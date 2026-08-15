@@ -1,0 +1,13 @@
+# .cgullignore
+# Exclude test fixtures, vendor code, or generated files from C-GULL security scanning
+
+build/
+dist/
+vendor/
+third_party/
+*.o
+*.obj
+*.so
+*.dylib
+temp_*.c
+mock_*.c
