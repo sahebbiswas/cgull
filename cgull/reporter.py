@@ -79,7 +79,7 @@ class ReportGenerator:
                         "name": "C-GULL",
                         "fullName": "C-GULL: Code Guardian for Unchecked Logic & Leaks",
                         "version": "1.0.0",
-                        "informationUri": "https://github.com/cgull-security/c-gull",
+                        "informationUri": "https://github.com/sahebbiswas/cgull",
                         "rules": list(rules_dict.values()),
                     }
                 },

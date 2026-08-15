@@ -33,8 +33,8 @@ Built for both lightning-fast lightweight CI/CD regex scans and deep semantic AS
 C-GULL's core engine runs on standard Python 3.8+ with **no third-party dependencies required**:
 ```bash
 # Clone the repository
-git clone https://github.com/cgull-security/c-gull.git
-cd c-gull
+git clone https://github.com/sahebbiswas/cgull.git
+cd cgull
 
 # Run directly via Python module
 python3 -m cgull scan src/
