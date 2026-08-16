@@ -11,7 +11,7 @@ setup(
     url="https://github.com/sahebbiswas/cgull",
     packages=find_packages(),
     classifiers=[
-        "Development Status :: 5 - Production/Stable",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Topic :: Security",
         "Topic :: Software Development :: Quality Assurance",
@@ -20,6 +20,7 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Programming Language :: C",
     ],
     python_requires=">=3.10",
