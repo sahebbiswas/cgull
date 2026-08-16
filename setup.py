@@ -11,7 +11,7 @@ setup(
     url="https://github.com/sahebbiswas/cgull",
     packages=find_packages(),
     classifiers=[
-        "Development Status :: 5 - Production/Stable",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Topic :: Security",
         "Topic :: Software Development :: Quality Assurance",
