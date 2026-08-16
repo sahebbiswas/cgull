@@ -6,7 +6,7 @@ import re
 from typing import List, Optional
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine
-from ..ast_analyzer import CASTContext
+from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
 
 
 class NonConstantTimeMemoryComparisonRule(BaseRule):
@@ -15,7 +15,7 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
     impact = Severity.HIGH
     category = RuleCategory.CRYPTO
     description = "Flag standard memcmp(), strcmp(), or strncmp() in crypto, token, or security checks that leak execution timing information."
-    implementation_method = "Regex or AST to flag standard comparisons and suggest constant-time alternatives"
+    implementation_method = "AST type analysis / function context with fallback name heuristics"
     implementation_complexity = "Medium"
     chances_of_false_positives = "Low"
     cwe_id = "CWE-208 / CWE-385"
@@ -24,17 +24,81 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
     sample_remediated_code = "if (CRYPTO_memcmp(calculated_hash, expected_hash, 32) == 0) {\n    grant_admin_access();\n}"
     analysis_engine = AnalysisEngine.HYBRID
 
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        target_funcs = {"memcmp", "strcmp", "strncmp", "bcmp"}
+        sensitive_keywords = {'hash', 'token', 'key', 'secret', 'pass', 'auth', 'sign', 'mac', 'digest', 'pin', 'cert', 'crypto', 'session'}
+
+        for fn in ast_ctx.functions:
+            fn_is_security_ctx = any(k in fn.name.lower() for k in ['auth', 'verify', 'crypto', 'check', 'validate', 'login', 'permission', 'security', 'token', 'pass', 'hash', 'sign'])
+
+            # Symbol type map in this function scope
+            var_types: dict = {}
+            for p in fn.parameters:
+                var_types[p.name] = p.type_name.lower()
+            for v_name, v_obj in fn.variables.items():
+                var_types[v_name] = v_obj.type_name.lower()
+            for g_name, g_obj in ast_ctx.global_variables.items():
+                if g_name not in var_types:
+                    var_types[g_name] = g_obj.type_name.lower()
+
+            for callee, line_no, raw_args in fn.calls:
+                if callee in target_funcs:
+                    arg_list = [a.strip() for a in raw_args.split(',')] if raw_args else []
+
+                    # Check 1: AST / Resolved Type analysis
+                    # Types like uint8_t[], byte[], uint8_t*, unsigned char* or structs containing crypto/key/secret
+                    is_crypto_type = False
+                    for arg in arg_list:
+                        # Find identifier tokens in arg
+                        identifiers = re.findall(r'\b[a-zA-Z_]\w*\b', arg)
+                        for id_token in identifiers:
+                            if id_token in var_types:
+                                tname = var_types[id_token]
+                                if any(k in tname for k in ['uint8_t', 'uint8', 'byte', 'unsigned char', 'crypto', 'secret', 'key', 'hash', 'token']):
+                                    is_crypto_type = True
+                                    break
+                        if is_crypto_type:
+                            break
+
+                    # Check 2: Name heuristic (fallback / secondary signal)
+                    is_crypto_name = any(w in raw_args.lower() for w in sensitive_keywords)
+
+                    # Context judgment
+                    # If call is bcmp or in security function or crypto type/name is present
+                    should_flag = False
+                    if callee == "bcmp":
+                        should_flag = True
+                    elif is_crypto_type:
+                        should_flag = True
+                    elif fn_is_security_ctx and (is_crypto_name or any(w in raw_args.lower() for w in ['buf', 'data', 'arg', 'a', 'b', 'val', 'ptr', 'input', 'expected', 'calc'])):
+                        should_flag = True
+                    elif is_crypto_name and not any(non_sec in raw_args.lower() for non_sec in ['key_count', 'key_index', 'key_len', 'keyword_id']):
+                        should_flag = True
+
+                    if should_flag:
+                        snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{callee}({raw_args})"
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=snippet,
+                            message=f"Standard comparison '{callee}()' on security-sensitive values ({raw_args.strip()}) is vulnerable to timing side-channel attacks (CWE-208).",
+                            column_number=1,
+                            engine="AST",
+                            auto_fix_replacement=f"CRYPTO_memcmp({raw_args})"
+                        ))
+        return issues
+
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        # Check memcmp, strcmp, strncmp, bcmp on sensitive tokens or inside auth functions
+        # Fallback for line-based scanner when AST is not used
         m = re.search(r'\b(memcmp|strcmp|strncmp|bcmp)\s*\(([^)]+)\)', line_content)
         if m:
             func_name = m.group(1)
             args = m.group(2)
-            # Check if arguments or nearby context refer to secrets/keys/hashes/tokens/passwords/auth/signatures
             is_crypto_context = any(w in args.lower() for w in [
                 'hash', 'token', 'key', 'secret', 'pass', 'auth', 'sign', 'mac', 'digest', 'pin', 'cert', 'crypto', 'session'
-            ])
+            ]) and not any(non_sec in args.lower() for non_sec in ['key_count', 'key_index', 'key_len', 'keyword_id'])
             if is_crypto_context or func_name == "bcmp":
                 issues.append(self.create_issue(
                     file_path=file_path,
@@ -54,7 +118,7 @@ class StrippingVolatileQualifiersRule(BaseRule):
     impact = Severity.HIGH
     category = RuleCategory.CONTROL_FLOW
     description = "Prevent casts or function calls that silently remove volatile from hardware/registers or shared memory pointers."
-    implementation_method = "AST parsing to track type qualifiers across assignments/calls"
+    implementation_method = "AST type analysis & cast node inspection with fallback name heuristics"
     implementation_complexity = "Medium"
     chances_of_false_positives = "Low"
     cwe_id = "CWE-562 / CWE-704"
@@ -63,10 +127,97 @@ class StrippingVolatileQualifiersRule(BaseRule):
     sample_remediated_code = "volatile uint32_t *reg = (volatile uint32_t *)0x4000;\nvolatile uint32_t *p = reg; // Preserves volatile"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
-        # Pattern: (type *) non-volatile cast of volatile pointer or cast removing volatile
-        # e.g. (int *)reg or (char *)hw_reg
+
+        for fn in ast_ctx.functions:
+            # Build map of volatile symbols in this function scope
+            volatile_vars: set = set()
+
+            for p in fn.parameters:
+                if 'volatile' in p.type_name:
+                    volatile_vars.add(p.name)
+
+            for v_name, v_obj in fn.variables.items():
+                if v_obj.is_volatile or 'volatile' in v_obj.type_name:
+                    volatile_vars.add(v_name)
+
+            for g_name, g_obj in ast_ctx.global_variables.items():
+                if g_obj.is_volatile or 'volatile' in g_obj.type_name:
+                    volatile_vars.add(g_name)
+
+            # Analyze pycparser AST if available
+            if ast_ctx.pycparser_ast:
+                from pycparser import c_ast
+
+                # Find the FuncDef for this function
+                for ext in ast_ctx.pycparser_ast.ext:
+                    if isinstance(ext, c_ast.FuncDef) and ext.decl.name == fn.name:
+                        # Inspect parameters
+                        if ext.decl.type.args and getattr(ext.decl.type.args, "params", None):
+                            for param in ext.decl.type.args.params:
+                                p_name = getattr(param, "name", None)
+                                quals = getattr(param, "quals", []) or []
+                                type_quals = getattr(getattr(param, "type", None), "quals", []) or []
+                                inner_type = getattr(getattr(param, "type", None), "type", None)
+                                inner_quals = getattr(inner_type, "quals", []) or []
+                                if "volatile" in quals or "volatile" in type_quals or "volatile" in inner_quals:
+                                    if p_name:
+                                        volatile_vars.add(p_name)
+
+                        # Visitor to find Cast nodes where expression is volatile
+                        class CastVisitor(c_ast.NodeVisitor):
+                            def __init__(self, outer_rule, fn_start):
+                                self.outer_rule = outer_rule
+                                self.fn_start = fn_start
+
+                            def visit_Cast(self, node):
+                                cast_to_type, _, _, is_vol, _, _, _, _ = _format_pycparser_type(node.to_type)
+                                # Check if target type is missing volatile
+                                target_has_volatile = is_vol or "volatile" in cast_to_type
+                                if not target_has_volatile:
+                                    # Check if expression being cast contains a known volatile variable
+                                    expr_ids = _extract_identifiers_from_ast(node.expr)
+                                    volatile_ids = expr_ids.intersection(volatile_vars)
+                                    if volatile_ids:
+                                        line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else self.fn_start
+                                        v_name = sorted(list(volatile_ids))[0]
+                                        snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else _format_pycparser_expr(node)
+                                        issues.append(self.outer_rule.create_issue(
+                                            file_path=file_path,
+                                            line_number=line_no,
+                                            code_snippet=snippet,
+                                            message=f"Explicit type cast potentially strips 'volatile' qualifier from variable '{v_name}', allowing unsafe compiler register caching.",
+                                            column_number=1,
+                                            engine="AST",
+                                        ))
+                                self.generic_visit(node)
+
+                        CastVisitor(self, fn.start_line).visit(ext.body)
+            else:
+                # Fallback AST analysis using regex/code lines and volatile_vars map
+                body_lines = fn.body.splitlines()
+                cast_regex = re.compile(r'\(\s*(?!volatile\b)(?:unsigned\s+|signed\s+|struct\s+\w+|\w+)\s*\*+\s*\)\s*(\w+)')
+                for i, line in enumerate(body_lines):
+                    line_no = fn.start_line + 1 + i
+                    for m in cast_regex.finditer(line):
+                        var_name = m.group(1)
+                        is_vol = var_name in volatile_vars or any(k in var_name.lower() for k in ['reg', 'mmio', 'hw', 'io', 'port', 'shared', 'vol'])
+                        if is_vol:
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=line.strip(),
+                                message=f"Explicit type cast potentially strips 'volatile' qualifier from variable '{var_name}', allowing unsafe compiler register caching.",
+                                column_number=m.start() + 1,
+                                engine="AST",
+                            ))
+
+        return issues
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        # Line scanner fallback only when scan_ast is not executed (REGEX mode)
+        issues = []
         m = re.search(r'\(\s*(?!volatile\b)(?:unsigned\s+|signed\s+|struct\s+\w+|\w+)\s*\*+\s*\)\s*(\w*(?:reg|mmio|hw|io|port|shared|vol)\w*)', line_content, re.IGNORECASE)
         if m:
             var_name = m.group(1)
@@ -74,7 +225,7 @@ class StrippingVolatileQualifiersRule(BaseRule):
                 file_path=file_path,
                 line_number=line_number,
                 code_snippet=line_content,
-                message=f"Explicit type cast potentially strips 'volatile' qualifier from hardware/MMIO variable '{var_name}', allowing unsafe compiler register caching.",
+                message=f"Explicit type cast potentially strips 'volatile' qualifier from variable '{var_name}', allowing unsafe compiler register caching.",
                 column_number=m.start() + 1,
                 engine="Regex",
             ))
@@ -87,7 +238,7 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
     impact = Severity.HIGH
     category = RuleCategory.CONTROL_FLOW
     description = "Prevent conversions between function pointers and data pointers (void *) or integers to mitigate Return-Oriented Programming (ROP) and CFI violations."
-    implementation_method = "AST parsing to examine type casts involving FuncPtr nodes"
+    implementation_method = "AST type analysis & cast node inspection with fallback name heuristics"
     implementation_complexity = "Medium"
     chances_of_false_positives = "Low"
     cwe_id = "CWE-843 / CWE-588"
@@ -95,6 +246,79 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
     sample_vulnerable_code = "void *callback = (void *)my_handler; // Illegal func ptr to object ptr conversion\nint addr = (int)my_handler;"
     sample_remediated_code = "typedef void (*handler_fn)(int);\nhandler_fn callback = my_handler;"
     analysis_engine = AnalysisEngine.HYBRID
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+
+        # Collect function names and function pointer variables in the file
+        func_names = {f.name for f in ast_ctx.functions}
+        func_ptr_vars = set()
+
+        for fn in ast_ctx.functions:
+            for p in fn.parameters:
+                if p.is_pointer and ('(' in p.type_name or 'fn' in p.type_name.lower() or 'func' in p.type_name.lower() or 'handler' in p.type_name.lower() or 'cb' in p.type_name.lower()):
+                    func_ptr_vars.add(p.name)
+            for v_name, v_obj in fn.variables.items():
+                if v_obj.is_pointer and ('(' in v_obj.type_name or 'fn' in v_obj.type_name.lower() or 'func' in v_obj.type_name.lower() or 'handler' in v_obj.type_name.lower() or 'cb' in v_obj.type_name.lower()):
+                    func_ptr_vars.add(v_name)
+
+        for g_name, g_obj in ast_ctx.global_variables.items():
+            if g_obj.is_pointer and ('(' in g_obj.type_name or 'fn' in g_obj.type_name.lower() or 'func' in g_obj.type_name.lower()):
+                func_ptr_vars.add(g_name)
+
+        all_func_symbols = func_names.union(func_ptr_vars)
+
+        if ast_ctx.pycparser_ast:
+            from pycparser import c_ast
+
+            class FuncPtrCastVisitor(c_ast.NodeVisitor):
+                def __init__(self, outer_rule):
+                    self.outer_rule = outer_rule
+
+                def visit_Cast(self, node):
+                    to_type_str, is_ptr, is_fp, _, _, _, _, _ = _format_pycparser_type(node.to_type)
+                    # Check if target cast type is data pointer (e.g. void *) or integer type (e.g. int, long, uintptr_t, uint32_t)
+                    is_data_ptr_or_int = (is_ptr and "void" in to_type_str) or any(it in to_type_str for it in ['int', 'long', 'short', 'intptr_t', 'uintptr_t', 'uint32_t', 'uint64_t', 'size_t'])
+
+                    if is_data_ptr_or_int and not is_fp:
+                        # Check expression being cast
+                        expr_ids = _extract_identifiers_from_ast(node.expr)
+                        fn_ids = expr_ids.intersection(all_func_symbols)
+                        if fn_ids:
+                            line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else 1
+                            target = sorted(list(fn_ids))[0]
+                            snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else _format_pycparser_expr(node)
+                            issues.append(self.outer_rule.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=snippet,
+                                message=f"Dangerous function pointer conversion for '{target}' (cast between function pointer and data pointer/integer violates ISO C and Control Flow Integrity).",
+                                column_number=1,
+                                engine="AST",
+                                auto_fix_replacement="Use dedicated function pointer typedef instead of void* / int"
+                            ))
+
+                    self.generic_visit(node)
+
+            FuncPtrCastVisitor(self).visit(ast_ctx.pycparser_ast)
+        else:
+            # Fallback AST analysis using regex & known function symbols
+            cast_regex = re.compile(r'\(\s*(?:void\s*\*|int|long|short|uint32_t|uint64_t|intptr_t|uintptr_t|size_t|unsigned\s+int)\s*\)\s*([a-zA-Z_]\w*)\b')
+            for line_no, line in enumerate(ast_ctx.source_lines, 1):
+                for m in cast_regex.finditer(line):
+                    target = m.group(1)
+                    if target in all_func_symbols or any(k in target.lower() for k in ['_handler', '_fn', '_callback', '_hook', 'func', 'proc']):
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=line.strip(),
+                            message=f"Dangerous function pointer conversion for '{target}' (cast between function pointer and data pointer/integer violates ISO C and Control Flow Integrity).",
+                            column_number=m.start() + 1,
+                            engine="AST",
+                            auto_fix_replacement="Use dedicated function pointer typedef instead of void* / int"
+                        ))
+
+        return issues
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []

@@ -305,7 +305,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
     impact = Severity.HIGH
     category = RuleCategory.CRYPTO
     description = "Flag memset() used on sensitive local buffers just before scope exit/return, which optimizing compilers can silently eliminate (Dead Store Elimination)."
-    implementation_method = "AST parsing to track buffer scope exit and subsequent reads"
+    implementation_method = "AST parsing & CFG dataflow to track buffer scope exit and dead store risks"
     implementation_complexity = "High"
     chances_of_false_positives = "Medium"
     cwe_id = "CWE-14"
@@ -314,13 +314,90 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
     sample_remediated_code = "explicit_bzero(password, sizeof(password)); // Or memset_s(password, sizeof(password), 0, sizeof(password));"
     analysis_engine = AnalysisEngine.HYBRID
 
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        sensitive_name_keywords = {'key', 'secret', 'pass', 'token', 'auth', 'hash', 'iv', 'pin', 'cred', 'buf', 'data', 'priv', 'cert', 'seed'}
+
+        for fn in ast_ctx.functions:
+            fn_is_sec = any(k in fn.name.lower() for k in ['auth', 'crypto', 'sec', 'key', 'pass', 'hash', 'token', 'sign', 'login', 'verify'])
+            body_lines = fn.body.splitlines()
+
+            # Map memset calls in function
+            for callee, line_no, raw_args in fn.calls:
+                if callee == "memset":
+                    # Parse args: memset(buf, 0, len)
+                    arg_parts = [a.strip() for a in raw_args.split(',')]
+                    if len(arg_parts) >= 2 and arg_parts[1] in ('0', '0U', '0x0'):
+                        buf_expr = arg_parts[0]
+                        buf_name = re.findall(r'\b[a-zA-Z_]\w*\b', buf_expr)[0] if re.findall(r'\b[a-zA-Z_]\w*\b', buf_expr) else buf_expr
+
+                        # Primary signal 1: Check if buf_name is a local variable (stack allocation)
+                        is_local_stack_var = buf_name in fn.variables
+                        var_obj = fn.variables.get(buf_name)
+
+                        # Primary signal 2: Scope exit / near return or end of function
+                        is_near_exit = False
+                        # Check CFG if available
+                        if fn.cfg_nodes:
+                            # find memset node in cfg
+                            memset_nodes = [n for n in fn.cfg_nodes if n.line_number == line_no and 'memset' in n.expr_str]
+                            for mn in memset_nodes:
+                                idx = fn.cfg_nodes.index(mn)
+                                # Look ahead in CFG for return or end of nodes
+                                is_read_after = False
+                                for next_n in fn.cfg_nodes[idx + 1:]:
+                                    if next_n.kind == "return":
+                                        is_near_exit = True
+                                    if buf_name in next_n.read_vars:
+                                        is_read_after = True
+                                        break
+                                if not is_read_after:
+                                    is_near_exit = True
+                        else:
+                            # Fallback line check in fn body
+                            line_idx = line_no - fn.start_line
+                            for offset in range(1, 4):
+                                if line_idx + offset < len(body_lines):
+                                    l_str = body_lines[line_idx + offset]
+                                    if "return" in l_str or l_str.strip() == "}":
+                                        is_near_exit = True
+                                        break
+                            if line_idx >= len(body_lines) - 3:
+                                is_near_exit = True
+
+                        # Name heuristic signal
+                        is_sensitive_name = any(k in buf_name.lower() for k in sensitive_name_keywords)
+
+                        # Decision logic:
+                        # Local stack buffer cleared before exit is dead store risk (primary AST signal)
+                        # or sensitive name / function context
+                        if is_local_stack_var and is_near_exit:
+                            should_flag = True
+                        elif (is_sensitive_name or fn_is_sec) and is_near_exit:
+                            should_flag = True
+                        else:
+                            should_flag = False
+
+                        if should_flag:
+                            len_arg = arg_parts[2] if len(arg_parts) >= 3 else f"sizeof({buf_name})"
+                            snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"memset({raw_args})"
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=snippet,
+                                message=f"Potentially unsafe memory wipe using memset('{buf_name}', 0, ...). Compilers frequently optimize out memset prior to return (Dead Store Elimination / CWE-14).",
+                                column_number=1,
+                                engine="AST",
+                                auto_fix_replacement=f"explicit_bzero({buf_name}, {len_arg});"
+                            ))
+        return issues
+
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # memset(key, 0, len) followed within 3 lines by return or }
         m = re.search(r'\bmemset\s*\(\s*(\w+)\s*,\s*0\s*,\s*([^)]+)\)', line_content)
         if m:
             buf_name = m.group(1)
-            # Check if name is sensitive or near return
             is_sensitive_name = any(k in buf_name.lower() for k in ['key', 'secret', 'pass', 'token', 'auth', 'hash', 'iv', 'pin', 'cred', 'buf'])
             is_near_return = False
             for offset in range(1, 4):
