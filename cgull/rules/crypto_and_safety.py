@@ -58,6 +58,11 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                                 if any(k in tname for k in ['uint8_t', 'uint8', 'byte', 'unsigned char', 'crypto', 'secret', 'key', 'hash', 'token']):
                                     is_crypto_type = True
                                     break
+                            elif fn.parameters:
+                                for p in fn.parameters:
+                                    if p.name == id_token and any(k in p.type_name.lower() for k in ['uint8_t', 'uint8', 'byte', 'unsigned char', 'crypto', 'secret', 'key', 'hash', 'token']):
+                                        is_crypto_type = True
+                                        break
                         if is_crypto_type:
                             break
 
@@ -199,7 +204,7 @@ class StrippingVolatileQualifiersRule(BaseRule):
                 body_lines = fn.body.splitlines()
                 cast_regex = re.compile(r'\(\s*(?!volatile\b)(?:unsigned\s+|signed\s+|struct\s+\w+|\w+)\s*\*+\s*\)\s*(\w+)')
                 for i, line in enumerate(body_lines):
-                    line_no = fn.start_line + 1 + i
+                    line_no = fn.start_line + i
                     for m in cast_regex.finditer(line):
                         var_name = m.group(1)
                         is_vol = var_name in volatile_vars or any(k in var_name.lower() for k in ['reg', 'mmio', 'hw', 'io', 'port', 'shared', 'vol'])

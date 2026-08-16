@@ -113,7 +113,7 @@ class TestNonConstantTimeMemoryComparison(unittest.TestCase):
 
     def test_detects_type_based_sensitive_memcmp_neutral_names(self):
         # Sensitive types (uint8_t arrays / bytes) in sensitive check context with neutral names
-        code = "typedef unsigned char uint8_t;\nint check_signature(const uint8_t *a, const uint8_t *b) {\n    if (memcmp(a, b, 32) == 0) return 1;\n    return 0;\n}"
+        code = "typedef unsigned char uint8_t;\nint check_signature(const uint8_t *a, const uint8_t *b) {\n    int res = memcmp(a, b, 32);\n    return res == 0;\n}"
         issues = scan_with_rule("CGULL-005", code)
         self.assertEqual(len(issues), 1)
 
