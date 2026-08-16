@@ -144,7 +144,7 @@ class TestScanCommand(unittest.TestCase):
     def test_output_extension_autodetects_markdown_format(self):
         out_path = os.path.join(self.temp_dir, "report.md")
         code, _ = self._run(["scan", self.c_file, "-o", out_path])
-        with open(out_path) as f:
+        with open(out_path, encoding="utf-8") as f:
             content = f.read()
         self.assertIn("C-GULL Security Audit Report", content)
 

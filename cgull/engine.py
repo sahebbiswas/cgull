@@ -23,7 +23,7 @@ class CGullScanner:
     Main static analyzer engine for C source code.
     """
 
-    C_EXTENSIONS: Set[str] = {".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"}
+    C_EXTENSIONS: Set[str] = {".c", ".h"}
 
     def __init__(
         self,
@@ -321,7 +321,10 @@ def _scan_file_worker(file_path: str, engine_mode: AnalysisEngine) -> Tuple[List
     so this is cheap) rather than pickling rule objects across the
     process boundary.
     """
-    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-        content = f.read()
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception:
+        return [], 0, 0.0
     rules = get_all_rules()
     return _scan_file_content(content, file_path, rules, engine_mode)

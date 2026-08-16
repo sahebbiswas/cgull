@@ -55,7 +55,10 @@ class TestScanPathUnreadableFile(unittest.TestCase):
             # under `files`, but open() will raise FileNotFoundError.
             # The scanner should skip it rather than crash the whole scan.
             broken_link = os.path.join(temp_dir, "bad.c")
-            os.symlink(os.path.join(temp_dir, "does_not_exist_target"), broken_link)
+            try:
+                os.symlink(os.path.join(temp_dir, "does_not_exist_target"), broken_link)
+            except OSError:
+                self.skipTest("Symlinks not supported or permitted on this platform/privilege level")
             result = CGullScanner().scan_path(temp_dir)
             self.assertEqual(result.scanned_files_count, 2)  # both discovered
             self.assertEqual(len(result.file_summaries), 1)  # only good.c actually scanned

@@ -5,27 +5,27 @@
 [![Security Standards](https://img.shields.io/badge/standards-MISRA--C%20%7C%20CWE%20%7C%20CERT--C-orange.svg)](https://cwe.mitre.org/)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)]()
 
-**C-GULL** (*Code Guardian for Unchecked Logic & Leaks*) is a high-performance, modular C source code static security analyzer designed to detect critical memory vulnerabilities, buffer overflows, timing attacks, format string exploits, uninitialized pointer usage, and MISRA-C compliance violations.
+**C-GULL** (*Code Guardian for Unchecked Logic & Leaks*) is a lightweight, modular C source code static security analyzer designed to assist with identifying common C memory vulnerabilities, buffer overflow risks, format string flaws, timing side-channel patterns, and select MISRA-C compliance guidelines.
 
-Built for both lightning-fast lightweight CI/CD regex scans and semantic AST-assisted analysis (a built-in lightweight C parser, cross-checked and enriched by `pycparser` when it can successfully parse the file -- see "AST Engine Notes" below for what that does and doesn't cover), C-GULL generates actionable vulnerability reports in **JSON**, **OASIS SARIF v2.1.0**, **Markdown**, and **colored terminal formats**.
+Built for both lightweight regex scans and AST-assisted analysis (using a built-in C structural parser, cross-checked by `pycparser` when available -- see "AST Engine Notes" below), C-GULL generates vulnerability reports in **JSON**, **OASIS SARIF v2.1.0**, **Markdown**, and **colored terminal formats**.
 
 ---
 
 ## 🚀 Key Features
 
 - **⚡ Dual Analysis Engine**:
-  - **Lightweight Regex Pattern Matching**: fast first-pass scanning for banned API calls, format strings, unsafe casts, and suspicious macros. Runs against a comment-stripped and string-literal-masked view of the source, so a banned function name mentioned only in a comment or log string is never mistaken for a real call.
-  - **AST-Assisted Semantic Flow Engine**: dataflow analysis for unchecked `malloc` returns, missing pointer NULL checks, use-after-free, VLAs, and control flow glitch vulnerabilities, built primarily on a lightweight in-repo C parser and cross-checked/enriched with `pycparser`'s real AST where it can parse the file (see below).
-- **🔇 Inline Suppression**: silence specific findings with `// cgull-ignore`, `// cgull-ignore: CGULL-001`, or `// cgull-ignore-next-line: CGULL-001,CGULL-003` -- important given several rules have a documented non-trivial false-positive rate (see the rules table).
+  - **Lightweight Regex Pattern Matching**: fast first-pass scanning for banned API calls, format strings, unsafe casts, and suspicious macros. Runs against a comment-stripped and string-literal-masked view of the source to reduce basic false matches.
+  - **AST-Assisted Structural Analysis**: structural pattern checks for unchecked `malloc` returns, missing pointer NULL checks, use-after-free, VLAs, and control flow patterns, built on a lightweight in-repo C parser and cross-checked with `pycparser` where supported.
+- **🔇 Inline Suppression**: silence specific findings with `// cgull-ignore`, `// cgull-ignore: CGULL-001`, or `// cgull-ignore-next-line: CGULL-001,CGULL-003` -- useful since heuristic static analysis rules can produce false positives.
 - **⚙️ Parallel Scanning**: `-j/--jobs` scans multiple files concurrently across CPU cores for larger codebases.
-- **📁 Recursive Directory Scanning**: Automatically discovers and audits `.c`, `.h`, `.cpp`, and `.hpp` files across nested codebases.
+- **📁 Recursive Directory Scanning**: Automatically discovers and audits C source and header files (`.c`, `.h`) across nested codebases.
 - **🚫 .cgullignore Support**: Exclude vendor libraries, third-party dependencies, build output directories, or test mock files using standard gitignore glob patterns and negations (`!`).
 - **📊 Multi-Format Reporting**:
   - Structured **JSON** for automated ingestion and reporting dashboards.
   - **SARIF 2.1.0** for native integration into GitHub Code Scanning and GitLab SAST.
   - **Executive Markdown** summary tables with remediation guides.
 - **🧩 Extensible & Modular Architecture**: Add new custom regex or AST rules with a clean object-oriented class interface.
-- **🧪 Test Suite**: `unittest` suite covering all security rules plus regression tests for known false-positive patterns (comments/strings, `return`-as-declaration mis-parsing, suppression directives, parallel-vs-sequential parity).
+- **🧪 Test Suite**: `unittest` suite covering security rules plus regression tests for known false-positive patterns.
 
 ### AST Engine Notes (please read before trusting AST-tagged findings)
 
@@ -285,9 +285,11 @@ python3 tests/test_scanner.py -v
 
 ## ⚠️ Known Limitations
 
+- **C++ is NOT supported**: C-GULL is strictly designed for C source code (`.c`, `.h`). C++ features (classes, namespaces, templates, references, operator overloading, etc.) are not supported by the parser or rules engine.
+- **Heuristic Static Analysis**: C-GULL relies on regex pattern matching and lightweight AST structural checks. It is not a formal verification tool or full symbolic execution solver and may produce false positives or miss complex interprocedural control flow vulnerabilities.
 - **Performance on very large or macro-heavy codebases is not yet optimized.** Function/variable extraction is currently regex-based (`O(n)` per file but with a real constant-factor cost), and the `pycparser` cross-check adds further parse time on top of that. On pathological inputs (e.g. thousands of small functions in one file) total scan time can be significant. Use `-j/--jobs` to parallelize across files in the meantime; a follow-up pass on the extraction/parse hot path is planned.
 - **AST-tagged rules degrade gracefully but silently** when `pycparser` can't parse a file (see "AST Engine Notes" above) -- there is currently no per-file indicator in the report distinguishing "analyzed with pycparser" from "regex-fallback only."
-- Several rules have a documented **high false-positive rate** by design trade-off (see `chances_of_false_positives` in the rules table) -- use inline suppression (`// cgull-ignore`) rather than disabling the rule entirely if it's noisy on your codebase but still valuable.
+- Several rules have a documented **high false-positive rate** by design trade-off -- use inline suppression (`// cgull-ignore`) rather than disabling the rule entirely if it's noisy on your codebase but still valuable.
 
 ---
 
