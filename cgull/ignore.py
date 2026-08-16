@@ -82,14 +82,14 @@ class CGullIgnoreFilter:
 
         anchored_to_root = raw.startswith("/") or "/" in raw.rstrip("/")
         # Convert glob to regex
-        regex = self._glob_to_regex(raw)
+        regex = self._glob_to_regex(raw, anchored_to_root=anchored_to_root)
         self.rules.append((is_negation, regex, directory_only, anchored_to_root))
 
-    def _glob_to_regex(self, glob_pat: str) -> str:
+    def _glob_to_regex(self, glob_pat: str, anchored_to_root: bool = False) -> str:
         """Converts glob pattern to regex string."""
         # Handle leading slash (relative to root)
-        anchored_to_root = glob_pat.startswith("/")
-        if anchored_to_root:
+        if glob_pat.startswith("/"):
+            anchored_to_root = True
             glob_pat = glob_pat[1:]
 
         # Escape special regex characters except * and ?
