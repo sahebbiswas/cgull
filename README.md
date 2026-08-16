@@ -1,6 +1,6 @@
 # 🛡️ C-GULL: Code Guardian for Unchecked Logic & Leaks
 
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![Security Standards](https://img.shields.io/badge/standards-MISRA--C%20%7C%20CWE%20%7C%20CERT--C-orange.svg)](https://cwe.mitre.org/)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)]()
@@ -36,7 +36,7 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
 ## 📦 Installation
 
 ### Option 1: Direct Python Execution (Zero External Dependencies)
-C-GULL's core engine runs on standard Python 3.8+ with **no third-party dependencies required**:
+C-GULL's core engine runs on standard Python 3.10+ with **no third-party dependencies required**:
 ```bash
 # Clone the repository
 git clone https://github.com/sahebbiswas/cgull.git

@@ -1,4 +1,4 @@
 # C-GULL Core Requirements
-# The core static analyzer runs on Python 3.8+ standard library with zero mandatory external dependencies.
+# The core static analyzer runs on Python 3.10+ standard library with zero mandatory external dependencies.
 # Optional AST enhancements:
 pycparser>=2.21
