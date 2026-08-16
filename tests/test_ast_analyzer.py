@@ -149,6 +149,81 @@ class TestPycparserIntegration(unittest.TestCase):
         self.assertEqual(len(ctx.functions), 1)
 
 
+@unittest.skipUnless(_pycparser_available(), "pycparser not installed")
+class TestComplexASTConstructs(unittest.TestCase):
+    def setUp(self):
+        self.parser = CASTParser()
+
+    def test_function_pointers_in_parameters_and_variables(self):
+        src = """
+        int execute_callback(int (*callback)(int, char *), char *data) {
+            int (*local_fp)(int) = 0;
+            return callback(10, data);
+        }
+        """
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        fn = ctx.functions[0]
+        self.assertEqual(fn.name, "execute_callback")
+        self.assertTrue(fn.parameters[0].is_pointer)
+        self.assertIn("local_fp", fn.variables)
+        local_fp = fn.variables["local_fp"]
+        self.assertTrue(local_fp.is_pointer)
+
+    def test_complex_declarations_and_qualifiers(self):
+        src = """
+        void process_hw(void) {
+            const volatile uint32_t *reg;
+            int *p, q, **pp;
+        }
+        """
+        ctx = self.parser.parse(src)
+        fn = ctx.functions[0]
+        reg_var = fn.variables["reg"]
+        self.assertTrue(reg_var.is_volatile)
+        self.assertTrue(reg_var.is_pointer)
+
+        p_var = fn.variables["p"]
+        q_var = fn.variables["q"]
+        pp_var = fn.variables["pp"]
+        self.assertTrue(p_var.is_pointer)
+        self.assertFalse(q_var.is_pointer)
+        self.assertTrue(pp_var.is_pointer)
+
+    def test_multiline_function_headers_and_declarations(self):
+        src = """
+        int
+        multi_line_fn(
+            int x,
+            char *msg
+        ) {
+            int
+                a = 1,
+                b = 2;
+            return x + a + b;
+        }
+        """
+        ctx = self.parser.parse(src)
+        fn = ctx.functions[0]
+        self.assertEqual(fn.name, "multi_line_fn")
+        self.assertEqual(len(fn.parameters), 2)
+        self.assertIn("a", fn.variables)
+        self.assertIn("b", fn.variables)
+
+    def test_nested_expressions_and_cfg_nodes(self):
+        src = """
+        int compute(int **pp, int a, int b) {
+            int result = *(*(pp + 1)) + (a * (b + 3));
+            return result;
+        }
+        """
+        ctx = self.parser.parse(src)
+        fn = ctx.functions[0]
+        self.assertGreater(len(fn.cfg_nodes), 0)
+        result_var = fn.variables["result"]
+        self.assertTrue(result_var.has_initializer)
+
+
 class TestStripOnly(unittest.TestCase):
     def test_strip_only_matches_full_parse_clean_source(self):
         src = "int x = 1; // comment\n"
