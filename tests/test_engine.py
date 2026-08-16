@@ -107,5 +107,37 @@ class TestParallelWorkerFunction(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+class TestDirectoryTraversalWithNegation(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+        # Create nested directory structure:
+        # vendor/foo.c
+        # vendor/crypto/other.c
+        # vendor/crypto/secure_memcmp.c
+        os.makedirs(os.path.join(self.temp_dir, "vendor", "crypto"))
+        with open(os.path.join(self.temp_dir, "vendor", "foo.c"), "w") as f:
+            f.write("void foo() {}")
+        with open(os.path.join(self.temp_dir, "vendor", "crypto", "other.c"), "w") as f:
+            f.write("void other() {}")
+        with open(os.path.join(self.temp_dir, "vendor", "crypto", "secure_memcmp.c"), "w") as f:
+            f.write("void secure_memcmp() { char b[10]; gets(b); }")
+
+        with open(os.path.join(self.temp_dir, ".cgullignore"), "w") as f:
+            f.write("vendor/\n!vendor/crypto/secure_memcmp.c\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_scan_path_traverses_ignored_dir_to_include_negated_file(self):
+        scanner = CGullScanner()
+        result = scanner.scan_path(self.temp_dir)
+        self.assertEqual(result.scanned_files_count, 1)
+        scanned_files = [fs.file_path for fs in result.file_summaries]
+        self.assertTrue(any("secure_memcmp.c" in p for p in scanned_files))
+        self.assertFalse(any("foo.c" in p for p in scanned_files))
+        self.assertFalse(any("other.c" in p for p in scanned_files))
+
+
 if __name__ == "__main__":
     unittest.main()

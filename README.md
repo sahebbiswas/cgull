@@ -191,6 +191,10 @@ temp_*.c
 !vendor/crypto/secure_memcmp.c
 ```
 
+### Negation Semantics and Traversal Behavior
+- `.cgullignore` supports gitignore-style negation rules (`!`). Later patterns override earlier matching rules for the same path (last match wins).
+- **Directory Traversal Note**: Unlike native `git` (which prunes excluded directories during directory walking and thus cannot re-include files inside an ignored parent directory), C-GULL traverses nested directories so that negation rules (`!`) can re-include specific files or subdirectories underneath an ignored parent directory (e.g. `!vendor/crypto/secure_memcmp.c` inside `vendor/`).
+
 ---
 
 ## 🧩 Extending Ruleset: Creating Custom Rules

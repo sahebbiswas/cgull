@@ -147,5 +147,69 @@ class TestFilterPaths(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+class TestNegationAndAnchoredPatterns(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.filter = CGullIgnoreFilter(base_dir=self.temp_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _p(self, rel):
+        return os.path.join(self.temp_dir, rel)
+
+    def test_ignored_directory(self):
+        self.filter.load_from_text("vendor/\n")
+        self.assertTrue(self.filter.should_ignore(self._p("vendor"), is_dir=True))
+        self.assertTrue(self.filter.should_ignore(self._p("vendor/foo.c")))
+        self.assertTrue(self.filter.should_ignore(self._p("vendor/crypto/other.c")))
+
+    def test_negated_file_inside_ignored_directory(self):
+        self.filter.load_from_text("vendor/\n!vendor/crypto/secure_memcmp.c")
+        self.assertTrue(self.filter.should_ignore(self._p("vendor/foo.c")))
+        self.assertTrue(self.filter.should_ignore(self._p("vendor/crypto/other.c")))
+        self.assertFalse(self.filter.should_ignore(self._p("vendor/crypto/secure_memcmp.c")))
+
+    def test_nested_negated_paths(self):
+        patterns = """
+        vendor/
+        !vendor/crypto/
+        vendor/crypto/insecure/
+        !vendor/crypto/insecure/override.c
+        """
+        self.filter.load_from_text(patterns)
+        self.assertTrue(self.filter.should_ignore(self._p("vendor/foo.c")))
+        self.assertFalse(self.filter.should_ignore(self._p("vendor/crypto/secure.c")))
+        self.assertTrue(self.filter.should_ignore(self._p("vendor/crypto/insecure/bad.c")))
+        self.assertFalse(self.filter.should_ignore(self._p("vendor/crypto/insecure/override.c")))
+
+    def test_directory_only_patterns(self):
+        self.filter.load_from_text("docs/\n")
+        self.assertTrue(self.filter.should_ignore(self._p("docs"), is_dir=True))
+        self.assertTrue(self.filter.should_ignore(self._p("docs/readme.md")))
+        self.assertFalse(self.filter.should_ignore(self._p("docs"), is_dir=False))
+
+    def test_anchored_patterns_middle_slash_and_leading_slash(self):
+        self.filter.load_from_text("/root_only.c\nvendor/crypto/secure.c\n")
+        # Leading slash pattern
+        self.assertTrue(self.filter.should_ignore(self._p("root_only.c")))
+        self.assertFalse(self.filter.should_ignore(self._p("sub/root_only.c")))
+
+        # Middle slash pattern (anchored to base_dir)
+        self.assertTrue(self.filter.should_ignore(self._p("vendor/crypto/secure.c")))
+        self.assertFalse(self.filter.should_ignore(self._p("other/vendor/crypto/secure.c")))
+
+    def test_overlapping_ignore_negation_rules(self):
+        patterns = """
+        *.c
+        !important.c
+        important.c
+        !important.c
+        """
+        self.filter.load_from_text(patterns)
+        self.assertFalse(self.filter.should_ignore(self._p("important.c")))
+        self.assertTrue(self.filter.should_ignore(self._p("other.c")))
+
+
 if __name__ == "__main__":
     unittest.main()
