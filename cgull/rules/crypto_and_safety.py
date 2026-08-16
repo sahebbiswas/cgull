@@ -24,7 +24,7 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
     sample_remediated_code = "if (CRYPTO_memcmp(calculated_hash, expected_hash, 32) == 0) {\n    grant_admin_access();\n}"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Check memcmp, strcmp, strncmp, bcmp on sensitive tokens or inside auth functions
         m = re.search(r'\b(memcmp|strcmp|strncmp|bcmp)\s*\(([^)]+)\)', line_content)
@@ -63,7 +63,7 @@ class StrippingVolatileQualifiersRule(BaseRule):
     sample_remediated_code = "volatile uint32_t *reg = (volatile uint32_t *)0x4000;\nvolatile uint32_t *p = reg; // Preserves volatile"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Pattern: (type *) non-volatile cast of volatile pointer or cast removing volatile
         # e.g. (int *)reg or (char *)hw_reg
@@ -96,7 +96,7 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
     sample_remediated_code = "typedef void (*handler_fn)(int);\nhandler_fn callback = my_handler;"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Cast to (void *) or (int) / (long) on function names or func ptrs
         m = re.search(r'\(\s*(?:void\s*\*|int|long|uint32_t|unsigned\s+int)\s*\)\s*([a-zA-Z_]\w*(?:_handler|_fn|_callback|_hook|func))\b', line_content)
@@ -160,7 +160,7 @@ class InsecureDataStorageRule(BaseRule):
     sample_remediated_code = "// Load credentials dynamically from secure vault/environment\nchar *api_key = getenv(\"API_KEY\");"
     analysis_engine = AnalysisEngine.REGEX
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Match hardcoded password/key/secret strings
         m = re.search(r'(?:char\s*\*|char\s+\w+\[\]|string)\s*(\w*(?:password|secret|apikey|api_key|private_key|auth_token)\w*)\s*=\s*"([^"]+)"', line_content, re.IGNORECASE)

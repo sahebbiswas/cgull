@@ -7,15 +7,17 @@
 
 **C-GULL** (*Code Guardian for Unchecked Logic & Leaks*) is a high-performance, modular C source code static security analyzer designed to detect critical memory vulnerabilities, buffer overflows, timing attacks, format string exploits, uninitialized pointer usage, and MISRA-C compliance violations.
 
-Built for both lightning-fast lightweight CI/CD regex scans and deep semantic AST flow analysis (with `pycparser` and built-in C AST visitor), C-GULL generates actionable vulnerability reports in **JSON**, **OASIS SARIF v2.1.0**, **Markdown**, and **colored terminal formats**.
+Built for both lightning-fast lightweight CI/CD regex scans and semantic AST-assisted analysis (a built-in lightweight C parser, cross-checked and enriched by `pycparser` when it can successfully parse the file -- see "AST Engine Notes" below for what that does and doesn't cover), C-GULL generates actionable vulnerability reports in **JSON**, **OASIS SARIF v2.1.0**, **Markdown**, and **colored terminal formats**.
 
 ---
 
 ## 🚀 Key Features
 
 - **⚡ Dual Analysis Engine**:
-  - **Lightweight Regex Pattern Matching**: Sub-millisecond first-pass scanning for banned API calls, format strings, unsafe casts, and suspicious macros.
-  - **AST Semantic Flow Engine**: Deep syntax and dataflow analysis for unchecked `malloc` returns, missing pointer NULL checks, use-after-free, VLAs, and control flow glitch vulnerabilities.
+  - **Lightweight Regex Pattern Matching**: fast first-pass scanning for banned API calls, format strings, unsafe casts, and suspicious macros. Runs against a comment-stripped and string-literal-masked view of the source, so a banned function name mentioned only in a comment or log string is never mistaken for a real call.
+  - **AST-Assisted Semantic Flow Engine**: dataflow analysis for unchecked `malloc` returns, missing pointer NULL checks, use-after-free, VLAs, and control flow glitch vulnerabilities, built primarily on a lightweight in-repo C parser and cross-checked/enriched with `pycparser`'s real AST where it can parse the file (see below).
+- **🔇 Inline Suppression**: silence specific findings with `// cgull-ignore`, `// cgull-ignore: CGULL-001`, or `// cgull-ignore-next-line: CGULL-001,CGULL-003` -- important given several rules have a documented non-trivial false-positive rate (see the rules table).
+- **⚙️ Parallel Scanning**: `-j/--jobs` scans multiple files concurrently across CPU cores for larger codebases.
 - **📁 Recursive Directory Scanning**: Automatically discovers and audits `.c`, `.h`, `.cpp`, and `.hpp` files across nested codebases.
 - **🚫 .cgullignore Support**: Exclude vendor libraries, third-party dependencies, build output directories, or test mock files using standard gitignore glob patterns and negations (`!`).
 - **📊 Multi-Format Reporting**:
@@ -23,7 +25,11 @@ Built for both lightning-fast lightweight CI/CD regex scans and deep semantic AS
   - **SARIF 2.1.0** for native integration into GitHub Code Scanning and GitLab SAST.
   - **Executive Markdown** summary tables with remediation guides.
 - **🧩 Extensible & Modular Architecture**: Add new custom regex or AST rules with a clean object-oriented class interface.
-- **🧪 100% Test Coverage**: Complete Python `unittest` suite covering all security rules and edge cases.
+- **🧪 Test Suite**: `unittest` suite covering all security rules plus regression tests for known false-positive patterns (comments/strings, `return`-as-declaration mis-parsing, suppression directives, parallel-vs-sequential parity).
+
+### AST Engine Notes (please read before trusting AST-tagged findings)
+
+`pycparser` cannot parse raw, unpreprocessed C -- it has no definition for `size_t`, `uint32_t`, or anything from an `#include`d header, and chokes on macro-dependent syntax. C-GULL works around this by stripping preprocessor directives and injecting a small prelude of common standard-library typedefs before handing the file to `pycparser`. This unblocks a meaningful fraction of ordinary application code, but it is **not a real preprocessor pass**: files that are only syntactically valid after macro expansion, or that rely on project-specific typedefs, will still fail to parse with `pycparser`. When that happens, C-GULL transparently falls back to its own lightweight regex/brace-counting extractor for function and variable structure -- which is weaker (e.g. it cannot represent multi-declarator lines like `int a, b, c;` on its own) but never crashes the scan. In practice this means: AST-tagged findings are more reliable when `pycparser` successfully parses the file, and you should not assume every function/variable in a large or macro-heavy file was analyzed with full AST precision.
 
 ---
 
@@ -89,9 +95,27 @@ cgull scan src/ --severity high --engine regex
 cgull scan src/ --engine ast
 ```
 
+### Parallel Scanning
+```bash
+# Scan files across 4 worker processes
+cgull scan src/ -j 4
+
+# Auto-detect and use all available CPU cores
+cgull scan src/ -j 0
+```
+
+### Suppressing Findings Inline
+```c
+strcpy(dest, src);                        // cgull-ignore: CGULL-001
+strcpy(dest, src);                        // cgull-ignore              (suppresses every rule on this line)
+// cgull-ignore-next-line: CGULL-001,CGULL-003
+strcpy(dest, src);
+```
+
 ### CI/CD Pipeline Enforcement (Fail on High Severity)
 ```bash
 # Exits with non-zero exit code if High severity issues are found
+
 cgull scan src/ --fail-on-high
 ```
 
@@ -256,6 +280,14 @@ python3 tests/test_scanner.py -v
   ]
 }
 ```
+
+---
+
+## ⚠️ Known Limitations
+
+- **Performance on very large or macro-heavy codebases is not yet optimized.** Function/variable extraction is currently regex-based (`O(n)` per file but with a real constant-factor cost), and the `pycparser` cross-check adds further parse time on top of that. On pathological inputs (e.g. thousands of small functions in one file) total scan time can be significant. Use `-j/--jobs` to parallelize across files in the meantime; a follow-up pass on the extraction/parse hot path is planned.
+- **AST-tagged rules degrade gracefully but silently** when `pycparser` can't parse a file (see "AST Engine Notes" above) -- there is currently no per-file indicator in the report distinguishing "analyzed with pycparser" from "regex-fallback only."
+- Several rules have a documented **high false-positive rate** by design trade-off (see `chances_of_false_positives` in the rules table) -- use inline suppression (`// cgull-ignore`) rather than disabling the rule entirely if it's noisy on your codebase but still valuable.
 
 ---
 

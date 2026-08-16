@@ -33,13 +33,20 @@ class BannedFunctionsRule(BaseRule):
         "scanf": ("scanf() with unbounded %s can overflow input buffers.", "scanf(\"%31s\", dest) with explicit width specifier"),
     }
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
+        match_target = masked_line_content or line_content
         for fn_name, (reason, fix) in self.BANNED_FUNCS.items():
             pattern = rf'\b{fn_name}\s*\('
-            m = re.search(pattern, line_content)
+            # Match against the string-literal-masked view so a banned
+            # function name that only appears as text inside a string
+            # literal (e.g. a log message mentioning "gets()") isn't
+            # flagged as an actual call.
+            m = re.search(pattern, match_target)
             if m:
-                # Special check for scanf: only flag if format specifier has %s without width
+                # Special check for scanf: only flag if format specifier has %s without width.
+                # This needs the REAL (unmasked) format-string content, so it
+                # intentionally checks line_content rather than match_target.
                 if fn_name == "scanf":
                     if re.search(r'scanf\s*\(\s*"[^"]*%s[^"]*"', line_content):
                         issues.append(self.create_issue(
@@ -81,7 +88,7 @@ class FormatStringRule(BaseRule):
 
     PRINT_FUNCS = ["printf", "fprintf", "sprintf", "snprintf", "syslog", "vprintf", "vfprintf"]
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # printf(var) or printf(var, ...) where first arg is not "..."
         for fn in ["printf", "vprintf"]:
@@ -131,10 +138,11 @@ class UnsafeIntegerConversionsRule(BaseRule):
     sample_remediated_code = "char *endptr;\nerrno = 0;\nlong val = strtol(str, &endptr, 10);\nif (errno == ERANGE || *endptr != '\\0') { /* handle error */ }"
     analysis_engine = AnalysisEngine.REGEX
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
+        match_target = masked_line_content or line_content
         for fn in ["atoi", "atol", "atoll", "atof"]:
-            m = re.search(rf'\b{fn}\s*\(([^)]+)\)', line_content)
+            m = re.search(rf'\b{fn}\s*\(([^)]+)\)', match_target)
             if m:
                 arg = m.group(1).strip()
                 issues.append(self.create_issue(

@@ -52,11 +52,25 @@ class BaseRule(ABC):
         line_number: int,
         line_content: str,
         full_code: str,
-        source_lines: List[str]
+        source_lines: List[str],
+        masked_line_content: str = "",
     ) -> List[Issue]:
         """
         Regex / lightweight line-by-line scanner.
         Override to implement pattern-based checks.
+
+        `line_content` has comments stripped but string/char literal
+        contents intact (so rules that need real string contents, e.g.
+        detecting hardcoded secrets, still work correctly).
+
+        `masked_line_content` additionally has string/char literal
+        *contents* replaced with 'x' placeholders (quotes and length
+        preserved). Call-pattern rules (banned functions, atoi, etc.)
+        should match against this instead of `line_content` so that a
+        function name appearing only as text inside a string literal --
+        e.g. `char *msg = "please don't use gets()";` -- isn't mistaken
+        for a real call. Defaults to "" for callers/tests that construct
+        rules directly without going through CGullScanner.
         """
         return []
 

@@ -56,7 +56,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
     sample_remediated_code = "int table[10];\nif (idx >= 0 && idx < 10) {\n    table[idx] = 42;\n}"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Skip variable declarations e.g. char username[32]; or int table[10];
         if re.search(r'^\s*(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?\s*\w+\[\s*\d+\s*\]\s*;', line_content):
@@ -103,7 +103,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
     sample_remediated_code = "if (count > SIZE_MAX / sizeof(int)) return -EINVAL;\nint *buf = malloc(count * sizeof(int));"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Look for malloc(n * m) or malloc(n + m) or calloc expressions without bounds check
         m = re.search(r'\bmalloc\s*\(\s*(\w+)\s*([\*\+])\s*([^)]+)\)', line_content)
@@ -148,7 +148,7 @@ class BitwiseOperationsOnSignedIntegersRule(BaseRule):
     sample_remediated_code = "uint32_t mask = 0xFFFFFFFFU;\nuint32_t shifted = mask << 2U;"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Pattern matching signed shift: e.g. (int)x << n or int x = ...; x <<= 2
         m = re.search(r'\bint\s+(\w+)[^;]*;\s*.*?\b\1\s*(?:<<|>>|&=|\|=|\^=)', line_content)
@@ -183,7 +183,7 @@ class UseOfMagicNumbersRule(BaseRule):
     sample_remediated_code = "#define BUFFER_SIZE 1024\n#define MAX_ENTRIES 256\nchar buffer[BUFFER_SIZE];"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Flag magic numbers in array bounds e.g. char buf[4096] or malloc(8192)
         m = re.search(r'\b(?:char|int|float|double|uint\w+_t)\s+\w+\[\s*([3-9]\d{1,5})\s*\]', line_content)

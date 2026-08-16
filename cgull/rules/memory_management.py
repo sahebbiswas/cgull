@@ -9,6 +9,22 @@ from ..models import Severity, RuleCategory, Issue, AnalysisEngine
 from ..ast_analyzer import CASTContext, CFunction
 
 
+def _brace_depths(body_lines: List[str]) -> List[int]:
+    """
+    Returns, for each line in `body_lines`, the net brace depth *after*
+    that line relative to the start of the function body (depth 0). Used
+    to bound forward-lookahead dataflow checks (use-after-free, unchecked
+    allocation) to the enclosing block, instead of scanning arbitrarily
+    far into unrelated code later in the same function.
+    """
+    depths = []
+    depth = 0
+    for line in body_lines:
+        depth += line.count("{") - line.count("}")
+        depths.append(depth)
+    return depths
+
+
 class UncheckedDynamicAllocationsRule(BaseRule):
     rule_id = "CGULL-003"
     name = "Unchecked Dynamic Allocations"
@@ -30,15 +46,24 @@ class UncheckedDynamicAllocationsRule(BaseRule):
 
         for fn in ast_ctx.functions:
             body_lines = fn.body.splitlines()
+            depths = _brace_depths(body_lines)
             for i, line in enumerate(body_lines):
                 line_no = fn.start_line + i
                 m = alloc_regex.search(line)
                 if m:
                     ptr_name = m.group(1)
-                    # Check if subsequent lines check this pointer before using it
+                    # Check if subsequent lines check this pointer before using
+                    # it. Bounded both by a short line window (the check
+                    # should be immediate) AND by the enclosing block: once
+                    # brace depth drops below the depth at the allocation
+                    # site, we've left that scope and any "if" seen further
+                    # down belongs to unrelated code.
+                    base_depth = depths[i]
                     has_check = False
-                    subsequent_lines = body_lines[i + 1: min(i + 8, len(body_lines))]
-                    for sub_line in subsequent_lines:
+                    for j in range(i + 1, min(i + 8, len(body_lines))):
+                        if depths[j] < base_depth:
+                            break
+                        sub_line = body_lines[j]
                         if re.search(rf'\bif\s*\([^)]*?\b{re.escape(ptr_name)}\s*(?:==\s*NULL|!=\s*NULL|==\s*0|!=\s*0)\b', sub_line) or \
                            re.search(rf'\bif\s*\(\s*!{re.escape(ptr_name)}\b', sub_line) or \
                            re.search(rf'\bassert\s*\([^)]*?\b{re.escape(ptr_name)}\b', sub_line):
@@ -126,7 +151,7 @@ class UninitializedPointersRule(BaseRule):
     sample_remediated_code = "char *secret_key = NULL;\nif (condition) {\n    secret_key = fetch_key();\n}\nif (secret_key) use_key(secret_key);"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Match pointer declaration without = : e.g. int *p; or char* ptr, *buf;
         m = re.search(r'^[ \t]*(?:static\s+|const\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*+\s*|\w+\s*\*+)(\w+)\s*;', line_content)
@@ -160,17 +185,31 @@ class UseAfterFreeRule(BaseRule):
     sample_remediated_code = "free(session);\nsession = NULL;"
     analysis_engine = AnalysisEngine.AST
 
+    # Hard cap on lookahead even within the same block, so a single `free()`
+    # near the top of a very large function body can't force an O(n) scan
+    # (and O(n^2) across many free() calls in the same function).
+    MAX_LOOKAHEAD_LINES = 200
+
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         for fn in ast_ctx.functions:
             body_lines = fn.body.splitlines()
+            depths = _brace_depths(body_lines)
             for i, line in enumerate(body_lines):
                 line_no = fn.start_line + i
                 free_match = re.search(r'\bfree\s*\(\s*(\w+)\s*\)', line)
                 if free_match:
                     freed_ptr = free_match.group(1)
-                    # Look ahead for usage of freed_ptr without reassignment
-                    for j in range(i + 1, len(body_lines)):
+                    base_depth = depths[i]
+                    # Look ahead for usage of freed_ptr without reassignment,
+                    # bounded to the enclosing block (once we exit the scope
+                    # the free() happened in, later re-declarations/reuses of
+                    # the same name elsewhere aren't the same pointer) and to
+                    # a hard line cap as a defense-in-depth perf bound.
+                    limit = min(i + 1 + self.MAX_LOOKAHEAD_LINES, len(body_lines))
+                    for j in range(i + 1, limit):
+                        if depths[j] < base_depth:
+                            break
                         next_line = body_lines[j]
                         next_line_no = fn.start_line + j
                         # If reassigned (e.g. ptr = ...), stop checking
@@ -241,7 +280,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
     sample_remediated_code = "explicit_bzero(password, sizeof(password)); // Or memset_s(password, sizeof(password), 0, sizeof(password));"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # memset(key, 0, len) followed within 3 lines by return or }
         m = re.search(r'\bmemset\s*\(\s*(\w+)\s*,\s*0\s*,\s*([^)]+)\)', line_content)

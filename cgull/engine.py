@@ -6,14 +6,16 @@ regex scanning, AST parsing, and issue aggregation.
 
 import os
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import List, Optional, Set, Dict
+from typing import List, Optional, Set, Dict, Tuple
 from pathlib import Path
 
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine
 from .ignore import CGullIgnoreFilter
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
+from .utils import SuppressionMap, mask_string_and_char_literals
 
 
 class CGullScanner:
@@ -40,10 +42,17 @@ class CGullScanner:
         self,
         target_path: str,
         ignore_file: Optional[str] = None,
-        custom_ignore_patterns: Optional[List[str]] = None
+        custom_ignore_patterns: Optional[List[str]] = None,
+        jobs: int = 1,
     ) -> ScanResult:
         """
         Recursively scans a directory or single file for security vulnerabilities.
+
+        `jobs` controls parallelism across files: 1 (default) scans
+        sequentially in-process; >1 scans files concurrently using a
+        process pool, which matters once a codebase has more than a
+        handful of files since each file's regex + AST passes are
+        independent and CPU-bound.
         """
         start_time = time.time()
         abs_target = os.path.abspath(target_path)
@@ -88,14 +97,12 @@ class CGullScanner:
         file_summaries: List[FileScanSummary] = []
         total_loc = 0
 
-        for file_path in files_to_scan:
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            except Exception as e:
-                continue
+        if jobs and jobs > 1 and len(files_to_scan) > 1:
+            results = self._scan_files_parallel(files_to_scan, jobs)
+        else:
+            results = self._scan_files_sequential(files_to_scan)
 
-            file_issues, loc, duration_ms = self._scan_single_file_content(file_path, content)
+        for file_path, file_issues, loc, duration_ms in results:
             total_loc += loc
             all_issues.extend(file_issues)
 
@@ -122,6 +129,11 @@ class CGullScanner:
         med_total = sum(1 for i in all_issues if i.impact == Severity.MEDIUM)
         low_total = sum(1 for i in all_issues if i.impact == Severity.LOW)
 
+        # Keep report output stable/deterministic regardless of scan order
+        # (matters once parallel scanning can complete files out of order).
+        file_summaries.sort(key=lambda fs: fs.file_path)
+        all_issues.sort(key=lambda i: (i.file_path, i.line_number, i.column_number, i.rule_id))
+
         return ScanResult(
             target_path=target_path,
             scanned_files_count=len(files_to_scan),
@@ -137,6 +149,38 @@ class CGullScanner:
             ignored_paths=[os.path.relpath(p, base_dir) for p in ignored_paths],
             rules_applied=len(self.rules),
         )
+
+    def _scan_files_sequential(self, files_to_scan: List[str]):
+        results = []
+        for file_path in files_to_scan:
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+            file_issues, loc, duration_ms = self._scan_single_file_content(file_path, content)
+            results.append((file_path, file_issues, loc, duration_ms))
+        return results
+
+    def _scan_files_parallel(self, files_to_scan: List[str], jobs: int):
+        # Rule instances aren't guaranteed picklable/shareable across
+        # processes, and re-instantiating the default rule set per worker
+        # is cheap, so workers rebuild their own scanner from engine_mode
+        # alone rather than trying to pickle self.
+        results = []
+        with ProcessPoolExecutor(max_workers=jobs) as pool:
+            futures = {
+                pool.submit(_scan_file_worker, file_path, self.engine_mode): file_path
+                for file_path in files_to_scan
+            }
+            for future in as_completed(futures):
+                file_path = futures[future]
+                try:
+                    file_issues, loc, duration_ms = future.result()
+                except Exception:
+                    continue
+                results.append((file_path, file_issues, loc, duration_ms))
+        return results
 
     def scan_text(self, source_code: str, file_path: str = "source.c") -> ScanResult:
         """
@@ -177,47 +221,107 @@ class CGullScanner:
             rules_applied=len(self.rules),
         )
 
-    def _scan_single_file_content(self, file_path: str, content: str) -> (List[Issue], int, float):
-        t0 = time.time()
-        lines = content.splitlines()
-        loc = len(lines)
-        issues: List[Issue] = []
-        seen_keys: Set[str] = set()
+    def _scan_single_file_content(self, file_path: str, content: str) -> Tuple[List[Issue], int, float]:
+        return _scan_file_content(content, file_path, self.rules, self.engine_mode, self.ast_parser)
 
-        def add_issue_if_unique(issue: Issue):
-            key = f"{issue.rule_id}:{issue.line_number}:{issue.message}"
-            if key not in seen_keys:
-                seen_keys.add(key)
-                issues.append(issue)
 
-        # 1. Regex Pass
-        if self.engine_mode in (AnalysisEngine.REGEX, AnalysisEngine.HYBRID):
-            for line_no, line in enumerate(lines, 1):
-                # Skip pure comments for line checks
-                stripped = line.strip()
-                if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
-                    continue
+def _scan_file_content(
+    content: str,
+    file_path: str,
+    rules: List[BaseRule],
+    engine_mode: AnalysisEngine,
+    ast_parser: Optional[CASTParser] = None,
+) -> Tuple[List[Issue], int, float]:
+    """
+    Module-level scan implementation shared by in-process and
+    worker-process scanning paths.
 
-                for rule in self.rules:
-                    found = rule.scan_line(
-                        file_path=file_path,
-                        line_number=line_no,
-                        line_content=line,
-                        full_code=content,
-                        source_lines=lines,
-                    )
-                    for iss in found:
-                        add_issue_if_unique(iss)
+    Comment/string handling: raw source lines are used only for (a)
+    computing line count, (b) parsing `cgull-ignore` suppression
+    directives, and (c) restoring the exact original text into each
+    reported Issue's code_snippet. All rule matching -- both regex and
+    AST -- runs against a *comment-stripped* view of the source, so a
+    banned function name mentioned only in a trailing or leading comment
+    can never trigger a finding. Call-pattern regex rules additionally
+    receive a string-literal-masked view (quotes preserved, contents
+    replaced with 'x') via `masked_line_content`, so text like
+    `"please don't use gets()"` inside a string literal doesn't either.
+    """
+    t0 = time.time()
+    ast_parser = ast_parser or CASTParser()
+    raw_lines = content.splitlines()
+    loc = len(raw_lines)
+    issues: List[Issue] = []
+    seen_keys: Set[str] = set()
 
-        # 2. AST Pass
-        if self.engine_mode in (AnalysisEngine.AST, AnalysisEngine.HYBRID):
-            ast_ctx = self.ast_parser.parse(content)
-            for rule in self.rules:
-                ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
-                for iss in ast_found:
+    suppressions = SuppressionMap.from_source(raw_lines)
+
+    def add_issue_if_unique(issue: Issue):
+        if suppressions.is_suppressed(issue.line_number, issue.rule_id):
+            return
+        key = f"{issue.rule_id}:{issue.line_number}:{issue.message}"
+        if key not in seen_keys:
+            seen_keys.add(key)
+            # Restore the original (uncleaned) source line for display,
+            # regardless of what internal cleaned/masked view the rule
+            # matched against.
+            if 0 < issue.line_number <= len(raw_lines):
+                issue.code_snippet = raw_lines[issue.line_number - 1].strip()
+            issues.append(issue)
+
+    # A single AST parse (which internally strips comments once) covers
+    # both the regex pass and the AST pass -- no need to strip/parse the
+    # file twice, and no need to parse at all in pure REGEX mode.
+    if engine_mode == AnalysisEngine.REGEX:
+        clean_lines, clean_code = CASTParser.strip_only(content)
+        ast_ctx = None
+    else:
+        ast_ctx = ast_parser.parse(content)
+        clean_lines = ast_ctx.clean_source.splitlines()
+        clean_code = ast_ctx.clean_source
+
+    # 1. Regex Pass
+    if engine_mode in (AnalysisEngine.REGEX, AnalysisEngine.HYBRID):
+        masked_lines = [mask_string_and_char_literals(line) for line in clean_lines]
+        for line_no, line in enumerate(clean_lines, 1):
+            if not line.strip():
+                continue
+            masked_line = masked_lines[line_no - 1]
+            for rule in rules:
+                found = rule.scan_line(
+                    file_path=file_path,
+                    line_number=line_no,
+                    line_content=line,
+                    full_code=clean_code,
+                    source_lines=clean_lines,
+                    masked_line_content=masked_line,
+                )
+                for iss in found:
                     add_issue_if_unique(iss)
 
-        # Sort issues by line number
-        issues.sort(key=lambda x: (x.line_number, x.column_number))
-        duration_ms = (time.time() - t0) * 1000.0
-        return issues, loc, duration_ms
+    # 2. AST Pass
+    if engine_mode in (AnalysisEngine.AST, AnalysisEngine.HYBRID):
+        if ast_ctx is None:
+            ast_ctx = ast_parser.parse(content)
+        for rule in rules:
+            ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
+            for iss in ast_found:
+                add_issue_if_unique(iss)
+
+    # Sort issues by line number
+    issues.sort(key=lambda x: (x.line_number, x.column_number))
+    duration_ms = (time.time() - t0) * 1000.0
+    return issues, loc, duration_ms
+
+
+def _scan_file_worker(file_path: str, engine_mode: AnalysisEngine) -> Tuple[List[Issue], int, float]:
+    """
+    Entry point run in a separate process by ProcessPoolExecutor. Rebuilds
+    the default rule set locally (rule instances hold no per-scan state,
+    so this is cheap) rather than pickling rule objects across the
+    process boundary.
+    """
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    rules = get_all_rules()
+    return _scan_file_content(content, file_path, rules, engine_mode)

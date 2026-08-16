@@ -24,7 +24,7 @@ class NakedControlFlowStatementsRule(BaseRule):
     sample_remediated_code = "if (err) {\n    goto fail;\n}"
     analysis_engine = AnalysisEngine.HYBRID
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Check if line has if (...) or while (...) or for (...) without { at end or next line
         stripped = line_content.strip()
@@ -124,7 +124,7 @@ class UseOfGotoStatementsRule(BaseRule):
     sample_remediated_code = "if (error) {\n    cleanup_resources(p);\n    return -1;\n}"
     analysis_engine = AnalysisEngine.REGEX
 
-    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str]) -> List[Issue]:
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         m = re.search(r'\bgoto\s+([a-zA-Z_]\w*)\s*;', line_content)
         if m:

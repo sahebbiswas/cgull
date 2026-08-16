@@ -26,8 +26,14 @@ Examples:
   cgull scan src/ --engine regex --severity high
   cgull scan main.c --format sarif -o results.sarif
   cgull scan src/ --ignore-file .cgullignore --fail-on-high
+  cgull scan src/ -j 0            # parallelize across all CPU cores
   cgull rules
   cgull init-ignore
+
+Suppressing findings inline:
+  // cgull-ignore                          suppress all rules on this line
+  // cgull-ignore: CGULL-001                suppress a specific rule on this line
+  // cgull-ignore-next-line: CGULL-001,CGULL-003
         """
     )
     parser.add_argument("--version", "-v", action="version", version="C-GULL 1.0.0")
@@ -44,6 +50,7 @@ Examples:
     scan_parser.add_argument("--severity", choices=["high", "medium", "low", "all"], default="all", help="Severity filter threshold")
     scan_parser.add_argument("--engine", choices=["regex", "ast", "hybrid"], default="hybrid", help="Scan engine mode (default: hybrid)")
     scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD)")
+    scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count.")
 
     # RULES subcommand
     subparsers.add_parser("rules", help="List all security audit rules supported by C-GULL")
@@ -81,10 +88,15 @@ def handle_scan(args) -> int:
         engine_mode=eng_mode
     )
 
+    jobs = args.jobs
+    if jobs == 0:
+        jobs = os.cpu_count() or 1
+
     result = scanner.scan_path(
         target_path=target,
         ignore_file=args.ignore_file,
-        custom_ignore_patterns=args.ignore_pattern
+        custom_ignore_patterns=args.ignore_pattern,
+        jobs=jobs,
     )
 
     # Format output

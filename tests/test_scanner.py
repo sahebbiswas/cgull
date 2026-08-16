@@ -221,5 +221,157 @@ class TestDirectoryScanning(unittest.TestCase):
         self.assertFalse(any("bad.c" in fs.file_path for fs in result.file_summaries))
 
 
+class TestFalsePositiveRegressions(unittest.TestCase):
+    """
+    Regression tests for false positives / false negatives found while
+    reviewing the analyzer: banned-function names appearing only in
+    comments or string literals, `return x;`-style statements being
+    mis-parsed as variable declarations, and multi-declarator lines.
+    """
+
+    def setUp(self):
+        self.scanner = CGullScanner(engine_mode=AnalysisEngine.HYBRID)
+
+    def test_banned_function_name_in_trailing_comment_not_flagged(self):
+        code = """
+        void f(int x) {
+            int result = x + 1; // avoid using strcpy() here, it's banned
+        }
+        """
+        result = self.scanner.scan_text(code, "test_comment_fp.c")
+        banned_issues = [i for i in result.issues if i.rule_id == "CGULL-001"]
+        self.assertEqual(len(banned_issues), 0)
+
+    def test_banned_function_name_in_string_literal_not_flagged(self):
+        code = """
+        void f(void) {
+            char *name = "use gets() carefully";
+        }
+        """
+        result = self.scanner.scan_text(code, "test_string_fp.c")
+        banned_issues = [i for i in result.issues if i.rule_id == "CGULL-001"]
+        self.assertEqual(len(banned_issues), 0)
+
+    def test_real_banned_call_still_detected_alongside_lookalike_string(self):
+        # A real strcpy() call on one line and a string mentioning strcpy()
+        # on another -- only the real call should be flagged.
+        code = """
+        #include <string.h>
+        void f(char *dest, char *src) {
+            char *msg = "don't use strcpy()";
+            strcpy(dest, src);
+        }
+        """
+        result = self.scanner.scan_text(code, "test_mixed.c")
+        banned_issues = [i for i in result.issues if i.rule_id == "CGULL-001"]
+        self.assertEqual(len(banned_issues), 1)
+        self.assertEqual(banned_issues[0].line_number, 5)
+
+    def test_return_statement_not_mistaken_for_declaration(self):
+        # Regression test: the regex variable-declaration extractor used
+        # to parse `return c;` as if it were declaring a variable `c`,
+        # firing CGULL-023 (uninitialized memory use) on ordinary
+        # control-flow statements that reference a name never actually
+        # declared anywhere in the function.
+        code = """
+        int compute(int x, int y) {
+            int total = x + y;
+            return total;
+        }
+        """
+        result = self.scanner.scan_text(code, "test_return_fp.c")
+        uninit_issues = [i for i in result.issues if i.rule_id == "CGULL-023"]
+        self.assertEqual(len(uninit_issues), 0)
+
+    def test_multi_declarator_line_all_vars_tracked(self):
+        # int a, b, c; -- the single-declarator regex cannot represent
+        # this; pycparser (when available) should recover all three.
+        code = """
+        int compute(int x, int y) {
+            int a, b, c;
+            a = x;
+            b = y;
+            c = a + b;
+            return c;
+        }
+        """
+        from cgull.ast_analyzer import CASTParser
+        ctx = CASTParser().parse(code)
+        if not ctx.has_pycparser:
+            self.skipTest("pycparser not installed in this environment")
+        fn = ctx.functions[0]
+        self.assertIn("a", fn.variables)
+        self.assertIn("b", fn.variables)
+        self.assertIn("c", fn.variables)
+
+
+class TestSuppressionComments(unittest.TestCase):
+
+    def setUp(self):
+        self.scanner = CGullScanner(engine_mode=AnalysisEngine.HYBRID)
+
+    def test_suppress_specific_rule_same_line(self):
+        code = """
+        #include <string.h>
+        void f(char *dest, char *src) {
+            strcpy(dest, src); // cgull-ignore: CGULL-001
+        }
+        """
+        result = self.scanner.scan_text(code, "test_suppress.c")
+        self.assertEqual(len([i for i in result.issues if i.rule_id == "CGULL-001"]), 0)
+
+    def test_suppress_all_rules_same_line(self):
+        code = """
+        #include <string.h>
+        void f(char *dest, char *src) {
+            strcpy(dest, src); // cgull-ignore
+        }
+        """
+        result = self.scanner.scan_text(code, "test_suppress_all.c")
+        self.assertEqual(len(result.issues), 0)
+
+    def test_suppress_next_line(self):
+        code = """
+        #include <string.h>
+        void f(char *dest, char *src) {
+            // cgull-ignore-next-line: CGULL-001
+            strcpy(dest, src);
+        }
+        """
+        result = self.scanner.scan_text(code, "test_suppress_next.c")
+        self.assertEqual(len([i for i in result.issues if i.rule_id == "CGULL-001"]), 0)
+
+    def test_unrelated_rule_not_suppressed(self):
+        code = """
+        #include <string.h>
+        void f(char *dest, char *src) {
+            strcpy(dest, src); // cgull-ignore: CGULL-099
+        }
+        """
+        result = self.scanner.scan_text(code, "test_suppress_wrong_rule.c")
+        self.assertEqual(len([i for i in result.issues if i.rule_id == "CGULL-001"]), 1)
+
+
+class TestParallelScanning(unittest.TestCase):
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        for i in range(4):
+            with open(os.path.join(self.temp_dir, f"f{i}.c"), "w") as f:
+                f.write(f"void t{i}() {{ char buf[32]; gets(buf); }}")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_parallel_scan_matches_sequential_scan(self):
+        seq = CGullScanner().scan_path(self.temp_dir, jobs=1)
+        par = CGullScanner().scan_path(self.temp_dir, jobs=2)
+        self.assertEqual(seq.scanned_files_count, par.scanned_files_count)
+        self.assertEqual(
+            sorted((i.file_path, i.rule_id, i.line_number) for i in seq.issues),
+            sorted((i.file_path, i.rule_id, i.line_number) for i in par.issues),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,11 +2,69 @@
 AST and Lexical Semantic Analyzer for C code in C-GULL.
 Provides both pycparser integration (if installed) and a built-in
 lightweight C Abstract Syntax Tree & Semantic Flow Parser.
+
+Design note: pycparser cannot parse raw, unpreprocessed C (it chokes on
+#include, macros, and standard-library typedefs like size_t/uint32_t that
+it never sees a definition for). Rather than silently degrading to
+"pycparser_ast = None" for almost every real-world file -- which is what
+happened before, since nothing ever consumed pycparser_ast anyway -- this
+module now (a) strips preprocessor directives, (b) injects a small prelude
+of the typedefs real C code relies on constantly, and (c) actually walks
+the resulting AST with a NodeVisitor to extract precise function/variable
+information that the regex-based extractor structurally cannot get right,
+most notably multi-declarator lines like `int a, b, c;`. Where pycparser
+succeeds, its findings are merged into (and take precedence over) the
+regex-derived CFunction/CVariable data; where it fails (which will still
+happen on complex real headers/macros), we transparently fall back to the
+regex-only extraction exactly as before.
 """
 
 import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, Tuple
+
+from .utils import strip_comments_keep_lines
+
+# Common standard-library typedefs that pycparser needs a definition for
+# since it never sees <stdint.h>/<stddef.h>/etc. Injected as a prelude
+# before parsing; stripped back out via line-count offset afterwards.
+_PYCPARSER_PRELUDE = """
+typedef unsigned long size_t;
+typedef long ssize_t;
+typedef unsigned char uint8_t;
+typedef signed char int8_t;
+typedef unsigned short uint16_t;
+typedef signed short int16_t;
+typedef unsigned int uint32_t;
+typedef signed int int32_t;
+typedef unsigned long uint64_t;
+typedef signed long int64_t;
+typedef int wchar_t;
+typedef int bool;
+typedef unsigned long uintptr_t;
+typedef long intptr_t;
+typedef unsigned long size_type;
+"""
+_PRELUDE_LINE_COUNT = _PYCPARSER_PRELUDE.count("\n")
+
+# Keywords that must never be treated as a "type" by the declaration-regex
+# matcher. Without this guard, a bare statement like `return c;` or
+# `break;` parses as if it were declaring a variable named after whatever
+# identifier follows the keyword (`return` looks like a type, `c` looks
+# like the declared name), producing spurious "uninitialized variable"
+# findings on ordinary control-flow statements.
+_STATEMENT_KEYWORDS = {
+    'return', 'break', 'continue', 'goto', 'case', 'default', 'if', 'else', 'for', 'while',
+    'switch', 'sizeof', 'typeof', 'do',
+}
+
+# Strips #include/#define/#pragma/#if.../conditional compilation directives
+# (and line-continuations) so pycparser sees plain C. This is a best-effort
+# substitute for a real preprocessor pass -- it will not expand macros, so
+# code that structurally depends on macro expansion still won't parse, but
+# it unblocks the large fraction of files that only use directives for
+# includes/include-guards/simple constants.
+_PREPROCESSOR_LINE_RE = re.compile(r'^[ \t]*#')
 
 
 @dataclass
@@ -73,23 +131,14 @@ class CASTParser:
 
     def parse(self, source_code: str) -> CASTContext:
         lines = source_code.splitlines()
-        clean_lines, clean_code = self._strip_comments_keep_lines(source_code)
+        clean_lines, clean_code = strip_comments_keep_lines(source_code)
 
         functions = self._extract_functions(clean_lines, clean_code)
         global_vars = self._extract_global_vars(clean_lines, functions)
 
-        # Pycparser attempt if available
-        pycparser_ast = None
-        has_pycparser = False
-        try:
-            from pycparser import c_parser
-            parser = c_parser.CParser()
-            # Pycparser requires basic C99 preprocessed input
-            pycparser_ast = parser.parse(clean_code, filename='<input>')
-            has_pycparser = True
-        except Exception:
-            has_pycparser = False
-            pycparser_ast = None
+        pycparser_ast, has_pycparser = self._try_pycparser(clean_code)
+        if has_pycparser and pycparser_ast is not None:
+            self._merge_pycparser_findings(pycparser_ast, functions)
 
         return CASTContext(
             functions=functions,
@@ -101,97 +150,127 @@ class CASTParser:
             pycparser_ast=pycparser_ast,
         )
 
-    def _strip_comments_keep_lines(self, source: str) -> Tuple[List[str], str]:
+    @staticmethod
+    def strip_only(source_code: str) -> Tuple[List[str], str]:
         """
-        Strips block comments /* */ and line comments // while preserving
-        exact line breaks and string literals.
+        Cheap path used by the engine in REGEX-only mode: just returns
+        comment-stripped lines/code without the (much more expensive)
+        function/variable extraction or pycparser attempt.
         """
-        output_chars = []
-        i = 0
-        n = len(source)
-        in_string = False
-        in_char = False
-        in_line_comment = False
-        in_block_comment = False
+        return strip_comments_keep_lines(source_code)
 
-        while i < n:
-            c = source[i]
-            next_c = source[i + 1] if i + 1 < n else ""
+    def _try_pycparser(self, clean_code: str):
+        """
+        Attempts a real pycparser parse of the (comment-stripped) source.
 
-            if in_line_comment:
-                if c == "\n":
-                    in_line_comment = False
-                    output_chars.append("\n")
-                else:
-                    output_chars.append(" ")
-                i += 1
+        pycparser requires preprocessed C99 input. We approximate that by
+        stripping preprocessor directives and injecting typedefs for the
+        standard integer/size types that real C code universally assumes.
+        This is not a full preprocessor -- files that rely on macro
+        expansion to be syntactically valid will still fail to parse -- but
+        it is enough to successfully parse a large fraction of ordinary
+        application code, which is what actually matters for the rules
+        that consume this AST.
+        """
+        try:
+            from pycparser import c_parser
+        except ImportError:
+            return None, False
+
+        no_directives = "\n".join(
+            "" if _PREPROCESSOR_LINE_RE.match(line) else line
+            for line in clean_code.splitlines()
+        )
+        prepared = _PYCPARSER_PRELUDE + no_directives
+
+        try:
+            parser = c_parser.CParser()
+            pycparser_ast = parser.parse(prepared, filename='<input>')
+            return pycparser_ast, True
+        except Exception:
+            return None, False
+
+    def _merge_pycparser_findings(self, pycparser_ast, functions: List["CFunction"]) -> None:
+        """
+        Cross-checks and enriches the regex-derived function list using the
+        real pycparser AST. Currently this fixes the most impactful known
+        gap in the regex extractor: multi-declarator local variable
+        declarations (`int a, b, c;`), which a single-declarator regex
+        cannot represent. Variables recovered this way are merged into the
+        matching CFunction so every downstream rule (uninitialized-memory,
+        VLA, etc.) benefits without any rule-level changes.
+        """
+        try:
+            from pycparser import c_ast
+        except ImportError:
+            return
+
+        funcs_by_line = {fn.start_line: fn for fn in functions}
+        # Also allow matching by name in case brace-counting drifted the
+        # start line by a comment/blank-line off-by-one.
+        funcs_by_name: Dict[str, List["CFunction"]] = {}
+        for fn in functions:
+            funcs_by_name.setdefault(fn.name, []).append(fn)
+
+        class _LocalDeclVisitor(c_ast.NodeVisitor):
+            def __init__(self, owning_fn: "CFunction", base_line: int):
+                self.owning_fn = owning_fn
+                self.base_line = base_line
+
+            def visit_Decl(self, node):
+                # Skip function prototypes / typedefs / struct-only decls.
+                if node.name and node.coord is not None:
+                    is_pointer = type(node.type).__name__ == "PtrDecl"
+                    is_func = type(node.type).__name__ == "FuncDecl"
+                    if not is_func:
+                        line_no = node.coord.line - _PRELUDE_LINE_COUNT
+                        existing = self.owning_fn.variables.get(node.name)
+                        # pycparser is authoritative: prefer it whenever it
+                        # disagrees with the regex extractor, since the
+                        # regex path is known to occasionally misfire on
+                        # bare statements (see _STATEMENT_KEYWORDS) or miss
+                        # multi-declarator lines entirely.
+                        if existing is None or existing.declaration_line != (line_no if line_no > 0 else self.owning_fn.start_line):
+                            self.owning_fn.variables[node.name] = CVariable(
+                                name=node.name,
+                                type_name=self._type_name(node.type),
+                                is_pointer=is_pointer,
+                                is_signed="unsigned" not in self._type_name(node.type),
+                                is_volatile="volatile" in (node.quals or []),
+                                is_vla=False,
+                                array_size_expr=None,
+                                has_initializer=node.init is not None,
+                                declaration_line=line_no if line_no > 0 else self.owning_fn.start_line,
+                            )
+                self.generic_visit(node)
+
+            @staticmethod
+            def _type_name(type_node) -> str:
+                names = getattr(type_node, "names", None)
+                if names:
+                    return " ".join(names)
+                inner = getattr(type_node, "type", None)
+                if inner is not None:
+                    return _LocalDeclVisitor._type_name(inner)
+                return "int"
+
+        for ext in pycparser_ast.ext:
+            if type(ext).__name__ != "FuncDef":
+                continue
+            fname = ext.decl.name
+            fn_line = (ext.decl.coord.line - _PRELUDE_LINE_COUNT) if ext.decl.coord else None
+
+            owning_fn = None
+            if fn_line and fn_line in funcs_by_line:
+                owning_fn = funcs_by_line[fn_line]
+            elif fname in funcs_by_name and len(funcs_by_name[fname]) == 1:
+                owning_fn = funcs_by_name[fname][0]
+            if owning_fn is None or ext.body is None:
                 continue
 
-            if in_block_comment:
-                if c == "*" and next_c == "/":
-                    in_block_comment = False
-                    output_chars.append("  ")
-                    i += 2
-                elif c == "\n":
-                    output_chars.append("\n")
-                    i += 1
-                else:
-                    output_chars.append(" ")
-                    i += 1
-                continue
-
-            if in_string:
-                output_chars.append(c)
-                if c == "\\" and i + 1 < n:
-                    output_chars.append(source[i + 1])
-                    i += 2
-                    continue
-                elif c == '"':
-                    in_string = False
-                i += 1
-                continue
-
-            if in_char:
-                output_chars.append(c)
-                if c == "\\" and i + 1 < n:
-                    output_chars.append(source[i + 1])
-                    i += 2
-                    continue
-                elif c == "'":
-                    in_char = False
-                i += 1
-                continue
-
-            if c == "/" and next_c == "/":
-                in_line_comment = True
-                output_chars.append("  ")
-                i += 2
-                continue
-
-            if c == "/" and next_c == "*":
-                in_block_comment = True
-                output_chars.append("  ")
-                i += 2
-                continue
-
-            if c == '"':
-                in_string = True
-                output_chars.append(c)
-                i += 1
-                continue
-
-            if c == "'":
-                in_char = True
-                output_chars.append(c)
-                i += 1
-                continue
-
-            output_chars.append(c)
-            i += 1
-
-        clean_code = "".join(output_chars)
-        clean_lines = clean_code.splitlines()
-        return clean_lines, clean_code
+            visitor = _LocalDeclVisitor(owning_fn, owning_fn.start_line)
+            for stmt in getattr(ext.body, "block_items", None) or []:
+                visitor.visit(stmt)
 
     def _extract_functions(self, lines: List[str], full_code: str) -> List[CFunction]:
         functions: List[CFunction] = []
@@ -320,6 +399,10 @@ class CASTParser:
 
                 if v_name in C_KEYWORDS or not v_name.isidentifier():
                     continue
+                type_tokens = type_prefix.split()
+                if type_tokens and type_tokens[-1] in _STATEMENT_KEYWORDS:
+                    # e.g. "return c;" / "break;" mis-parsed as a decl of `c`.
+                    continue
 
                 is_ptr = '*' in type_prefix or '*' in v_name
                 is_signed = 'unsigned' not in type_prefix
@@ -382,6 +465,9 @@ class CASTParser:
             if m:
                 type_prefix = m.group(1).strip()
                 v_name = m.group(2).strip()
+                type_tokens = type_prefix.split()
+                if type_tokens and type_tokens[-1] in _STATEMENT_KEYWORDS:
+                    continue
                 if v_name not in ('typedef', '#include', '#define', '#ifdef', '#ifndef'):
                     global_vars[v_name] = CVariable(
                         name=v_name,
