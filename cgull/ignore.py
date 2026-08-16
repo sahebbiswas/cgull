@@ -18,7 +18,7 @@ class CGullIgnoreFilter:
 
     def __init__(self, base_dir: Optional[str] = None, custom_patterns: Optional[List[str]] = None):
         self.base_dir = os.path.abspath(base_dir) if base_dir else os.getcwd()
-        self.rules: List[Tuple[bool, str, bool]] = []  # (is_negation, regex_pattern, directory_only)
+        self.rules: List[Tuple[bool, str, bool, bool]] = []  # (is_negation, regex_pattern, directory_only, anchored_to_root)
         self.raw_patterns: List[str] = []
 
         # Default standard ignore patterns
@@ -80,9 +80,10 @@ class CGullIgnoreFilter:
         if directory_only:
             raw = raw[:-1]
 
+        anchored_to_root = raw.startswith("/") or "/" in raw.rstrip("/")
         # Convert glob to regex
         regex = self._glob_to_regex(raw)
-        self.rules.append((is_negation, regex, directory_only))
+        self.rules.append((is_negation, regex, directory_only, anchored_to_root))
 
     def _glob_to_regex(self, glob_pat: str) -> str:
         """Converts glob pattern to regex string."""
@@ -145,11 +146,23 @@ class CGullIgnoreFilter:
             return False
 
         ignored = False
-        for is_negation, regex, dir_only in self.rules:
+        for is_negation, regex, dir_only, anchored in self.rules:
             if dir_only and not is_dir:
-                # Directory-only rule won't match a plain file unless its parent dir matched
-                pass
-            if re.search(regex, rel_path) or re.search(regex, os.path.basename(rel_path)):
+                # Directory-only rule (e.g. "build/") must not match a
+                # plain file entry unless it's a descendant of a matched
+                # directory -- the regex itself (`(?:/.*)?$`) already
+                # allows matching files *underneath* a matched directory,
+                # so we only need to skip the case where the rule would
+                # otherwise match the file/dir name itself.
+                base_regex = regex[:-len("(?:/.*)?$")] + "$" if regex.endswith("(?:/.*)?$") else regex
+                if re.search(base_regex, rel_path) or re.search(base_regex, os.path.basename(rel_path)):
+                    continue
+            # Patterns containing a "/" (anchored to base_dir, per standard
+            # .gitignore semantics) must only be checked against the full
+            # relative path -- NOT against the bare basename, or a rule
+            # like "/config.c" (root only) would incorrectly also match
+            # "src/config.c" via its basename "config.c" alone.
+            if re.search(regex, rel_path) or (not anchored and re.search(regex, os.path.basename(rel_path))):
                 ignored = not is_negation
 
         return ignored

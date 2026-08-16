@@ -1,0 +1,231 @@
+"""
+Tests for cgull.cli: argument parsing and subcommand behavior.
+"""
+
+import io
+import os
+import json
+import shutil
+import tempfile
+import contextlib
+import unittest
+
+from cgull.cli import main, build_parser
+
+
+class TestArgumentParsing(unittest.TestCase):
+    def test_default_command_is_scan_current_dir(self):
+        parser = build_parser()
+        args = parser.parse_args(["scan", "."])
+        self.assertEqual(args.command, "scan")
+        self.assertEqual(args.target, ".")
+
+    def test_bare_path_implies_scan_subcommand(self):
+        # main() should rewrite `cgull somefile.c` to `cgull scan somefile.c`
+        parser = build_parser()
+        args = parser.parse_args(["scan", "somefile.c"])
+        self.assertEqual(args.target, "somefile.c")
+
+    def test_jobs_defaults_to_one(self):
+        parser = build_parser()
+        args = parser.parse_args(["scan", "."])
+        self.assertEqual(args.jobs, 1)
+
+    def test_severity_choices_restricted(self):
+        parser = build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["scan", ".", "--severity", "invalid"])
+
+
+class TestScanCommand(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.c_file = os.path.join(self.temp_dir, "vuln.c")
+        with open(self.c_file, "w") as f:
+            f.write("void f(char *b) {\n    gets(b);\n}\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _run(self, argv):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = main(argv)
+        return code, stdout.getvalue()
+
+    def test_scan_missing_target_returns_error(self):
+        code, out = self._run(["scan", "/nonexistent/path/xyz"])
+        self.assertEqual(code, 1)
+
+    def test_scan_text_format_prints_findings(self):
+        code, out = self._run(["scan", self.c_file, "--format", "text"])
+        self.assertEqual(code, 0)
+        self.assertIn("CGULL-001", out)
+
+    def test_scan_json_format_is_valid_json(self):
+        code, out = self._run(["scan", self.c_file, "--format", "json"])
+        parsed = json.loads(out)
+        self.assertIn("summary", parsed)
+
+    def test_scan_sarif_format_is_valid_json(self):
+        code, out = self._run(["scan", self.c_file, "--format", "sarif"])
+        parsed = json.loads(out)
+        self.assertEqual(parsed["version"], "2.1.0")
+
+    def test_scan_markdown_format(self):
+        code, out = self._run(["scan", self.c_file, "--format", "markdown"])
+        self.assertIn("C-GULL Security Audit Report", out)
+
+    def test_fail_on_high_returns_nonzero_when_high_severity_found(self):
+        code, _ = self._run(["scan", self.c_file, "--fail-on-high"])
+        self.assertEqual(code, 1)
+
+    def test_fail_on_high_returns_zero_when_no_high_severity(self):
+        clean_file = os.path.join(self.temp_dir, "clean.c")
+        with open(clean_file, "w") as f:
+            f.write("void noop(void) {\n    int total = 0;\n    total = total + 1;\n}\n")
+        code, _ = self._run(["scan", clean_file, "--fail-on-high"])
+        self.assertEqual(code, 0)
+
+    def test_output_file_written_and_reported(self):
+        out_path = os.path.join(self.temp_dir, "report.json")
+        code, out = self._run(["scan", self.c_file, "-o", out_path, "--format", "json"])
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(out_path))
+        with open(out_path) as f:
+            parsed = json.load(f)
+        self.assertIn("summary", parsed)
+
+    def test_output_extension_autodetects_json_format(self):
+        out_path = os.path.join(self.temp_dir, "report.json")
+        code, _ = self._run(["scan", self.c_file, "-o", out_path])
+        with open(out_path) as f:
+            parsed = json.load(f)  # would raise if not actually JSON
+        self.assertIn("issues", parsed)
+
+    def test_severity_filter_high_excludes_lower_severity_issues(self):
+        code, out = self._run(["scan", self.c_file, "--severity", "high", "--format", "json"])
+        parsed = json.loads(out)
+        for issue in parsed["issues"]:
+            self.assertEqual(issue["impact"], "High")
+
+    def test_regex_engine_mode_runs_without_error(self):
+        code, out = self._run(["scan", self.c_file, "--engine", "regex", "--format", "json"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(out)
+        self.assertGreaterEqual(parsed["summary"]["total_issues_count"], 1)
+
+    def test_bare_target_without_scan_keyword_still_works(self):
+        code, out = self._run([self.c_file, "--format", "json"])
+        parsed = json.loads(out)
+        self.assertIn("summary", parsed)
+
+    def test_severity_filter_medium_includes_high_and_medium(self):
+        code, out = self._run(["scan", self.c_file, "--severity", "medium", "--format", "json"])
+        parsed = json.loads(out)
+        for issue in parsed["issues"]:
+            self.assertIn(issue["impact"], ("High", "Medium"))
+
+    def test_severity_filter_low_includes_all_but_info(self):
+        code, out = self._run(["scan", self.c_file, "--severity", "low", "--format", "json"])
+        self.assertEqual(code, 0)
+
+    def test_ast_engine_mode_runs_without_error(self):
+        code, out = self._run(["scan", self.c_file, "--engine", "ast", "--format", "json"])
+        self.assertEqual(code, 0)
+
+    def test_output_extension_autodetects_sarif_format(self):
+        out_path = os.path.join(self.temp_dir, "report.sarif")
+        code, _ = self._run(["scan", self.c_file, "-o", out_path])
+        with open(out_path) as f:
+            parsed = json.load(f)
+        self.assertEqual(parsed["version"], "2.1.0")
+
+    def test_output_extension_autodetects_markdown_format(self):
+        out_path = os.path.join(self.temp_dir, "report.md")
+        code, _ = self._run(["scan", self.c_file, "-o", out_path])
+        with open(out_path) as f:
+            content = f.read()
+        self.assertIn("C-GULL Security Audit Report", content)
+
+    def test_output_write_failure_returns_error(self):
+        # Writing to a path inside a non-existent directory should fail
+        # cleanly with a non-zero exit code rather than raising.
+        bad_path = os.path.join(self.temp_dir, "no_such_dir", "report.json")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            code = main(["scan", self.c_file, "-o", bad_path])
+        self.assertEqual(code, 1)
+
+
+class TestRulesCommand(unittest.TestCase):
+    def test_rules_command_lists_all_rule_ids(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = main(["rules"])
+        self.assertEqual(code, 0)
+        out = stdout.getvalue()
+        self.assertIn("CGULL-001", out)
+        self.assertIn("CGULL-025", out)
+
+
+class TestInitIgnoreCommand(unittest.TestCase):
+    def test_creates_cgullignore_file_in_cwd(self):
+        temp_dir = tempfile.mkdtemp()
+        cwd = os.getcwd()
+        try:
+            os.chdir(temp_dir)
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = main(["init-ignore"])
+            self.assertEqual(code, 0)
+            self.assertTrue(os.path.exists(".cgullignore"))
+        finally:
+            os.chdir(cwd)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_does_not_overwrite_existing_file(self):
+        temp_dir = tempfile.mkdtemp()
+        cwd = os.getcwd()
+        try:
+            os.chdir(temp_dir)
+            with open(".cgullignore", "w") as f:
+                f.write("# custom content\n")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                main(["init-ignore"])
+            with open(".cgullignore") as f:
+                content = f.read()
+            self.assertEqual(content, "# custom content\n")
+        finally:
+            os.chdir(cwd)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+class TestMainDispatch(unittest.TestCase):
+    def test_no_args_defaults_to_scanning_current_directory(self):
+        temp_dir = tempfile.mkdtemp()
+        cwd = os.getcwd()
+        try:
+            os.chdir(temp_dir)
+            with open("clean.c", "w") as f:
+                f.write("void noop(void) {\n    int total = 0;\n    total = total + 1;\n}\n")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = main([])
+            self.assertEqual(code, 0)
+        finally:
+            os.chdir(cwd)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_help_flag_exits_via_argparse(self):
+        # --help is handled entirely by argparse's own action (SystemExit),
+        # never reaching main()'s own command-dispatch branches.
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit) as ctx:
+                main(["--help"])
+        self.assertEqual(ctx.exception.code, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
