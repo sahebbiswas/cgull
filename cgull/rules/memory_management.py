@@ -31,7 +31,7 @@ class UncheckedDynamicAllocationsRule(BaseRule):
     impact = Severity.HIGH
     category = RuleCategory.MEMORY
     description = "Ensure return value of memory allocation (malloc, calloc, realloc, aligned_alloc) is checked for NULL before use."
-    implementation_method = "AST parsing / Regex dataflow to verify conditional NULL checks"
+    implementation_method = "AST parsing / CFG dataflow to verify conditional NULL checks"
     implementation_complexity = "Medium"
     chances_of_false_positives = "Medium"
     cwe_id = "CWE-476 / CWE-252"
@@ -42,44 +42,66 @@ class UncheckedDynamicAllocationsRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
-        alloc_regex = re.compile(r'\b(\w+)\s*=\s*(?:\([^\)]+\)\s*)?(?:malloc|calloc|realloc|aligned_alloc)\s*\(')
+        alloc_fn_names = {"malloc", "calloc", "realloc", "aligned_alloc"}
 
         for fn in ast_ctx.functions:
-            body_lines = fn.body.splitlines()
-            depths = _brace_depths(body_lines)
-            for i, line in enumerate(body_lines):
-                line_no = fn.start_line + i
-                m = alloc_regex.search(line)
-                if m:
-                    ptr_name = m.group(1)
-                    # Check if subsequent lines check this pointer before using
-                    # it. Bounded both by a short line window (the check
-                    # should be immediate) AND by the enclosing block: once
-                    # brace depth drops below the depth at the allocation
-                    # site, we've left that scope and any "if" seen further
-                    # down belongs to unrelated code.
-                    base_depth = depths[i]
-                    has_check = False
-                    for j in range(i + 1, min(i + 8, len(body_lines))):
-                        if depths[j] < base_depth:
+            if fn.cfg_nodes:
+                alloc_nodes = [n for n in fn.cfg_nodes if n.kind == "allocation" and n.target_var]
+
+                for alloc_node in alloc_nodes:
+                    ptr_name = alloc_node.target_var
+                    line_no = alloc_node.line_number
+                    checked = False
+                    start_idx = fn.cfg_nodes.index(alloc_node)
+                    for next_node in fn.cfg_nodes[start_idx + 1:]:
+                        if ptr_name in next_node.null_checked_vars:
+                            checked = True
                             break
-                        sub_line = body_lines[j]
-                        if re.search(rf'\bif\s*\([^)]*?\b{re.escape(ptr_name)}\s*(?:==\s*NULL|!=\s*NULL|==\s*0|!=\s*0)\b', sub_line) or \
-                           re.search(rf'\bif\s*\(\s*!{re.escape(ptr_name)}\b', sub_line) or \
-                           re.search(rf'\bassert\s*\([^)]*?\b{re.escape(ptr_name)}\b', sub_line):
-                            has_check = True
+                        if next_node.kind not in ("if_cond", "while_cond", "for_cond", "switch_cond") and ptr_name in next_node.read_vars:
                             break
 
-                    if not has_check:
+                    if not checked:
+                        snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else alloc_node.expr_str
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=line_no,
-                            code_snippet=line,
+                            code_snippet=snippet,
                             message=f"Return value of dynamic memory allocation for '{ptr_name}' is not checked for NULL before use.",
-                            column_number=m.start() + 1,
+                            column_number=1,
                             engine="AST",
                             auto_fix_replacement=f"if ({ptr_name} == NULL) {{\n    return -1; // Handle out-of-memory\n}}"
                         ))
+            else:
+                body_lines = fn.body.splitlines()
+                depths = _brace_depths(body_lines)
+                alloc_regex = re.compile(r'\b(\w+)\s*=\s*(?:\([^\)]+\)\s*)?(?:malloc|calloc|realloc|aligned_alloc)\s*\(')
+                for i, line in enumerate(body_lines):
+                    line_no = fn.start_line + 1 + i
+                    m = alloc_regex.search(line)
+                    if m:
+                        ptr_name = m.group(1)
+                        base_depth = depths[i]
+                        has_check = False
+                        for j in range(i + 1, min(i + 8, len(body_lines))):
+                            if depths[j] < base_depth:
+                                break
+                            sub_line = body_lines[j]
+                            if re.search(rf'\bif\s*\([^)]*?\b{re.escape(ptr_name)}\s*(?:==\s*NULL|!=\s*NULL|==\s*0|!=\s*0)\b', sub_line) or \
+                               re.search(rf'\bif\s*\(\s*!{re.escape(ptr_name)}\b', sub_line) or \
+                               re.search(rf'\bassert\s*\([^)]*?\b{re.escape(ptr_name)}\b', sub_line):
+                                has_check = True
+                                break
+
+                        if not has_check:
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=line,
+                                message=f"Return value of dynamic memory allocation for '{ptr_name}' is not checked for NULL before use.",
+                                column_number=m.start() + 1,
+                                engine="AST",
+                                auto_fix_replacement=f"if ({ptr_name} == NULL) {{\n    return -1; // Handle out-of-memory\n}}"
+                            ))
         return issues
 
 
@@ -185,48 +207,60 @@ class UseAfterFreeRule(BaseRule):
     sample_remediated_code = "free(session);\nsession = NULL;"
     analysis_engine = AnalysisEngine.AST
 
-    # Hard cap on lookahead even within the same block, so a single `free()`
-    # near the top of a very large function body can't force an O(n) scan
-    # (and O(n^2) across many free() calls in the same function).
     MAX_LOOKAHEAD_LINES = 200
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         for fn in ast_ctx.functions:
-            body_lines = fn.body.splitlines()
-            depths = _brace_depths(body_lines)
-            for i, line in enumerate(body_lines):
-                line_no = fn.start_line + i
-                free_match = re.search(r'\bfree\s*\(\s*(\w+)\s*\)', line)
-                if free_match:
-                    freed_ptr = free_match.group(1)
-                    base_depth = depths[i]
-                    # Look ahead for usage of freed_ptr without reassignment,
-                    # bounded to the enclosing block (once we exit the scope
-                    # the free() happened in, later re-declarations/reuses of
-                    # the same name elsewhere aren't the same pointer) and to
-                    # a hard line cap as a defense-in-depth perf bound.
-                    limit = min(i + 1 + self.MAX_LOOKAHEAD_LINES, len(body_lines))
-                    for j in range(i + 1, limit):
-                        if depths[j] < base_depth:
-                            break
-                        next_line = body_lines[j]
-                        next_line_no = fn.start_line + j
-                        # If reassigned (e.g. ptr = ...), stop checking
-                        if re.search(rf'\b{re.escape(freed_ptr)}\s*=', next_line):
-                            break
-                        # If used: *ptr, ptr->field, ptr[idx], func(ptr)
-                        if re.search(rf'(?:\*\s*{re.escape(freed_ptr)}\b|{re.escape(freed_ptr)}\s*->|{re.escape(freed_ptr)}\s*\[|\b\w+\s*\([^)]*?\b{re.escape(freed_ptr)}\b)', next_line):
-                            issues.append(self.create_issue(
-                                file_path=file_path,
-                                line_number=next_line_no,
-                                code_snippet=next_line,
-                                message=f"Potential Use-After-Free: pointer '{freed_ptr}' was freed at line {line_no} and accessed here.",
-                                column_number=1,
-                                engine="AST",
-                                auto_fix_replacement=f"// Ensure {freed_ptr} is set to NULL after free() and not accessed"
-                            ))
-                            break
+            if fn.cfg_nodes:
+                for idx, node in enumerate(fn.cfg_nodes):
+                    if node.freed_vars:
+                        for freed_ptr in node.freed_vars:
+                            free_line = node.line_number
+                            for future_node in fn.cfg_nodes[idx + 1:]:
+                                if freed_ptr in future_node.written_vars:
+                                    break
+                                if freed_ptr in future_node.read_vars:
+                                    use_line = future_node.line_number
+                                    snippet = ast_ctx.source_lines[use_line - 1].strip() if use_line <= len(ast_ctx.source_lines) else future_node.expr_str
+                                    issues.append(self.create_issue(
+                                        file_path=file_path,
+                                        line_number=use_line,
+                                        code_snippet=snippet,
+                                        message=f"Potential Use-After-Free: pointer '{freed_ptr}' was freed at line {free_line} and accessed here.",
+                                        column_number=1,
+                                        engine="AST",
+                                        auto_fix_replacement=f"// Ensure {freed_ptr} is set to NULL after free() and not accessed"
+                                    ))
+                                    break
+            else:
+                body_lines = fn.body.splitlines()
+                depths = _brace_depths(body_lines)
+                for i, line in enumerate(body_lines):
+                    line_no = fn.start_line + 1 + i
+                    free_match = re.search(r'\bfree\s*\(\s*(\w+)\s*\)', line)
+                    if free_match:
+                        freed_ptr = free_match.group(1)
+                        base_depth = depths[i]
+                        limit = min(i + 1 + self.MAX_LOOKAHEAD_LINES, len(body_lines))
+                        for j in range(i + 1, limit):
+                            if depths[j] < base_depth:
+                                break
+                            next_line = body_lines[j]
+                            next_line_no = fn.start_line + 1 + j
+                            if re.search(rf'\b{re.escape(freed_ptr)}\s*=', next_line):
+                                break
+                            if re.search(rf'(?:\*\s*{re.escape(freed_ptr)}\b|{re.escape(freed_ptr)}\s*->|{re.escape(freed_ptr)}\s*\[|\b\w+\s*\([^)]*?\b{re.escape(freed_ptr)}\b)', next_line):
+                                issues.append(self.create_issue(
+                                    file_path=file_path,
+                                    line_number=next_line_no,
+                                    code_snippet=next_line,
+                                    message=f"Potential Use-After-Free: pointer '{freed_ptr}' was freed at line {line_no} and accessed here.",
+                                    column_number=1,
+                                    engine="AST",
+                                    auto_fix_replacement=f"// Ensure {freed_ptr} is set to NULL after free() and not accessed"
+                                ))
+                                break
         return issues
 
 

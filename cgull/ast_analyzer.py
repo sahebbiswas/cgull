@@ -93,6 +93,20 @@ class CVariable:
 
 
 @dataclass
+class CFGNode:
+    node_id: int
+    kind: str  # "decl", "assignment", "call", "if_cond", "while_cond", "for_cond", "switch_cond", "return", "free", "null_check", "statement"
+    line_number: int
+    expr_str: str = ""
+    target_var: Optional[str] = None
+    read_vars: Set[str] = field(default_factory=set)
+    written_vars: Set[str] = field(default_factory=set)
+    freed_vars: Set[str] = field(default_factory=set)
+    null_checked_vars: Set[str] = field(default_factory=set)
+    next_nodes: List["CFGNode"] = field(default_factory=list)
+
+
+@dataclass
 class CFunction:
     name: str
     return_type: str
@@ -106,6 +120,7 @@ class CFunction:
     calls: List[Tuple[str, int, str]] = field(default_factory=list)  # (callee_name, line, raw_args)
     returns_boolean: bool = False
     has_assertions: bool = False
+    cfg_nodes: List[CFGNode] = field(default_factory=list)
 
 
 @dataclass
@@ -117,6 +132,386 @@ class CASTContext:
     clean_source: str
     has_pycparser: bool = False
     pycparser_ast: Optional[Any] = None
+
+
+def _format_pycparser_expr(node) -> str:
+    """Recursively formats a pycparser expression node to a C code string."""
+    if node is None:
+        return ""
+    type_name = type(node).__name__
+    if type_name == "Constant":
+        return str(node.value)
+    elif type_name == "ID":
+        return str(node.name)
+    elif type_name == "UnaryOp":
+        return f"{node.op}{_format_pycparser_expr(node.expr)}"
+    elif type_name == "BinaryOp":
+        return f"{_format_pycparser_expr(node.left)} {node.op} {_format_pycparser_expr(node.right)}"
+    elif type_name == "Cast":
+        return f"({_format_pycparser_expr(node.to_type)}){_format_pycparser_expr(node.expr)}"
+    elif type_name == "ArrayRef":
+        return f"{_format_pycparser_expr(node.name)}[{_format_pycparser_expr(node.subscript)}]"
+    elif type_name == "StructRef":
+        return f"{_format_pycparser_expr(node.name)}{node.type}{_format_pycparser_expr(node.field)}"
+    elif type_name == "FuncCall":
+        args_str = ""
+        if node.args:
+            args_str = ", ".join(_format_pycparser_expr(a) for a in getattr(node.args, "exprs", []))
+        return f"{_format_pycparser_expr(node.name)}({args_str})"
+    elif type_name == "ExprList":
+        return ", ".join(_format_pycparser_expr(e) for e in getattr(node, "exprs", []))
+    elif type_name == "Typename":
+        tname, _, _, _, _, _, _, _ = _format_pycparser_type(node.type)
+        return tname
+    elif hasattr(node, "name") and node.name:
+        return str(node.name)
+    return ""
+
+
+def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Optional[str], bool]:
+    """
+    Recursively formats a pycparser type node.
+    Returns:
+      (type_name, is_pointer, is_func_ptr, is_volatile, is_signed, is_vla, array_size_expr, is_array)
+    """
+    if node is None:
+        return "int", False, False, False, True, False, None, False
+
+    quals = getattr(node, "quals", []) or []
+    is_volatile = "volatile" in quals
+    is_signed = "unsigned" not in quals
+    type_name = type(node).__name__
+
+    if type_name == "PtrDecl":
+        sub_t, sub_ptr, is_fp, sub_vol, sub_sig, sub_vla, sub_dim, is_arr = _format_pycparser_type(node.type)
+        vol = is_volatile or sub_vol
+        sig = is_signed and sub_sig
+        if is_fp:
+            return f"(*{sub_t})", True, True, vol, sig, False, None, False
+        return f"{sub_t} *", True, False, vol, sig, False, None, False
+
+    elif type_name == "ArrayDecl":
+        sub_t, sub_ptr, sub_fp, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type)
+        dim_str = None
+        is_vla = False
+        if node.dim:
+            if type(node.dim).__name__ == "Constant":
+                dim_str = str(node.dim.value)
+                is_vla = False
+            elif type(node.dim).__name__ == "ID":
+                dim_str = str(node.dim.name)
+                is_vla = True
+            else:
+                dim_str = _format_pycparser_expr(node.dim)
+                is_vla = True
+        vol = is_volatile or sub_vol
+        sig = is_signed and sub_sig
+        return f"{sub_t}[{dim_str or ''}]", sub_ptr, sub_fp, vol, sig, is_vla, dim_str, True
+
+    elif type_name == "FuncDecl":
+        ret_t, _, _, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type)
+        p_list = []
+        if node.args and getattr(node.args, "params", None):
+            for p in node.args.params:
+                p_type_name = type(p).__name__
+                if p_type_name == "Typename":
+                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type)
+                    p_list.append(pt)
+                elif p_type_name == "Decl":
+                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type)
+                    p_list.append(f"{pt} {p.name}" if getattr(p, "name", None) else pt)
+        params_str = ", ".join(p_list) if p_list else "void"
+        return f"{ret_t} ({params_str})", False, True, sub_vol, sub_sig, False, None, False
+
+    elif type_name == "TypeDecl":
+        inner = node.type
+        inner_type_name = type(inner).__name__
+        vol = is_volatile
+        sig = is_signed
+        if inner_type_name == "IdentifierType":
+            names = getattr(inner, "names", ["int"])
+            tname = " ".join(names)
+            if "unsigned" in names:
+                sig = False
+        elif inner_type_name == "Struct":
+            tname = f"struct {inner.name}" if getattr(inner, "name", None) else "struct"
+        elif inner_type_name == "Union":
+            tname = f"union {inner.name}" if getattr(inner, "name", None) else "union"
+        elif inner_type_name == "Enum":
+            tname = f"enum {inner.name}" if getattr(inner, "name", None) else "enum"
+        else:
+            tname = getattr(node, "declname", "int") or "int"
+        if "volatile" in (getattr(inner, "quals", []) or []):
+            vol = True
+        return tname, False, False, vol, sig, False, None, False
+
+    elif type_name == "IdentifierType":
+        names = getattr(node, "names", ["int"])
+        sig = "unsigned" not in names
+        return " ".join(names), False, False, False, sig, False, None, False
+
+    elif type_name == "Typename":
+        return _format_pycparser_type(node.type)
+
+    return "int", False, False, False, True, False, None, False
+
+
+def _extract_identifiers_from_ast(node) -> Set[str]:
+    """Recursively extracts all identifier names from an AST node."""
+    names: Set[str] = set()
+    if node is None:
+        return names
+    if type(node).__name__ == "ID":
+        names.add(str(node.name))
+    for _, child in node.children():
+        names.update(_extract_identifiers_from_ast(child))
+    return names
+
+
+def _get_max_ast_line(node, current_max: int, prelude_offset: int) -> int:
+    """Recursively finds the maximum line coordinate in an AST node."""
+    if node is None:
+        return current_max
+    if getattr(node, "coord", None):
+        current_max = max(current_max, node.coord.line - prelude_offset)
+    for _, child in node.children():
+        current_max = _get_max_ast_line(child, current_max, prelude_offset)
+    return current_max
+
+
+class _ASTFunctionAnalyzer:
+    """
+    Traverses a pycparser FuncDef body to extract local variables,
+    function calls, dataflow events, and CFG nodes.
+    """
+
+    def __init__(self, owning_fn: CFunction, prelude_offset: int, clean_lines: List[str]):
+        self.owning_fn = owning_fn
+        self.prelude_offset = prelude_offset
+        self.clean_lines = clean_lines
+        self.node_counter = 0
+
+    def analyze(self, body_node) -> None:
+        if body_node is None:
+            return
+        from pycparser import c_ast
+
+        class Visitor(c_ast.NodeVisitor):
+            def __init__(self, outer: "_ASTFunctionAnalyzer"):
+                self.outer = outer
+
+            def visit_Decl(self, node):
+                if node.name and type(node.type).__name__ != "FuncDecl":
+                    line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(node.type)
+                    c_var = CVariable(
+                        name=node.name,
+                        type_name=tname,
+                        is_pointer=(is_ptr or is_fp),
+                        is_signed=is_sig,
+                        is_volatile=is_vol,
+                        is_vla=is_vla,
+                        array_size_expr=arr_dim,
+                        has_initializer=(node.init is not None),
+                        declaration_line=line_no,
+                    )
+                    init_ids: Set[str] = set()
+                    if node.init:
+                        c_var.assigned_lines.append(line_no)
+                        init_ids = _extract_identifiers_from_ast(node.init)
+                        for v in init_ids:
+                            if v in self.outer.owning_fn.variables:
+                                self.outer.owning_fn.variables[v].read_lines.append(line_no)
+                    self.outer.owning_fn.variables[node.name] = c_var
+
+                    init_str = f" = {_format_pycparser_expr(node.init)}" if node.init else ""
+                    alloc_fn_names = {"malloc", "calloc", "realloc", "aligned_alloc"}
+                    is_alloc = False
+                    if node.init:
+                        init_expr_str = _format_pycparser_expr(node.init)
+                        if any(fn_name in init_expr_str for fn_name in alloc_fn_names):
+                            is_alloc = True
+
+                    self.outer.node_counter += 1
+                    cfg_n = CFGNode(
+                        node_id=self.outer.node_counter,
+                        kind="allocation" if is_alloc else "decl",
+                        line_number=line_no,
+                        expr_str=f"{tname} {node.name}{init_str}",
+                        target_var=node.name,
+                        written_vars={node.name} if node.init else set(),
+                        read_vars=init_ids if node.init else set(),
+                    )
+                    self.outer.owning_fn.cfg_nodes.append(cfg_n)
+                self.generic_visit(node)
+
+            def visit_Assignment(self, node):
+                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                lval_ids = _extract_identifiers_from_ast(node.lvalue)
+                rval_ids = _extract_identifiers_from_ast(node.rvalue)
+                target = list(lval_ids)[0] if lval_ids else None
+                for v in lval_ids:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].assigned_lines.append(line_no)
+                for v in rval_ids:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+
+                alloc_fn_names = {"malloc", "calloc", "realloc", "aligned_alloc"}
+                rval_expr_str = _format_pycparser_expr(node.rvalue)
+                is_alloc = any(fn_name in rval_expr_str for fn_name in alloc_fn_names)
+
+                self.outer.node_counter += 1
+                cfg_n = CFGNode(
+                    node_id=self.outer.node_counter,
+                    kind="allocation" if is_alloc else "assignment",
+                    line_number=line_no,
+                    expr_str=f"{_format_pycparser_expr(node.lvalue)} {node.op} {rval_expr_str}",
+                    target_var=target,
+                    written_vars=lval_ids,
+                    read_vars=rval_ids,
+                )
+                self.outer.owning_fn.cfg_nodes.append(cfg_n)
+                self.generic_visit(node)
+
+            def visit_FuncCall(self, node):
+                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                callee = _format_pycparser_expr(node.name)
+                raw_args = _format_pycparser_expr(node.args) if node.args else ""
+                if callee not in ('if', 'for', 'while', 'switch', 'sizeof', 'typeof', '__attribute__'):
+                    self.outer.owning_fn.calls.append((callee, line_no, raw_args))
+
+                arg_ids = _extract_identifiers_from_ast(node.args) if node.args else set()
+                freed_set: Set[str] = set()
+                null_checked_set: Set[str] = set()
+
+                param_names = {p.name for p in self.outer.owning_fn.parameters}
+                if callee in ("free", "cfree", "vfree", "realloc"):
+                    if node.args and getattr(node.args, "exprs", None):
+                        freed_p = _format_pycparser_expr(node.args.exprs[0])
+                        if freed_p in self.outer.owning_fn.variables or freed_p in param_names:
+                            if freed_p in self.outer.owning_fn.variables:
+                                self.outer.owning_fn.variables[freed_p].freed_lines.append(line_no)
+                            freed_set.add(freed_p)
+
+                if callee in ("assert", "ASSERT", "assert_param"):
+                    self.outer.owning_fn.has_assertions = True
+                    if node.args:
+                        null_checked_set = _extract_identifiers_from_ast(node.args)
+                        for v in null_checked_set:
+                            if v in self.outer.owning_fn.variables:
+                                self.outer.owning_fn.variables[v].checked_null_lines.append(line_no)
+
+                for v in arg_ids:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+
+                self.outer.node_counter += 1
+                cfg_n = CFGNode(
+                    node_id=self.outer.node_counter,
+                    kind="free" if freed_set else "call",
+                    line_number=line_no,
+                    expr_str=f"{callee}({raw_args})",
+                    target_var=callee,
+                    read_vars=arg_ids,
+                    freed_vars=freed_set,
+                    null_checked_vars=null_checked_set,
+                )
+                self.outer.owning_fn.cfg_nodes.append(cfg_n)
+                self.generic_visit(node)
+
+            def visit_If(self, node):
+                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                cond_ids = _extract_identifiers_from_ast(node.cond)
+                null_checked_set = set(cond_ids)
+                for v in null_checked_set:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].checked_null_lines.append(line_no)
+                for v in cond_ids:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+
+                self.outer.node_counter += 1
+                cfg_n = CFGNode(
+                    node_id=self.outer.node_counter,
+                    kind="if_cond",
+                    line_number=line_no,
+                    expr_str=_format_pycparser_expr(node.cond),
+                    read_vars=cond_ids,
+                    null_checked_vars=null_checked_set,
+                )
+                self.outer.owning_fn.cfg_nodes.append(cfg_n)
+                self.generic_visit(node)
+
+            def visit_While(self, node):
+                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                cond_ids = _extract_identifiers_from_ast(node.cond)
+                null_checked_set = set(cond_ids)
+                for v in null_checked_set:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].checked_null_lines.append(line_no)
+                for v in cond_ids:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+
+                self.outer.node_counter += 1
+                cfg_n = CFGNode(
+                    node_id=self.outer.node_counter,
+                    kind="while_cond",
+                    line_number=line_no,
+                    expr_str=_format_pycparser_expr(node.cond),
+                    read_vars=cond_ids,
+                    null_checked_vars=null_checked_set,
+                )
+                self.outer.owning_fn.cfg_nodes.append(cfg_n)
+                self.generic_visit(node)
+
+            def visit_For(self, node):
+                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                cond_ids = _extract_identifiers_from_ast(node.cond) if node.cond else set()
+                for v in cond_ids:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+
+                self.outer.node_counter += 1
+                cfg_n = CFGNode(
+                    node_id=self.outer.node_counter,
+                    kind="for_cond",
+                    line_number=line_no,
+                    expr_str=_format_pycparser_expr(node.cond) if node.cond else "",
+                    read_vars=cond_ids,
+                )
+                self.outer.owning_fn.cfg_nodes.append(cfg_n)
+                self.generic_visit(node)
+
+            def visit_Return(self, node):
+                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                ret_expr_str = _format_pycparser_expr(node.expr)
+                if ret_expr_str in ("0", "1", "true", "false"):
+                    if any(term in self.outer.owning_fn.name.lower() for term in ['auth', 'verify', 'check_password', 'validate_token', 'boot_secure', 'crypto', 'admin', 'login', 'permission']):
+                        self.outer.owning_fn.returns_boolean = True
+
+                ret_ids = _extract_identifiers_from_ast(node.expr) if node.expr else set()
+                for v in ret_ids:
+                    if v in self.outer.owning_fn.variables:
+                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+
+                self.outer.node_counter += 1
+                cfg_n = CFGNode(
+                    node_id=self.outer.node_counter,
+                    kind="return",
+                    line_number=line_no,
+                    expr_str=ret_expr_str,
+                    read_vars=ret_ids,
+                )
+                self.outer.owning_fn.cfg_nodes.append(cfg_n)
+                self.generic_visit(node)
+
+        Visitor(self).visit(body_node)
+
+        # Connect sequential CFG nodes
+        for i in range(len(self.owning_fn.cfg_nodes) - 1):
+            self.owning_fn.cfg_nodes[i].next_nodes.append(self.owning_fn.cfg_nodes[i + 1])
 
 
 class CASTParser:
@@ -133,12 +528,12 @@ class CASTParser:
         lines = source_code.splitlines()
         clean_lines, clean_code = strip_comments_keep_lines(source_code)
 
-        functions = self._extract_functions(clean_lines, clean_code)
-        global_vars = self._extract_global_vars(clean_lines, functions)
-
         pycparser_ast, has_pycparser = self._try_pycparser(clean_code)
         if has_pycparser and pycparser_ast is not None:
-            self._merge_pycparser_findings(pycparser_ast, functions)
+            functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code)
+        else:
+            functions = self._extract_functions(clean_lines, clean_code)
+            global_vars = self._extract_global_vars(clean_lines, functions)
 
         return CASTContext(
             functions=functions,
@@ -190,87 +585,96 @@ class CASTParser:
         except Exception:
             return None, False
 
-    def _merge_pycparser_findings(self, pycparser_ast, functions: List["CFunction"]) -> None:
+    def _build_model_from_ast(
+        self, pycparser_ast, clean_lines: List[str], clean_code: str
+    ) -> Tuple[List[CFunction], Dict[str, CVariable]]:
         """
-        Cross-checks and enriches the regex-derived function list using the
-        real pycparser AST. Currently this fixes the most impactful known
-        gap in the regex extractor: multi-declarator local variable
-        declarations (`int a, b, c;`), which a single-declarator regex
-        cannot represent. Variables recovered this way are merged into the
-        matching CFunction so every downstream rule (uninitialized-memory,
-        VLA, etc.) benefits without any rule-level changes.
+        Builds the authoritative structural representation (functions, parameters,
+        local/global variables, symbols, types, scopes, CFG, and dataflow)
+        directly from a pycparser AST.
         """
-        try:
-            from pycparser import c_ast
-        except ImportError:
-            return
+        from pycparser import c_ast
 
-        funcs_by_line = {fn.start_line: fn for fn in functions}
-        # Also allow matching by name in case brace-counting drifted the
-        # start line by a comment/blank-line off-by-one.
-        funcs_by_name: Dict[str, List["CFunction"]] = {}
-        for fn in functions:
-            funcs_by_name.setdefault(fn.name, []).append(fn)
-
-        class _LocalDeclVisitor(c_ast.NodeVisitor):
-            def __init__(self, owning_fn: "CFunction", base_line: int):
-                self.owning_fn = owning_fn
-                self.base_line = base_line
-
-            def visit_Decl(self, node):
-                # Skip function prototypes / typedefs / struct-only decls.
-                if node.name and node.coord is not None:
-                    is_pointer = type(node.type).__name__ == "PtrDecl"
-                    is_func = type(node.type).__name__ == "FuncDecl"
-                    if not is_func:
-                        line_no = node.coord.line - _PRELUDE_LINE_COUNT
-                        existing = self.owning_fn.variables.get(node.name)
-                        # pycparser is authoritative: prefer it whenever it
-                        # disagrees with the regex extractor, since the
-                        # regex path is known to occasionally misfire on
-                        # bare statements (see _STATEMENT_KEYWORDS) or miss
-                        # multi-declarator lines entirely.
-                        if existing is None or existing.declaration_line != (line_no if line_no > 0 else self.owning_fn.start_line):
-                            self.owning_fn.variables[node.name] = CVariable(
-                                name=node.name,
-                                type_name=self._type_name(node.type),
-                                is_pointer=is_pointer,
-                                is_signed="unsigned" not in self._type_name(node.type),
-                                is_volatile="volatile" in (node.quals or []),
-                                is_vla=False,
-                                array_size_expr=None,
-                                has_initializer=node.init is not None,
-                                declaration_line=line_no if line_no > 0 else self.owning_fn.start_line,
-                            )
-                self.generic_visit(node)
-
-            @staticmethod
-            def _type_name(type_node) -> str:
-                names = getattr(type_node, "names", None)
-                if names:
-                    return " ".join(names)
-                inner = getattr(type_node, "type", None)
-                if inner is not None:
-                    return _LocalDeclVisitor._type_name(inner)
-                return "int"
+        functions: List[CFunction] = []
+        global_vars: Dict[str, CVariable] = {}
 
         for ext in pycparser_ast.ext:
-            if type(ext).__name__ != "FuncDef":
-                continue
-            fname = ext.decl.name
-            fn_line = (ext.decl.coord.line - _PRELUDE_LINE_COUNT) if ext.decl.coord else None
+            if isinstance(ext, c_ast.Decl) and type(ext.type).__name__ != "FuncDecl" and type(ext).__name__ != "Typedef":
+                line_no = (ext.coord.line - _PRELUDE_LINE_COUNT) if ext.coord else 1
+                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(ext.type)
+                if ext.name and ext.name not in ('typedef', '#include', '#define', '#ifdef', '#ifndef'):
+                    global_vars[ext.name] = CVariable(
+                        name=ext.name,
+                        type_name=tname,
+                        is_pointer=(is_ptr or is_fp),
+                        is_signed=is_sig,
+                        is_volatile=is_vol,
+                        is_vla=is_vla,
+                        array_size_expr=arr_dim,
+                        has_initializer=(ext.init is not None),
+                        declaration_line=line_no,
+                    )
 
-            owning_fn = None
-            if fn_line and fn_line in funcs_by_line:
-                owning_fn = funcs_by_line[fn_line]
-            elif fname in funcs_by_name and len(funcs_by_name[fname]) == 1:
-                owning_fn = funcs_by_name[fname][0]
-            if owning_fn is None or ext.body is None:
-                continue
+            elif isinstance(ext, c_ast.FuncDef):
+                fname = ext.decl.name
+                fn_start = (ext.decl.coord.line - _PRELUDE_LINE_COUNT) if ext.decl.coord else 1
 
-            visitor = _LocalDeclVisitor(owning_fn, owning_fn.start_line)
-            for stmt in getattr(ext.body, "block_items", None) or []:
-                visitor.visit(stmt)
+                ret_t, _, _, _, _, _, _, _ = _format_pycparser_type(ext.decl.type.type)
+
+                params: List[CParameter] = []
+                has_void_param = False
+                is_empty_params = False
+                func_args = ext.decl.type.args
+
+                if func_args is None or not getattr(func_args, "params", None):
+                    is_empty_params = True
+                else:
+                    if len(func_args.params) == 1:
+                        p0 = func_args.params[0]
+                        p0_type, _, _, _, _, _, _, _ = _format_pycparser_type(p0.type)
+                        if p0_type == "void" and (not getattr(p0, "name", None) or p0.name == "void"):
+                            has_void_param = True
+
+                    if not has_void_param:
+                        for param in func_args.params:
+                            p_name = getattr(param, "name", None) or ""
+                            p_type, p_is_ptr, p_is_fp, _, _, _, _, _ = _format_pycparser_type(param.type)
+                            p_line = (param.coord.line - _PRELUDE_LINE_COUNT) if param.coord else fn_start
+                            params.append(CParameter(
+                                name=p_name,
+                                type_name=p_type,
+                                is_pointer=(p_is_ptr or p_is_fp),
+                                line_number=p_line,
+                            ))
+
+                fn_end = _get_max_ast_line(ext.body, fn_start, _PRELUDE_LINE_COUNT)
+                brace_count = 0
+                for l in range(fn_start, len(clean_lines) + 1):
+                    line_str = clean_lines[l - 1]
+                    brace_count += line_str.count("{") - line_str.count("}")
+                    if l >= fn_end and brace_count <= 0:
+                        fn_end = l
+                        break
+
+                fn_body = "\n".join(clean_lines[fn_start: max(fn_start, fn_end - 1)]) if fn_start < fn_end else ""
+
+                fn = CFunction(
+                    name=fname,
+                    return_type=ret_t,
+                    parameters=params,
+                    start_line=fn_start,
+                    end_line=fn_end,
+                    body=fn_body,
+                    has_void_param_list=has_void_param,
+                    is_empty_param_list=is_empty_params,
+                )
+
+                if ext.body:
+                    _ASTFunctionAnalyzer(fn, _PRELUDE_LINE_COUNT, clean_lines).analyze(ext.body)
+
+                functions.append(fn)
+
+        return functions, global_vars
 
     def _extract_functions(self, lines: List[str], full_code: str) -> List[CFunction]:
         functions: List[CFunction] = []
