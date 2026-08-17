@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="cgull",
-    version="0.4.0",
+    version="0.5.0",
     author="Saheb Biswas",
     author_email="s.b9@yahoo.com",
     description="C-GULL: Code Guardian for Unchecked Logic & Leaks (C Code Security Static Analyzer)",

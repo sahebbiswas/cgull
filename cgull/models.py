@@ -154,7 +154,7 @@ class ScanResult:
         return {
             "meta": {
                 "tool": "C-GULL",
-                "version": "0.4.0",
+                "version": "0.5.0",
                 "full_name": "C-GULL: Code Guardian for Unchecked Logic & Leaks",
                 "timestamp": self.timestamp,
                 "target_path": self.target_path,

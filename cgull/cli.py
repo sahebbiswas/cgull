@@ -39,7 +39,7 @@ Suppressing findings inline:
   // cgull-ignore-next-line: CGULL-001,CGULL-003
         """
     )
-    parser.add_argument("--version", "-v", action="version", version="C-GULL 0.4.0")
+    parser.add_argument("--version", "-v", action="version", version="C-GULL 0.5.0")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

@@ -15,7 +15,7 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
 
 - **⚡ Dual Analysis Engine**:
   - **Lightweight Regex Pattern Matching**: fast first-pass scanning for banned API calls, format strings, unsafe casts, and suspicious macros. Runs against a comment-stripped and string-literal-masked view of the source to reduce basic false matches.
-  - **AST-Assisted Structural Analysis**: structural pattern checks for unchecked `malloc` returns, missing pointer NULL checks, use-after-free, VLAs, and control flow patterns, built on a lightweight in-repo C parser and cross-checked with `pycparser` where supported.
+  - **AST & CFG-Assisted Structural Analysis**: structural and control-flow aware pattern checks for unchecked `malloc` returns, missing pointer NULL checks, use-after-free (now branch, loop, and switch-sensitive), VLAs, and control flow patterns, built on a lightweight in-repo C parser and cross-checked with `pycparser` where supported.
 - **🔇 Inline Suppression**: silence specific findings with `// cgull-ignore`, `// cgull-ignore: CGULL-001`, or `// cgull-ignore-next-line: CGULL-001,CGULL-003` -- useful since heuristic static analysis rules can produce false positives.
 - **⚙️ Parallel Scanning**: `-j/--jobs` scans multiple files concurrently across CPU cores for larger codebases.
 - **📏 Baseline / Diff Mode**: `--baseline`/`--update-baseline` let CI enforce "no *new* issues" on an existing, imperfect codebase instead of requiring it to already be fully clean -- see "Baseline / Diff Mode" below.
@@ -290,7 +290,7 @@ python3 tests/test_scanner.py -v
 {
   "meta": {
     "tool": "C-GULL",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "timestamp": "2026-08-15T21:45:00Z",
     "target_path": "src/",
     "scan_duration_seconds": 0.0124
