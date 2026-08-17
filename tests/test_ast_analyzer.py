@@ -184,11 +184,73 @@ class TestRegexTier3Fallback(unittest.TestCase):
         var = ctx.functions[0].variables["buf"]
         self.assertTrue(var.is_vla)
 
+    def test_regex_fallback_handles_fn_ptr_gracefully(self):
+        src = "void register_handler(void (*handler)(int)) {}"
+        ctx = self.parser.parse(src)
+        self.assertFalse(ctx.has_pycparser)
+
+    def test_regex_fallback_handles_multiline_decls_gracefully(self):
+        src = "void f(void) {\n    int\n    a,\n    b;\n}"
+        ctx = self.parser.parse(src)
+        self.assertFalse(ctx.has_pycparser)
+        self.assertEqual(len(ctx.functions), 1)
+
+    def test_regex_fallback_handles_typedefs_and_extensions(self):
+        src = "typedef int custom_t;\nvoid __attribute__((noreturn)) fatal(void) {}"
+        ctx = self.parser.parse(src)
+        self.assertFalse(ctx.has_pycparser)
+
 
 @unittest.skipUnless(_pycparser_available(), "pycparser not installed")
 class TestComplexASTConstructs(unittest.TestCase):
     def setUp(self):
         self.parser = CASTParser()
+
+    def test_function_handler_prototype_with_fn_ptr_param(self):
+        src = "void register_handler(void (*handler)(int));"
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+
+    def test_function_handler_def_with_fn_ptr_param(self):
+        src = "void register_handler(void (*handler)(int)) {}"
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        self.assertEqual(len(ctx.functions), 1)
+        fn = ctx.functions[0]
+        self.assertEqual(fn.name, "register_handler")
+        self.assertEqual(len(fn.parameters), 1)
+        self.assertEqual(fn.parameters[0].name, "handler")
+        self.assertTrue(fn.parameters[0].is_pointer)
+
+    def test_compiler_extensions_attribute_and_declspec(self):
+        src = """
+        void __attribute__((noreturn)) fatal_error(const char *msg) {}
+        int __declspec(dllexport) add_export(int a, int b) { return a + b; }
+        """
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        names = [f.name for f in ctx.functions]
+        self.assertIn("fatal_error", names)
+        self.assertIn("add_export", names)
+
+    def test_typedef_struct_and_arrays(self):
+        src = """
+        typedef struct {
+            int x;
+            int y;
+        } Point;
+
+        void draw_matrix(void) {
+            Point grid[10][20];
+            Point *p = &grid[0][0];
+        }
+        """
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        fn = ctx.functions[0]
+        self.assertIn("grid", fn.variables)
+        self.assertIn("p", fn.variables)
+        self.assertTrue(fn.variables["p"].is_pointer)
 
     def test_function_pointers_in_parameters_and_variables(self):
         src = """
