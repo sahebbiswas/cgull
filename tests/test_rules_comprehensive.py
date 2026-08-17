@@ -407,6 +407,14 @@ class TestMemoryRulesStructuredCFG(unittest.TestCase):
         code = "void f(int n) {\n    char *p = malloc(16);\n    while (n--) {\n        if (p == NULL) continue;\n    }\n    p[0] = 'x';\n}"
         self.assertEqual(len(self._scan("CGULL-003", code)), 1)
 
+    def test_alloc_check_early_return_is_safe(self):
+        code = "void f(size_t size) {\n    char *p = malloc(size);\n    if (p == NULL)\n        return;\n    p[0] = 'a';\n}"
+        self.assertEqual(len(self._scan("CGULL-003", code)), 0)
+
+    def test_alloc_check_logging_without_return_is_unsafe(self):
+        code = "void f(size_t size) {\n    char *p = malloc(size);\n    if (p == NULL)\n        log_error();\n    p[0] = 'a';\n}"
+        self.assertEqual(len(self._scan("CGULL-003", code)), 1)
+
     def test_null_check_guard_return_dominates_later_deref(self):
         code = "int f(int *p) {\n    if (p == NULL) return -1;\n    *p = 1;\n    return 0;\n}"
         self.assertEqual(len(self._scan("CGULL-004", code)), 0)
@@ -414,6 +422,10 @@ class TestMemoryRulesStructuredCFG(unittest.TestCase):
     def test_null_check_only_inside_loop_does_not_guard_after_loop(self):
         code = "int f(int *p, int n) {\n    while (n--) {\n        if (p == NULL) continue;\n    }\n    *p = 1;\n    return 0;\n}"
         self.assertEqual(len(self._scan("CGULL-004", code)), 1)
+
+    def test_reassignment_after_free_is_not_uaf(self):
+        code = "void f(char *p) {\n    free(p);\n    p = malloc(32);\n    if (p == NULL) return;\n    p[0] = 'a';\n}"
+        self.assertEqual(len(self._scan("CGULL-022", code)), 0)
 
     def test_uaf_in_exclusive_else_branch_is_not_reported(self):
         code = "void f(int cond, char *p) {\n    if (cond) {\n        free(p);\n    } else {\n        p[0] = 'x';\n    }\n}"
@@ -430,3 +442,19 @@ class TestMemoryRulesStructuredCFG(unittest.TestCase):
     def test_switch_break_does_not_reach_later_use_for_uaf(self):
         code = "void f(int which, char *p) {\n    switch (which) {\n    case 1:\n        free(p);\n        break;\n    case 2:\n        p[0] = 'x';\n        break;\n    default:\n        break;\n    }\n}"
         self.assertEqual(len(self._scan("CGULL-022", code)), 0)
+
+    def test_uninitialized_pointer_conditional_assignment_reported(self):
+        code = "void f(int cond) {\n    char *p;\n    if (cond) {\n        p = malloc(16);\n    }\n    p[0] = 'x';\n}"
+        self.assertEqual(len(self._scan("CGULL-021", code)), 1)
+
+    def test_uninitialized_pointer_all_branches_assigned_is_safe(self):
+        code = "void f(int cond) {\n    char *p;\n    if (cond) {\n        p = malloc(16);\n    } else {\n        p = NULL;\n    }\n    p[0] = 'x';\n}"
+        self.assertEqual(len(self._scan("CGULL-021", code)), 0)
+
+    def test_uninitialized_scalar_conditional_assignment_reported(self):
+        code = "int f(int cond) {\n    int status;\n    if (cond) {\n        status = 1;\n    }\n    return status;\n}"
+        self.assertEqual(len(self._scan("CGULL-023", code)), 1)
+
+    def test_uninitialized_scalar_all_branches_assigned_is_safe(self):
+        code = "int f(int cond) {\n    int status;\n    if (cond) {\n        status = 1;\n    } else {\n        status = 0;\n    }\n    return status;\n}"
+        self.assertEqual(len(self._scan("CGULL-023", code)), 0)
