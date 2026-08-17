@@ -6,6 +6,7 @@ Generates structured JSON, SARIF 2.1.0, Markdown audit summaries, and terminal o
 import json
 from typing import Dict, Any, List
 from .models import ScanResult, Severity
+from . import __version__
 
 
 class ReportGenerator:
@@ -81,7 +82,7 @@ class ReportGenerator:
                     "driver": {
                         "name": "C-GULL",
                         "fullName": "C-GULL: Code Guardian for Unchecked Logic & Leaks",
-                        "version": "0.5.0",
+                        "version": __version__,
                         "informationUri": "https://github.com/sahebbiswas/cgull",
                         "rules": list(rules_dict.values()),
                     }

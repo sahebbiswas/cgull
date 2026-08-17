@@ -290,7 +290,7 @@ python3 tests/test_scanner.py -v
 {
   "meta": {
     "tool": "C-GULL",
-    "version": "0.5.0",
+    "version": "<VERSION>",
     "timestamp": "2026-08-15T21:45:00Z",
     "target_path": "src/",
     "scan_duration_seconds": 0.0124

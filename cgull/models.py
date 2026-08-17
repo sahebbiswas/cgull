@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import List, Dict, Any, Optional
 import time
+from . import __version__
 
 
 class Severity(str, Enum):
@@ -154,7 +155,7 @@ class ScanResult:
         return {
             "meta": {
                 "tool": "C-GULL",
-                "version": "0.5.0",
+                "version": __version__,
                 "full_name": "C-GULL: Code Guardian for Unchecked Logic & Leaks",
                 "timestamp": self.timestamp,
                 "target_path": self.target_path,

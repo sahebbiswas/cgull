@@ -1,18 +1,25 @@
+import os
+import re
 from setuptools import setup, find_packages
+
+with open(os.path.join("cgull", "__init__.py"), "r", encoding="utf-8") as f:
+    version = re.search(r'__version__\s*=\s*[\'"]([^\'"]*)[\'"]', f.read()).group(1)
 
 setup(
     name="cgull",
-    version="0.5.0",
+    version=version,
     author="Saheb Biswas",
     author_email="s.b9@yahoo.com",
     description="C-GULL: Code Guardian for Unchecked Logic & Leaks (C Code Security Static Analyzer)",
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/sahebbiswas/cgull",
+    license="Apache-2.0",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
+        "License :: OSI Approved :: Apache Software License",
         "Topic :: Security",
         "Topic :: Software Development :: Quality Assurance",
         "Programming Language :: Python :: 3",
