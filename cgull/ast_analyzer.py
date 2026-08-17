@@ -163,6 +163,11 @@ def _format_pycparser_expr(node) -> str:
     elif type_name == "Typename":
         tname, _, _, _, _, _, _, _ = _format_pycparser_type(node.type)
         return tname
+    elif type_name == "Assignment":
+        return f"{_format_pycparser_expr(node.lvalue)} {node.op} {_format_pycparser_expr(node.rvalue)}"
+    elif type_name == "Decl":
+        init_str = f" = {_format_pycparser_expr(node.init)}" if node.init else ""
+        return f"{_format_pycparser_expr(node.type)} {node.name}{init_str}"
     elif hasattr(node, "name") and node.name:
         return str(node.name)
     return ""

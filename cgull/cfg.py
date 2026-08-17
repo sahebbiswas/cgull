@@ -5,9 +5,56 @@ needed by the memory-safety rules.  It is used only when pycparser produced a
 real AST; the existing lexical fallback remains available otherwise.
 """
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr, _PRELUDE_LINE_COUNT
+
+
+class Nullness(Enum):
+    NULL = "NULL"
+    NON_NULL = "NON_NULL"
+    MAYBE_NULL = "MAYBE_NULL"
+    UNKNOWN = "UNKNOWN"
+
+
+class Initialization(Enum):
+    UNINITIALIZED = "UNINITIALIZED"
+    INITIALIZED = "INITIALIZED"
+    MAYBE_INITIALIZED = "MAYBE_INITIALIZED"
+
+
+class Allocation(Enum):
+    NOT_ALLOCATED = "NOT_ALLOCATED"
+    ALLOCATED = "ALLOCATED"
+    FREED = "FREED"
+    MAYBE_FREED = "MAYBE_FREED"
+
+
+@dataclass
+class VariableFacts:
+    nullness: Nullness = Nullness.UNKNOWN
+    initialization: Initialization = Initialization.UNINITIALIZED
+    allocation: Allocation = Allocation.NOT_ALLOCATED
+
+
+@dataclass
+class BasicBlock:
+    block_id: int
+    nodes: List["CFGEvent"] = field(default_factory=list)
+    predecessors: List[int] = field(default_factory=list)  # list of block_ids
+    successors: List[int] = field(default_factory=list)    # list of block_ids
+    edge_facts: Dict[int, Tuple[Set[str], Set[str]]] = field(default_factory=dict)  # succ block_id -> (add, remove)
+
+    # In and Out facts at block entry and block exit
+    nullness_in: Dict[str, Nullness] = field(default_factory=dict)
+    nullness_out: Dict[str, Nullness] = field(default_factory=dict)
+
+    init_in: Dict[str, Initialization] = field(default_factory=dict)
+    init_out: Dict[str, Initialization] = field(default_factory=dict)
+
+    alloc_in: Dict[str, Allocation] = field(default_factory=dict)
+    alloc_out: Dict[str, Allocation] = field(default_factory=dict)
 
 
 @dataclass
@@ -31,6 +78,8 @@ class StructuredCFG:
         self.edge_facts: Dict[Tuple[int, int], Tuple[Set[str], Set[str]]] = {}
         self.entry: Optional[int] = None
         self._next_id = 0
+        self.blocks: Dict[int, BasicBlock] = {}
+        self.node_to_block: Dict[int, int] = {}
 
     def add_node(self, node: CFGEvent) -> int:
         self.nodes[node.node_id] = node
@@ -50,6 +99,296 @@ class StructuredCFG:
         if dst not in self.nodes[src].successors:
             self.nodes[src].successors.append(dst)
         self.edge_facts[(src, dst)] = (set(add), set(remove))
+
+    def build_basic_blocks(self) -> Dict[int, BasicBlock]:
+        if not self.nodes:
+            return {}
+
+        preds: Dict[int, List[int]] = {nid: [] for nid in self.nodes}
+        for nid, node in self.nodes.items():
+            for succ in node.successors:
+                if succ in preds:
+                    preds[succ].append(nid)
+
+        leaders: Set[int] = set()
+        if self.entry is not None and self.entry in self.nodes:
+            leaders.add(self.entry)
+
+        for nid, node in self.nodes.items():
+            if len(preds[nid]) != 1:
+                leaders.add(nid)
+            for succ in node.successors:
+                if len(node.successors) > 1:
+                    leaders.add(succ)
+
+        self.blocks = {}
+        self.node_to_block = {}
+        block_id_counter = 1
+
+        leader_to_block: Dict[int, BasicBlock] = {}
+
+        for leader in sorted(leaders):
+            b_id = block_id_counter
+            block_id_counter += 1
+            block = BasicBlock(block_id=b_id)
+
+            curr = leader
+            while True:
+                block.nodes.append(self.nodes[curr])
+                self.node_to_block[curr] = b_id
+
+                succs = self.nodes[curr].successors
+                if len(succs) == 1:
+                    nxt = succs[0]
+                    if nxt in leaders:
+                        break
+                    curr = nxt
+                else:
+                    break
+
+            leader_to_block[leader] = block
+            self.blocks[b_id] = block
+
+        for leader, block in leader_to_block.items():
+            last_node = block.nodes[-1]
+            for succ_node_id in last_node.successors:
+                succ_block = leader_to_block.get(succ_node_id)
+                if succ_block:
+                    if succ_block.block_id not in block.successors:
+                        block.successors.append(succ_block.block_id)
+                    if block.block_id not in succ_block.predecessors:
+                        succ_block.predecessors.append(block.block_id)
+
+                    edge_fact = self.edge_facts.get((last_node.node_id, succ_node_id))
+                    if edge_fact:
+                        block.edge_facts[succ_block.block_id] = edge_fact
+
+        return self.blocks
+
+    def analyze_dataflow(self, initial_nonnull: Optional[Set[str]] = None,
+                         initial_initialized: Optional[Set[str]] = None,
+                         all_vars: Optional[Set[str]] = None) -> None:
+        """Run fixed-point dataflow analysis across basic blocks for Nullness, Initialization, and Allocation facts."""
+        if not self.blocks:
+            self.build_basic_blocks()
+        if not self.blocks:
+            return
+
+        if all_vars is None:
+            all_vars = set()
+            for node in self.nodes.values():
+                all_vars.update(node.reads)
+                all_vars.update(node.writes)
+                all_vars.update(node.allocated)
+                all_vars.update(node.freed)
+                all_vars.update(node.asserted)
+                all_vars.update(node.derefs)
+
+        init_nonnull = set(initial_nonnull) if initial_nonnull else set()
+        init_initialized = set(initial_initialized) if initial_initialized else set()
+
+        for block in self.blocks.values():
+            block.nullness_in = {}
+            block.nullness_out = {}
+            block.init_in = {}
+            block.init_out = {}
+            block.alloc_in = {}
+            block.alloc_out = {}
+
+        entry_block_id = self.node_to_block.get(self.entry) if self.entry else min(self.blocks.keys())
+        entry_block = self.blocks.get(entry_block_id)
+
+        if entry_block:
+            for v in all_vars:
+                entry_block.nullness_in[v] = Nullness.NON_NULL if v in init_nonnull else Nullness.UNKNOWN
+                entry_block.init_in[v] = Initialization.INITIALIZED if v in init_initialized else Initialization.UNINITIALIZED
+                entry_block.alloc_in[v] = Allocation.NOT_ALLOCATED
+
+        worklist = list(self.blocks.keys())
+
+        while worklist:
+            b_id = worklist.pop(0)
+            block = self.blocks[b_id]
+
+            curr_null = dict(block.nullness_in)
+            curr_init = dict(block.init_in)
+            curr_alloc = dict(block.alloc_in)
+
+            for node in block.nodes:
+                for v in node.allocated:
+                    curr_alloc[v] = Allocation.ALLOCATED
+                    curr_null[v] = Nullness.MAYBE_NULL
+                    curr_init[v] = Initialization.INITIALIZED
+
+                for v in node.freed:
+                    curr_alloc[v] = Allocation.FREED
+
+                for v in node.writes:
+                    curr_init[v] = Initialization.INITIALIZED
+                    if v not in node.allocated:
+                        curr_alloc[v] = Allocation.NOT_ALLOCATED
+                        if "NULL" in node.expr_str or "nullptr" in node.expr_str:
+                            curr_null[v] = Nullness.NULL
+                        else:
+                            curr_null[v] = Nullness.UNKNOWN
+
+                for v in node.asserted:
+                    curr_null[v] = Nullness.NON_NULL
+                for v in node.derefs:
+                    curr_null[v] = Nullness.NON_NULL
+
+            block.nullness_out = curr_null
+            block.init_out = curr_init
+            block.alloc_out = curr_alloc
+
+            for succ_id in block.successors:
+                succ_block = self.blocks[succ_id]
+                edge_fact = block.edge_facts.get(succ_id, (set(), set()))
+                add_nonnull, remove_nonnull = edge_fact
+
+                edge_null = dict(curr_null)
+                for v in add_nonnull:
+                    edge_null[v] = Nullness.NON_NULL
+                for v in remove_nonnull:
+                    edge_null[v] = Nullness.NULL
+
+                changed = False
+
+                for v in all_vars:
+                    # Nullness
+                    e_null = edge_null.get(v, Nullness.UNKNOWN)
+                    if v not in succ_block.nullness_in:
+                        new_null = e_null
+                    else:
+                        new_null = meet_nullness(succ_block.nullness_in[v], e_null)
+                    if succ_block.nullness_in.get(v) != new_null:
+                        succ_block.nullness_in[v] = new_null
+                        changed = True
+
+                    # Init
+                    e_init = curr_init.get(v, Initialization.UNINITIALIZED)
+                    if v not in succ_block.init_in:
+                        new_init = e_init
+                    else:
+                        new_init = meet_initialization(succ_block.init_in[v], e_init)
+                    if succ_block.init_in.get(v) != new_init:
+                        succ_block.init_in[v] = new_init
+                        changed = True
+
+                    # Alloc
+                    e_alloc = curr_alloc.get(v, Allocation.NOT_ALLOCATED)
+                    if v not in succ_block.alloc_in:
+                        new_alloc = e_alloc
+                    else:
+                        new_alloc = meet_allocation(succ_block.alloc_in[v], e_alloc)
+                    if succ_block.alloc_in.get(v) != new_alloc:
+                        succ_block.alloc_in[v] = new_alloc
+                        changed = True
+
+                if changed and succ_id not in worklist:
+                    worklist.append(succ_id)
+
+        self._compute_node_level_facts(all_vars)
+
+    def _compute_node_level_facts(self, all_vars: Set[str]) -> None:
+        self.node_facts: Dict[int, Dict[str, VariableFacts]] = {}
+        for block in self.blocks.values():
+            curr_null = dict(block.nullness_in)
+            curr_init = dict(block.init_in)
+            curr_alloc = dict(block.alloc_in)
+
+            for node in block.nodes:
+                self.node_facts[node.node_id] = {
+                    v: VariableFacts(
+                        nullness=curr_null.get(v, Nullness.UNKNOWN),
+                        initialization=curr_init.get(v, Initialization.UNINITIALIZED),
+                        allocation=curr_alloc.get(v, Allocation.NOT_ALLOCATED),
+                    )
+                    for v in all_vars
+                }
+
+                for v in node.allocated:
+                    curr_alloc[v] = Allocation.ALLOCATED
+                    curr_null[v] = Nullness.MAYBE_NULL
+                    curr_init[v] = Initialization.INITIALIZED
+
+                for v in node.freed:
+                    curr_alloc[v] = Allocation.FREED
+
+                for v in node.writes:
+                    curr_init[v] = Initialization.INITIALIZED
+                    if v not in node.allocated:
+                        curr_alloc[v] = Allocation.NOT_ALLOCATED
+                        if "NULL" in node.expr_str or "nullptr" in node.expr_str:
+                            curr_null[v] = Nullness.NULL
+                        else:
+                            curr_null[v] = Nullness.UNKNOWN
+
+                for v in node.asserted:
+                    curr_null[v] = Nullness.NON_NULL
+                for v in node.derefs:
+                    curr_null[v] = Nullness.NON_NULL
+
+    def get_facts_at_node(self, node_id: int) -> Dict[str, VariableFacts]:
+        if not hasattr(self, "node_facts"):
+            self.analyze_dataflow()
+        return self.node_facts.get(node_id, {})
+
+    def query_nullness(self, var_name: str, node_id: int) -> Nullness:
+        facts = self.get_facts_at_node(node_id)
+        if var_name in facts:
+            return facts[var_name].nullness
+        return Nullness.UNKNOWN
+
+    def query_initialization(self, var_name: str, node_id: int) -> Initialization:
+        facts = self.get_facts_at_node(node_id)
+        if var_name in facts:
+            return facts[var_name].initialization
+        return Initialization.UNINITIALIZED
+
+    def query_allocation(self, var_name: str, node_id: int) -> Allocation:
+        facts = self.get_facts_at_node(node_id)
+        if var_name in facts:
+            return facts[var_name].allocation
+        return Allocation.NOT_ALLOCATED
+
+
+def meet_nullness(a: Nullness, b: Nullness) -> Nullness:
+    if a == Nullness.UNKNOWN:
+        return b
+    if b == Nullness.UNKNOWN:
+        return a
+    if a == b:
+        return a
+    if (a == Nullness.NON_NULL and b == Nullness.NULL) or (a == Nullness.NULL and b == Nullness.NON_NULL):
+        return Nullness.MAYBE_NULL
+    if a == Nullness.MAYBE_NULL or b == Nullness.MAYBE_NULL:
+        return Nullness.MAYBE_NULL
+    return Nullness.UNKNOWN
+
+
+def meet_initialization(a: Initialization, b: Initialization) -> Initialization:
+    if a == b:
+        return a
+    if a == Initialization.MAYBE_INITIALIZED or b == Initialization.MAYBE_INITIALIZED:
+        return Initialization.MAYBE_INITIALIZED
+    if (a == Initialization.INITIALIZED and b == Initialization.UNINITIALIZED) or \
+       (a == Initialization.UNINITIALIZED and b == Initialization.INITIALIZED):
+        return Initialization.MAYBE_INITIALIZED
+    return a
+
+
+def meet_allocation(a: Allocation, b: Allocation) -> Allocation:
+    if a == b:
+        return a
+    if a == Allocation.MAYBE_FREED or b == Allocation.MAYBE_FREED:
+        return Allocation.MAYBE_FREED
+    if a == Allocation.FREED or b == Allocation.FREED:
+        return Allocation.MAYBE_FREED
+    if (a == Allocation.ALLOCATED and b == Allocation.NOT_ALLOCATED) or \
+       (a == Allocation.NOT_ALLOCATED and b == Allocation.ALLOCATED):
+        return Allocation.NOT_ALLOCATED
+    return Allocation.NOT_ALLOCATED
 
 
 def _ids(node) -> Set[str]:
@@ -183,16 +522,16 @@ def _event_payload(ast_node) -> Tuple[str, Set[str], Set[str], Set[str], Set[str
         if ast_node.init is not None:
             reads = _ids(ast_node.init)
             writes = {str(ast_node.name)} if ast_node.name else set()
-            for alloc_name in ("malloc", "calloc", "realloc", "aligned_alloc"):
-                if alloc_name in _call_names(ast_node.init):
+            for call_name in _call_names(ast_node.init):
+                if any(alloc_kw in call_name.lower() for alloc_kw in ("malloc", "calloc", "realloc", "aligned_alloc", "alloc")):
                     if ast_node.name:
                         allocated.add(str(ast_node.name))
                     break
     elif kind == "Assignment":
         reads = _ids(ast_node.rvalue)
         writes = _assignment_target(ast_node.lvalue)
-        for alloc_name in ("malloc", "calloc", "realloc", "aligned_alloc"):
-            if alloc_name in _call_names(ast_node.rvalue):
+        for call_name in _call_names(ast_node.rvalue):
+            if any(alloc_kw in call_name.lower() for alloc_kw in ("malloc", "calloc", "realloc", "aligned_alloc", "alloc")):
                 allocated.update(writes)
                 break
     elif kind == "FuncCall":
@@ -345,6 +684,7 @@ def build_cfg(funcdef) -> StructuredCFG:
         return node
 
     cfg.entry = build_stmt(funcdef.body, None, None, None)
+    cfg.build_basic_blocks()
     return cfg
 
 
