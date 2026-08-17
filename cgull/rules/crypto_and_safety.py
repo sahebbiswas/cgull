@@ -9,6 +9,60 @@ from ..models import Severity, RuleCategory, Issue, AnalysisEngine
 from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
 
 
+def _is_sensitive_identifier(token: str) -> bool:
+    """Check if an identifier token indicates a security-sensitive value."""
+    t = token.lower()
+    non_sec_terms = [
+        'key_count', 'key_cnt', 'key_index', 'key_idx', 'key_len', 'key_length',
+        'key_size', 'key_id', 'key_type', 'key_num', 'key_name', 'key_tag',
+        'key_offset', 'key_list', 'key_arr', 'key_array', 'key_table', 'key_slot',
+        'keys_count', 'max_keys', 'num_keys', 'keyword', 'keyboard', 'signal',
+        'assignment', 'designation', 'header', 'magic', 'version', 'count',
+        'length', 'size', 'index'
+    ]
+    if any(non_sec in t for non_sec in non_sec_terms):
+        return False
+
+    if any(k in t for k in ['secret', 'password', 'passwd', 'token', 'auth', 'hash', 'digest', 'mac', 'hmac', 'pin', 'cert', 'credential', 'cred', 'privkey', 'private_key', 'session', 'apikey', 'api_key']):
+        if 'sig' in t and not ('signature' in t or 'sig' in t.split('_') or t.startswith('sig') or t.endswith('sig')):
+            return False
+        if 'pass' in t and not ('password' in t or 'passwd' in t or 'pass' in t.split('_') or t.startswith('pass') or t.endswith('pass')):
+            return False
+        return True
+
+    if 'key' in t or 'crypto' in t:
+        if t == 'keys':
+            return False
+        return True
+
+    return False
+
+
+def _is_sensitive_type(type_name: str) -> bool:
+    """Check if a type name explicitly indicates sensitive secret data (excluding generic uint8_t/char/byte)."""
+    t = type_name.lower()
+    for k in ['crypto', 'secret', 'key', 'hash', 'token', 'credential', 'cipher', 'privkey', 'auth_t', 'mac_t', 'digest_t']:
+        if k in t:
+            if k == 'key' and any(ex in t for ex in ['key_count', 'key_index', 'key_len', 'key_id']):
+                continue
+            return True
+    return False
+
+
+def _is_security_function_context(fn_name: str) -> bool:
+    """Check if a function name indicates a security-relevant context."""
+    f = fn_name.lower()
+    sec_terms = ['auth', 'login', 'permission', 'credential', 'crypto', 'security', 'token', 'password', 'passwd', 'signature', 'mac', 'hmac', 'pfx', 'cert', 'verifier', 'authenticate', 'sec_cmp']
+    if any(term in f for term in sec_terms):
+        return True
+
+    if any(action in f for action in ['check', 'verify', 'validate', 'compare']):
+        if any(noun in f for noun in ['hash', 'token', 'mac', 'sig', 'key', 'secret', 'auth', 'cert', 'pin', 'cred', 'pass']):
+            if not any(non_sec in f for non_sec in ['bounds', 'header', 'length', 'len', 'size', 'version', 'count', 'magic', 'index', 'type']):
+                return True
+    return False
+
+
 class NonConstantTimeMemoryComparisonRule(BaseRule):
     rule_id = "CGULL-005"
     name = "Non-Constant Time Memory Comparison"
@@ -27,10 +81,9 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         target_funcs = {"memcmp", "strcmp", "strncmp", "bcmp"}
-        sensitive_keywords = {'hash', 'token', 'key', 'secret', 'pass', 'auth', 'sign', 'mac', 'digest', 'pin', 'cert', 'crypto', 'session'}
 
         for fn in ast_ctx.functions:
-            fn_is_security_ctx = any(k in fn.name.lower() for k in ['auth', 'verify', 'crypto', 'check', 'validate', 'login', 'permission', 'security', 'token', 'pass', 'hash', 'sign'])
+            fn_is_sec_ctx = _is_security_function_context(fn.name)
 
             # Symbol type map in this function scope
             var_types: dict = {}
@@ -46,40 +99,42 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                 if callee in target_funcs:
                     arg_list = [a.strip() for a in raw_args.split(',')] if raw_args else []
 
-                    # Check 1: AST / Resolved Type analysis
-                    # Types like uint8_t[], byte[], uint8_t*, unsigned char* or structs containing crypto/key/secret
-                    is_crypto_type = False
-                    for arg in arg_list:
-                        # Find identifier tokens in arg
-                        identifiers = re.findall(r'\b[a-zA-Z_]\w*\b', arg)
-                        for id_token in identifiers:
-                            if id_token in var_types:
-                                tname = var_types[id_token]
-                                if any(k in tname for k in ['uint8_t', 'uint8', 'byte', 'unsigned char', 'crypto', 'secret', 'key', 'hash', 'token']):
-                                    is_crypto_type = True
-                                    break
-                            elif fn.parameters:
-                                for p in fn.parameters:
-                                    if p.name == id_token and any(k in p.type_name.lower() for k in ['uint8_t', 'uint8', 'byte', 'unsigned char', 'crypto', 'secret', 'key', 'hash', 'token']):
-                                        is_crypto_type = True
-                                        break
-                        if is_crypto_type:
-                            break
-
-                    # Check 2: Name heuristic (fallback / secondary signal)
-                    is_crypto_name = any(w in raw_args.lower() for w in sensitive_keywords)
-
-                    # Context judgment
-                    # If call is bcmp or in security function or crypto type/name is present
-                    should_flag = False
                     if callee == "bcmp":
                         should_flag = True
-                    elif is_crypto_type:
-                        should_flag = True
-                    elif fn_is_security_ctx and (is_crypto_name or any(w in raw_args.lower() for w in ['buf', 'data', 'arg', 'a', 'b', 'val', 'ptr', 'input', 'expected', 'calc'])):
-                        should_flag = True
-                    elif is_crypto_name and not any(non_sec in raw_args.lower() for non_sec in ['key_count', 'key_index', 'key_len', 'keyword_id']):
-                        should_flag = True
+                    else:
+                        has_sensitive_type = False
+                        has_sensitive_name = False
+
+                        for arg in arg_list:
+                            identifiers = re.findall(r'\b[a-zA-Z_]\w*\b', arg)
+                            for id_token in identifiers:
+                                if _is_sensitive_identifier(id_token):
+                                    has_sensitive_name = True
+                                    break
+
+                                tname = var_types.get(id_token, "")
+                                if not tname and fn.parameters:
+                                    for p in fn.parameters:
+                                        if p.name == id_token:
+                                            tname = p.type_name.lower()
+                                            break
+                                if tname and _is_sensitive_type(tname):
+                                    has_sensitive_type = True
+                                    break
+                            if has_sensitive_name or has_sensitive_type:
+                                break
+
+                        should_flag = False
+                        if has_sensitive_name or has_sensitive_type:
+                            should_flag = True
+                        elif fn_is_sec_ctx:
+                            is_non_sec_metadata = any(
+                                any(non_sec in id_tok.lower() for non_sec in ['count', 'length', 'size', 'index', 'version', 'magic', 'header'])
+                                for arg in arg_list
+                                for id_tok in re.findall(r'\b[a-zA-Z_]\w*\b', arg)
+                            )
+                            if not is_non_sec_metadata:
+                                should_flag = True
 
                     if should_flag:
                         snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{callee}({raw_args})"
@@ -101,10 +156,13 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
         if m:
             func_name = m.group(1)
             args = m.group(2)
-            is_crypto_context = any(w in args.lower() for w in [
-                'hash', 'token', 'key', 'secret', 'pass', 'auth', 'sign', 'mac', 'digest', 'pin', 'cert', 'crypto', 'session'
-            ]) and not any(non_sec in args.lower() for non_sec in ['key_count', 'key_index', 'key_len', 'keyword_id'])
-            if is_crypto_context or func_name == "bcmp":
+            if func_name == "bcmp":
+                should_flag = True
+            else:
+                identifiers = re.findall(r'\b[a-zA-Z_]\w*\b', args)
+                should_flag = any(_is_sensitive_identifier(tok) for tok in identifiers)
+
+            if should_flag:
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,
