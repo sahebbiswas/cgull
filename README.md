@@ -29,7 +29,15 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
 
 ### AST Engine Notes (please read before trusting AST-tagged findings)
 
-`pycparser` cannot parse raw, unpreprocessed C -- it has no definition for `size_t`, `uint32_t`, or anything from an `#include`d header, and chokes on macro-dependent syntax. C-GULL works around this by stripping preprocessor directives and injecting a small prelude of common standard-library typedefs before handing the file to `pycparser`. This unblocks a meaningful fraction of ordinary application code, but it is **not a real preprocessor pass**: files that are only syntactically valid after macro expansion, or that rely on project-specific typedefs, will still fail to parse with `pycparser`. When that happens, C-GULL transparently falls back to its own lightweight regex/brace-counting extractor for function and variable structure -- which is weaker (e.g. it cannot represent multi-declarator lines like `int a, b, c;` on its own) but never crashes the scan. In practice this means: AST-tagged findings are more reliable when `pycparser` successfully parses the file, and you should not assume every function/variable in a large or macro-heavy file was analyzed with full AST precision.
+`pycparser` cannot parse raw, unpreprocessed C — it has no definition for `size_t`, `uint32_t`, or anything from an `#include`d header, and chokes on macro-dependent syntax. C-GULL uses a **three-tier strategy** to maximize the fraction of files that get a real AST parse:
+
+1. **`pcpp` + `pycparser`** (best, when both are installed): [`pcpp`](https://pypi.org/project/pcpp/) is a pure-Python C99 preprocessor that expands `#define` macros and evaluates `#ifdef`/`#if` conditionals *within the file*, producing output that `pycparser` can parse. This handles the common case of code that depends on in-file macro definitions (e.g. `#define BUF_SIZE 128` → `char buf[BUF_SIZE];`). `#include` directives for unavailable headers are silently passed through and stripped before parsing.
+
+2. **Directive stripping + `pycparser`** (good, when only `pycparser` is installed): Preprocessor directives are stripped and a small typedef prelude is injected. This works for code that does not structurally depend on macro expansion.
+
+3. **Regex extractor** (fallback, always available): A lightweight regex/brace-counting extractor for function and variable structure. Weaker (e.g. it cannot represent multi-declarator lines like `int a, b, c;` on its own) but never crashes the scan.
+
+In all cases, files that rely on external header definitions, project-specific typedefs, or complex macro expansion patterns may still fail the AST parse and silently fall back to the regex extractor. AST-tagged findings are most reliable when `pcpp` and `pycparser` are both installed.
 
 ---
 
@@ -51,12 +59,16 @@ python3 -m cgull scan src/
 pip install -e .
 ```
 
-### Option 3: Optional AST Parser Enhancement (`pycparser`)
+### Option 3: Optional AST Parser Enhancement (`pycparser` + `pcpp`)
 ```bash
-pip install pycparser
-# Or install with extras:
+# Install both pycparser and pcpp for best AST analysis:
 pip install -e ".[ast]"
+
+# Or install individually:
+pip install pycparser   # AST parsing
+pip install pcpp        # C preprocessor (macro expansion)
 ```
+
 
 ---
 
@@ -251,7 +263,7 @@ python3 tests/test_scanner.py -v
 {
   "meta": {
     "tool": "C-GULL",
-    "version": "1.0.0",
+    "version": "0.4.0",
     "timestamp": "2026-08-15T21:45:00Z",
     "target_path": "src/",
     "scan_duration_seconds": 0.0124

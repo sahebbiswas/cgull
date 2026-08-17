@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="cgull",
-    version="1.0.0",
+    version="0.4.0",
     author="Saheb Biswas",
     author_email="s.b9@yahoo.com",
     description="C-GULL: Code Guardian for Unchecked Logic & Leaks (C Code Security Static Analyzer)",
@@ -29,7 +29,8 @@ setup(
         # pycparser is optional for advanced C99 full AST parsing
     ],
     extras_require={
-        "ast": ["pycparser>=2.21"],
+        "ast": ["pycparser>=2.21", "pcpp>=1.30"],
+        "preprocess": ["pcpp>=1.30"],
         "dev": ["pytest>=7.0.0", "flake8>=5.0.0"],
     },
     entry_points={

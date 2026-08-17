@@ -2,3 +2,5 @@
 # The core static analyzer runs on Python 3.10+ standard library with zero mandatory external dependencies.
 # Optional AST enhancements:
 pycparser>=2.21
+# Optional C preprocessor for macro expansion (improves AST success rate):
+pcpp>=1.30

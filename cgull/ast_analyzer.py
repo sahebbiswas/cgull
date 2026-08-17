@@ -558,20 +558,37 @@ class CASTParser:
         """
         Attempts a real pycparser parse of the (comment-stripped) source.
 
-        pycparser requires preprocessed C99 input. We approximate that by
-        stripping preprocessor directives and injecting typedefs for the
-        standard integer/size types that real C code universally assumes.
-        This is not a full preprocessor -- files that rely on macro
-        expansion to be syntactically valid will still fail to parse -- but
-        it is enough to successfully parse a large fraction of ordinary
-        application code, which is what actually matters for the rules
-        that consume this AST.
+        Three-tier strategy:
+
+        1. **pcpp + pycparser** (best): Use pcpp to expand #define macros
+           and evaluate #ifdef conditionals, then parse with pycparser.
+           This handles the common case of macro-dependent code.
+
+        2. **Strip directives + pycparser** (good): If pcpp is unavailable
+           or its output still fails to parse, fall back to the original
+           approach of stripping preprocessor directives and injecting a
+           typedef prelude.
+
+        3. **Regex extractor** (fallback): If pycparser is not installed
+           or both tiers above fail, return None and let the caller use
+           the regex-based function/variable extractor.
         """
         try:
             from pycparser import c_parser
         except ImportError:
             return None, False
 
+        # Tier 1: pcpp preprocessing (if available)
+        pcpp_result = self._try_pcpp_preprocess(clean_code)
+        if pcpp_result is not None:
+            try:
+                parser = c_parser.CParser()
+                pycparser_ast = parser.parse(pcpp_result, filename='<input>')
+                return pycparser_ast, True
+            except Exception:
+                pass  # Fall through to tier 2
+
+        # Tier 2: Strip directives + typedef prelude (original approach)
         no_directives = "\n".join(
             "" if _PREPROCESSOR_LINE_RE.match(line) else line
             for line in clean_code.splitlines()
@@ -584,6 +601,79 @@ class CASTParser:
             return pycparser_ast, True
         except Exception:
             return None, False
+
+    def _try_pcpp_preprocess(self, clean_code: str) -> "Optional[str]":
+        """
+        Uses pcpp (pure-Python C preprocessor) to expand macros and
+        evaluate conditional compilation directives, producing output
+        that pycparser can parse.
+
+        Returns the preprocessed source with the typedef prelude
+        prepended, or None if pcpp is not installed or preprocessing
+        fails.
+
+        Line-number preservation: pcpp emits ``#line N`` directives.
+        We convert those back into the appropriate number of blank
+        lines so that pycparser's reported line numbers (minus the
+        prelude offset) still map to original source lines.
+        """
+        try:
+            import pcpp
+        except ImportError:
+            return None
+
+        import io
+        import re
+
+        class _SilentPreprocessor(pcpp.Preprocessor):
+            """Suppresses errors and passes through unresolvable #includes."""
+            def on_error(self, file, line, msg):
+                pass
+
+            def on_include_not_found(self, is_malformed, is_system_include,
+                                     curdir, includepath):
+                raise pcpp.OutputDirective(pcpp.Action.IgnoreAndPassThrough)
+
+        try:
+            preprocessor = _SilentPreprocessor()
+            # Feed the typedef prelude + source as a single unit so that
+            # macros defined in the source are expanded while the prelude
+            # typedefs are preserved for pycparser.
+            combined = _PYCPARSER_PRELUDE + clean_code
+            preprocessor.parse(combined, '<input>')
+            out = io.StringIO()
+            preprocessor.write(out)
+            raw = out.getvalue()
+
+            # Reconstruct line-preserving output: convert #line N
+            # directives into blank-line padding so that line numbers
+            # in the output correspond to line numbers in `combined`.
+            line_dir_re = re.compile(r'^#line\s+(\d+)')
+            output_lines: list = []
+            current_line = 1
+            for line in raw.splitlines():
+                m = line_dir_re.match(line)
+                if m:
+                    target_line = int(m.group(1))
+                    while current_line < target_line:
+                        output_lines.append('')
+                        current_line += 1
+                else:
+                    output_lines.append(line)
+                    current_line += 1
+
+            result = '\n'.join(output_lines)
+
+            # Strip any remaining #include lines that pcpp passed through
+            # (unresolvable includes) -- pycparser can't handle them.
+            result = '\n'.join(
+                '' if _PREPROCESSOR_LINE_RE.match(ln) else ln
+                for ln in result.splitlines()
+            )
+
+            return result
+        except Exception:
+            return None
 
     def _build_model_from_ast(
         self, pycparser_ast, clean_lines: List[str], clean_code: str

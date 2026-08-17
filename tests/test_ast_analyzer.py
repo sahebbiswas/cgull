@@ -16,6 +16,14 @@ def _pycparser_available():
         return False
 
 
+def _pcpp_available():
+    try:
+        import pcpp  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 class TestFunctionExtraction(unittest.TestCase):
     def setUp(self):
         self.parser = CASTParser()
@@ -149,6 +157,34 @@ class TestPycparserIntegration(unittest.TestCase):
         self.assertEqual(len(ctx.functions), 1)
 
 
+class TestRegexTier3Fallback(unittest.TestCase):
+    """
+    Forces the regex fallback tier to run by patching _try_pycparser to fail.
+    This guarantees the massive regex parsing blocks in ast_analyzer.py
+    remain heavily tested even on environments where pycparser/pcpp are installed.
+    """
+    def setUp(self):
+        from unittest.mock import patch
+        self.parser = CASTParser()
+        self.patcher = patch.object(self.parser, "_try_pycparser", return_value=(None, False))
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+
+    def test_regex_extracts_simple_function(self):
+        ctx = self.parser.parse("int add(int a, int b) {\n    return a + b;\n}")
+        self.assertFalse(ctx.has_pycparser)
+        self.assertEqual(len(ctx.functions), 1)
+        self.assertEqual(ctx.functions[0].name, "add")
+
+    def test_regex_extracts_variables(self):
+        ctx = self.parser.parse("void f(int len) {\n    char buf[len];\n}")
+        self.assertFalse(ctx.has_pycparser)
+        var = ctx.functions[0].variables["buf"]
+        self.assertTrue(var.is_vla)
+
+
 @unittest.skipUnless(_pycparser_available(), "pycparser not installed")
 class TestComplexASTConstructs(unittest.TestCase):
     def setUp(self):
@@ -238,6 +274,119 @@ class TestStripOnly(unittest.TestCase):
         lines, code = CASTParser.strip_only("int add(int a, int b) {\n    return a + b;\n}")
         self.assertIsInstance(lines, list)
         self.assertIsInstance(code, str)
+
+@unittest.skipUnless(
+    _pycparser_available() and _pcpp_available(),
+    "pycparser and pcpp both required"
+)
+class TestPcppPreprocessing(unittest.TestCase):
+    """Tests for the pcpp-based preprocessing tier in the AST pipeline."""
+
+    def setUp(self):
+        self.parser = CASTParser()
+
+    def test_define_macro_expands_for_pycparser(self):
+        """#define SIZE 128 → char buf[SIZE] should parse as fixed array, not VLA."""
+        src = "#define SIZE 128\nvoid f(void) {\n    char buf[SIZE];\n}"
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        fn = ctx.functions[0]
+        self.assertIn("buf", fn.variables)
+        self.assertFalse(fn.variables["buf"].is_vla)
+        self.assertEqual(fn.variables["buf"].array_size_expr, "128")
+
+    def test_define_type_alias_expands_for_pycparser(self):
+        """#define TYPE int → TYPE add(TYPE a, TYPE b) should use pycparser."""
+        src = "#define TYPE int\nTYPE add(TYPE a, TYPE b) {\n    return a + b;\n}"
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        self.assertEqual(len(ctx.functions), 1)
+        self.assertEqual(ctx.functions[0].name, "add")
+
+    def test_ifdef_includes_defined_block(self):
+        """#ifdef FEATURE with #define FEATURE should include the block."""
+        src = (
+            "#define FEATURE\n"
+            "#ifdef FEATURE\n"
+            "void feature_fn(void) { }\n"
+            "#endif\n"
+        )
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        names = [f.name for f in ctx.functions]
+        self.assertIn("feature_fn", names)
+
+    def test_ifdef_excludes_undefined_block(self):
+        """#ifdef MISSING (without #define) should exclude the block."""
+        src = (
+            "#ifdef MISSING\n"
+            "void missing_fn(void) { }\n"
+            "#endif\n"
+            "void present_fn(void) { }\n"
+        )
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        names = [f.name for f in ctx.functions]
+        self.assertNotIn("missing_fn", names)
+        self.assertIn("present_fn", names)
+
+    def test_line_numbers_preserved_after_preprocessing(self):
+        """Line numbers in the AST model should map back to original source."""
+        src = (
+            "#define SIZE 64\n"       # line 1
+            "\n"                       # line 2
+            "void process(void) {\n"   # line 3
+            "    char buf[SIZE];\n"     # line 4
+            "}\n"                      # line 5
+        )
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        fn = ctx.functions[0]
+        self.assertEqual(fn.name, "process")
+        # Function should start at line 3 (after #define and blank line)
+        self.assertEqual(fn.start_line, 3)
+
+    def test_function_like_macro_expands(self):
+        """Function-like macros (e.g. MAX(a,b)) should expand."""
+        src = (
+            "#define MAX(a,b) ((a) > (b) ? (a) : (b))\n"
+            "int f(void) {\n"
+            "    int x = MAX(10, 20);\n"
+            "    return x;\n"
+            "}\n"
+        )
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        fn = ctx.functions[0]
+        self.assertIn("x", fn.variables)
+        self.assertTrue(fn.variables["x"].has_initializer)
+
+    def test_include_not_found_does_not_crash(self):
+        """#include for unavailable headers should not crash preprocessing."""
+        src = (
+            "#include <nonexistent_header.h>\n"
+            "void f(void) { }\n"
+        )
+        ctx = self.parser.parse(src)
+        # Should still parse (pcpp passes through the #include, which then
+        # gets stripped before pycparser sees it)
+        self.assertEqual(len(ctx.functions), 1)
+        self.assertEqual(ctx.functions[0].name, "f")
+
+
+@unittest.skipUnless(_pycparser_available(), "pycparser not installed")
+class TestPcppFallback(unittest.TestCase):
+    """Tests that the directive-stripping tier works when pcpp is absent."""
+
+    def test_parse_works_without_pcpp(self):
+        """Even if _try_pcpp_preprocess returns None, pycparser tier 2 works."""
+        from unittest.mock import patch
+        parser = CASTParser()
+        with patch.object(CASTParser, "_try_pcpp_preprocess", return_value=None):
+            src = "int add(int a, int b) {\n    return a + b;\n}"
+            ctx = parser.parse(src)
+            self.assertTrue(ctx.has_pycparser)
+            self.assertEqual(ctx.functions[0].name, "add")
 
 
 if __name__ == "__main__":

@@ -78,7 +78,7 @@ class ReportGenerator:
                     "driver": {
                         "name": "C-GULL",
                         "fullName": "C-GULL: Code Guardian for Unchecked Logic & Leaks",
-                        "version": "1.0.0",
+                        "version": "0.4.0",
                         "informationUri": "https://github.com/sahebbiswas/cgull",
                         "rules": list(rules_dict.values()),
                     }
