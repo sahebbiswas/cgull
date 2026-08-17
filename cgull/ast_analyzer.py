@@ -67,6 +67,47 @@ _STATEMENT_KEYWORDS = {
 _PREPROCESSOR_LINE_RE = re.compile(r'^[ \t]*#')
 
 
+def _strip_attributes_and_specifiers(code: str) -> str:
+    """
+    Strips GNU/Clang __attribute__((...)) and MSVC __declspec(...) constructs
+    from C source code while preserving character/line offsets (replacing
+    stripped tokens with spaces/newlines).
+    """
+    result = []
+    i = 0
+    n = len(code)
+    targets = [('__attribute__', 13), ('__declspec', 10)]
+    while i < n:
+        matched = False
+        for kw, kw_len in targets:
+            if code[i:i + kw_len] == kw:
+                j = i + kw_len
+                while j < n and code[j].isspace():
+                    j += 1
+                if j < n and code[j] == '(':
+                    paren_depth = 0
+                    k = j
+                    while k < n:
+                        if code[k] == '(':
+                            paren_depth += 1
+                        elif code[k] == ')':
+                            paren_depth -= 1
+                            if paren_depth == 0:
+                                k += 1
+                                break
+                        k += 1
+                    chunk = code[i:k]
+                    spaces = ''.join('\n' if c == '\n' else ' ' for c in chunk)
+                    result.append(spaces)
+                    i = k
+                    matched = True
+                    break
+        if not matched:
+            result.append(code[i])
+            i += 1
+    return ''.join(result)
+
+
 @dataclass
 class CParameter:
     name: str
@@ -598,7 +639,8 @@ class CASTParser:
             "" if _PREPROCESSOR_LINE_RE.match(line) else line
             for line in clean_code.splitlines()
         )
-        prepared = _PYCPARSER_PRELUDE + no_directives
+        stripped_code = _strip_attributes_and_specifiers(no_directives)
+        prepared = _PYCPARSER_PRELUDE + stripped_code
 
         try:
             parser = c_parser.CParser()
@@ -675,6 +717,7 @@ class CASTParser:
                 '' if _PREPROCESSOR_LINE_RE.match(ln) else ln
                 for ln in result.splitlines()
             )
+            result = _strip_attributes_and_specifiers(result)
 
             return result
         except Exception:
