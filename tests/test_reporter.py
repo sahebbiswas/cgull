@@ -3,11 +3,19 @@ Tests for cgull.reporter.ReportGenerator across all four output formats.
 """
 
 import json
+import os
+import tempfile
 import unittest
+
+import jsonschema
 
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine
 from cgull.reporter import ReportGenerator
+
+SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "sarif-2.1.0.json")
+with open(SCHEMA_PATH, "r", encoding="utf-8") as _f:
+    SARIF_SCHEMA = json.load(_f)
 
 
 VULNERABLE_CODE = """
@@ -59,6 +67,55 @@ class TestReportGeneratorJSON(unittest.TestCase):
 class TestReportGeneratorSARIF(unittest.TestCase):
     def setUp(self):
         self.scanner = CGullScanner(engine_mode=AnalysisEngine.HYBRID)
+
+    def test_sarif_schema_validation_vulnerable_code(self):
+        result = self.scanner.scan_text(VULNERABLE_CODE, "sample.c")
+        parsed = json.loads(ReportGenerator.to_sarif(result))
+        jsonschema.validate(instance=parsed, schema=SARIF_SCHEMA)
+
+    def test_sarif_schema_validation_clean_code(self):
+        result = self.scanner.scan_text(CLEAN_CODE, "clean.c")
+        parsed = json.loads(ReportGenerator.to_sarif(result))
+        jsonschema.validate(instance=parsed, schema=SARIF_SCHEMA)
+
+    def test_sarif_schema_validation_multi_file_multi_rule(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            f1 = os.path.join(tmpdir, "src1.c")
+            f2 = os.path.join(tmpdir, "src2.c")
+            with open(f1, "w") as out:
+                out.write("void f(void) {\n    goto exit_label;\nexit_label:\n    return;\n}\n")
+            with open(f2, "w") as out:
+                out.write("#include <stdio.h>\nvoid g(char *buf) {\n    gets(buf);\n}\n")
+
+            result = self.scanner.scan_path(tmpdir)
+            sarif_str = ReportGenerator.to_sarif(result)
+            parsed = json.loads(sarif_str)
+
+            # Validate against official SARIF 2.1.0 JSON Schema
+            jsonschema.validate(instance=parsed, schema=SARIF_SCHEMA)
+
+            # Assert findings exist across multiple rules and files
+            results = parsed["runs"][0]["results"]
+            self.assertGreaterEqual(len(results), 2)
+            rule_ids = {r["ruleId"] for r in results}
+            file_uris = {r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] for r in results}
+
+            self.assertIn("CGULL-018", rule_ids)
+            self.assertIn("CGULL-001", rule_ids)
+            self.assertTrue(any(uri.endswith("src1.c") for uri in file_uris))
+            self.assertTrue(any(uri.endswith("src2.c") for uri in file_uris))
+
+            # Verify source location details in findings
+            for res in results:
+                self.assertIn("locations", res)
+                loc = res["locations"][0]["physicalLocation"]
+                self.assertIn("artifactLocation", loc)
+                self.assertIn("uri", loc["artifactLocation"])
+                self.assertIn("region", loc)
+                region = loc["region"]
+                self.assertGreaterEqual(region["startLine"], 1)
+                self.assertGreaterEqual(region["startColumn"], 1)
+                self.assertIn("snippet", region)
 
     def test_sarif_schema_fields_present(self):
         result = self.scanner.scan_text(VULNERABLE_CODE, "sample.c")
