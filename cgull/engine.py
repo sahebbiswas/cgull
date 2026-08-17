@@ -292,6 +292,8 @@ def _scan_file_content(
                 continue
             masked_line = masked_lines[line_no - 1]
             for rule in rules:
+                if engine_mode == AnalysisEngine.HYBRID and rule.analysis_engine == AnalysisEngine.AST:
+                    continue
                 found = rule.scan_line(
                     file_path=file_path,
                     line_number=line_no,

@@ -3,7 +3,7 @@ Rules for Memory Allocation, Null-checks, Lifecycles, and Pointer Safety.
 """
 
 import re
-from typing import List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine
 from ..ast_analyzer import CASTContext, CFunction
@@ -51,77 +51,219 @@ def _edge_state(cfg: StructuredCFG, src: int, dst: int, state: bool, var: str) -
     return state
 
 
-def _find_unsafe_allocation_use(cfg: StructuredCFG, alloc_node_id: int, ptr_name: str):
-    """Return the first reachable unsafe use, or None.
-
-    The state is the nullability of the allocation currently tracked. A write
-    to the same variable ends the lifetime of the allocation being checked;
-    another allocation is a new object and is handled independently.
-    """
-    alloc = cfg.nodes[alloc_node_id]
-    work = [(succ, False) for succ in alloc.successors]
-    seen = set()
-    while work:
-        node_id, nonnull = work.pop()
-        state_key = (node_id, nonnull)
-        if state_key in seen:
-            continue
-        seen.add(state_key)
-        node = cfg.nodes[node_id]
-        if node.writes.intersection({ptr_name}):
-            continue
-        if ptr_name in node.allocated:
-            continue
-        if ptr_name in node.asserted:
-            nonnull = True
-        if not node.kind.endswith('_cond') and (ptr_name in node.derefs or ptr_name in node.reads):
-            if not nonnull:
-                return node
+def _get_predecessors(cfg: StructuredCFG) -> Dict[int, List[int]]:
+    preds: Dict[int, List[int]] = {nid: [] for nid in cfg.nodes}
+    for nid, node in cfg.nodes.items():
         for succ in node.successors:
-            work.append((succ, _edge_state(cfg, node_id, succ, nonnull, ptr_name)))
+            if succ in preds:
+                preds[succ].append(nid)
+    return preds
+
+
+def _compute_must_nonnull_states(cfg: StructuredCFG, initial_nonnull: Optional[Set[str]] = None) -> Dict[int, Set[str]]:
+    """
+    Computes MUST-nonnull variables at entry to each node in cfg using a
+    fixed-point forward dataflow solver with intersection at join points.
+    """
+    preds = _get_predecessors(cfg)
+    all_vars: Set[str] = set()
+    for node in cfg.nodes.values():
+        all_vars.update(node.reads)
+        all_vars.update(node.writes)
+        all_vars.update(node.allocated)
+        all_vars.update(node.freed)
+        all_vars.update(node.asserted)
+
+    init_set = set(initial_nonnull) if initial_nonnull else set()
+    in_state: Dict[int, Set[str]] = {}
+    for nid in cfg.nodes:
+        if nid == cfg.entry or not preds[nid]:
+            in_state[nid] = set(init_set)
+        else:
+            in_state[nid] = set(all_vars)
+
+    worklist = list(cfg.nodes.keys())
+    while worklist:
+        nid = worklist.pop(0)
+        node = cfg.nodes[nid]
+
+        for succ in node.successors:
+            succ_preds = preds[succ]
+            if len(succ_preds) <= 1:
+                add_vars, remove_vars = cfg.edge_facts.get((nid, succ), (set(), set()))
+                base = (in_state[nid] | node.asserted) - node.writes
+                new_succ_in = (base | add_vars) - remove_vars
+            else:
+                new_succ_in = None
+                for p in succ_preds:
+                    p_node = cfg.nodes[p]
+                    p_add, p_rem = cfg.edge_facts.get((p, succ), (set(), set()))
+                    p_base = (in_state[p] | p_node.asserted) - p_node.writes
+                    p_out = (p_base | p_add) - p_rem
+                    if new_succ_in is None:
+                        new_succ_in = set(p_out)
+                    else:
+                        new_succ_in.intersection_update(p_out)
+                if new_succ_in is None:
+                    new_succ_in = set()
+
+            if new_succ_in != in_state[succ]:
+                in_state[succ] = new_succ_in
+                if succ not in worklist:
+                    worklist.append(succ)
+
+    return in_state
+
+
+def _compute_maybe_freed_states(cfg: StructuredCFG) -> Dict[int, Set[str]]:
+    """
+    Computes MAYBE-freed variables at entry to each node in cfg using a
+    fixed-point forward dataflow solver with union at join points.
+    """
+    in_freed: Dict[int, Set[str]] = {nid: set() for nid in cfg.nodes}
+
+    worklist = list(cfg.nodes.keys())
+    while worklist:
+        nid = worklist.pop(0)
+        node = cfg.nodes[nid]
+
+        out_freed = (in_freed[nid] | node.freed) - node.writes
+
+        for succ in node.successors:
+            if not out_freed.issubset(in_freed[succ]):
+                in_freed[succ].update(out_freed)
+                if succ not in worklist:
+                    worklist.append(succ)
+
+    return in_freed
+
+
+def _compute_must_initialized_states(cfg: StructuredCFG, initial_initialized: Set[str]) -> Dict[int, Set[str]]:
+    """
+    Computes MUST-initialized variables at entry to each node in cfg using a
+    fixed-point forward dataflow solver with intersection at join points.
+    """
+    preds = _get_predecessors(cfg)
+    all_vars: Set[str] = set()
+    for node in cfg.nodes.values():
+        all_vars.update(node.reads)
+        all_vars.update(node.writes)
+        all_vars.update(node.allocated)
+
+    in_init: Dict[int, Set[str]] = {}
+    for nid in cfg.nodes:
+        if nid == cfg.entry or not preds[nid]:
+            in_init[nid] = set(initial_initialized)
+        else:
+            in_init[nid] = set(all_vars)
+
+    worklist = list(cfg.nodes.keys())
+    while worklist:
+        nid = worklist.pop(0)
+        node = cfg.nodes[nid]
+
+        for succ in node.successors:
+            succ_preds = preds[succ]
+            if len(succ_preds) <= 1:
+                out_init = in_init[nid] | node.writes
+                new_succ_in = set(out_init)
+            else:
+                new_succ_in = None
+                for p in succ_preds:
+                    p_node = cfg.nodes[p]
+                    p_out = in_init[p] | p_node.writes
+                    if new_succ_in is None:
+                        new_succ_in = set(p_out)
+                    else:
+                        new_succ_in.intersection_update(p_out)
+                if new_succ_in is None:
+                    new_succ_in = set()
+
+            if new_succ_in != in_init[succ]:
+                in_init[succ] = new_succ_in
+                if succ not in worklist:
+                    worklist.append(succ)
+
+    return in_init
+
+
+def _find_unsafe_allocation_use(cfg: StructuredCFG, alloc_node_id: int, ptr_name: str):
+    """Return the first reachable unsafe use of ptr_name allocated at alloc_node_id, or None."""
+    must_nonnull = _compute_must_nonnull_states(cfg)
+    work = list(cfg.nodes[alloc_node_id].successors)
+    visited = set()
+    while work:
+        nid = work.pop(0)
+        if nid in visited:
+            continue
+        visited.add(nid)
+        node = cfg.nodes[nid]
+
+        if not node.kind.endswith('_cond'):
+            if ptr_name in node.derefs or (ptr_name in node.reads and ptr_name not in node.freed and ptr_name not in node.asserted):
+                if ptr_name not in must_nonnull.get(nid, set()):
+                    return node
+
+        if ptr_name in node.writes:
+            # Variable reassigned; ends scope of this allocation
+            continue
+
+        for succ in node.successors:
+            if succ not in visited:
+                work.append(succ)
     return None
 
 
 def _find_unsafe_param_deref(cfg: StructuredCFG, param: str):
-    if cfg.entry is None:
-        return None
-    work = [(cfg.entry, False)]
-    seen = set()
+    """Return the first reachable unsafe dereference of parameter `param`, or None."""
+    must_nonnull = _compute_must_nonnull_states(cfg)
+    work = [cfg.entry] if cfg.entry is not None else []
+    visited = set()
     while work:
-        node_id, nonnull = work.pop()
-        state_key = (node_id, nonnull)
-        if state_key in seen:
+        nid = work.pop(0)
+        if nid in visited:
             continue
-        seen.add(state_key)
-        node = cfg.nodes[node_id]
-        if param in node.writes:
-            nonnull = False
-        if param in node.asserted:
-            nonnull = True
-        if param in node.derefs and not nonnull:
+        visited.add(nid)
+        node = cfg.nodes[nid]
+
+        if param in node.derefs and param not in must_nonnull.get(nid, set()):
             return node
+
+        if param in node.writes:
+            # Parameter reassigned
+            continue
+
         for succ in node.successors:
-            work.append((succ, _edge_state(cfg, node_id, succ, nonnull, param)))
+            if succ not in visited:
+                work.append(succ)
     return None
 
 
 def _find_uaf_uses(cfg: StructuredCFG, freed_node_id: int, ptr_name: str):
-    work = [(succ, True) for succ in cfg.nodes[freed_node_id].successors]
-    seen = set()
+    """Yield all reachable nodes where ptr_name is accessed after free."""
+    maybe_freed = _compute_maybe_freed_states(cfg)
+    work = list(cfg.nodes[freed_node_id].successors)
+    visited = set()
     while work:
-        node_id, freed = work.pop()
-        state_key = (node_id, freed)
-        if state_key in seen:
+        nid = work.pop(0)
+        if nid in visited:
             continue
-        seen.add(state_key)
-        node = cfg.nodes[node_id]
+        visited.add(nid)
+        node = cfg.nodes[nid]
+
+        if ptr_name in maybe_freed.get(nid, set()):
+            if not node.kind.endswith('_cond'):
+                if ptr_name in node.derefs or (ptr_name in node.reads and ptr_name not in node.writes):
+                    yield node
+                    continue
+
         if ptr_name in node.writes:
+            # Reassignment ends freed lifetime
             continue
-        if not node.kind.endswith('_cond') and (ptr_name in node.derefs or ptr_name in node.reads):
-            yield node
-            continue
+
         for succ in node.successors:
-            work.append((succ, freed))
+            if succ not in visited:
+                work.append(succ)
 
 
 class UncheckedDynamicAllocationsRule(BaseRule):
@@ -280,7 +422,41 @@ class UninitializedPointersRule(BaseRule):
     remediation_suggestion = "Initialize all pointer variables explicitly at declaration: type *ptr = NULL;"
     sample_vulnerable_code = "char *secret_key;\nif (condition) {\n    secret_key = fetch_key();\n}\nuse_key(secret_key); // May hold wild stack garbage"
     sample_remediated_code = "char *secret_key = NULL;\nif (condition) {\n    secret_key = fetch_key();\n}\nif (secret_key) use_key(secret_key);"
-    analysis_engine = AnalysisEngine.HYBRID
+    analysis_engine = AnalysisEngine.AST
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        for fn in ast_ctx.functions:
+            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            if cfg is not None:
+                uninit_ptrs = [v_name for v_name, var in fn.variables.items() if var.is_pointer and not var.has_initializer]
+                if not uninit_ptrs:
+                    continue
+                initial_init = set(p.name for p in fn.parameters) | set(ast_ctx.global_variables.keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
+                in_init = _compute_must_initialized_states(cfg, initial_init)
+                reported = set()
+                for node in cfg.nodes.values():
+                    for ptr in uninit_ptrs:
+                        if ptr in reported:
+                            continue
+                        if ptr in node.writes:
+                            continue
+                        if ptr in node.reads or ptr in node.derefs:
+                            if ptr not in in_init.get(node.node_id, set()):
+                                decl_line = fn.variables[ptr].declaration_line
+                                snippet = _source_snippet(ast_ctx, decl_line, f"char *{ptr};")
+                                issues.append(self.create_issue(
+                                    file_path=file_path,
+                                    line_number=decl_line,
+                                    code_snippet=snippet,
+                                    message=f"Pointer variable '{ptr}' is declared uninitialized (wild pointer risk). Initialize to NULL.",
+                                    column_number=1,
+                                    engine="AST",
+                                    auto_fix_replacement=snippet.replace(f"{ptr};", f"{ptr} = NULL;")
+                                ))
+                                reported.add(ptr)
+                continue
+        return issues
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
@@ -388,9 +564,38 @@ class UninitializedMemoryUseRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         for fn in ast_ctx.functions:
+            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            if cfg is not None:
+                uninit_vars = [v_name for v_name, var in fn.variables.items() if not var.has_initializer and not var.is_volatile]
+                if not uninit_vars:
+                    continue
+                initial_init = set(p.name for p in fn.parameters) | set(ast_ctx.global_variables.keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
+                in_init = _compute_must_initialized_states(cfg, initial_init)
+                reported = set()
+                for node in cfg.nodes.values():
+                    for v_name in uninit_vars:
+                        if v_name in reported:
+                            continue
+                        if v_name in node.writes:
+                            continue
+                        if v_name in node.reads:
+                            if v_name not in in_init.get(node.node_id, set()):
+                                decl_line = fn.variables[v_name].declaration_line
+                                snippet = _source_snippet(ast_ctx, decl_line, f"int {v_name};")
+                                issues.append(self.create_issue(
+                                    file_path=file_path,
+                                    line_number=decl_line,
+                                    code_snippet=snippet,
+                                    message=f"Local variable '{v_name}' is declared without initialization. Initialize at declaration to prevent reading stack garbage.",
+                                    column_number=1,
+                                    engine="AST",
+                                    auto_fix_replacement=snippet.replace(f"{v_name};", f"{v_name} = 0;")
+                                ))
+                                reported.add(v_name)
+                continue
+
             for v_name, var in fn.variables.items():
                 if not var.has_initializer and not var.is_pointer and not var.is_volatile:
-                    # Check if declaration line was bare uninitialized
                     decl_line_content = ast_ctx.source_lines[var.declaration_line - 1] if var.declaration_line <= len(ast_ctx.source_lines) else ""
                     if "=" not in decl_line_content and "{" not in decl_line_content:
                         issues.append(self.create_issue(

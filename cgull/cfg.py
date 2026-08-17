@@ -126,9 +126,13 @@ def _assignment_target(node) -> Set[str]:
 
 
 def _is_nullish(node) -> bool:
+    if node is None:
+        return False
     kind = type(node).__name__
     if kind == "ID":
         return str(node.name) in {"NULL", "nullptr"}
+    if kind == "Cast":
+        return _is_nullish(node.expr)
     return kind == "Constant" and str(getattr(node, "value", "")) in {"0", "0L", "0UL", "0LL", "0ULL"}
 
 
@@ -141,17 +145,27 @@ def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
         return {str(cond.name)}, set()
     if kind == "UnaryOp" and getattr(cond, "op", None) == "!" and type(cond.expr).__name__ == "ID":
         return set(), {str(cond.expr.name)}
-    if kind == "BinaryOp" and getattr(cond, "op", None) in {"==", "!="}:
-        lhs, rhs = cond.left, cond.right
-        if type(lhs).__name__ == "ID" and _is_nullish(rhs):
-            var = str(lhs.name)
-        elif type(rhs).__name__ == "ID" and _is_nullish(lhs):
-            var = str(rhs.name)
-        else:
-            return set(), set()
-        if cond.op == "!=":
-            return {var}, set()
-        return set(), {var}
+    if kind == "BinaryOp":
+        op = getattr(cond, "op", None)
+        if op in {"==", "!="}:
+            lhs, rhs = cond.left, cond.right
+            if type(lhs).__name__ == "ID" and _is_nullish(rhs):
+                var = str(lhs.name)
+            elif type(rhs).__name__ == "ID" and _is_nullish(lhs):
+                var = str(rhs.name)
+            else:
+                return set(), set()
+            if op == "!=":
+                return {var}, set()
+            return set(), {var}
+        elif op == "||":
+            l_t, l_f = _simple_null_facts(cond.left)
+            r_t, r_f = _simple_null_facts(cond.right)
+            return l_t.intersection(r_t), l_f.union(r_f)
+        elif op == "&&":
+            l_t, l_f = _simple_null_facts(cond.left)
+            r_t, r_f = _simple_null_facts(cond.right)
+            return l_t.union(r_t), l_f.intersection(r_f)
     return set(), set()
 
 
@@ -230,7 +244,12 @@ def build_cfg(funcdef) -> StructuredCFG:
 
         if kind in {"Decl", "Assignment", "FuncCall", "Return", "UnaryOp", "BinaryOp", "ExprList", "Cast", "ArrayRef", "StructRef"}:
             node = make_event(stmt)
-            if kind != "Return":
+            is_exit_call = False
+            if kind == "FuncCall":
+                callee_name = _format_pycparser_expr(getattr(stmt, "name", None))
+                if callee_name in {"exit", "_exit", "_Exit", "abort", "quick_exit", "fatal", "panic", "err", "errx"}:
+                    is_exit_call = True
+            if kind != "Return" and not is_exit_call:
                 cfg.connect(node, next_entry)
             return node
 
