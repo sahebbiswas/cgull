@@ -18,6 +18,7 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
   - **AST-Assisted Structural Analysis**: structural pattern checks for unchecked `malloc` returns, missing pointer NULL checks, use-after-free, VLAs, and control flow patterns, built on a lightweight in-repo C parser and cross-checked with `pycparser` where supported.
 - **🔇 Inline Suppression**: silence specific findings with `// cgull-ignore`, `// cgull-ignore: CGULL-001`, or `// cgull-ignore-next-line: CGULL-001,CGULL-003` -- useful since heuristic static analysis rules can produce false positives.
 - **⚙️ Parallel Scanning**: `-j/--jobs` scans multiple files concurrently across CPU cores for larger codebases.
+- **📏 Baseline / Diff Mode**: `--baseline`/`--update-baseline` let CI enforce "no *new* issues" on an existing, imperfect codebase instead of requiring it to already be fully clean -- see "Baseline / Diff Mode" below.
 - **📁 Recursive Directory Scanning**: Automatically discovers and audits C source and header files (`.c`, `.h`) across nested codebases.
 - **🚫 .cgullignore Support**: Exclude vendor libraries, third-party dependencies, build output directories, or test mock files using standard gitignore glob patterns and negations (`!`).
 - **📊 Multi-Format Reporting**:
@@ -123,6 +124,32 @@ strcpy(dest, src);                        // cgull-ignore              (suppress
 // cgull-ignore-next-line: CGULL-001,CGULL-003
 strcpy(dest, src);
 ```
+
+### Baseline / Diff Mode
+
+Adopting a scanner on an existing, imperfect codebase is usually impractical if `--fail-on-high` fails the build on every pre-existing issue on day one. Baseline mode fixes that: snapshot the findings you're accepting for now, then only fail CI on findings introduced *after* that snapshot.
+
+A baseline file is just an ordinary `cgull scan --format json` report -- there's no separate format. Findings are matched between scans by a content-based fingerprint (rule + file + normalized code snippet), not line number, so unrelated edits elsewhere in a file won't make an untouched finding look "new".
+
+```bash
+# 1. Snapshot current findings as the accepted baseline (commit this file)
+cgull scan src/ --update-baseline .cgull-baseline.json
+
+# 2. In CI: only fail on issues introduced since the baseline
+cgull scan src/ --baseline .cgull-baseline.json --fail-on-high
+
+# --update-baseline and --baseline can be combined in one invocation to
+# both check against the current baseline AND immediately refresh it:
+cgull scan src/ --baseline .cgull-baseline.json --update-baseline .cgull-baseline.json --fail-on-high
+```
+
+The report (any format) shows both the new-issue count and how many baseline findings have since been resolved:
+
+```
+Baseline Diff    : 12 total, 1 new, 3 resolved since baseline
+```
+
+> **Note:** run the baseline snapshot and the later diffed scan with the same `--severity`/`--engine` flags. A baseline captured with `--severity all` compared against a later scan run with `--severity high` will make the filtered-out medium/low findings look "resolved" even though they were just excluded, not fixed.
 
 ### CI/CD Pipeline Enforcement (Fail on High Severity)
 ```bash
@@ -306,6 +333,7 @@ python3 tests/test_scanner.py -v
 - **Performance on very large or macro-heavy codebases is not yet optimized.** Function/variable extraction is currently regex-based (`O(n)` per file but with a real constant-factor cost), and the `pycparser` cross-check adds further parse time on top of that. On pathological inputs (e.g. thousands of small functions in one file) total scan time can be significant. Use `-j/--jobs` to parallelize across files in the meantime; a follow-up pass on the extraction/parse hot path is planned.
 - **AST-tagged rules degrade gracefully but silently** when `pycparser` can't parse a file (see "AST Engine Notes" above) -- there is currently no per-file indicator in the report distinguishing "analyzed with pycparser" from "regex-fallback only."
 - Several rules have a documented **high false-positive rate** by design trade-off -- use inline suppression (`// cgull-ignore`) rather than disabling the rule entirely if it's noisy on your codebase but still valuable.
+- **Baseline fingerprints are content-based, not a cryptographic identity.** Two textually-identical findings from the same rule in the same file (e.g. the same unsafe call copy-pasted at two call sites) share a fingerprint; baseline diffing correctly counts "how many instances are new" via multiset comparison, but if you rename/move code such that the *normalized* snippet text changes, the finding will look new even though it's the same underlying issue moved elsewhere. Re-running `--update-baseline` after intentional refactors is the expected workflow.
 
 ---
 

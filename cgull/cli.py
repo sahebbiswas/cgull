@@ -12,6 +12,7 @@ from .models import Severity, AnalysisEngine
 from .ignore import CGullIgnoreFilter
 from .reporter import ReportGenerator
 from .rules import get_all_rules
+from .baseline import load_baseline_fingerprints, apply_baseline, BaselineError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,6 +28,8 @@ Examples:
   cgull scan main.c --format sarif -o results.sarif
   cgull scan src/ --ignore-file .cgullignore --fail-on-high
   cgull scan src/ -j 0            # parallelize across all CPU cores
+  cgull scan src/ --update-baseline baseline.json     # snapshot current findings
+  cgull scan src/ --baseline baseline.json --fail-on-high  # only fail on NEW issues
   cgull rules
   cgull init-ignore
 
@@ -51,6 +54,8 @@ Suppressing findings inline:
     scan_parser.add_argument("--engine", choices=["regex", "ast", "hybrid"], default="hybrid", help="Scan engine mode (default: hybrid)")
     scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD)")
     scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count.")
+    scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
+    scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
 
     # RULES subcommand
     subparsers.add_parser("rules", help="List all security audit rules supported by C-GULL")
@@ -98,6 +103,26 @@ def handle_scan(args) -> int:
         custom_ignore_patterns=args.ignore_pattern,
         jobs=jobs,
     )
+
+    # --update-baseline always snapshots the full (pre-baseline-filter)
+    # result, so it reflects everything currently found regardless of
+    # whether --baseline was also passed in the same invocation.
+    if args.update_baseline:
+        try:
+            with open(args.update_baseline, "w", encoding="utf-8") as f:
+                f.write(ReportGenerator.to_json(result))
+            print(f"✅ Baseline saved to: {args.update_baseline} ({result.total_issues_count} issue(s) recorded)")
+        except Exception as e:
+            print(f"Error writing baseline to {args.update_baseline}: {e}", file=sys.stderr)
+            return 1
+
+    if args.baseline:
+        try:
+            baseline_counts = load_baseline_fingerprints(args.baseline)
+        except BaselineError as e:
+            print(f"Error loading baseline: {e}", file=sys.stderr)
+            return 1
+        result = apply_baseline(result, baseline_counts)
 
     # Format output
     fmt = args.format.lower()

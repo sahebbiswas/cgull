@@ -158,6 +158,84 @@ class TestScanCommand(unittest.TestCase):
         self.assertEqual(code, 1)
 
 
+class TestBaselineFlags(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.c_file = os.path.join(self.temp_dir, "vuln.c")
+        with open(self.c_file, "w") as f:
+            f.write("void f(char *b) {\n    gets(b);\n}\n")
+        self.baseline_path = os.path.join(self.temp_dir, "baseline.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _run(self, argv):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = main(argv)
+        return code, stdout.getvalue()
+
+    def test_update_baseline_writes_full_json_report(self):
+        code, out = self._run(["scan", self.c_file, "--update-baseline", self.baseline_path])
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(self.baseline_path))
+        with open(self.baseline_path) as f:
+            data = json.load(f)
+        self.assertGreaterEqual(len(data["issues"]), 1)
+        self.assertIn("fingerprint", data["issues"][0])
+
+    def test_baseline_flag_suppresses_known_findings(self):
+        self._run(["scan", self.c_file, "--update-baseline", self.baseline_path])
+        code, out = self._run(["scan", self.c_file, "--baseline", self.baseline_path, "--format", "json"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(out)
+        self.assertEqual(parsed["summary"]["total_issues_count"], 0)
+        self.assertIn("baseline", parsed["summary"])
+
+    def test_fail_on_high_only_fails_on_new_issues_with_baseline(self):
+        self._run(["scan", self.c_file, "--update-baseline", self.baseline_path])
+        # No code changes: --fail-on-high should now pass since nothing is new.
+        code, _ = self._run(["scan", self.c_file, "--baseline", self.baseline_path, "--fail-on-high"])
+        self.assertEqual(code, 0)
+
+    def test_fail_on_high_still_fails_on_genuinely_new_issue(self):
+        self._run(["scan", self.c_file, "--update-baseline", self.baseline_path])
+        with open(self.c_file, "a") as f:
+            f.write("void g(char *dest, char *src) {\n    strcpy(dest, src);\n}\n")
+        code, _ = self._run(["scan", self.c_file, "--baseline", self.baseline_path, "--fail-on-high"])
+        self.assertEqual(code, 1)
+
+    def test_missing_baseline_file_is_a_clean_error_not_a_crash(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            code = main(["scan", self.c_file, "--baseline", os.path.join(self.temp_dir, "nope.json")])
+        self.assertEqual(code, 1)
+        self.assertIn("Baseline file not found", stderr.getvalue())
+
+    def test_update_baseline_snapshots_full_result_even_with_baseline_also_passed(self):
+        self._run(["scan", self.c_file, "--update-baseline", self.baseline_path])
+        second_baseline = os.path.join(self.temp_dir, "baseline2.json")
+        # Even filtered down to 0 issues by --baseline, --update-baseline
+        # should still snapshot everything that was actually found.
+        self._run(["scan", self.c_file, "--baseline", self.baseline_path, "--update-baseline", second_baseline])
+        with open(second_baseline) as f:
+            data = json.load(f)
+        self.assertGreaterEqual(len(data["issues"]), 1)
+
+    def test_terminal_output_shows_baseline_diff_line(self):
+        self._run(["scan", self.c_file, "--update-baseline", self.baseline_path])
+        code, out = self._run(["scan", self.c_file, "--baseline", self.baseline_path])
+        self.assertIn("Baseline Diff", out)
+
+    def test_update_baseline_write_failure_returns_error(self):
+        bad_path = os.path.join(self.temp_dir, "no_such_dir", "baseline.json")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            code = main(["scan", self.c_file, "--update-baseline", bad_path])
+        self.assertEqual(code, 1)
+        self.assertIn("Error writing baseline", stderr.getvalue())
+
+
 class TestRulesCommand(unittest.TestCase):
     def test_rules_command_lists_all_rule_ids(self):
         stdout = io.StringIO()

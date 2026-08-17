@@ -15,7 +15,7 @@ from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine
 from .ignore import CGullIgnoreFilter
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
-from .utils import SuppressionMap, mask_string_and_char_literals
+from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint
 
 
 class CGullScanner:
@@ -94,6 +94,18 @@ class CGullScanner:
 
         for file_path, file_issues, loc, duration_ms in results:
             total_loc += loc
+
+            # Store a relative path on each Issue, matching what
+            # FileScanSummary already does below. Without this, directory
+            # scans store the absolute scan-time path on every Issue,
+            # which breaks portability of saved reports (a baseline
+            # captured on one machine/checkout would never match another)
+            # and made two reports of the same repo look unrelated purely
+            # because of where it happened to be checked out.
+            display_path = os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path)
+            for issue in file_issues:
+                issue.file_path = display_path
+                issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
             all_issues.extend(file_issues)
 
             high_count = sum(1 for i in file_issues if i.impact == Severity.HIGH)
@@ -101,7 +113,7 @@ class CGullScanner:
             low_count = sum(1 for i in file_issues if i.impact == Severity.LOW)
 
             file_summaries.append(FileScanSummary(
-                file_path=os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path),
+                file_path=display_path,
                 lines_of_code=loc,
                 issues_count=len(file_issues),
                 high_count=high_count,
@@ -178,6 +190,8 @@ class CGullScanner:
         """
         start_time = time.time()
         file_issues, loc, duration_ms = self._scan_single_file_content(file_path, source_code)
+        for issue in file_issues:
+            issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
 
         if self.severity_filter:
             file_issues = [i for i in file_issues if i.impact in self.severity_filter]

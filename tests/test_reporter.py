@@ -94,6 +94,13 @@ class TestReportGeneratorSARIF(unittest.TestCase):
         uri = parsed["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
         self.assertNotIn("\\", uri)
 
+    def test_sarif_results_include_partial_fingerprints(self):
+        result = self.scanner.scan_text(VULNERABLE_CODE, "sample.c")
+        parsed = json.loads(ReportGenerator.to_sarif(result))
+        fp = parsed["runs"][0]["results"][0]["partialFingerprints"]["cgullFingerprint/v1"]
+        self.assertTrue(fp)
+        self.assertEqual(fp, result.issues[0].fingerprint)
+
 
 class TestReportGeneratorMarkdown(unittest.TestCase):
     def setUp(self):

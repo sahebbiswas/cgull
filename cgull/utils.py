@@ -7,6 +7,7 @@ masked view of the source -- rather than each rule re-implementing its own
 (inconsistent) comment/string handling.
 """
 
+import hashlib
 import re
 from typing import Dict, List, Set, Tuple
 
@@ -246,3 +247,32 @@ class SuppressionMap:
             if rule_ids and ("*" in rule_ids or rule_id.upper() in rule_ids):
                 return True
         return False
+
+
+# Collapses all runs of whitespace to a single space and trims the ends, so
+# a finding's fingerprint survives pure re-indentation / reformatting of
+# the line it was found on.
+_WHITESPACE_RUN_RE = re.compile(r'\s+')
+
+
+def compute_issue_fingerprint(rule_id: str, relative_file_path: str, code_snippet: str) -> str:
+    """
+    Computes a stable identifier for a finding, used to recognize "the same
+    issue" across two separate scans (baseline diffing) and to populate
+    SARIF's partialFingerprints (so tools like GitHub Code Scanning can
+    track a finding's lifecycle across commits instead of treating every
+    run as all-new).
+
+    Deliberately content-based rather than line-number-based: an unrelated
+    edit earlier in the file that shifts every subsequent line number
+    would otherwise make every later finding look "new" to a line-number
+    based diff. Whitespace is normalized so pure reformatting/re-indenting
+    doesn't do the same. This is a heuristic, not a cryptographic
+    guarantee -- two textually-identical lines flagged by the same rule
+    in the same file will collide (deliberately: from a baseline/dedup
+    perspective, they *are* the same finding to act on).
+    """
+    normalized_path = relative_file_path.replace("\\", "/")
+    normalized_snippet = _WHITESPACE_RUN_RE.sub(" ", code_snippet.strip())
+    basis = f"{rule_id}|{normalized_path}|{normalized_snippet}"
+    return hashlib.sha256(basis.encode("utf-8", errors="replace")).hexdigest()[:16]

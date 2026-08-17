@@ -78,6 +78,7 @@ class Issue:
     cwe_id: str = ""
     engine: str = "Regex"
     auto_fix_replacement: Optional[str] = None
+    fingerprint: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -93,6 +94,7 @@ class Issue:
             "cwe_id": self.cwe_id,
             "engine": self.engine,
             "auto_fix_replacement": self.auto_fix_replacement,
+            "fingerprint": self.fingerprint,
         }
 
 
@@ -125,8 +127,30 @@ class ScanResult:
     file_summaries: List[FileScanSummary] = field(default_factory=list)
     ignored_paths: List[str] = field(default_factory=list)
     rules_applied: int = 0
+    # Populated only when a --baseline was applied (see cgull.baseline);
+    # left at their defaults for an ordinary, non-baseline scan.
+    is_baseline_filtered: bool = False
+    baseline_new_count: Optional[int] = None
+    baseline_resolved_count: Optional[int] = None
+    baseline_total_before_filter: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {
+            "scanned_files_count": self.scanned_files_count,
+            "total_lines_of_code": self.total_lines_of_code,
+            "total_issues_count": self.total_issues_count,
+            "high_severity_count": self.high_severity_count,
+            "medium_severity_count": self.medium_severity_count,
+            "low_severity_count": self.low_severity_count,
+            "rules_applied_count": self.rules_applied,
+            "ignored_paths_count": len(self.ignored_paths),
+        }
+        if self.is_baseline_filtered:
+            summary["baseline"] = {
+                "new_issues_count": self.baseline_new_count,
+                "resolved_issues_count": self.baseline_resolved_count,
+                "total_issues_before_baseline_filter": self.baseline_total_before_filter,
+            }
         return {
             "meta": {
                 "tool": "C-GULL",
@@ -136,16 +160,7 @@ class ScanResult:
                 "target_path": self.target_path,
                 "scan_duration_seconds": round(self.scan_duration_seconds, 4),
             },
-            "summary": {
-                "scanned_files_count": self.scanned_files_count,
-                "total_lines_of_code": self.total_lines_of_code,
-                "total_issues_count": self.total_issues_count,
-                "high_severity_count": self.high_severity_count,
-                "medium_severity_count": self.medium_severity_count,
-                "low_severity_count": self.low_severity_count,
-                "rules_applied_count": self.rules_applied,
-                "ignored_paths_count": len(self.ignored_paths),
-            },
+            "summary": summary,
             "issues": [issue.to_dict() for issue in self.issues],
             "file_summaries": [fs.to_dict() for fs in self.file_summaries],
             "ignored_paths": self.ignored_paths,

@@ -67,7 +67,10 @@ class ReportGenerator:
                     "cwe": issue.cwe_id,
                     "remediation": issue.remediation,
                     "autoFix": issue.auto_fix_replacement
-                }
+                },
+                "partialFingerprints": {
+                    "cgullFingerprint/v1": issue.fingerprint
+                } if issue.fingerprint else {}
             })
 
         sarif_obj = {
@@ -99,6 +102,13 @@ class ReportGenerator:
             f"**Duration**: `{result.scan_duration_seconds:.3f}s`  ",
             f"**Files Scanned**: `{result.scanned_files_count}`  ",
             f"**Total Lines of Code**: `{result.total_lines_of_code}`  ",
+        ]
+        if result.is_baseline_filtered:
+            lines.append(
+                f"**Baseline Diff**: `{result.baseline_total_before_filter}` total finding(s) found; "
+                f"`{result.baseline_new_count}` new since baseline, `{result.baseline_resolved_count}` resolved since baseline  "
+            )
+        lines.extend([
             "",
             "## 📊 Executive Summary",
             "",
@@ -113,10 +123,11 @@ class ReportGenerator:
             "",
             "## 🚨 Detected Vulnerabilities & Security Findings",
             "",
-        ]
+        ])
 
         if not result.issues:
-            lines.append("🎉 *No vulnerabilities detected! The code complies with all checked security rules.*")
+            msg = "🎉 *No new vulnerabilities since baseline!*" if result.is_baseline_filtered else "🎉 *No vulnerabilities detected! The code complies with all checked security rules.*"
+            lines.append(msg)
         else:
             for idx, issue in enumerate(result.issues, 1):
                 badge = "🔴 HIGH" if issue.impact == Severity.HIGH else ("🟡 MEDIUM" if issue.impact == Severity.MEDIUM else "🔵 LOW")
@@ -162,11 +173,17 @@ class ReportGenerator:
             f" Lines of Code    : {result.total_lines_of_code}",
             f" Scan Duration    : {result.scan_duration_seconds:.3f}s",
             f" Total Findings   : {result.total_issues_count} (High: {result.high_severity_count}, Medium: {result.medium_severity_count}, Low: {result.low_severity_count})",
-            "=======================================================================",
         ]
+        if result.is_baseline_filtered:
+            lines.append(
+                f" Baseline Diff    : {result.baseline_total_before_filter} total, "
+                f"{result.baseline_new_count} new, {result.baseline_resolved_count} resolved since baseline"
+            )
+        lines.append("=======================================================================")
 
         if not result.issues:
-            lines.append(" ✅ No vulnerabilities found. Clean audit!")
+            msg = " ✅ No new vulnerabilities since baseline!" if result.is_baseline_filtered else " ✅ No vulnerabilities found. Clean audit!"
+            lines.append(msg)
             return "\n".join(lines)
 
         lines.append("")

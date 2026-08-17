@@ -139,5 +139,42 @@ class TestDirectoryTraversalWithNegation(unittest.TestCase):
         self.assertFalse(any("other.c" in p for p in scanned_files))
 
 
+class TestIssueFilePathIsRelative(unittest.TestCase):
+    """
+    Regression test: Issue.file_path used to be left as the absolute
+    scan-time path for directory scans (while FileScanSummary.file_path
+    was already relative), which broke portability of saved reports --
+    e.g. a baseline captured on one machine/checkout would never match
+    fingerprints computed against another checkout's absolute paths.
+    """
+
+    def test_directory_scan_issue_file_path_is_relative(self):
+        temp_dir = tempfile.mkdtemp()
+        try:
+            nested = os.path.join(temp_dir, "src")
+            os.makedirs(nested)
+            with open(os.path.join(nested, "vuln.c"), "w") as f:
+                f.write(VULNERABLE_CODE)
+            result = CGullScanner().scan_path(temp_dir)
+            self.assertGreaterEqual(len(result.issues), 1)
+            for issue in result.issues:
+                self.assertFalse(os.path.isabs(issue.file_path))
+                self.assertEqual(issue.file_path, os.path.join("src", "vuln.c"))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_issue_file_path_matches_file_summary_file_path(self):
+        temp_dir = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(temp_dir, "vuln.c"), "w") as f:
+                f.write(VULNERABLE_CODE)
+            result = CGullScanner().scan_path(temp_dir)
+            summary_paths = {fs.file_path for fs in result.file_summaries}
+            issue_paths = {i.file_path for i in result.issues}
+            self.assertTrue(issue_paths.issubset(summary_paths))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()
