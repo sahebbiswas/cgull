@@ -50,6 +50,10 @@ class TestSecurityRuleBehavioralCorpus(unittest.TestCase):
         success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-023", verbose=False)
         self.assertTrue(success, f"CGULL-023 Corpus Failed:\n{report}")
 
+    def test_rule_cgull_026_snprintf_return_value(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-026", verbose=False)
+        self.assertTrue(success, f"CGULL-026 Corpus Failed:\n{report}")
+
 
 if __name__ == "__main__":
     unittest.main()
