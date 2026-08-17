@@ -123,6 +123,40 @@ class FormatStringRule(BaseRule):
         return issues
 
 
+class UncheckedSnprintfReturnRule(BaseRule):
+    rule_id = "CGULL-026"
+    name = "Unchecked snprintf() Return Value"
+    impact = Severity.HIGH
+    category = RuleCategory.STRINGS
+    description = "Flag the direct accumulation of snprintf() return value into an offset without checking for truncation. snprintf() returns the number of bytes it *would* have written, leading to underflow if used directly on truncation."
+    implementation_method = "Regex string matching"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-131"
+    remediation_suggestion = "Check the return value of snprintf() to ensure it is not less than zero and not greater than or equal to the buffer size before using it."
+    sample_vulnerable_code = "int offset = 0;\noffset += snprintf(buf + offset, size - offset, \"%s\", str);"
+    sample_remediated_code = "int offset = 0;\nint n = snprintf(buf + offset, size - offset, \"%s\", str);\nif (n < 0 || n >= size - offset) { /* handle error */ }\noffset += n;"
+    analysis_engine = AnalysisEngine.REGEX
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        match_target = masked_line_content or line_content
+
+        m = re.search(r'\b(\w+)\s*\+=\s*snprintf\s*\(', match_target)
+        if m:
+            var_name = m.group(1)
+            issues.append(self.create_issue(
+                file_path=file_path,
+                line_number=line_number,
+                code_snippet=line_content,
+                message=f"Direct accumulation of snprintf() return value into '{var_name}'. If snprintf truncates, it returns the intended length, leading to buffer overflow on subsequent uses.",
+                column_number=m.start() + 1,
+                engine="Regex",
+                auto_fix_replacement=f"int n = snprintf(...);\nif (n < 0 || n >= remaining_size) {{ ... }}\n{var_name} += n;"
+            ))
+        return issues
+
+
 class UnsafeIntegerConversionsRule(BaseRule):
     rule_id = "CGULL-012"
     name = "Unsafe Integer Conversions"

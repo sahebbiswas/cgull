@@ -8,6 +8,7 @@ from .banned_functions import (
     BannedFunctionsRule,
     FormatStringRule,
     UnsafeIntegerConversionsRule,
+    UncheckedSnprintfReturnRule,
 )
 from .memory_management import (
     UncheckedDynamicAllocationsRule,
@@ -44,6 +45,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     # High Impact
     BannedFunctionsRule,
     FormatStringRule,
+    UncheckedSnprintfReturnRule,
     UncheckedDynamicAllocationsRule,
     MissingNullCheckOnFunctionParametersRule,
     NonConstantTimeMemoryComparisonRule,
