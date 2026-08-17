@@ -31,7 +31,7 @@ setup(
     extras_require={
         "ast": ["pycparser>=2.21", "pcpp>=1.30"],
         "preprocess": ["pcpp>=1.30"],
-        "dev": ["pytest>=7.0.0", "flake8>=5.0.0"],
+        "dev": ["pytest>=7.0.0", "flake8>=5.0.0", "jsonschema>=4.0.0"],
     },
     entry_points={
         "console_scripts": [
