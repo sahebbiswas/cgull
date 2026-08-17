@@ -116,9 +116,10 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             for offset in range(1, 5):
                 if line_number - 1 - offset >= 0:
                     prev_l = source_lines[line_number - 1 - offset]
-                    if "SIZE_MAX" in prev_l or "MAX_" in prev_l or ">" in prev_l:
-                        has_overflow_check = True
-                        break
+                    if not prev_l.strip().startswith('#'):
+                        if "SIZE_MAX" in prev_l or "MAX_" in prev_l or ">" in prev_l:
+                            has_overflow_check = True
+                            break
 
             if not has_overflow_check:
                 issues.append(self.create_issue(
