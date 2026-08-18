@@ -23,9 +23,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Gemini Code Review
-        uses: petarzarkov/gemini-code-review-action@v1
+        uses: petarzarkov/gemini-code-review-action@latest
         with:
-          model: 'gemini-2.5-flash'
+          model: 'gemini-3.7-flash'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
