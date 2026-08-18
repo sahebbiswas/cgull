@@ -28,6 +28,19 @@ class FixType(str, Enum):
     MANUAL_REVIEW = "manual_review"
 
 
+class ParserStatus(str, Enum):
+    PYCPARSER_SUCCESS = "pycparser-success"
+    FALLBACK_PARSER = "fallback-parser"
+    REGEX = "regex"
+    PARSE_FAILED = "parse-failed"
+
+
+class Confidence(str, Enum):
+    FULL = "FULL"
+    FALLBACK = "FALLBACK"
+    LIMITED = "LIMITED"
+
+
 class RuleCategory(str, Enum):
     MEMORY = "Memory Management & Allocation"
     STRINGS = "String Operations & Bounds"
@@ -88,9 +101,11 @@ class Issue:
     fingerprint: str = ""
     fix_type: FixType = FixType.MANUAL_REVIEW
     suggested_fix_replacement: Optional[str] = None
+    confidence: Optional[Confidence] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        conf_val = self.confidence.value if isinstance(self.confidence, Confidence) else (str(self.confidence) if self.confidence else None)
+        d = {
             "rule_id": self.rule_id,
             "rule_name": self.rule_name,
             "impact": self.impact.value if isinstance(self.impact, Severity) else str(self.impact),
@@ -107,6 +122,9 @@ class Issue:
             "suggested_fix_replacement": self.suggested_fix_replacement,
             "fingerprint": self.fingerprint,
         }
+        if conf_val:
+            d["confidence"] = conf_val
+        return d
 
 
 @dataclass
@@ -118,6 +136,9 @@ class FileScanSummary:
     medium_count: int
     low_count: int
     scan_duration_ms: float
+    parser: str = ParserStatus.FALLBACK_PARSER.value
+    status: str = "success"
+    confidence: str = Confidence.FALLBACK.value
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -137,6 +158,14 @@ class ScanResult:
     issues: List[Issue] = field(default_factory=list)
     file_summaries: List[FileScanSummary] = field(default_factory=list)
     ignored_paths: List[str] = field(default_factory=list)
+    failed_paths: List[str] = field(default_factory=list)
+    files_discovered: int = 0
+    files_analyzed: int = 0
+    files_ignored: int = 0
+    files_failed: int = 0
+    analysis_status_counts: Dict[str, int] = field(default_factory=dict)
+    overall_parser_status: Optional[str] = None
+    overall_analysis_status: Optional[str] = None
     rules_applied: int = 0
     # Populated only when a --baseline was applied (see cgull.baseline);
     # left at their defaults for an ordinary, non-baseline scan.
@@ -145,8 +174,46 @@ class ScanResult:
     baseline_resolved_count: Optional[int] = None
     baseline_total_before_filter: Optional[int] = None
 
+    def get_overall_parser_status(self) -> str:
+        if self.overall_parser_status:
+            return self.overall_parser_status
+        pyc_count = self.analysis_status_counts.get(ParserStatus.PYCPARSER_SUCCESS.value, 0)
+        fallback_count = self.analysis_status_counts.get(ParserStatus.FALLBACK_PARSER.value, 0)
+        regex_count = self.analysis_status_counts.get(ParserStatus.REGEX.value, 0)
+        failed_count = self.analysis_status_counts.get(ParserStatus.PARSE_FAILED.value, 0)
+
+        if pyc_count > 0:
+            if fallback_count > 0 or regex_count > 0:
+                return "hybrid"
+            return "pycparser"
+        elif fallback_count > 0:
+            return "fallback-parser"
+        elif regex_count > 0:
+            return "regex"
+        elif failed_count > 0:
+            return "parse-failed"
+        return "none"
+
+    def get_overall_analysis_status(self) -> str:
+        if self.overall_analysis_status:
+            return self.overall_analysis_status
+        if self.files_failed == 0:
+            return "success"
+        elif self.files_analyzed > 0:
+            return "partial_success"
+        return "failed"
+
     def to_dict(self) -> Dict[str, Any]:
+        analysis: Dict[str, Any] = {
+            "parser": self.get_overall_parser_status(),
+            "status": self.get_overall_analysis_status(),
+            "status_counts": self.analysis_status_counts,
+        }
         summary: Dict[str, Any] = {
+            "files_discovered": self.files_discovered or (self.scanned_files_count + len(self.ignored_paths) + len(self.failed_paths)),
+            "files_analyzed": self.files_analyzed or self.scanned_files_count,
+            "files_ignored": self.files_ignored or len(self.ignored_paths),
+            "files_failed": self.files_failed or len(self.failed_paths),
             "scanned_files_count": self.scanned_files_count,
             "total_lines_of_code": self.total_lines_of_code,
             "total_issues_count": self.total_issues_count,
@@ -155,6 +222,7 @@ class ScanResult:
             "low_severity_count": self.low_severity_count,
             "rules_applied_count": self.rules_applied,
             "ignored_paths_count": len(self.ignored_paths),
+            "failed_paths_count": len(self.failed_paths),
         }
         if self.is_baseline_filtered:
             summary["baseline"] = {
@@ -171,8 +239,10 @@ class ScanResult:
                 "target_path": self.target_path,
                 "scan_duration_seconds": round(self.scan_duration_seconds, 4),
             },
+            "analysis": analysis,
             "summary": summary,
             "issues": [issue.to_dict() for issue in self.issues],
             "file_summaries": [fs.to_dict() for fs in self.file_summaries],
             "ignored_paths": self.ignored_paths,
+            "failed_paths": self.failed_paths,
         }

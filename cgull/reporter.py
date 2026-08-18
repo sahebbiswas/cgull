@@ -50,6 +50,16 @@ class ReportGenerator:
             # SARIF level
             level = "error" if issue.impact == Severity.HIGH else ("warning" if issue.impact == Severity.MEDIUM else "note")
 
+            props: Dict[str, Any] = {
+                "cwe": issue.cwe_id,
+                "remediation": issue.remediation,
+                "fixType": issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type),
+                "autoFix": issue.auto_fix_replacement,
+                "suggestedFix": issue.suggested_fix_replacement,
+            }
+            if issue.confidence:
+                props["confidence"] = issue.confidence.value if hasattr(issue.confidence, "value") else str(issue.confidence)
+
             results_list.append({
                 "ruleId": issue.rule_id,
                 "level": level,
@@ -64,17 +74,16 @@ class ReportGenerator:
                         }
                     }
                 }],
-                "properties": {
-                    "cwe": issue.cwe_id,
-                    "remediation": issue.remediation,
-                    "fixType": issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type),
-                    "autoFix": issue.auto_fix_replacement,
-                    "suggestedFix": issue.suggested_fix_replacement,
-                },
+                "properties": props,
                 "partialFingerprints": {
                     "cgullFingerprint/v1": issue.fingerprint
                 } if issue.fingerprint else {}
             })
+
+        disc = result.files_discovered or (result.scanned_files_count + len(result.ignored_paths) + len(result.failed_paths))
+        analyzed = result.files_analyzed or result.scanned_files_count
+        ignored = result.files_ignored or len(result.ignored_paths)
+        failed = result.files_failed or len(result.failed_paths)
 
         sarif_obj = {
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
@@ -89,6 +98,17 @@ class ReportGenerator:
                         "rules": list(rules_dict.values()),
                     }
                 },
+                "invocations": [{
+                    "executionSuccessful": failed == 0,
+                    "properties": {
+                        "parser": result.get_overall_parser_status(),
+                        "analysisStatus": result.get_overall_analysis_status(),
+                        "filesDiscovered": disc,
+                        "filesAnalyzed": analyzed,
+                        "filesIgnored": ignored,
+                        "filesFailed": failed,
+                    }
+                }],
                 "results": results_list
             }]
         }
@@ -97,13 +117,23 @@ class ReportGenerator:
     @staticmethod
     def to_markdown(result: ScanResult) -> str:
         """Generates executive Markdown audit report."""
+        disc = result.files_discovered or (result.scanned_files_count + len(result.ignored_paths) + len(result.failed_paths))
+        analyzed = result.files_analyzed or result.scanned_files_count
+        ignored = result.files_ignored or len(result.ignored_paths)
+        failed = result.files_failed or len(result.failed_paths)
+
         lines = [
             "# 🛡️ C-GULL Security Audit Report",
             "",
             f"**Target**: `{result.target_path}`  ",
             f"**Scan Date**: `{result.timestamp}`  ",
             f"**Duration**: `{result.scan_duration_seconds:.3f}s`  ",
-            f"**Files Scanned**: `{result.scanned_files_count}`  ",
+            f"**Parser Mode**: `{result.get_overall_parser_status()}`  ",
+            f"**Analysis Status**: `{result.get_overall_analysis_status()}`  ",
+            f"**Files Discovered**: `{disc}`  ",
+            f"**Files Analyzed**: `{analyzed}`  ",
+            f"**Files Ignored**: `{ignored}`  ",
+            f"**Files Failed**: `{failed}`  ",
             f"**Total Lines of Code**: `{result.total_lines_of_code}`  ",
         ]
         if result.is_baseline_filtered:
@@ -177,12 +207,22 @@ class ReportGenerator:
     @staticmethod
     def to_terminal_text(result: ScanResult) -> str:
         """Generates clean human-readable CLI terminal output."""
+        disc = result.files_discovered or (result.scanned_files_count + len(result.ignored_paths) + len(result.failed_paths))
+        analyzed = result.files_analyzed or result.scanned_files_count
+        ignored = result.files_ignored or len(result.ignored_paths)
+        failed = result.files_failed or len(result.failed_paths)
+
         lines = [
             "=======================================================================",
             " 🛡️  C-GULL: Code Guardian for Unchecked Logic & Leaks",
             "=======================================================================",
             f" Target Path      : {result.target_path}",
-            f" Files Scanned    : {result.scanned_files_count}",
+            f" Parser Mode      : {result.get_overall_parser_status()}",
+            f" Analysis Status  : {result.get_overall_analysis_status()}",
+            f" Discovered Files : {disc}",
+            f" Analyzed Files   : {analyzed}",
+            f" Ignored Files    : {ignored}",
+            f" Failed Files     : {failed}",
             f" Lines of Code    : {result.total_lines_of_code}",
             f" Scan Duration    : {result.scan_duration_seconds:.3f}s",
             f" Total Findings   : {result.total_issues_count} (High: {result.high_severity_count}, Medium: {result.medium_severity_count}, Low: {result.low_severity_count})",
