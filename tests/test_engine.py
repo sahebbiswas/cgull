@@ -76,6 +76,73 @@ class TestScanTextSeverityFilter(unittest.TestCase):
         for issue in result.issues:
             self.assertEqual(issue.impact, Severity.HIGH)
 
+class TestSeverityFilterConsistency(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.code = """
+#include <stdio.h>
+#include <string.h>
+
+void f(char *b) {
+    gets(b); // HIGH: CGULL-001, CGULL-023
+    for (int i = 0; i < strlen(b); i++) { // MEDIUM: CGULL-012 (if atoi/strlen)
+        if (i == 42) goto done; // LOW: CGULL-018
+    }
+done:
+    return;
+}
+"""
+        self.f1 = os.path.join(self.temp_dir, "file1.c")
+        with open(self.f1, "w") as f:
+            f.write(self.code)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _assert_consistency(self, result):
+        sum_file_issues = sum(fs.issues_count for fs in result.file_summaries)
+        self.assertEqual(result.total_issues_count, len(result.issues))
+        self.assertEqual(result.total_issues_count, sum_file_issues)
+        for fs in result.file_summaries:
+            self.assertEqual(fs.issues_count, fs.high_count + fs.medium_count + fs.low_count)
+
+    def test_no_filter(self):
+        scanner = CGullScanner()
+        res = scanner.scan_path(self.temp_dir)
+        self._assert_consistency(res)
+
+    def test_high_only_filter(self):
+        scanner = CGullScanner(severity_filter={Severity.HIGH})
+        res = scanner.scan_path(self.temp_dir)
+        self._assert_consistency(res)
+        for issue in res.issues:
+            self.assertEqual(issue.impact, Severity.HIGH)
+
+    def test_medium_plus_filter(self):
+        scanner = CGullScanner(severity_filter={Severity.HIGH, Severity.MEDIUM})
+        res = scanner.scan_path(self.temp_dir)
+        self._assert_consistency(res)
+        for issue in res.issues:
+            self.assertIn(issue.impact, {Severity.HIGH, Severity.MEDIUM})
+
+    def test_low_plus_filter(self):
+        scanner = CGullScanner(severity_filter={Severity.HIGH, Severity.MEDIUM, Severity.LOW})
+        res = scanner.scan_path(self.temp_dir)
+        self._assert_consistency(res)
+        for issue in res.issues:
+            self.assertIn(issue.impact, {Severity.HIGH, Severity.MEDIUM, Severity.LOW})
+
+    def test_scan_text_filter_consistency(self):
+        for sev_filter in [
+            None,
+            {Severity.HIGH},
+            {Severity.HIGH, Severity.MEDIUM},
+            {Severity.HIGH, Severity.MEDIUM, Severity.LOW},
+        ]:
+            scanner = CGullScanner(severity_filter=sev_filter)
+            res = scanner.scan_text(self.code, "sample.c")
+            self._assert_consistency(res)
+
 
 class TestEngineModes(unittest.TestCase):
     def test_ast_only_mode_skips_regex_rules(self):

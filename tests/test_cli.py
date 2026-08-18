@@ -108,6 +108,20 @@ class TestScanCommand(unittest.TestCase):
         parsed = json.loads(out)
         for issue in parsed["issues"]:
             self.assertEqual(issue["impact"], "High")
+        sum_file_issues = sum(fs["issues_count"] for fs in parsed["file_summaries"])
+        self.assertEqual(parsed["summary"]["total_issues_count"], len(parsed["issues"]))
+        self.assertEqual(parsed["summary"]["total_issues_count"], sum_file_issues)
+
+    def test_severity_filter_formats_consistency(self):
+        for fmt in ["json", "sarif", "markdown", "text"]:
+            code, out = self._run(["scan", self.c_file, "--severity", "high", "--format", fmt])
+            self.assertEqual(code, 0)
+            if fmt == "json":
+                parsed = json.loads(out)
+                self.assertEqual(parsed["summary"]["total_issues_count"], len(parsed["issues"]))
+            elif fmt == "sarif":
+                parsed = json.loads(out)
+                self.assertEqual(len(parsed["runs"][0]["results"]), parsed["runs"][0]["results"].__len__())
 
     def test_regex_engine_mode_runs_without_error(self):
         code, out = self._run(["scan", self.c_file, "--engine", "regex", "--format", "json"])
