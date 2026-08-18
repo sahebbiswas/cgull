@@ -5,11 +5,13 @@ and inline suppression-comment parsing.
 
 import unittest
 
+import io
 from cgull.utils import (
     strip_comments_keep_lines,
     mask_string_and_char_literals,
     is_in_string_or_char_literal,
     SuppressionMap,
+    ProgressIndicator,
 )
 
 
@@ -135,6 +137,32 @@ class TestSuppressionMap(unittest.TestCase):
     def test_rule_id_matching_is_case_insensitive(self):
         sup = SuppressionMap.from_source(["x(); // cgull-ignore: cgull-001"])
         self.assertTrue(sup.is_suppressed(1, "CGULL-001"))
+
+
+class TestProgressIndicator(unittest.TestCase):
+    def test_progress_indicator_updates_and_finishes(self):
+        stream = io.StringIO()
+        progress = ProgressIndicator(stream=stream, bar_width=10)
+        progress.update(1, 2, "test.c")
+        out = stream.getvalue()
+        self.assertIn("\rScanning [█████░░░░░] 50% (1/2 files) test.c", out)
+
+        progress.finish()
+        final_out = stream.getvalue()
+        self.assertTrue(final_out.endswith("\r"))
+
+    def test_progress_indicator_quiet_mode(self):
+        stream = io.StringIO()
+        progress = ProgressIndicator(stream=stream, quiet=True)
+        progress.update(1, 2, "test.c")
+        progress.finish()
+        self.assertEqual(stream.getvalue(), "")
+
+    def test_progress_indicator_zero_total(self):
+        stream = io.StringIO()
+        progress = ProgressIndicator(stream=stream)
+        progress.update(0, 0, "")
+        self.assertIn("100% (0/0 files)", stream.getvalue())
 
 
 if __name__ == "__main__":
