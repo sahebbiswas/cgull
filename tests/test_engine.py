@@ -60,8 +60,10 @@ class TestScanPathUnreadableFile(unittest.TestCase):
             except OSError:
                 self.skipTest("Symlinks not supported or permitted on this platform/privilege level")
             result = CGullScanner().scan_path(temp_dir)
-            self.assertEqual(result.scanned_files_count, 2)  # both discovered
-            self.assertEqual(len(result.file_summaries), 1)  # only good.c actually scanned
+            self.assertEqual(result.files_discovered, 2)  # both discovered
+            self.assertEqual(result.files_analyzed, 1)    # good.c analyzed
+            self.assertEqual(result.files_failed, 1)      # bad.c failed
+            self.assertEqual(len(result.file_summaries), 2)  # summaries for both
             self.assertTrue(any("good.c" in fs.file_path for fs in result.file_summaries))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -99,12 +101,50 @@ class TestParallelWorkerFunction(unittest.TestCase):
             file_path = os.path.join(temp_dir, "sample.c")
             with open(file_path, "w") as f:
                 f.write(VULNERABLE_CODE)
-            issues, loc, duration_ms = _scan_file_worker(file_path, AnalysisEngine.HYBRID)
+            issues, loc, duration_ms, parser_status, status, confidence = _scan_file_worker(file_path, AnalysisEngine.HYBRID)
             self.assertGreaterEqual(len(issues), 1)
             self.assertGreater(loc, 0)
             self.assertGreaterEqual(duration_ms, 0)
+            self.assertIn(parser_status, ["pycparser-success", "fallback-parser"])
+            self.assertEqual(status, "success")
+            self.assertIn(confidence, ["FULL", "FALLBACK"])
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+class TestAnalysisStatusAndScanCompleteness(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.f1 = os.path.join(self.temp_dir, "f1.c")
+        self.f2 = os.path.join(self.temp_dir, "f2.c")
+        with open(self.f1, "w") as f:
+            f.write("void f(char *b) { gets(b); }\n")
+        with open(self.f2, "w") as f:
+            f.write("void g(void) { int x = 0; }\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_completeness_and_status_sequential_and_parallel(self):
+        scanner = CGullScanner()
+        res_seq = scanner.scan_path(self.temp_dir, custom_ignore_patterns=["f2.c"], jobs=1)
+        res_par = scanner.scan_path(self.temp_dir, custom_ignore_patterns=["f2.c"], jobs=2)
+
+        for res in (res_seq, res_par):
+            self.assertEqual(res.files_discovered, 2)
+            self.assertEqual(res.files_analyzed, 1)
+            self.assertEqual(res.files_ignored, 1)
+            self.assertEqual(res.files_failed, 0)
+            self.assertIn("analysis", res.to_dict())
+            self.assertIn("parser", res.to_dict()["analysis"])
+            self.assertIn("status", res.to_dict()["analysis"])
+            self.assertIn("status_counts", res.to_dict()["analysis"])
+            self.assertEqual(res.to_dict()["summary"]["files_discovered"], 2)
+            self.assertEqual(res.to_dict()["summary"]["files_analyzed"], 1)
+            self.assertEqual(res.to_dict()["summary"]["files_ignored"], 1)
+            self.assertEqual(res.to_dict()["summary"]["files_failed"], 0)
+            for issue in res.issues:
+                self.assertIsNotNone(issue.confidence)
 
 
 class TestDirectoryTraversalWithNegation(unittest.TestCase):

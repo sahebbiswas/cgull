@@ -295,7 +295,20 @@ python3 tests/test_scanner.py -v
     "target_path": "src/",
     "scan_duration_seconds": 0.0124
   },
+  "analysis": {
+    "parser": "pycparser",
+    "status": "success",
+    "status_counts": {
+      "pycparser-success": 4,
+      "fallback-parser": 0,
+      "parse-failed": 0
+    }
+  },
   "summary": {
+    "files_discovered": 6,
+    "files_analyzed": 4,
+    "files_ignored": 2,
+    "files_failed": 0,
     "scanned_files_count": 4,
     "total_lines_of_code": 348,
     "total_issues_count": 5,
@@ -303,7 +316,8 @@ python3 tests/test_scanner.py -v
     "medium_severity_count": 1,
     "low_severity_count": 1,
     "rules_applied_count": 25,
-    "ignored_paths_count": 2
+    "ignored_paths_count": 2,
+    "failed_paths_count": 0
   },
   "issues": [
     {
@@ -320,7 +334,8 @@ python3 tests/test_scanner.py -v
       "engine": "Regex",
       "fix_type": "suggested_fix",
       "auto_fix_replacement": null,
-      "suggested_fix_replacement": "strncpy_s(dest, dest_size, src, _TRUNCATE) or snprintf(dest, sizeof(dest), \"%s\", src)"
+      "suggested_fix_replacement": "strncpy_s(dest, dest_size, src, _TRUNCATE) or snprintf(dest, sizeof(dest), \"%s\", src)",
+      "confidence": "FULL"
     }
   ]
 }

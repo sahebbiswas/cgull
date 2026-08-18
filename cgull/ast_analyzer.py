@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, Tuple
 
+from .models import ParserStatus
 from .utils import strip_comments_keep_lines
 
 # Common standard-library typedefs that pycparser needs a definition for
@@ -173,6 +174,7 @@ class CASTContext:
     clean_source: str
     has_pycparser: bool = False
     pycparser_ast: Optional[Any] = None
+    parser_status: str = ParserStatus.FALLBACK_PARSER.value
 
 
 def _format_pycparser_expr(node) -> str:
@@ -579,9 +581,11 @@ class CASTParser:
         pycparser_ast, has_pycparser = self._try_pycparser(clean_code)
         if has_pycparser and pycparser_ast is not None:
             functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code)
+            parser_status = ParserStatus.PYCPARSER_SUCCESS.value
         else:
             functions = self._extract_functions(clean_lines, clean_code)
             global_vars = self._extract_global_vars(clean_lines, functions)
+            parser_status = ParserStatus.FALLBACK_PARSER.value
 
         return CASTContext(
             functions=functions,
@@ -591,6 +595,7 @@ class CASTParser:
             clean_source=clean_code,
             has_pycparser=has_pycparser,
             pycparser_ast=pycparser_ast,
+            parser_status=parser_status,
         )
 
     @staticmethod
