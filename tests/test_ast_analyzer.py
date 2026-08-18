@@ -156,6 +156,38 @@ class TestPycparserIntegration(unittest.TestCase):
         ctx = self.parser.parse(src)  # should not raise
         self.assertEqual(len(ctx.functions), 1)
 
+    def test_ast_parser_handles_variadic_functions(self):
+        from cgull.ast_analyzer import ASTAnalyzer
+        c_code = """
+        void debug_print(const char *fmt, ...);
+
+        int main(void) {
+            debug_print("Status: %s", "OK");
+            return 0;
+        }
+        """
+        analyzer = ASTAnalyzer()
+        ast_ctx = analyzer.parse(c_code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+    def test_ast_parser_handles_variadic_function_definition(self):
+        c_code = """
+        void debug_print(const char *fmt, ...) {
+            // body
+        }
+
+        int main(void) {
+            debug_print("Status: %s", "OK");
+            return 0;
+        }
+        """
+        analyzer = CASTParser()
+        ast_ctx = analyzer.parse(c_code)
+        self.assertTrue(ast_ctx.has_pycparser)
+        fn_names = [f.name for f in ast_ctx.functions]
+        self.assertIn("debug_print", fn_names)
+        self.assertIn("main", fn_names)
+
 
 class TestRegexTier3Fallback(unittest.TestCase):
     """
