@@ -95,6 +95,7 @@ class CGullScanner:
         analysis_status_counts: Dict[str, int] = {
             ParserStatus.PYCPARSER_SUCCESS.value: 0,
             ParserStatus.FALLBACK_PARSER.value: 0,
+            ParserStatus.REGEX.value: 0,
             ParserStatus.PARSE_FAILED.value: 0,
         }
 
@@ -114,15 +115,15 @@ class CGullScanner:
             if file_status == "failed":
                 failed_count += 1
                 failed_paths.append(display_path)
+                file_issues = []
             else:
                 analyzed_count += 1
+                for issue in file_issues:
+                    issue.file_path = display_path
+                    issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
+                all_issues.extend(file_issues)
 
             total_loc += loc
-
-            for issue in file_issues:
-                issue.file_path = display_path
-                issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
-            all_issues.extend(file_issues)
 
             high_count = sum(1 for i in file_issues if i.impact == Severity.HIGH)
             med_count = sum(1 for i in file_issues if i.impact == Severity.MEDIUM)
@@ -334,7 +335,7 @@ def _scan_file_content(
         if engine_mode == AnalysisEngine.REGEX:
             clean_lines, clean_code = CASTParser.strip_only(content)
             ast_ctx = None
-            parser_status = ParserStatus.FALLBACK_PARSER.value
+            parser_status = ParserStatus.REGEX.value
             confidence_val = Confidence.LIMITED.value
         else:
             ast_ctx = ast_parser.parse(content)
@@ -353,18 +354,21 @@ def _scan_file_content(
                 for rule in rules:
                     if engine_mode == AnalysisEngine.HYBRID and rule.analysis_engine == AnalysisEngine.AST:
                         continue
-                    found = rule.scan_line(
-                        file_path=file_path,
-                        line_number=line_no,
-                        line_content=line,
-                        full_code=clean_code,
-                        source_lines=clean_lines,
-                        masked_line_content=masked_line,
-                    )
-                    for iss in found:
-                        if iss.confidence is None:
-                            iss.confidence = Confidence(confidence_val)
-                        add_issue_if_unique(iss)
+                    try:
+                        found = rule.scan_line(
+                            file_path=file_path,
+                            line_number=line_no,
+                            line_content=line,
+                            full_code=clean_code,
+                            source_lines=clean_lines,
+                            masked_line_content=masked_line,
+                        )
+                        for iss in found:
+                            if iss.confidence is None:
+                                iss.confidence = Confidence(confidence_val)
+                            add_issue_if_unique(iss)
+                    except Exception:
+                        pass
 
         # 2. AST Pass
         if engine_mode in (AnalysisEngine.AST, AnalysisEngine.HYBRID):
@@ -373,13 +377,17 @@ def _scan_file_content(
                 parser_status = ast_ctx.parser_status
                 confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
             for rule in rules:
-                ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
-                for iss in ast_found:
-                    if iss.confidence is None:
-                        iss.confidence = Confidence(confidence_val)
-                    add_issue_if_unique(iss)
+                try:
+                    ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
+                    for iss in ast_found:
+                        if iss.confidence is None:
+                            iss.confidence = Confidence(confidence_val)
+                        add_issue_if_unique(iss)
+                except Exception:
+                    pass
 
     except Exception:
+        issues = []
         parser_status = ParserStatus.PARSE_FAILED.value
         file_status = "failed"
         confidence_val = Confidence.LIMITED.value

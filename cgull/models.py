@@ -31,6 +31,7 @@ class FixType(str, Enum):
 class ParserStatus(str, Enum):
     PYCPARSER_SUCCESS = "pycparser-success"
     FALLBACK_PARSER = "fallback-parser"
+    REGEX = "regex"
     PARSE_FAILED = "parse-failed"
 
 
@@ -176,13 +177,22 @@ class ScanResult:
     def get_overall_parser_status(self) -> str:
         if self.overall_parser_status:
             return self.overall_parser_status
-        if self.analysis_status_counts.get(ParserStatus.PYCPARSER_SUCCESS.value, 0) > 0:
-            if self.analysis_status_counts.get(ParserStatus.FALLBACK_PARSER.value, 0) > 0:
+        pyc_count = self.analysis_status_counts.get(ParserStatus.PYCPARSER_SUCCESS.value, 0)
+        fallback_count = self.analysis_status_counts.get(ParserStatus.FALLBACK_PARSER.value, 0)
+        regex_count = self.analysis_status_counts.get(ParserStatus.REGEX.value, 0)
+        failed_count = self.analysis_status_counts.get(ParserStatus.PARSE_FAILED.value, 0)
+
+        if pyc_count > 0:
+            if fallback_count > 0 or regex_count > 0:
                 return "hybrid"
             return "pycparser"
-        elif self.analysis_status_counts.get(ParserStatus.FALLBACK_PARSER.value, 0) > 0:
+        elif fallback_count > 0:
             return "fallback-parser"
-        return "regex"
+        elif regex_count > 0:
+            return "regex"
+        elif failed_count > 0:
+            return "parse-failed"
+        return "none"
 
     def get_overall_analysis_status(self) -> str:
         if self.overall_analysis_status:

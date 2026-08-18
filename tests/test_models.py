@@ -117,10 +117,21 @@ class TestParserStatusAndConfidenceEnums(unittest.TestCase):
     def test_enum_values(self):
         self.assertEqual(ParserStatus.PYCPARSER_SUCCESS.value, "pycparser-success")
         self.assertEqual(ParserStatus.FALLBACK_PARSER.value, "fallback-parser")
+        self.assertEqual(ParserStatus.REGEX.value, "regex")
         self.assertEqual(ParserStatus.PARSE_FAILED.value, "parse-failed")
         self.assertEqual(Confidence.FULL.value, "FULL")
         self.assertEqual(Confidence.FALLBACK.value, "FALLBACK")
         self.assertEqual(Confidence.LIMITED.value, "LIMITED")
+
+    def test_get_overall_parser_status_derivation(self):
+        res1 = ScanResult("a", 1, 10, 0, 0, 0, 0, 0.1, "now", analysis_status_counts={ParserStatus.PARSE_FAILED.value: 2})
+        self.assertEqual(res1.get_overall_parser_status(), "parse-failed")
+
+        res2 = ScanResult("a", 1, 10, 0, 0, 0, 0, 0.1, "now", analysis_status_counts={ParserStatus.REGEX.value: 2})
+        self.assertEqual(res2.get_overall_parser_status(), "regex")
+
+        res3 = ScanResult("a", 1, 10, 0, 0, 0, 0, 0.1, "now", analysis_status_counts={ParserStatus.PYCPARSER_SUCCESS.value: 1, ParserStatus.REGEX.value: 1})
+        self.assertEqual(res3.get_overall_parser_status(), "hybrid")
 
 
 if __name__ == "__main__":

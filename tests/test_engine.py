@@ -93,6 +93,40 @@ class TestEngineModes(unittest.TestCase):
         result = scanner.scan_text(code, "sample.c")
         self.assertFalse(any(i.rule_id == "CGULL-020" for i in result.issues))
 
+    def test_regex_only_mode_reports_regex_parser_status(self):
+        scanner = CGullScanner(engine_mode=AnalysisEngine.REGEX)
+        result = scanner.scan_text(VULNERABLE_CODE, "sample.c")
+        self.assertEqual(result.get_overall_parser_status(), "regex")
+
+    def test_atomic_failure_policy_discards_findings_on_failed_file(self):
+        temp_dir = tempfile.mkdtemp()
+        try:
+            broken_link = os.path.join(temp_dir, "bad.c")
+            try:
+                os.symlink(os.path.join(temp_dir, "nonexistent"), broken_link)
+            except OSError:
+                self.skipTest("Symlinks not supported")
+            result = CGullScanner().scan_path(temp_dir)
+            self.assertEqual(result.files_failed, 1)
+            self.assertEqual(result.total_issues_count, 0)
+            self.assertEqual(result.issues, [])
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_rule_exception_does_not_fail_file(self):
+        from cgull.rules.base import BaseRule
+        class BuggyRule(BaseRule):
+            rule_id = "BUGGY-001"
+            name = "Buggy Rule"
+            impact = Severity.LOW
+            def scan_line(self, **kwargs):
+                raise RuntimeError("Buggy rule crashed!")
+
+        scanner = CGullScanner(rules=[BuggyRule()])
+        result = scanner.scan_text("int main() { return 0; }", "app.c")
+        self.assertEqual(result.files_failed, 0)
+        self.assertEqual(result.get_overall_analysis_status(), "success")
+
 
 class TestParallelWorkerFunction(unittest.TestCase):
     def test_scan_file_worker_returns_same_shape_as_sequential(self):

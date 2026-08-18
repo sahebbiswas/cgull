@@ -156,6 +156,23 @@ class TestBaselineToDictSerialization(unittest.TestCase):
         diffed = apply_baseline(result, Counter())
         self.assertIn("baseline", diffed.to_dict()["summary"])
 
+    def test_apply_baseline_preserves_scan_completeness_and_analysis_metadata(self):
+        result = CGullScanner().scan_text(VULNERABLE_CODE, "app.c")
+        result.failed_paths = ["failed.c"]
+        result.files_discovered = 5
+        result.files_analyzed = 3
+        result.files_ignored = 1
+        result.files_failed = 1
+        result.analysis_status_counts = {"pycparser-success": 3, "parse-failed": 1}
+
+        diffed = apply_baseline(result, Counter())
+        self.assertEqual(diffed.failed_paths, ["failed.c"])
+        self.assertEqual(diffed.files_discovered, 5)
+        self.assertEqual(diffed.files_analyzed, 3)
+        self.assertEqual(diffed.files_ignored, 1)
+        self.assertEqual(diffed.files_failed, 1)
+        self.assertEqual(diffed.analysis_status_counts, {"pycparser-success": 3, "parse-failed": 1})
+
 
 if __name__ == "__main__":
     unittest.main()
