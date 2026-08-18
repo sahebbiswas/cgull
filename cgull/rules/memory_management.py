@@ -478,7 +478,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
-        sensitive_name_keywords = {'key', 'secret', 'pass', 'token', 'auth', 'hash', 'iv', 'pin', 'cred', 'buf', 'data', 'priv', 'cert', 'seed'}
+        sensitive_name_keywords = {'key', 'secret', 'pass', 'passwd', 'password', 'token', 'auth', 'hash', 'iv', 'pin', 'cred', 'credential', 'priv', 'cert', 'seed', 'session'}
 
         for fn in ast_ctx.functions:
             fn_is_sec = any(k in fn.name.lower() for k in ['auth', 'crypto', 'sec', 'key', 'pass', 'hash', 'token', 'sign', 'login', 'verify'])
@@ -493,19 +493,21 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                         buf_expr = arg_parts[0]
                         buf_name = re.findall(r'\b[a-zA-Z_]\w*\b', buf_expr)[0] if re.findall(r'\b[a-zA-Z_]\w*\b', buf_expr) else buf_expr
 
-                        # Primary signal 1: Check if buf_name is a local variable (stack allocation)
-                        is_local_stack_var = buf_name in fn.variables
+                        # Check if buf_name is sensitive by name or type or function context
+                        is_sensitive_name = any(k in buf_name.lower() for k in sensitive_name_keywords)
                         var_obj = fn.variables.get(buf_name)
+                        is_sensitive_type = False
+                        if var_obj:
+                            t_lower = var_obj.type_name.lower()
+                            if any(k in t_lower for k in sensitive_name_keywords):
+                                is_sensitive_type = True
 
-                        # Primary signal 2: Scope exit / near return or end of function
                         is_near_exit = False
                         # Check CFG if available
                         if fn.cfg_nodes:
-                            # find memset node in cfg
                             memset_nodes = [n for n in fn.cfg_nodes if n.line_number == line_no and 'memset' in n.expr_str]
                             for mn in memset_nodes:
                                 idx = fn.cfg_nodes.index(mn)
-                                # Look ahead in CFG for return or end of nodes
                                 is_read_after = False
                                 for next_n in fn.cfg_nodes[idx + 1:]:
                                     if next_n.kind == "return":
@@ -516,7 +518,6 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                                 if not is_read_after:
                                     is_near_exit = True
                         else:
-                            # Fallback line check in fn body
                             line_idx = line_no - fn.start_line
                             for offset in range(1, 4):
                                 if line_idx + offset < len(body_lines):
@@ -527,20 +528,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                             if line_idx >= len(body_lines) - 3:
                                 is_near_exit = True
 
-                        # Name heuristic signal
-                        is_sensitive_name = any(k in buf_name.lower() for k in sensitive_name_keywords)
-
-                        # Decision logic:
-                        # Local stack buffer cleared before exit is dead store risk (primary AST signal)
-                        # or sensitive name / function context
-                        if is_local_stack_var and is_near_exit:
-                            should_flag = True
-                        elif (is_sensitive_name or fn_is_sec) and is_near_exit:
-                            should_flag = True
-                        else:
-                            should_flag = False
-
-                        if should_flag:
+                        if (is_sensitive_name or is_sensitive_type or fn_is_sec) and is_near_exit:
                             len_arg = arg_parts[2] if len(arg_parts) >= 3 else f"sizeof({buf_name})"
                             snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"memset({raw_args})"
                             issues.append(self.create_issue(
@@ -560,7 +548,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
         m = re.search(r'\bmemset\s*\(\s*(\w+)\s*,\s*0\s*,\s*([^)]+)\)', line_content)
         if m:
             buf_name = m.group(1)
-            is_sensitive_name = any(k in buf_name.lower() for k in ['key', 'secret', 'pass', 'token', 'auth', 'hash', 'iv', 'pin', 'cred', 'buf'])
+            is_sensitive_name = any(k in buf_name.lower() for k in ['key', 'secret', 'pass', 'token', 'auth', 'hash', 'iv', 'pin', 'cred', 'session'])
             is_near_return = False
             for offset in range(1, 4):
                 if line_number - 1 + offset < len(source_lines):
@@ -569,7 +557,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                         is_near_return = True
                         break
 
-            if is_sensitive_name or is_near_return:
+            if is_sensitive_name and is_near_return:
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,

@@ -88,6 +88,43 @@ class TestCGullScannerRules(unittest.TestCase):
         self.assertGreaterEqual(len(timing_issues), 1)
         self.assertIn("timing", timing_issues[0].message.lower())
 
+    def test_generic_buffer_comparison_not_flagged_as_secret(self):
+        code = """
+        #include <string.h>
+        #include <stdint.h>
+
+        int process_packet(const uint8_t *buf, const uint8_t *expected, size_t len) {
+            if (memcmp(buf, expected, len) == 0) {
+                return 0;
+            }
+            return -1;
+        }
+
+        int validate_header(const char *data, size_t data_len) {
+            if (strncmp(data, "HEAD", 4) == 0) {
+                return 1;
+            }
+            return 0;
+        }
+        """
+        result = self.scanner.scan_text(code, "test_generic_comp.c")
+        timing_issues = [i for i in result.issues if i.rule_id == "CGULL-005"]
+        self.assertEqual(len(timing_issues), 0)
+
+    def test_generic_memset_buffer_not_flagged(self):
+        code = """
+        #include <string.h>
+
+        int clear_buffer(void) {
+            char buf[64];
+            memset(buf, 0, sizeof(buf));
+            return 0;
+        }
+        """
+        result = self.scanner.scan_text(code, "test_generic_memset.c")
+        wipe_issues = [i for i in result.issues if i.rule_id == "CGULL-008"]
+        self.assertEqual(len(wipe_issues), 0)
+
     def test_variable_length_arrays_vla(self):
         code = """
         void process_packet(int len) {
