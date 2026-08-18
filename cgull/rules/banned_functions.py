@@ -5,7 +5,7 @@ Rules for Banned & Insecure Functions and Format Strings.
 import re
 from typing import List, Optional
 from .base import BaseRule
-from ..models import Severity, RuleCategory, Issue, AnalysisEngine
+from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext
 
 
@@ -56,7 +56,8 @@ class BannedFunctionsRule(BaseRule):
                             message=f"Insecure function call '{fn_name}': {reason}",
                             column_number=m.start() + 1,
                             engine="Regex",
-                            auto_fix_replacement=fix,
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=fix,
                         ))
                 else:
                     issues.append(self.create_issue(
@@ -66,7 +67,8 @@ class BannedFunctionsRule(BaseRule):
                         message=f"Banned insecure function call '{fn_name}': {reason}",
                         column_number=m.start() + 1,
                         engine="Regex",
-                        auto_fix_replacement=fix,
+                        fix_type=FixType.SUGGESTED_FIX,
+                        suggested_fix_replacement=fix,
                     ))
         return issues
 
@@ -103,6 +105,7 @@ class FormatStringRule(BaseRule):
                         message=f"Non-literal format string passed to {fn}({arg}). An attacker can inject %x, %n, or %s to leak or overwrite memory.",
                         column_number=m.start() + 1,
                         engine="Regex",
+                        fix_type=FixType.SAFE_FIX,
                         auto_fix_replacement=f'{fn}("%s", {arg})'
                     ))
 
@@ -152,7 +155,8 @@ class UncheckedSnprintfReturnRule(BaseRule):
                 message=f"Direct accumulation of snprintf() return value into '{var_name}'. If snprintf truncates, it returns the intended length, leading to buffer overflow on subsequent uses.",
                 column_number=m.start() + 1,
                 engine="Regex",
-                auto_fix_replacement=f"int n = snprintf(...);\nif (n < 0 || n >= remaining_size) {{ ... }}\n{var_name} += n;"
+                fix_type=FixType.SUGGESTED_FIX,
+                suggested_fix_replacement=f"int n = snprintf(...);\nif (n < 0 || n >= remaining_size) {{ ... }}\n{var_name} += n;"
             ))
         return issues
 
@@ -186,6 +190,7 @@ class UnsafeIntegerConversionsRule(BaseRule):
                     message=f"Use of insecure conversion function '{fn}({arg})'. '{fn}' does not detect numeric overflow or invalid characters.",
                     column_number=m.start() + 1,
                     engine="Regex",
-                    auto_fix_replacement=f"strtol({arg}, &endptr, 10)"
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"strtol({arg}, &endptr, 10)"
                 ))
         return issues

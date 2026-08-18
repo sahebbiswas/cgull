@@ -24,7 +24,7 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
 - **📊 Multi-Format Reporting**:
   - Structured **JSON** for automated ingestion and reporting dashboards.
   - **SARIF 2.1.0** for native integration into GitHub Code Scanning and GitLab SAST.
-  - **Executive Markdown** summary tables with remediation guides.
+  - **Executive Markdown** summary tables with remediation guides and clear distinction between automatic fixes, suggested fixes, and manual review items.
 - **🧩 Extensible & Modular Architecture**: Add new custom regex or AST rules with a clean object-oriented class interface.
 - **🧪 Test Suite**: `unittest` suite covering security rules plus regression tests for known false-positive patterns.
 
@@ -318,11 +318,23 @@ python3 tests/test_scanner.py -v
       "remediation": "Replace with snprintf(dest, sizeof(dest), \"%s\", src)",
       "cwe_id": "CWE-676 / CWE-120",
       "engine": "Regex",
-      "auto_fix_replacement": "snprintf(dest_buffer, sizeof(dest_buffer), \"%s\", user_input)"
+      "fix_type": "suggested_fix",
+      "auto_fix_replacement": null,
+      "suggested_fix_replacement": "strncpy_s(dest, dest_size, src, _TRUNCATE) or snprintf(dest, sizeof(dest), \"%s\", src)"
     }
   ]
 }
 ```
+
+---
+
+## 🛠️ Remediation & Fix Classification (`fix_type`)
+
+C-GULL strictly separates mechanically safe transformations from code suggestions and manual architectural reviews:
+
+- **`safe_fix` (`FixType.SAFE_FIX`)**: Mechanically safe transformations that preserve exact program control flow and semantics (e.g., converting `printf(user_input)` to `printf("%s", user_input)`, adding `default:` labels to switch blocks, or adding `(void)` to empty parameter signatures). `auto_fix_replacement` contains the exact replacement code.
+- **`suggested_fix` (`FixType.SUGGESTED_FIX`)**: Illustrative code suggestions or replacement patterns (e.g., replacing `strcpy` with `strncpy_s`, converting `atoi` to `strtol`, or inserting OOM error checks) that provide actionable guidance but require human evaluation of buffer boundaries or error handling logic. `suggested_fix_replacement` holds the code suggestion, while `auto_fix_replacement` remains `null`.
+- **`manual_review` (`FixType.MANUAL_REVIEW`)**: Vulnerabilities requiring human inspection, secret management redesign, or architectural changes where automatic code replacement is unsafe (e.g., hardcoded secrets where automatically replacing with `getenv()` is not universally correct, or stripping `volatile` qualifiers). Explanatory text is provided in the `remediation` field.
 
 ---
 

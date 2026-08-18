@@ -4,7 +4,7 @@ Base Rule definitions for C-GULL Static Analyzer.
 
 from abc import ABC, abstractmethod
 from typing import List, Optional
-from ..models import Issue, Severity, RuleCategory, RuleDefinition, AnalysisEngine
+from ..models import Issue, Severity, RuleCategory, RuleDefinition, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext
 
 
@@ -93,8 +93,25 @@ class BaseRule(ABC):
         message: str,
         column_number: int = 1,
         engine: str = "Regex",
-        auto_fix_replacement: Optional[str] = None
+        auto_fix_replacement: Optional[str] = None,
+        fix_type: Optional[FixType] = None,
+        suggested_fix_replacement: Optional[str] = None,
     ) -> Issue:
+        if fix_type is None:
+            if auto_fix_replacement is not None:
+                fix_type = FixType.SAFE_FIX
+            elif suggested_fix_replacement is not None:
+                fix_type = FixType.SUGGESTED_FIX
+            else:
+                fix_type = FixType.MANUAL_REVIEW
+
+        final_auto_fix = auto_fix_replacement if fix_type == FixType.SAFE_FIX else None
+        final_suggested_fix = (
+            suggested_fix_replacement
+            if suggested_fix_replacement is not None
+            else (auto_fix_replacement if fix_type == FixType.SUGGESTED_FIX else None)
+        )
+
         return Issue(
             rule_id=self.rule_id,
             rule_name=self.name,
@@ -107,5 +124,7 @@ class BaseRule(ABC):
             remediation=self.remediation_suggestion,
             cwe_id=self.cwe_id,
             engine=engine,
-            auto_fix_replacement=auto_fix_replacement,
+            auto_fix_replacement=final_auto_fix,
+            fix_type=fix_type,
+            suggested_fix_replacement=final_suggested_fix,
         )

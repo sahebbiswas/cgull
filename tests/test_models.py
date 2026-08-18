@@ -4,7 +4,7 @@ Tests for cgull.models: dataclass serialization and enum behavior.
 
 import unittest
 
-from cgull.models import Issue, ScanResult, FileScanSummary, Severity, AnalysisEngine
+from cgull.models import Issue, ScanResult, FileScanSummary, Severity, AnalysisEngine, FixType
 
 
 class TestSeverityEnum(unittest.TestCase):
@@ -16,6 +16,13 @@ class TestSeverityEnum(unittest.TestCase):
     def test_severity_is_string_enum(self):
         # Severity subclasses str, so it should compare equal to its value
         self.assertEqual(Severity.HIGH, "High")
+
+
+class TestFixTypeEnum(unittest.TestCase):
+    def test_fixtype_values(self):
+        self.assertEqual(FixType.SAFE_FIX.value, "safe_fix")
+        self.assertEqual(FixType.SUGGESTED_FIX.value, "suggested_fix")
+        self.assertEqual(FixType.MANUAL_REVIEW.value, "manual_review")
 
 
 class TestIssueSerialization(unittest.TestCase):
@@ -32,7 +39,24 @@ class TestIssueSerialization(unittest.TestCase):
         self.assertEqual(d["rule_id"], "CGULL-001")
         self.assertEqual(d["impact"], "High")
         self.assertEqual(d["line_number"], 5)
+        self.assertEqual(d["fix_type"], "manual_review")
         self.assertIsNone(d["auto_fix_replacement"])
+        self.assertIsNone(d["suggested_fix_replacement"])
+
+    def test_to_dict_with_fix_type(self):
+        issue = Issue(
+            rule_id="CGULL-002",
+            rule_name="Format String",
+            impact=Severity.HIGH,
+            file_path="test.c",
+            line_number=10,
+            fix_type=FixType.SAFE_FIX,
+            auto_fix_replacement='printf("%s", arg)',
+        )
+        d = issue.to_dict()
+        self.assertEqual(d["fix_type"], "safe_fix")
+        self.assertEqual(d["auto_fix_replacement"], 'printf("%s", arg)')
+        self.assertIsNone(d["suggested_fix_replacement"])
 
     def test_default_column_number_is_one(self):
         issue = Issue(rule_id="X", rule_name="X", impact=Severity.LOW, file_path="a.c", line_number=1)
