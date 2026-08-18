@@ -15,6 +15,7 @@ from .memory_management import (
     MissingNullCheckOnFunctionParametersRule,
     UninitializedPointersRule,
     UseAfterFreeRule,
+    DoubleFreeRule,
     UninitializedMemoryUseRule,
     UnsafeSensitiveMemoryClearingRule,
 )
@@ -57,6 +58,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     IllegalFunctionPointerConversionsRule,
     UninitializedPointersRule,
     UseAfterFreeRule,
+    DoubleFreeRule,
     UninitializedMemoryUseRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
