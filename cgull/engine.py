@@ -149,6 +149,8 @@ class CGullScanner:
                 file_issues = []
             else:
                 analyzed_count += 1
+                if self.severity_filter:
+                    file_issues = [i for i in file_issues if i.impact in self.severity_filter]
                 for issue in file_issues:
                     issue.file_path = display_path
                     issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
@@ -172,10 +174,6 @@ class CGullScanner:
                 status=file_status,
                 confidence=file_confidence,
             ))
-
-        # Filter by severity if specified
-        if self.severity_filter:
-            all_issues = [i for i in all_issues if i.impact in self.severity_filter]
 
         duration = time.time() - start_time
         high_total = sum(1 for i in all_issues if i.impact == Severity.HIGH)
