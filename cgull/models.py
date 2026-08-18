@@ -4,7 +4,7 @@ Data models for C-GULL Static Analyzer.
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import time
 from . import __version__
 
@@ -39,6 +39,89 @@ class Confidence(str, Enum):
     FULL = "FULL"
     FALLBACK = "FALLBACK"
     LIMITED = "LIMITED"
+
+
+@dataclass
+class ScanConfig:
+    """
+    Serializable configuration object encapsulating all options for a scan.
+    Propagated to parallel workers to guarantee identical execution behavior
+    and rule configuration between sequential (jobs=1) and parallel (jobs>1) scans.
+    """
+    rules: List[Any] = field(default_factory=list)
+    engine_mode: AnalysisEngine = AnalysisEngine.HYBRID
+    severity_filter: Optional[Set[Severity]] = None
+    enable_inline_suppressions: bool = True
+    suppression_config: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        rules: Optional[List[Any]] = None,
+        engine_mode: AnalysisEngine = AnalysisEngine.HYBRID,
+        severity_filter: Optional[Set[Severity]] = None,
+        enable_inline_suppressions: bool = True,
+        suppression_config: Optional[Dict[str, Any]] = None,
+    ) -> "ScanConfig":
+        if rules is None:
+            from .rules import get_all_rules
+            rule_instances = get_all_rules()
+        else:
+            from .rules import BaseRule
+            rule_instances = []
+            for r in rules:
+                rule_obj = r() if isinstance(r, type) and issubclass(r, BaseRule) else r
+                rule_instances.append(rule_obj)
+
+        return cls(
+            rules=rule_instances,
+            engine_mode=engine_mode,
+            severity_filter=severity_filter,
+            enable_inline_suppressions=enable_inline_suppressions,
+            suppression_config=suppression_config or {},
+        )
+
+    def get_rules(self) -> List[Any]:
+        return self.rules
+
+    def to_dict(self) -> Dict[str, Any]:
+        from .rules import RULE_REGISTRY
+        enabled_rule_ids = []
+        for r in self.rules:
+            rule_id = getattr(r, "rule_id", None)
+            reg_cls = RULE_REGISTRY.get(rule_id) if rule_id else None
+            if reg_cls is not None and type(r) is reg_cls:
+                enabled_rule_ids.append(rule_id)
+            else:
+                raise ValueError(
+                    f"Cannot serialize ScanConfig to dict because rule {r!r} (type {type(r).__name__}) "
+                    "is a custom rule not registered in RULE_REGISTRY. Register custom rules using "
+                    "cgull.rules.register_rule(rule_cls) before serializing configuration."
+                )
+
+        return {
+            "enabled_rule_ids": enabled_rule_ids,
+            "engine_mode": self.engine_mode.value if isinstance(self.engine_mode, AnalysisEngine) else str(self.engine_mode),
+            "severity_filter": [s.value if isinstance(s, Severity) else str(s) for s in self.severity_filter] if self.severity_filter is not None else None,
+            "enable_inline_suppressions": self.enable_inline_suppressions,
+            "suppression_config": self.suppression_config,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ScanConfig":
+        from .rules import get_rule_by_id
+        engine_mode = AnalysisEngine(data.get("engine_mode", AnalysisEngine.HYBRID.value))
+        sev_raw = data.get("severity_filter")
+        severity_filter = {Severity(s) for s in sev_raw} if sev_raw is not None else None
+        rule_ids = data.get("enabled_rule_ids", [])
+        rules = [get_rule_by_id(rid) for rid in rule_ids]
+        return cls(
+            rules=rules,
+            engine_mode=engine_mode,
+            severity_filter=severity_filter,
+            enable_inline_suppressions=data.get("enable_inline_suppressions", True),
+            suppression_config=data.get("suppression_config", {}),
+        )
 
 
 class RuleCategory(str, Enum):

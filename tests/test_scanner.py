@@ -410,5 +410,158 @@ class TestParallelScanning(unittest.TestCase):
         )
 
 
+from cgull.rules.base import BaseRule
+
+class MyCustomRule(BaseRule):
+    rule_id = "CUSTOM-999"
+    name = "Custom Test Rule"
+    impact = Severity.HIGH
+    def scan_line(self, file_path, line_number, line_content, **kwargs):
+        if "atoi" in line_content:
+            return [self.create_issue(file_path, line_number, line_content, "Custom atoi match")]
+        return []
+
+
+class TestParallelAndSequentialEquivalence(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.temp_dir, "src"))
+        with open(os.path.join(self.temp_dir, "src", "file1.c"), "w") as f:
+            f.write("void f1(char *b) {\n    gets(b); // cgull-ignore: CGULL-001\n    char *buf = (char *)malloc(10);\n}\n")
+        with open(os.path.join(self.temp_dir, "src", "file2.c"), "w") as f:
+            f.write("void f2(char *b) {\n    strcpy(b, \"hello\");\n    int len;\n    atoi(\"123\");\n}\n")
+        with open(os.path.join(self.temp_dir, "src", "file3.c"), "w") as f:
+            f.write("void f3(char *b) {\n    gets(b);\n}\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _assert_scan_results_equal(self, res1, res2):
+        self.assertEqual(res1.scanned_files_count, res2.scanned_files_count)
+        self.assertEqual(res1.total_issues_count, res2.total_issues_count)
+        self.assertEqual(res1.high_severity_count, res2.high_severity_count)
+        self.assertEqual(res1.medium_severity_count, res2.medium_severity_count)
+        self.assertEqual(res1.low_severity_count, res2.low_severity_count)
+        self.assertEqual(res1.rules_applied, res2.rules_applied)
+        self.assertEqual(res1.failed_paths, res2.failed_paths)
+        self.assertEqual(res1.ignored_paths, res2.ignored_paths)
+        self.assertEqual(
+            [fs.file_path for fs in res1.file_summaries],
+            [fs.file_path for fs in res2.file_summaries]
+        )
+        self.assertEqual(
+            [(i.file_path, i.line_number, i.column_number, i.rule_id, i.message) for i in res1.issues],
+            [(i.file_path, i.line_number, i.column_number, i.rule_id, i.message) for i in res2.issues]
+        )
+
+    def test_custom_rule_subclass_parallel_equivalence(self):
+        scanner_seq = CGullScanner(rules=[MyCustomRule()])
+        scanner_par = CGullScanner(rules=[MyCustomRule()])
+
+        res_seq = scanner_seq.scan_path(self.temp_dir, jobs=1)
+        res_par = scanner_par.scan_path(self.temp_dir, jobs=2)
+
+        self._assert_scan_results_equal(res_seq, res_par)
+        self.assertEqual(res_seq.total_issues_count, 1)
+        self.assertEqual(res_seq.issues[0].rule_id, "CUSTOM-999")
+
+    def test_custom_rule_subset_parallel_equivalence(self):
+        from cgull.rules import BannedFunctionsRule
+        scanner_seq = CGullScanner(rules=[BannedFunctionsRule()])
+        scanner_par = CGullScanner(rules=[BannedFunctionsRule()])
+
+        res_seq = scanner_seq.scan_path(self.temp_dir, jobs=1)
+        res_par = scanner_par.scan_path(self.temp_dir, jobs=2)
+
+        self._assert_scan_results_equal(res_seq, res_par)
+        self.assertEqual(res_seq.rules_applied, 1)
+        self.assertTrue(all(i.rule_id == "CGULL-001" for i in res_seq.issues))
+
+    def test_engine_mode_parallel_equivalence(self):
+        scanner_seq = CGullScanner(engine_mode=AnalysisEngine.REGEX)
+        scanner_par = CGullScanner(engine_mode=AnalysisEngine.REGEX)
+
+        res_seq = scanner_seq.scan_path(self.temp_dir, jobs=1)
+        res_par = scanner_par.scan_path(self.temp_dir, jobs=2)
+
+        self._assert_scan_results_equal(res_seq, res_par)
+
+    def test_severity_filter_parallel_equivalence(self):
+        scanner_seq = CGullScanner(severity_filter={Severity.HIGH})
+        scanner_par = CGullScanner(severity_filter={Severity.HIGH})
+
+        res_seq = scanner_seq.scan_path(self.temp_dir, jobs=1)
+        res_par = scanner_par.scan_path(self.temp_dir, jobs=2)
+
+        self._assert_scan_results_equal(res_seq, res_par)
+        self.assertTrue(all(i.impact == Severity.HIGH for i in res_seq.issues))
+
+    def test_scan_config_to_from_dict(self):
+        from cgull.models import ScanConfig
+        cfg = ScanConfig.create(
+            rules=[get_rule_by_id("CGULL-001")],
+            engine_mode=AnalysisEngine.REGEX,
+            severity_filter={Severity.HIGH},
+        )
+        d = cfg.to_dict()
+        self.assertEqual(d["enabled_rule_ids"], ["CGULL-001"])
+        restored = ScanConfig.from_dict(d)
+        self.assertEqual(restored.engine_mode, cfg.engine_mode)
+        self.assertEqual(restored.severity_filter, cfg.severity_filter)
+        self.assertEqual(len(restored.get_rules()), 1)
+        self.assertEqual(restored.get_rules()[0].rule_id, "CGULL-001")
+
+    def test_custom_rule_instance_attributes_preserved(self):
+        class ConfigurableRule(BaseRule):
+            rule_id = "CONFIG-001"
+            def __init__(self, threshold=5):
+                super().__init__()
+                self.threshold = threshold
+
+            def scan_line(self, file_path, line_number, line_content, **kwargs):
+                if len(line_content) > self.threshold:
+                    return [self.create_issue(file_path, line_number, line_content, f"Exceeds {self.threshold}")]
+                return []
+
+        rule_inst = ConfigurableRule(threshold=100)
+        scanner = CGullScanner(rules=[rule_inst])
+        self.assertIs(scanner.rules[0], rule_inst)
+        self.assertEqual(scanner.rules[0].threshold, 100)
+
+    def test_unpicklable_rule_in_parallel_scan_raises_value_error(self):
+        class UnpicklableRule(BaseRule):
+            rule_id = "UNPICKLE-001"
+            def __init__(self):
+                super().__init__()
+                self.func = lambda x: x
+
+        scanner = CGullScanner(rules=[UnpicklableRule()])
+        with self.assertRaises(ValueError) as ctx:
+            scanner.scan_path(self.temp_dir, jobs=2)
+        self.assertIn("cannot be serialized", str(ctx.exception))
+
+    def test_to_dict_raises_value_error_for_unregistered_rule(self):
+        from cgull.models import ScanConfig
+        class UnregisteredRule(BaseRule):
+            rule_id = "UNREG-001"
+
+        cfg = ScanConfig.create(rules=[UnregisteredRule()])
+        with self.assertRaises(ValueError) as ctx:
+            cfg.to_dict()
+        self.assertIn("custom rule not registered", str(ctx.exception))
+
+    def test_register_rule_allows_serialization(self):
+        from cgull.models import ScanConfig
+        from cgull.rules import register_rule, RULE_REGISTRY
+        register_rule(MyCustomRule)
+        self.assertIn("CUSTOM-999", RULE_REGISTRY)
+
+        cfg = ScanConfig.create(rules=[MyCustomRule()])
+        d = cfg.to_dict()
+        self.assertEqual(d["enabled_rule_ids"], ["CUSTOM-999"])
+        restored = ScanConfig.from_dict(d)
+        self.assertEqual(restored.get_rules()[0].rule_id, "CUSTOM-999")
+
+
 if __name__ == "__main__":
     unittest.main()

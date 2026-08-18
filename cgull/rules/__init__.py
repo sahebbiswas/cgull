@@ -90,3 +90,10 @@ def get_rule_by_id(rule_id: str) -> BaseRule:
     if rule_id in RULE_REGISTRY:
         return RULE_REGISTRY[rule_id]()
     raise KeyError(f"Rule ID '{rule_id}' not found.")
+
+
+def register_rule(rule_cls: Type[BaseRule]) -> None:
+    """Registers a rule class in RULE_REGISTRY and ALL_RULES."""
+    RULE_REGISTRY[rule_cls.rule_id] = rule_cls
+    if rule_cls not in ALL_RULES:
+        ALL_RULES.append(rule_cls)
