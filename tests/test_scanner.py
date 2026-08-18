@@ -504,12 +504,63 @@ class TestParallelAndSequentialEquivalence(unittest.TestCase):
             severity_filter={Severity.HIGH},
         )
         d = cfg.to_dict()
+        self.assertEqual(d["enabled_rule_ids"], ["CGULL-001"])
         restored = ScanConfig.from_dict(d)
-        self.assertEqual(restored.enabled_rule_ids, cfg.enabled_rule_ids)
         self.assertEqual(restored.engine_mode, cfg.engine_mode)
         self.assertEqual(restored.severity_filter, cfg.severity_filter)
         self.assertEqual(len(restored.get_rules()), 1)
         self.assertEqual(restored.get_rules()[0].rule_id, "CGULL-001")
+
+    def test_custom_rule_instance_attributes_preserved(self):
+        class ConfigurableRule(BaseRule):
+            rule_id = "CONFIG-001"
+            def __init__(self, threshold=5):
+                super().__init__()
+                self.threshold = threshold
+
+            def scan_line(self, file_path, line_number, line_content, **kwargs):
+                if len(line_content) > self.threshold:
+                    return [self.create_issue(file_path, line_number, line_content, f"Exceeds {self.threshold}")]
+                return []
+
+        rule_inst = ConfigurableRule(threshold=100)
+        scanner = CGullScanner(rules=[rule_inst])
+        self.assertIs(scanner.rules[0], rule_inst)
+        self.assertEqual(scanner.rules[0].threshold, 100)
+
+    def test_unpicklable_rule_in_parallel_scan_raises_value_error(self):
+        class UnpicklableRule(BaseRule):
+            rule_id = "UNPICKLE-001"
+            def __init__(self):
+                super().__init__()
+                self.func = lambda x: x
+
+        scanner = CGullScanner(rules=[UnpicklableRule()])
+        with self.assertRaises(ValueError) as ctx:
+            scanner.scan_path(self.temp_dir, jobs=2)
+        self.assertIn("cannot be serialized", str(ctx.exception))
+
+    def test_to_dict_raises_value_error_for_unregistered_rule(self):
+        from cgull.models import ScanConfig
+        class UnregisteredRule(BaseRule):
+            rule_id = "UNREG-001"
+
+        cfg = ScanConfig.create(rules=[UnregisteredRule()])
+        with self.assertRaises(ValueError) as ctx:
+            cfg.to_dict()
+        self.assertIn("custom rule not registered", str(ctx.exception))
+
+    def test_register_rule_allows_serialization(self):
+        from cgull.models import ScanConfig
+        from cgull.rules import register_rule, RULE_REGISTRY
+        register_rule(MyCustomRule)
+        self.assertIn("CUSTOM-999", RULE_REGISTRY)
+
+        cfg = ScanConfig.create(rules=[MyCustomRule()])
+        d = cfg.to_dict()
+        self.assertEqual(d["enabled_rule_ids"], ["CUSTOM-999"])
+        restored = ScanConfig.from_dict(d)
+        self.assertEqual(restored.get_rules()[0].rule_id, "CUSTOM-999")
 
 
 if __name__ == "__main__":

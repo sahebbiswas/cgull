@@ -241,6 +241,16 @@ class CGullScanner:
         config: ScanConfig,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ):
+        import pickle
+        try:
+            pickle.dumps(config)
+        except Exception as e:
+            raise ValueError(
+                f"ScanConfig cannot be serialized for parallel worker processes: {e}. "
+                f"Ensure all custom rules are picklable (defined at module level or registered in RULE_REGISTRY) "
+                f"or use jobs=1 for sequential scanning."
+            ) from e
+
         results = []
         total_files = len(files_to_scan)
         completed_count = 0
