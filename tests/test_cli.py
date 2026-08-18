@@ -113,15 +113,57 @@ class TestScanCommand(unittest.TestCase):
         self.assertEqual(parsed["summary"]["total_issues_count"], sum_file_issues)
 
     def test_severity_filter_formats_consistency(self):
+        # Add a file with HIGH, MEDIUM, and LOW issues to thoroughly test filtering across formats
+        multi_file = os.path.join(self.temp_dir, "multi.c")
+        with open(multi_file, "w") as f:
+            f.write(
+                "#include <stdio.h>\n"
+                "#include <string.h>\n"
+                "void f(char *b) {\n"
+                "    gets(b);\n"  # HIGH
+                "    for (int i = 0; i < strlen(b); i++) {\n"  # MEDIUM
+                "        if (i == 42) goto done;\n"  # LOW
+                "    }\n"
+                "done:\n"
+                "    return;\n"
+                "}\n"
+            )
+
         for fmt in ["json", "sarif", "markdown", "text"]:
-            code, out = self._run(["scan", self.c_file, "--severity", "high", "--format", fmt])
+            code, out = self._run(["scan", multi_file, "--severity", "high", "--format", fmt])
             self.assertEqual(code, 0)
             if fmt == "json":
                 parsed = json.loads(out)
                 self.assertEqual(parsed["summary"]["total_issues_count"], len(parsed["issues"]))
+                self.assertGreater(len(parsed["issues"]), 0)
+                for issue in parsed["issues"]:
+                    self.assertEqual(issue["impact"], "High")
             elif fmt == "sarif":
                 parsed = json.loads(out)
-                self.assertEqual(len(parsed["runs"][0]["results"]), parsed["runs"][0]["results"].__len__())
+                results = parsed["runs"][0]["results"]
+                self.assertGreater(len(results), 0)
+                for res in results:
+                    self.assertEqual(res["level"], "error")
+            elif fmt == "markdown":
+                self.assertIn("| **Total Issues** | **", out)
+                # Ensure HIGH badge is present but MEDIUM/LOW badges are absent in findings
+                self.assertIn("[🔴 HIGH]", out)
+                self.assertNotIn("[🟡 MEDIUM]", out)
+                self.assertNotIn("[🔵 LOW]", out)
+                # Count finding section headers (e.g. ### #1 [🔴 HIGH])
+                finding_count = out.count("### #")
+                self.assertGreater(finding_count, 0)
+                self.assertIn(f"| **Total Issues** | **{finding_count}** |", out)
+            elif fmt == "text":
+                self.assertIn("Total Findings   :", out)
+                self.assertIn("[HIGH]", out)
+                self.assertNotIn("[MEDIUM]", out)
+                self.assertNotIn("[LOW]", out)
+                # Check displayed total findings matches rendered findings count
+                # Terminal output format rendered findings start with "[HIGH]   " or similar tags
+                rendered_findings_count = out.count("[HIGH]   ")
+                self.assertGreater(rendered_findings_count, 0)
+                self.assertIn(f"Total Findings   : {rendered_findings_count} (High: {rendered_findings_count}, Medium: 0, Low: 0)", out)
 
     def test_regex_engine_mode_runs_without_error(self):
         code, out = self._run(["scan", self.c_file, "--engine", "regex", "--format", "json"])
