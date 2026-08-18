@@ -9,23 +9,29 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: write
 
 jobs:
   review:
-    # Run on PR creation/push OR when someone comments "/gemini review" on a PR
+    # Only run on pull_request events OR when a comment starts with /gemini review
     if: |
       github.event_name == 'pull_request' ||
       (github.event.issue.pull_request && contains(github.event.comment.body, '/gemini review'))
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Fetch PR Ref for Comment Triggers
+        if: github.event_name == 'issue_comment'
+        run: |
+          gh pr checkout ${{ github.event.issue.number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Gemini Code Review
         uses: petarzarkov/gemini-code-review-action@latest
         with:
-          model: 'gemini-3.7-flash'
+          model: 'gemini-3.6-flash'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
