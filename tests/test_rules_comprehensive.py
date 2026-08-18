@@ -75,6 +75,11 @@ class TestFormatString(unittest.TestCase):
         issues = scan_with_rule("CGULL-002", code)
         self.assertEqual(len(issues), 0)
 
+    def test_string_literal_containing_printf_pattern_not_flagged(self):
+        code = 'void f(void) {\n    log_debug("call printf(user_input) -- insecure pattern, do not do this");\n}'
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
 
 class TestUncheckedDynamicAllocations(unittest.TestCase):
     def test_detects_unchecked_malloc(self):
