@@ -3,13 +3,20 @@ name: Gemini AI Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   review:
+    # Run on PR creation/push OR when someone comments "/gemini review" on a PR
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, '/gemini review'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -18,8 +25,7 @@ jobs:
       - name: Run Gemini Code Review
         uses: petarzarkov/gemini-code-review-action@v1
         with:
-          model: 'gemini-3.7-flash'
-          skip_draft_prs: true
+          model: 'gemini-2.5-flash'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
