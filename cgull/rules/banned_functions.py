@@ -92,11 +92,12 @@ class FormatStringRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
+        match_target = masked_line_content or line_content
         # printf(var) or printf(var, ...) where first arg is not "..."
         for fn in ["printf", "vprintf"]:
-            m = re.search(rf'\b{fn}\s*\(\s*([^",\s][^,\)]*)\s*\)', line_content)
+            m = re.search(rf'\b{fn}\s*\(\s*([^",\s][^,\)]*)\s*\)', match_target)
             if m:
-                arg = m.group(1).strip()
+                arg = line_content[m.start(1):m.end(1)].strip()
                 if not arg.startswith('"') and not arg.startswith('L"'):
                     issues.append(self.create_issue(
                         file_path=file_path,
@@ -111,9 +112,9 @@ class FormatStringRule(BaseRule):
 
         # fprintf(stream, var) or syslog(priority, var)
         for fn in ["fprintf", "syslog", "dprintf"]:
-            m = re.search(rf'\b{fn}\s*\(\s*[^,]+,\s*([^",\s][^,\)]*)\s*\)', line_content)
+            m = re.search(rf'\b{fn}\s*\(\s*[^,]+,\s*([^",\s][^,\)]*)\s*\)', match_target)
             if m:
-                arg = m.group(1).strip()
+                arg = line_content[m.start(1):m.end(1)].strip()
                 if not arg.startswith('"') and not arg.startswith('L"'):
                     issues.append(self.create_issue(
                         file_path=file_path,
