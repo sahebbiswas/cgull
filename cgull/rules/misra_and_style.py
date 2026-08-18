@@ -26,36 +26,158 @@ class NakedControlFlowStatementsRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        # Check if line has if (...) or while (...) or for (...) without { at end or next line
         stripped = line_content.strip()
-        # Single line if without brace: e.g. if (x) do_something();
-        m = re.match(r'^(if\s*\([^)]+\)|while\s*\([^)]+\)|for\s*\([^)]+\))\s+([^{;]+;)', stripped)
-        if m:
-            ctrl = m.group(1)
-            stmt = m.group(2)
-            issues.append(self.create_issue(
-                file_path=file_path,
-                line_number=line_number,
-                code_snippet=line_content,
-                message=f"Naked control flow statement without enclosing curly braces '{{ }}' in '{ctrl}'. Single-line statements are error-prone.",
-                column_number=1,
-                engine="Regex",
-                auto_fix_replacement=f"{ctrl} {{\n    {stmt}\n}}"
-            ))
-        elif re.match(r'^(if\s*\([^)]+\)|while\s*\([^)]+\)|for\s*\([^)]+\)|else)$', stripped):
-            # Check next line
-            if line_number < len(source_lines):
-                next_line = source_lines[line_number].strip()
-                if not next_line.startswith('{'):
-                    issues.append(self.create_issue(
-                        file_path=file_path,
-                        line_number=line_number,
-                        code_snippet=line_content,
-                        message=f"Naked control flow block: '{stripped}' lacks enclosing '{{' on the next line.",
-                        column_number=1,
-                        engine="Regex",
-                        auto_fix_replacement=f"{stripped} {{\n    {next_line}\n}}"
-                    ))
+        # Skip preprocessor lines
+        if stripped.startswith("#"):
+            return issues
+
+        line_idx = line_number - 1
+
+        for m in re.finditer(r'\b(if|else|while|for|do)\b', line_content):
+            kw = m.group(1)
+            kw_start = m.start()
+            kw_end = m.end()
+
+            # Ignore structure field access (e.g., obj.if or ptr->if)
+            if kw_start > 0 and line_content[kw_start - 1] == ".":
+                continue
+            if kw_start >= 2 and line_content[kw_start - 2:kw_start] == "->":
+                continue
+
+            curr_line = line_idx
+            curr_pos = kw_end
+
+            # Handle keywords with condition parens: if, while, for
+            if kw in ("if", "while", "for"):
+                found_paren = False
+                while curr_line < len(source_lines):
+                    rem = source_lines[curr_line][curr_pos:]
+                    rem_stripped = rem.strip()
+                    if rem_stripped:
+                        if rem_stripped.startswith("#"):
+                            curr_line += 1
+                            curr_pos = 0
+                            continue
+                        if rem_stripped.startswith("("):
+                            found_paren = True
+                            curr_pos = source_lines[curr_line].find("(", curr_pos)
+                            break
+                        else:
+                            break
+                    curr_line += 1
+                    curr_pos = 0
+
+                if not found_paren:
+                    continue
+
+                # Parse balanced parens
+                depth = 0
+                found_close = False
+                while curr_line < len(source_lines) and not found_close:
+                    line_str = source_lines[curr_line]
+                    while curr_pos < len(line_str):
+                        c = line_str[curr_pos]
+                        if c == "(":
+                            depth += 1
+                        elif c == ")":
+                            depth -= 1
+                            if depth == 0:
+                                found_close = True
+                                curr_pos += 1
+                                break
+                        curr_pos += 1
+                    if not found_close:
+                        curr_line += 1
+                        curr_pos = 0
+                        while curr_line < len(source_lines) and source_lines[curr_line].strip().startswith("#"):
+                            curr_line += 1
+
+                if not found_close:
+                    continue
+
+                # Special case for while in do-while loop
+                if kw == "while":
+                    after_paren_line = curr_line
+                    after_paren_pos = curr_pos
+                    next_char_after = None
+                    while after_paren_line < len(source_lines):
+                        rem_after = source_lines[after_paren_line][after_paren_pos:].strip()
+                        if rem_after:
+                            next_char_after = rem_after[0]
+                            break
+                        after_paren_line += 1
+                        after_paren_pos = 0
+                    if next_char_after == ";":
+                        before_str = line_content[:kw_start].strip()
+                        if before_str.endswith("}"):
+                            continue
+                        prev_line = line_idx - 1
+                        is_do_while = False
+                        while prev_line >= 0:
+                            prev_str = source_lines[prev_line].strip()
+                            if not prev_str or prev_str.startswith("#"):
+                                prev_line -= 1
+                                continue
+                            if prev_str.endswith("}") or "}" in prev_str:
+                                is_do_while = True
+                            break
+                        if is_do_while:
+                            continue
+
+            elif kw == "else":
+                look_l = line_idx
+                look_p = kw_end
+                is_else_if = False
+                while look_l < len(source_lines):
+                    rem_else = source_lines[look_l][look_p:].strip()
+                    if rem_else:
+                        if rem_else.startswith("#"):
+                            look_l += 1
+                            look_p = 0
+                            continue
+                        if rem_else.startswith("if") and (len(rem_else) == 2 or not rem_else[2].isalnum()):
+                            is_else_if = True
+                        break
+                    look_l += 1
+                    look_p = 0
+                if is_else_if:
+                    continue
+
+            # Look ahead for opening brace {
+            look_line = curr_line
+            look_pos = curr_pos
+            is_braced = True
+
+            while look_line < len(source_lines):
+                line_str = source_lines[look_line][look_pos:].strip()
+                if not line_str or source_lines[look_line].strip().startswith("#"):
+                    look_line += 1
+                    look_pos = 0
+                    continue
+                else:
+                    if line_str.startswith("{"):
+                        is_braced = True
+                    else:
+                        is_braced = False
+                    break
+
+            if not is_braced:
+                if kw in ("if", "while", "for"):
+                    message = f"Naked control flow block: missing '{{' after '{kw}'."
+                elif kw == "else":
+                    message = "Naked control flow block: missing '{' after 'else'."
+                else:
+                    message = f"Naked control flow block: missing '{{' after '{kw}'."
+
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=message,
+                    column_number=kw_start + 1,
+                    engine="Regex",
+                ))
+
         return issues
 
 
