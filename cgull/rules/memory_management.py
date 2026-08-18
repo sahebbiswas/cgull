@@ -330,6 +330,77 @@ class UninitializedPointersRule(BaseRule):
         return issues
 
 
+class DoubleFreeRule(BaseRule):
+    rule_id = "CGULL-027"
+    name = "Double Free"
+    impact = Severity.HIGH
+    category = RuleCategory.MEMORY
+    description = "Detect calling free() on a pointer that has already been freed."
+    implementation_method = "AST dataflow analysis tracking free() state"
+    implementation_complexity = "High"
+    chances_of_false_positives = "High"
+    cwe_id = "CWE-415"
+    remediation_suggestion = "Ensure a pointer is freed only once. Set freed pointers to NULL immediately after free()."
+    sample_vulnerable_code = "free(ptr);\nfree(ptr); // Double-Free"
+    sample_remediated_code = "free(ptr);\nptr = NULL;\nfree(ptr); // Safe: free(NULL) is a no-op"
+    analysis_engine = AnalysisEngine.AST
+
+    MAX_LOOKAHEAD_LINES = 200
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        for fn in ast_ctx.functions:
+            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            if cfg is not None:
+                for node in cfg.nodes.values():
+                    for freed_ptr in node.freed:
+                        # Check if ptr was already freed prior to this node
+                        alloc_status = cfg.query_allocation(freed_ptr, node.node_id)
+                        if alloc_status in (Allocation.FREED, Allocation.MAYBE_FREED):
+                            snippet = _source_snippet(ast_ctx, node.line_number, node.expr_str)
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=node.line_number,
+                                code_snippet=snippet,
+                                message=f"Potential Double Free: pointer '{freed_ptr}' is freed here but was already freed.",
+                                column_number=1,
+                                engine="AST",
+                                auto_fix_replacement=f"// Ensure {freed_ptr} is only freed once. Consider setting to NULL after first free."
+                            ))
+                continue
+
+            body_lines = fn.body.splitlines()
+            depths = _brace_depths(body_lines)
+            for i, line in enumerate(body_lines):
+                line_no = fn.start_line + 1 + i
+                free_match = re.search(r'\b(?:free|cfree|vfree)\s*\(\s*(\w+)\s*\)', line)
+                if not free_match:
+                    continue
+                freed_ptr = free_match.group(1)
+                base_depth = depths[i]
+                limit = min(i + 1 + self.MAX_LOOKAHEAD_LINES, len(body_lines))
+                for j in range(i + 1, limit):
+                    if depths[j] < base_depth:
+                        break
+                    next_line = body_lines[j]
+                    next_line_no = fn.start_line + 1 + j
+                    # If reassigned to NULL or another value, break
+                    if re.search(rf'\b{re.escape(freed_ptr)}\s*=', next_line):
+                        break
+                    if re.search(rf'\b(?:free|cfree|vfree)\s*\(\s*{re.escape(freed_ptr)}\s*\)', next_line):
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=next_line_no,
+                            code_snippet=next_line,
+                            message=f"Potential Double Free: pointer '{freed_ptr}' was already freed at line {line_no}.",
+                            column_number=1,
+                            engine="AST",
+                            auto_fix_replacement=f"// Ensure {freed_ptr} is only freed once. Consider setting to NULL after first free."
+                        ))
+                        break
+        return issues
+
+
 class UseAfterFreeRule(BaseRule):
     rule_id = "CGULL-022"
     name = "Use-After-Free"
