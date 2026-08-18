@@ -260,7 +260,9 @@ def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Opt
         if node.args and getattr(node.args, "params", None):
             for p in node.args.params:
                 p_type_name = type(p).__name__
-                if p_type_name == "Typename":
+                if p_type_name == "EllipsisParam" or not hasattr(p, "type"):
+                    p_list.append("...")
+                elif p_type_name == "Typename":
                     pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type)
                     p_list.append(pt)
                 elif p_type_name == "Decl":
@@ -769,12 +771,15 @@ class CASTParser:
                 else:
                     if len(func_args.params) == 1:
                         p0 = func_args.params[0]
-                        p0_type, _, _, _, _, _, _, _ = _format_pycparser_type(p0.type)
-                        if p0_type == "void" and (not getattr(p0, "name", None) or p0.name == "void"):
-                            has_void_param = True
+                        if hasattr(p0, "type"):
+                            p0_type, _, _, _, _, _, _, _ = _format_pycparser_type(p0.type)
+                            if p0_type == "void" and (not getattr(p0, "name", None) or p0.name == "void"):
+                                has_void_param = True
 
                     if not has_void_param:
                         for param in func_args.params:
+                            if type(param).__name__ == "EllipsisParam" or not hasattr(param, "type"):
+                                continue
                             p_name = getattr(param, "name", None) or ""
                             p_type, p_is_ptr, p_is_fp, _, _, _, _, _ = _format_pycparser_type(param.type)
                             p_line = (param.coord.line - _PRELUDE_LINE_COUNT) if param.coord else fn_start
@@ -1023,3 +1028,7 @@ class CASTParser:
                         declaration_line=line_no,
                     )
         return global_vars
+
+
+# Alias for backward compatibility
+ASTAnalyzer = CASTParser
