@@ -380,6 +380,21 @@ class TestInsecureDataStorage(unittest.TestCase):
         issues = scan_with_rule("CGULL-024", code)
         self.assertEqual(len(issues), 1)
 
+    def test_detects_sized_array_secret(self):
+        code = 'void f(void) {\n    char api_key[64] = "AIzaSyD-secret-key";\n}'
+        issues = scan_with_rule("CGULL-024", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_macro_sized_array_secret(self):
+        code = 'void f(void) {\n    char api_key[SIZE] = "AIzaSyD-secret-key";\n}'
+        issues = scan_with_rule("CGULL-024", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_const_sized_array_secret(self):
+        code = 'void f(void) {\n    const char api_key[64] = "AIzaSyD-secret-key";\n}'
+        issues = scan_with_rule("CGULL-024", code)
+        self.assertEqual(len(issues), 1)
+
     def test_clean_env_var_loaded_secret(self):
         code = 'void f(void) {\n    char *api_key = getenv("API_KEY");\n}'
         issues = scan_with_rule("CGULL-024", code)

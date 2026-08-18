@@ -452,7 +452,7 @@ class InsecureDataStorageRule(BaseRule):
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Match hardcoded password/key/secret strings
-        m = re.search(r'(?:char\s*\*|char\s+\w+\[\]|string)\s*(\w*(?:password|secret|apikey|api_key|private_key|auth_token)\w*)\s*=\s*"([^"]+)"', line_content, re.IGNORECASE)
+        m = re.search(r'(?:const\s+)?(?:char|string)\s*\*?\s*(\w*(?:password|secret|apikey|api_key|private_key|auth_token)\w*)\s*(?:\[[^\]]*\])?\s*=\s*"([^"]+)"', line_content, re.IGNORECASE)
         if m:
             var_name = m.group(1)
             val = m.group(2)
