@@ -139,6 +139,48 @@ class TestDirectoryTraversalWithNegation(unittest.TestCase):
         self.assertFalse(any("other.c" in p for p in scanned_files))
 
 
+class TestProgressCallback(unittest.TestCase):
+    def test_scan_path_sequential_triggers_callback(self):
+        temp_dir = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(temp_dir, "f1.c"), "w") as f:
+                f.write(VULNERABLE_CODE)
+            with open(os.path.join(temp_dir, "f2.c"), "w") as f:
+                f.write(VULNERABLE_CODE)
+
+            calls = []
+            def cb(completed, total, path):
+                calls.append((completed, total, path))
+
+            CGullScanner().scan_path(temp_dir, jobs=1, progress_callback=cb)
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(calls[0], (0, 2, ""))
+            self.assertEqual(calls[-1][0], 2)
+            self.assertEqual(calls[-1][1], 2)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_scan_path_parallel_triggers_callback(self):
+        temp_dir = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(temp_dir, "f1.c"), "w") as f:
+                f.write(VULNERABLE_CODE)
+            with open(os.path.join(temp_dir, "f2.c"), "w") as f:
+                f.write(VULNERABLE_CODE)
+
+            calls = []
+            def cb(completed, total, path):
+                calls.append((completed, total, path))
+
+            CGullScanner().scan_path(temp_dir, jobs=2, progress_callback=cb)
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(calls[0], (0, 2, ""))
+            self.assertEqual(calls[-1][0], 2)
+            self.assertEqual(calls[-1][1], 2)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 class TestIssueFilePathIsRelative(unittest.TestCase):
     """
     Regression test: Issue.file_path used to be left as the absolute

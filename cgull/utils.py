@@ -9,7 +9,8 @@ masked view of the source -- rather than each rule re-implementing its own
 
 import hashlib
 import re
-from typing import Dict, List, Set, Tuple
+import sys
+from typing import Dict, List, Optional, Set, TextIO, Tuple
 
 # Matches: // cgull-ignore
 #          // cgull-ignore: CGULL-001
@@ -276,3 +277,50 @@ def compute_issue_fingerprint(rule_id: str, relative_file_path: str, code_snippe
     normalized_snippet = _WHITESPACE_RUN_RE.sub(" ", code_snippet.strip())
     basis = f"{rule_id}|{normalized_path}|{normalized_snippet}"
     return hashlib.sha256(basis.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+class ProgressIndicator:
+    """
+    In-place CLI progress indicator for file scanning.
+    Writes progress to sys.stderr (or custom stream) using carriage return (\r).
+    When finished, erases the line completely so output remains clean.
+    """
+
+    def __init__(
+        self,
+        stream: Optional[TextIO] = None,
+        quiet: bool = False,
+        bar_width: int = 20,
+    ) -> None:
+        self.stream = stream if stream is not None else sys.stderr
+        self.quiet = quiet
+        self.bar_width = bar_width
+        self.last_line_len = 0
+
+    def update(self, completed: int, total: int, current_file: str = "") -> None:
+        if self.quiet:
+            return
+
+        if total <= 0:
+            percentage = 100
+            filled_len = self.bar_width
+        else:
+            percentage = min(100, int((completed / total) * 100))
+            filled_len = min(self.bar_width, int(self.bar_width * completed / total))
+
+        bar = "█" * filled_len + "░" * (self.bar_width - filled_len)
+        file_disp = f" {current_file}" if current_file else ""
+        line = f"Scanning [{bar}] {percentage}% ({completed}/{total} files){file_disp}"
+
+        padded_line = line.ljust(self.last_line_len)
+        self.stream.write(f"\r{padded_line}")
+        self.stream.flush()
+        self.last_line_len = max(self.last_line_len, len(padded_line))
+
+    def finish(self) -> None:
+        if self.quiet:
+            return
+        if self.last_line_len > 0:
+            self.stream.write("\r" + " " * self.last_line_len + "\r")
+            self.stream.flush()
+            self.last_line_len = 0

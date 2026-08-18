@@ -148,6 +148,13 @@ class TestScanCommand(unittest.TestCase):
             content = f.read()
         self.assertIn("C-GULL Security Audit Report", content)
 
+    def test_scan_quiet_flag_suppresses_stderr_progress(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, out = self._run(["scan", self.c_file, "-q"])
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+
     def test_output_write_failure_returns_error(self):
         # Writing to a path inside a non-existent directory should fail
         # cleanly with a non-zero exit code rather than raising.

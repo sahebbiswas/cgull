@@ -8,7 +8,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import List, Optional, Set, Dict, Tuple
+from typing import List, Optional, Set, Dict, Tuple, Callable
 from pathlib import Path
 
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine
@@ -44,6 +44,7 @@ class CGullScanner:
         ignore_file: Optional[str] = None,
         custom_ignore_patterns: Optional[List[str]] = None,
         jobs: int = 1,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> ScanResult:
         """
         Recursively scans a directory or single file for security vulnerabilities.
@@ -83,14 +84,18 @@ class CGullScanner:
                         else:
                             files_to_scan.append(file_path)
 
+        total_files = len(files_to_scan)
+        if progress_callback:
+            progress_callback(0, total_files, "")
+
         all_issues: List[Issue] = []
         file_summaries: List[FileScanSummary] = []
         total_loc = 0
 
         if jobs and jobs > 1 and len(files_to_scan) > 1:
-            results = self._scan_files_parallel(files_to_scan, jobs)
+            results = self._scan_files_parallel(files_to_scan, jobs, progress_callback)
         else:
-            results = self._scan_files_sequential(files_to_scan)
+            results = self._scan_files_sequential(files_to_scan, progress_callback)
 
         for file_path, file_issues, loc, duration_ms in results:
             total_loc += loc
@@ -152,24 +157,40 @@ class CGullScanner:
             rules_applied=len(self.rules),
         )
 
-    def _scan_files_sequential(self, files_to_scan: List[str]):
+    def _scan_files_sequential(
+        self,
+        files_to_scan: List[str],
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ):
         results = []
-        for file_path in files_to_scan:
+        total_files = len(files_to_scan)
+        for idx, file_path in enumerate(files_to_scan, 1):
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
             except Exception:
+                if progress_callback:
+                    progress_callback(idx, total_files, file_path)
                 continue
             file_issues, loc, duration_ms = self._scan_single_file_content(file_path, content)
             results.append((file_path, file_issues, loc, duration_ms))
+            if progress_callback:
+                progress_callback(idx, total_files, file_path)
         return results
 
-    def _scan_files_parallel(self, files_to_scan: List[str], jobs: int):
+    def _scan_files_parallel(
+        self,
+        files_to_scan: List[str],
+        jobs: int,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ):
         # Rule instances aren't guaranteed picklable/shareable across
         # processes, and re-instantiating the default rule set per worker
         # is cheap, so workers rebuild their own scanner from engine_mode
         # alone rather than trying to pickle self.
         results = []
+        total_files = len(files_to_scan)
+        completed_count = 0
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {
                 pool.submit(_scan_file_worker, file_path, self.engine_mode): file_path
@@ -177,11 +198,14 @@ class CGullScanner:
             }
             for future in as_completed(futures):
                 file_path = futures[future]
+                completed_count += 1
                 try:
                     file_issues, loc, duration_ms = future.result()
+                    results.append((file_path, file_issues, loc, duration_ms))
                 except Exception:
-                    continue
-                results.append((file_path, file_issues, loc, duration_ms))
+                    pass
+                if progress_callback:
+                    progress_callback(completed_count, total_files, file_path)
         return results
 
     def scan_text(self, source_code: str, file_path: str = "source.c") -> ScanResult:

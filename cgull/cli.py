@@ -13,6 +13,7 @@ from .ignore import CGullIgnoreFilter
 from .reporter import ReportGenerator
 from .rules import get_all_rules
 from .baseline import load_baseline_fingerprints, apply_baseline, BaselineError
+from .utils import ProgressIndicator
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +50,7 @@ Suppressing findings inline:
     scan_parser.add_argument("target", nargs="?", default=".", help="Target file or directory to scan (default: current directory)")
     scan_parser.add_argument("-o", "--output", help="Path to write the report file (defaults to stdout)")
     scan_parser.add_argument("-f", "--format", choices=["text", "json", "sarif", "markdown"], default="text", help="Report format (default: text)")
+    scan_parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress indicator during scan")
     scan_parser.add_argument("--ignore-file", help="Path to .cgullignore file")
     scan_parser.add_argument("--ignore-pattern", action="append", default=[], help="Pattern to ignore (can be specified multiple times)")
     scan_parser.add_argument("--severity", choices=["high", "medium", "low", "all"], default="all", help="Severity filter threshold")
@@ -98,12 +100,17 @@ def handle_scan(args) -> int:
     if jobs == 0:
         jobs = os.cpu_count() or 1
 
-    result = scanner.scan_path(
-        target_path=target,
-        ignore_file=args.ignore_file,
-        custom_ignore_patterns=args.ignore_pattern,
-        jobs=jobs,
-    )
+    progress = ProgressIndicator(quiet=args.quiet)
+    try:
+        result = scanner.scan_path(
+            target_path=target,
+            ignore_file=args.ignore_file,
+            custom_ignore_patterns=args.ignore_pattern,
+            jobs=jobs,
+            progress_callback=progress.update,
+        )
+    finally:
+        progress.finish()
 
     # --update-baseline always snapshots the full (pre-baseline-filter)
     # result, so it reflects everything currently found regardless of
