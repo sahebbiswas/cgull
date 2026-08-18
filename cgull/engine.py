@@ -8,10 +8,10 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import List, Optional, Set, Dict, Tuple, Callable
+from typing import List, Optional, Set, Dict, Tuple, Callable, Union
 from pathlib import Path
 
-from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, Confidence
+from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, Confidence, ScanConfig
 from .ignore import CGullIgnoreFilter
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
@@ -31,12 +31,39 @@ class CGullScanner:
         ignore_filter: Optional[CGullIgnoreFilter] = None,
         severity_filter: Optional[Set[Severity]] = None,
         engine_mode: AnalysisEngine = AnalysisEngine.HYBRID,
+        config: Optional[ScanConfig] = None,
     ):
-        self.rules = rules if rules is not None else get_all_rules()
+        if config is not None:
+            self.config = config
+            if rules is not None or severity_filter is not None or engine_mode != AnalysisEngine.HYBRID:
+                self.config = ScanConfig.create(
+                    rules=rules if rules is not None else self.config.get_rules(),
+                    engine_mode=engine_mode if engine_mode != AnalysisEngine.HYBRID else self.config.engine_mode,
+                    severity_filter=severity_filter if severity_filter is not None else self.config.severity_filter,
+                    enable_inline_suppressions=self.config.enable_inline_suppressions,
+                    suppression_config=self.config.suppression_config,
+                )
+        else:
+            self.config = ScanConfig.create(
+                rules=rules,
+                engine_mode=engine_mode,
+                severity_filter=severity_filter,
+            )
+
+        self.rules = self.config.get_rules()
         self.ignore_filter = ignore_filter
-        self.severity_filter = severity_filter
-        self.engine_mode = engine_mode
+        self.severity_filter = self.config.severity_filter
+        self.engine_mode = self.config.engine_mode
         self.ast_parser = CASTParser()
+
+    def _get_active_config(self) -> ScanConfig:
+        return ScanConfig.create(
+            rules=self.rules,
+            engine_mode=self.engine_mode,
+            severity_filter=self.severity_filter,
+            enable_inline_suppressions=self.config.enable_inline_suppressions,
+            suppression_config=self.config.suppression_config,
+        )
 
     def scan_path(
         self,
@@ -88,6 +115,10 @@ class CGullScanner:
         if progress_callback:
             progress_callback(0, total_files, "")
 
+        config = self._get_active_config()
+        self.config = config
+        self.rules = config.get_rules()
+
         all_issues: List[Issue] = []
         file_summaries: List[FileScanSummary] = []
         failed_paths: List[str] = []
@@ -100,9 +131,9 @@ class CGullScanner:
         }
 
         if jobs and jobs > 1 and len(files_to_scan) > 1:
-            results = self._scan_files_parallel(files_to_scan, jobs, progress_callback)
+            results = self._scan_files_parallel(files_to_scan, jobs, config, progress_callback)
         else:
-            results = self._scan_files_sequential(files_to_scan, progress_callback)
+            results = self._scan_files_sequential(files_to_scan, config, progress_callback)
 
         analyzed_count = 0
         failed_count = 0
@@ -154,9 +185,11 @@ class CGullScanner:
         # Keep report output stable/deterministic regardless of scan order
         # (matters once parallel scanning can complete files out of order).
         file_summaries.sort(key=lambda fs: fs.file_path)
-        all_issues.sort(key=lambda i: (i.file_path, i.line_number, i.column_number, i.rule_id))
+        all_issues.sort(key=lambda i: (i.file_path, i.line_number, i.column_number, i.rule_id, i.message))
+        failed_paths.sort()
 
         rel_ignored = [os.path.relpath(p, base_dir) if os.path.isdir(abs_target) else os.path.basename(p) for p in ignored_paths]
+        rel_ignored.sort()
         files_discovered = len(files_to_scan) + len(ignored_paths)
 
         return ScanResult(
@@ -184,6 +217,7 @@ class CGullScanner:
     def _scan_files_sequential(
         self,
         files_to_scan: List[str],
+        config: ScanConfig,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ):
         results = []
@@ -192,7 +226,7 @@ class CGullScanner:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                file_issues, loc, duration_ms, parser_status, status, confidence = self._scan_single_file_content(file_path, content)
+                file_issues, loc, duration_ms, parser_status, status, confidence = self._scan_single_file_content(file_path, content, config=config)
                 results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence))
             except Exception:
                 results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value))
@@ -204,6 +238,7 @@ class CGullScanner:
         self,
         files_to_scan: List[str],
         jobs: int,
+        config: ScanConfig,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ):
         results = []
@@ -211,7 +246,7 @@ class CGullScanner:
         completed_count = 0
         with ProcessPoolExecutor(max_workers=jobs) as pool:
             futures = {
-                pool.submit(_scan_file_worker, file_path, self.engine_mode): file_path
+                pool.submit(_scan_file_worker, file_path, config): file_path
                 for file_path in files_to_scan
             }
             for future in as_completed(futures):
@@ -231,7 +266,11 @@ class CGullScanner:
         Directly scans in-memory C source text.
         """
         start_time = time.time()
-        file_issues, loc, duration_ms, parser_status, status, confidence = self._scan_single_file_content(file_path, source_code)
+        config = self._get_active_config()
+        self.config = config
+        self.rules = config.get_rules()
+
+        file_issues, loc, duration_ms, parser_status, status, confidence = self._scan_single_file_content(file_path, source_code, config=config)
         for issue in file_issues:
             issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
 
@@ -276,16 +315,24 @@ class CGullScanner:
             rules_applied=len(self.rules),
         )
 
-    def _scan_single_file_content(self, file_path: str, content: str) -> Tuple[List[Issue], int, float, str, str, str]:
-        return _scan_file_content(content, file_path, self.rules, self.engine_mode, self.ast_parser)
+    def _scan_single_file_content(
+        self,
+        file_path: str,
+        content: str,
+        config: Optional[ScanConfig] = None,
+    ) -> Tuple[List[Issue], int, float, str, str, str]:
+        if config is None:
+            config = self._get_active_config()
+        return _scan_file_content(content, file_path, ast_parser=self.ast_parser, config=config)
 
 
 def _scan_file_content(
     content: str,
     file_path: str,
-    rules: List[BaseRule],
-    engine_mode: AnalysisEngine,
+    rules: Optional[List[BaseRule]] = None,
+    engine_mode: Optional[AnalysisEngine] = None,
     ast_parser: Optional[CASTParser] = None,
+    config: Optional[ScanConfig] = None,
 ) -> Tuple[List[Issue], int, float, str, str, str]:
     """
     Module-level scan implementation shared by in-process and
@@ -302,6 +349,17 @@ def _scan_file_content(
     replaced with 'x') via `masked_line_content`, so text like
     `"please don't use gets()"` inside a string literal doesn't either.
     """
+    if config is not None:
+        rules = config.get_rules()
+        engine_mode = config.engine_mode
+        sev_filter = config.severity_filter
+        enable_suppressions = config.enable_inline_suppressions
+    else:
+        rules = rules if rules is not None else get_all_rules()
+        engine_mode = engine_mode if engine_mode is not None else AnalysisEngine.HYBRID
+        sev_filter = None
+        enable_suppressions = True
+
     t0 = time.time()
     ast_parser = ast_parser or CASTParser()
     raw_lines = content.splitlines()
@@ -309,10 +367,12 @@ def _scan_file_content(
     issues: List[Issue] = []
     seen_keys: Set[str] = set()
 
-    suppressions = SuppressionMap.from_source(raw_lines)
+    suppressions = SuppressionMap.from_source(raw_lines) if enable_suppressions else None
 
     def add_issue_if_unique(issue: Issue):
-        if suppressions.is_suppressed(issue.line_number, issue.rule_id):
+        if suppressions and suppressions.is_suppressed(issue.line_number, issue.rule_id):
+            return
+        if sev_filter and issue.impact not in sev_filter:
             return
         key = f"{issue.rule_id}:{issue.line_number}:{issue.message}"
         if key not in seen_keys:
@@ -398,17 +458,19 @@ def _scan_file_content(
     return issues, loc, duration_ms, parser_status, file_status, confidence_val
 
 
-def _scan_file_worker(file_path: str, engine_mode: AnalysisEngine) -> Tuple[List[Issue], int, float, str, str, str]:
+def _scan_file_worker(
+    file_path: str,
+    config: Union[ScanConfig, AnalysisEngine],
+) -> Tuple[List[Issue], int, float, str, str, str]:
     """
     Entry point run in a separate process by ProcessPoolExecutor. Rebuilds
-    the default rule set locally (rule instances hold no per-scan state,
-    so this is cheap) rather than pickling rule objects across the
-    process boundary.
+    the rules and configuration from the provided ScanConfig.
     """
+    if isinstance(config, AnalysisEngine):
+        config = ScanConfig.create(engine_mode=config)
     try:
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
     except Exception:
         return [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value
-    rules = get_all_rules()
-    return _scan_file_content(content, file_path, rules, engine_mode)
+    return _scan_file_content(content, file_path, config=config)
