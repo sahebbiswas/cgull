@@ -5,7 +5,7 @@ Rules for Memory Allocation, Null-checks, Lifecycles, and Pointer Safety.
 import re
 from typing import Dict, List, Optional, Set, Tuple
 from .base import BaseRule
-from ..models import Severity, RuleCategory, Issue, AnalysisEngine
+from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext, CFunction
 from ..cfg import StructuredCFG, build_cfg, find_function_def, Nullness, Initialization, Allocation
 
@@ -157,7 +157,8 @@ class UncheckedDynamicAllocationsRule(BaseRule):
                             message=f"Return value of dynamic memory allocation for '{ptr_name}' is not checked for NULL before use.",
                             column_number=1,
                             engine="AST",
-                            auto_fix_replacement=f"if ({ptr_name} == NULL) {{\n    return -1; // Handle out-of-memory\n}}"
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=f"if ({ptr_name} == NULL) {{\n    return -1; // Handle out-of-memory\n}}"
                         ))
                 continue
 
@@ -190,7 +191,8 @@ class UncheckedDynamicAllocationsRule(BaseRule):
                         message=f"Return value of dynamic memory allocation for '{ptr_name}' is not checked for NULL before use.",
                         column_number=m.start() + 1,
                         engine="AST",
-                        auto_fix_replacement=f"if ({ptr_name} == NULL) {{\n    return -1; // Handle out-of-memory\n}}"
+                        fix_type=FixType.SUGGESTED_FIX,
+                        suggested_fix_replacement=f"if ({ptr_name} == NULL) {{\n    return -1; // Handle out-of-memory\n}}"
                     ))
         return issues
 
@@ -241,7 +243,8 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                                 message=f"Pointer parameter '{p_name}' in function '{fn.name}' is dereferenced without a preceding NULL check.",
                                 column_number=deref_match.start() + 1,
                                 engine="AST",
-                                auto_fix_replacement=f"if ({p_name} == NULL) return -EINVAL;"
+                                fix_type=FixType.SUGGESTED_FIX,
+                                suggested_fix_replacement=f"if ({p_name} == NULL) return -EINVAL;"
                             ))
                             break
                 continue
@@ -259,7 +262,8 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     message=f"Pointer parameter '{param.name}' in function '{fn.name}' is dereferenced without a preceding NULL check.",
                     column_number=1,
                     engine="AST",
-                    auto_fix_replacement=f"if ({param.name} == NULL) return -EINVAL;"
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"if ({param.name} == NULL) return -EINVAL;"
                 ))
         return issues
 
@@ -305,6 +309,7 @@ class UninitializedPointersRule(BaseRule):
                                     message=f"Pointer variable '{ptr}' is declared uninitialized (wild pointer risk). Initialize to NULL.",
                                     column_number=1,
                                     engine="AST",
+                                    fix_type=FixType.SAFE_FIX,
                                     auto_fix_replacement=snippet.replace(f"{ptr};", f"{ptr} = NULL;")
                                 ))
                                 reported.add(ptr)
@@ -325,6 +330,7 @@ class UninitializedPointersRule(BaseRule):
                     message=f"Pointer variable '{v_name}' is declared uninitialized (wild pointer risk). Initialize to NULL.",
                     column_number=m.start() + 1,
                     engine="Regex",
+                    fix_type=FixType.SAFE_FIX,
                     auto_fix_replacement=line_content.replace(f"{v_name};", f"{v_name} = NULL;")
                 ))
         return issues
@@ -365,7 +371,7 @@ class DoubleFreeRule(BaseRule):
                                 message=f"Potential Double Free: pointer '{freed_ptr}' is freed here but was already freed.",
                                 column_number=1,
                                 engine="AST",
-                                auto_fix_replacement=f"// Ensure {freed_ptr} is only freed once. Consider setting to NULL after first free."
+                                fix_type=FixType.MANUAL_REVIEW,
                             ))
                 continue
 
@@ -395,7 +401,7 @@ class DoubleFreeRule(BaseRule):
                             message=f"Potential Double Free: pointer '{freed_ptr}' was already freed at line {line_no}.",
                             column_number=1,
                             engine="AST",
-                            auto_fix_replacement=f"// Ensure {freed_ptr} is only freed once. Consider setting to NULL after first free."
+                            fix_type=FixType.MANUAL_REVIEW,
                         ))
                         break
         return issues
@@ -435,7 +441,7 @@ class UseAfterFreeRule(BaseRule):
                                 message=f"Potential Use-After-Free: pointer '{freed_ptr}' was freed at line {node.line_number} and accessed here.",
                                 column_number=1,
                                 engine="AST",
-                                auto_fix_replacement=f"// Ensure {freed_ptr} is set to NULL after free() and not accessed"
+                                fix_type=FixType.MANUAL_REVIEW,
                             ))
                 continue
 
@@ -464,7 +470,7 @@ class UseAfterFreeRule(BaseRule):
                             message=f"Potential Use-After-Free: pointer '{freed_ptr}' was freed at line {line_no} and accessed here.",
                             column_number=1,
                             engine="AST",
-                            auto_fix_replacement=f"// Ensure {freed_ptr} is set to NULL after free() and not accessed"
+                            fix_type=FixType.MANUAL_REVIEW,
                         ))
                         break
         return issues
@@ -511,6 +517,7 @@ class UninitializedMemoryUseRule(BaseRule):
                                     message=f"Local variable '{v_name}' is declared without initialization. Initialize at declaration to prevent reading stack garbage.",
                                     column_number=1,
                                     engine="AST",
+                                    fix_type=FixType.SAFE_FIX,
                                     auto_fix_replacement=snippet.replace(f"{v_name};", f"{v_name} = 0;")
                                 ))
                                 reported.add(v_name)
@@ -527,6 +534,7 @@ class UninitializedMemoryUseRule(BaseRule):
                             message=f"Local variable '{v_name}' is declared without initialization. Initialize at declaration to prevent reading stack garbage.",
                             column_number=1,
                             engine="AST",
+                            fix_type=FixType.SAFE_FIX,
                             auto_fix_replacement=decl_line_content.replace(f"{v_name};", f"{v_name} = 0;")
                         ))
         return issues
@@ -609,6 +617,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                                 message=f"Potentially unsafe memory wipe using memset('{buf_name}', 0, ...). Compilers frequently optimize out memset prior to return (Dead Store Elimination / CWE-14).",
                                 column_number=1,
                                 engine="AST",
+                                fix_type=FixType.SAFE_FIX,
                                 auto_fix_replacement=f"explicit_bzero({buf_name}, {len_arg});"
                             ))
         return issues
@@ -636,6 +645,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                     message=f"Potentially unsafe memory wipe using memset('{buf_name}', 0, ...). Compilers frequently optimize out memset prior to return (Dead Store Elimination / CWE-14).",
                     column_number=m.start() + 1,
                     engine="Regex",
+                    fix_type=FixType.SAFE_FIX,
                     auto_fix_replacement=f"explicit_bzero({buf_name}, {m.group(2).strip()});"
                 ))
         return issues

@@ -5,7 +5,7 @@ Rules for MISRA-C Compliance, Control Flow Best Practices, and Code Safety.
 import re
 from typing import List, Optional
 from .base import BaseRule
-from ..models import Severity, RuleCategory, Issue, AnalysisEngine
+from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext
 
 
@@ -226,6 +226,7 @@ class MissingDefaultCaseInSwitchStatementsRule(BaseRule):
                     message="Switch statement is missing a mandatory 'default:' label (MISRA C:2012 Rule 16.4).",
                     column_number=1,
                     engine="AST",
+                    fix_type=FixType.SAFE_FIX,
                     auto_fix_replacement="default:\n    break;"
                 ))
         return issues
@@ -289,6 +290,7 @@ class ParameterVoidRule(BaseRule):
                     message=f"Function '{fn.name}()' declared with empty parameter list instead of explicit '(void)'. In C, empty parameter lists allow un-typechecked calls.",
                     column_number=1,
                     engine="AST",
+                    fix_type=FixType.SAFE_FIX,
                     auto_fix_replacement=line_content.replace(f"{fn.name}()", f"{fn.name}(void)")
                 ))
         return issues
@@ -325,6 +327,7 @@ class UnusedArgumentsRule(BaseRule):
                         message=f"Parameter '{p_name}' is declared in '{fn.name}' but never used in the function body (MISRA C:2012 Rule 2.7).",
                         column_number=1,
                         engine="AST",
+                        fix_type=FixType.SAFE_FIX,
                         auto_fix_replacement=f"(void){p_name};"
                     ))
         return issues
@@ -357,6 +360,6 @@ class MissingAssertionsRule(BaseRule):
                     message=f"Function '{fn.name}' contains complex logic ({len(fn.body.splitlines())} lines) without any assert() invariant validations.",
                     column_number=1,
                     engine="AST",
-                    auto_fix_replacement="assert(/* invariant */);"
+                    fix_type=FixType.MANUAL_REVIEW,
                 ))
         return issues

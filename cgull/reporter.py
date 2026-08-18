@@ -5,7 +5,7 @@ Generates structured JSON, SARIF 2.1.0, Markdown audit summaries, and terminal o
 
 import json
 from typing import Dict, Any, List
-from .models import ScanResult, Severity
+from .models import ScanResult, Severity, FixType
 from . import __version__
 
 
@@ -67,7 +67,9 @@ class ReportGenerator:
                 "properties": {
                     "cwe": issue.cwe_id,
                     "remediation": issue.remediation,
-                    "autoFix": issue.auto_fix_replacement
+                    "fixType": issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type),
+                    "autoFix": issue.auto_fix_replacement,
+                    "suggestedFix": issue.suggested_fix_replacement,
                 },
                 "partialFingerprints": {
                     "cgullFingerprint/v1": issue.fingerprint
@@ -132,11 +134,13 @@ class ReportGenerator:
         else:
             for idx, issue in enumerate(result.issues, 1):
                 badge = "🔴 HIGH" if issue.impact == Severity.HIGH else ("🟡 MEDIUM" if issue.impact == Severity.MEDIUM else "🔵 LOW")
+                fix_type_label = issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type)
                 lines.extend([
                     f"### #{idx} [{badge}] {issue.rule_name} (`{issue.rule_id}`)",
                     f"- **Location**: `{issue.file_path}:{issue.line_number}`",
                     f"- **CWE**: `{issue.cwe_id}`",
                     f"- **Engine**: `{issue.engine}`",
+                    f"- **Fix Type**: `{fix_type_label}`",
                     "",
                     f"**Vulnerability Finding**:",
                     f"> {issue.message}",
@@ -152,9 +156,17 @@ class ReportGenerator:
                 ])
                 if issue.auto_fix_replacement:
                     lines.extend([
-                        "**Suggested Fix / Code Replacement**:",
+                        "**Automatic Fix (Mechanically Safe)**:",
                         "```c",
                         issue.auto_fix_replacement,
+                        "```",
+                        "",
+                    ])
+                elif issue.suggested_fix_replacement:
+                    lines.extend([
+                        "**Suggested Fix (Manual Verification Required)**:",
+                        "```c",
+                        issue.suggested_fix_replacement,
                         "```",
                         "",
                     ])
@@ -190,12 +202,18 @@ class ReportGenerator:
         lines.append("")
         for issue in result.issues:
             sev_tag = f"[{issue.impact.value.upper()}]"
+            fix_type_label = issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type)
             lines.append(f" {sev_tag:<8} {issue.file_path}:{issue.line_number} -> {issue.rule_name} ({issue.rule_id})")
             lines.append(f"          Detail: {issue.message}")
             if issue.code_snippet:
                 lines.append(f"          Code  : {issue.code_snippet}")
             lines.append(f"          CWE   : {issue.cwe_id}")
+            lines.append(f"          Fix Type: {fix_type_label}")
             lines.append(f"          Fix   : {issue.remediation}")
+            if issue.auto_fix_replacement:
+                lines.append(f"          Auto-Fix : {issue.auto_fix_replacement}")
+            elif issue.suggested_fix_replacement:
+                lines.append(f"          Suggested: {issue.suggested_fix_replacement}")
             lines.append("")
 
         lines.append("=======================================================================")

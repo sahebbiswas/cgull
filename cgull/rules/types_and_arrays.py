@@ -5,7 +5,7 @@ Rules for Arrays, Integer Overflows, VLAs, Bitwise Operations, and Magic Numbers
 import re
 from typing import List, Optional
 from .base import BaseRule
-from ..models import Severity, RuleCategory, Issue, AnalysisEngine
+from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext
 
 
@@ -36,7 +36,8 @@ class VariableLengthArraysRule(BaseRule):
                         message=f"Variable Length Array (VLA) '{var.name}[{var.array_size_expr}]' allocated on stack. Dynamic stack allocation causes stack smashing / exhaustion.",
                         column_number=1,
                         engine="AST",
-                        auto_fix_replacement=f"char *{var.name} = (char *)malloc({var.array_size_expr});"
+                        fix_type=FixType.SUGGESTED_FIX,
+                        suggested_fix_replacement=f"char *{var.name} = (char *)malloc({var.array_size_expr});"
                     ))
         return issues
 
@@ -82,7 +83,8 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                             message=f"Static Array Out-of-Bounds: index [{idx_val}] exceeds declared dimension of '{arr_name}[{declared_size}]'.",
                             column_number=m.start() + 1,
                             engine="Regex",
-                            auto_fix_replacement=f"{arr_name}[{declared_size - 1}]"
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=f"{arr_name}[{declared_size - 1}]"
                         ))
                     break
         return issues
@@ -129,7 +131,8 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                     message=f"Unchecked integer arithmetic '{var1} {op} {var2}' in memory allocation argument. May wrap around to small buffer causing heap corruption.",
                     column_number=m.start() + 1,
                     engine="Regex",
-                    auto_fix_replacement=f"if ({var1} > SIZE_MAX / ({var2})) return -EOVERFLOW;\n{line_content.strip()}"
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"if ({var1} > SIZE_MAX / ({var2})) return -EOVERFLOW;\n{line_content.strip()}"
                 ))
         return issues
 
@@ -164,7 +167,7 @@ class BitwiseOperationsOnSignedIntegersRule(BaseRule):
                 message="Bitwise operation performed on signed/negative integer. In C, shifting signed negative numbers causes Undefined Behavior.",
                 column_number=m.start() + 1,
                 engine="Regex",
-                auto_fix_replacement="Use unsigned integer types (uint32_t / unsigned int) for bitwise logic."
+                fix_type=FixType.MANUAL_REVIEW,
             ))
         return issues
 
@@ -197,6 +200,7 @@ class UseOfMagicNumbersRule(BaseRule):
                 message=f"Hardcoded magic number '{num}' in array declaration. Define a named constant (e.g. #define BUFFER_LEN {num}).",
                 column_number=m.start() + 1,
                 engine="Regex",
-                auto_fix_replacement=f"#define BUFFER_CAPACITY {num}"
+                fix_type=FixType.SUGGESTED_FIX,
+                suggested_fix_replacement=f"#define BUFFER_CAPACITY {num}"
             ))
         return issues

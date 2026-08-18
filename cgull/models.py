@@ -22,6 +22,12 @@ class AnalysisEngine(str, Enum):
     HYBRID = "Hybrid"
 
 
+class FixType(str, Enum):
+    SAFE_FIX = "safe_fix"
+    SUGGESTED_FIX = "suggested_fix"
+    MANUAL_REVIEW = "manual_review"
+
+
 class RuleCategory(str, Enum):
     MEMORY = "Memory Management & Allocation"
     STRINGS = "String Operations & Bounds"
@@ -80,6 +86,8 @@ class Issue:
     engine: str = "Regex"
     auto_fix_replacement: Optional[str] = None
     fingerprint: str = ""
+    fix_type: FixType = FixType.MANUAL_REVIEW
+    suggested_fix_replacement: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -94,7 +102,9 @@ class Issue:
             "remediation": self.remediation,
             "cwe_id": self.cwe_id,
             "engine": self.engine,
+            "fix_type": self.fix_type.value if isinstance(self.fix_type, FixType) else str(self.fix_type),
             "auto_fix_replacement": self.auto_fix_replacement,
+            "suggested_fix_replacement": self.suggested_fix_replacement,
             "fingerprint": self.fingerprint,
         }
 

@@ -13,7 +13,7 @@ points at exactly one rule's logic, not at cross-rule interference.
 import unittest
 
 from cgull.engine import CGullScanner
-from cgull.models import AnalysisEngine
+from cgull.models import AnalysisEngine, FixType
 from cgull.rules import get_rule_by_id, get_all_rules, ALL_RULES, RULE_REGISTRY
 
 
@@ -384,6 +384,34 @@ class TestInsecureDataStorage(unittest.TestCase):
         code = 'void f(void) {\n    char *api_key = getenv("API_KEY");\n}'
         issues = scan_with_rule("CGULL-024", code)
         self.assertEqual(len(issues), 0)
+
+
+class TestFixMetadata(unittest.TestCase):
+    def test_unsafe_secret_transformation_has_no_autofix(self):
+        code = 'void f(void) {\n    char *admin_password = "SuperSecret123!";\n}'
+        issues = scan_with_rule("CGULL-024", code)
+        self.assertEqual(len(issues), 1)
+        issue = issues[0]
+        self.assertEqual(issue.fix_type, FixType.MANUAL_REVIEW)
+        self.assertIsNone(issue.auto_fix_replacement)
+
+    def test_mechanically_safe_fix_populates_autofix(self):
+        code = 'void f(char *user_input) {\n    printf(user_input);\n}'
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 1)
+        issue = issues[0]
+        self.assertEqual(issue.fix_type, FixType.SAFE_FIX)
+        self.assertEqual(issue.auto_fix_replacement, 'printf("%s", user_input)')
+        self.assertIsNone(issue.suggested_fix_replacement)
+
+    def test_suggested_fix_populates_suggested_replacement_not_autofix(self):
+        code = 'void f(char *b) {\n    gets(b);\n}'
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        issue = issues[0]
+        self.assertEqual(issue.fix_type, FixType.SUGGESTED_FIX)
+        self.assertIsNone(issue.auto_fix_replacement)
+        self.assertIsNotNone(issue.suggested_fix_replacement)
 
 
 class TestMissingAssertions(unittest.TestCase):

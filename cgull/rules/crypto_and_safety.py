@@ -5,7 +5,7 @@ Rules for Cryptography, Timing Attack Prevention, Type Qualifiers, and Fault Inj
 import re
 from typing import List, Optional
 from .base import BaseRule
-from ..models import Severity, RuleCategory, Issue, AnalysisEngine
+from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
 
 
@@ -145,7 +145,8 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                             message=f"Standard comparison '{callee}()' on security-sensitive values ({raw_args.strip()}) is vulnerable to timing side-channel attacks (CWE-208).",
                             column_number=1,
                             engine="AST",
-                            auto_fix_replacement=f"CRYPTO_memcmp({raw_args})"
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=f"CRYPTO_memcmp({raw_args})"
                         ))
         return issues
 
@@ -170,7 +171,8 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                     message=f"Standard comparison '{func_name}()' on security-sensitive values ({args.strip()}) is vulnerable to timing side-channel attacks (CWE-208).",
                     column_number=m.start() + 1,
                     engine="Regex",
-                    auto_fix_replacement=f"CRYPTO_memcmp({args})"
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"CRYPTO_memcmp({args})"
                 ))
         return issues
 
@@ -358,7 +360,7 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
                                 message=f"Dangerous function pointer conversion for '{target}' (cast between function pointer and data pointer/integer violates ISO C and Control Flow Integrity).",
                                 column_number=1,
                                 engine="AST",
-                                auto_fix_replacement="Use dedicated function pointer typedef instead of void* / int"
+                                fix_type=FixType.MANUAL_REVIEW,
                             ))
 
                     self.generic_visit(node)
@@ -378,7 +380,7 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
                             message=f"Dangerous function pointer conversion for '{target}' (cast between function pointer and data pointer/integer violates ISO C and Control Flow Integrity).",
                             column_number=m.start() + 1,
                             engine="AST",
-                            auto_fix_replacement="Use dedicated function pointer typedef instead of void* / int"
+                            fix_type=FixType.MANUAL_REVIEW,
                         ))
 
         return issues
@@ -396,7 +398,7 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
                 message=f"Dangerous function pointer conversion for '{target}' (cast between function pointer and data pointer/integer violates ISO C and Control Flow Integrity).",
                 column_number=m.start() + 1,
                 engine="Regex",
-                auto_fix_replacement="Use dedicated function pointer typedef instead of void* / int"
+                fix_type=FixType.MANUAL_REVIEW,
             ))
         return issues
 
@@ -427,7 +429,7 @@ class SinglePointOfFailureControlFlowRule(BaseRule):
                     message=f"Security function '{fn.name}' returns simple binary 0/1 boolean. Hardware glitch or single-bit flip can bypass authorization.",
                     column_number=1,
                     engine="AST",
-                    auto_fix_replacement="Use multi-bit status constants (e.g. 0x5A5A5A5A) instead of 1/0"
+                    fix_type=FixType.MANUAL_REVIEW,
                 ))
         return issues
 
@@ -461,6 +463,6 @@ class InsecureDataStorageRule(BaseRule):
                 message=f"Hardcoded sensitive credential/key in plaintext variable '{var_name}' (CWE-312/CWE-798).",
                 column_number=m.start() + 1,
                 engine="Regex",
-                auto_fix_replacement=f"const char *{var_name} = getenv(\"{var_name.upper()}\");"
+                fix_type=FixType.MANUAL_REVIEW,
             ))
         return issues
