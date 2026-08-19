@@ -122,19 +122,21 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        # Skip variable declarations e.g. char username[32]; or int table[10];
-        if re.search(r'^\s*(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?\s*\w+\[\s*\d+\s*\]\s*;', line_content):
-            return issues
-
         # Detect constant out-of-bounds e.g. arr[10] when declared arr[10]
-        m = re.search(r'\b([a-zA-Z_]\w*)\[\s*(\d+)\s*\]', line_content)
-        if m:
+        for m in re.finditer(r'\b([a-zA-Z_]\w*)\[\s*(\d+)\s*\]', line_content):
             arr_name = m.group(1)
             idx_val = int(m.group(2))
-            # Look for declaration in earlier lines
+
+            # Skip array size declarator e.g. char username[32]; or int table[10]; or char dataBuffer[100] = "";
+            prefix = line_content[:m.start()]
+            stmt_prefix = re.split(r'[;{}]', prefix)[-1]
+            if re.search(r'\b(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\s)*$', stmt_prefix):
+                continue
+
+            # Look for declaration in earlier lines or earlier on current line
             decl_pattern = rf'\b(?:char|int|float|double|uint\w+_t|size_t|struct\s+\w+|\w+)\s+(?:\*|\s)*\b{re.escape(arr_name)}\s*\[\s*(\d+)\s*\]'
-            for prev_idx in range(0, line_number - 1):
-                prev_line = source_lines[prev_idx]
+            for prev_idx in range(0, line_number):
+                prev_line = line_content[:m.start()] if prev_idx == line_number - 1 else source_lines[prev_idx]
                 decl_m = re.search(decl_pattern, prev_line)
                 if decl_m:
                     declared_size = int(decl_m.group(1))
