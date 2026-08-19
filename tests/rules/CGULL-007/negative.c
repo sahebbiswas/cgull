@@ -17,3 +17,20 @@ void test_fp_declaration_line(void) {
     int buffer[100];
     (void)buffer;
 }
+
+/* False-Positive Regression: Array declaration with initializer */
+void test_fp_declaration_with_initializer(void) {
+    char dataBuffer[100] = "";
+    (void)dataBuffer;
+}
+
+/* False-Positive Regression: Array declaration with initializer after earlier declaration */
+void other_function_decl(void) {
+    char dataBuffer[100];
+    dataBuffer[0] = 'x';
+}
+
+void test_fp_declaration_with_initializer_and_prior_decl(void) {
+    char dataBuffer[100] = "";
+    (void)dataBuffer;
+}

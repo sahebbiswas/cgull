@@ -59,8 +59,8 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        # Skip variable declarations e.g. char username[32]; or int table[10];
-        if re.search(r'^\s*(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?\s*\w+\[\s*\d+\s*\]\s*;', line_content):
+        # Skip variable declarations e.g. char username[32]; or int table[10]; or char dataBuffer[100] = "";
+        if re.search(r'^\s*(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?\s*\w+\[\s*\d+\s*\]\s*(?:=.*)?;', line_content):
             return issues
 
         # Detect constant out-of-bounds e.g. arr[10] when declared arr[10]
