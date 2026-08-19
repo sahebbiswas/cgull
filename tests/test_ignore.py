@@ -245,6 +245,12 @@ class TestShouldPruneDir(unittest.TestCase):
         self.assertFalse(self.filter.should_prune_dir(self._p("vendor")))
         self.assertFalse(self.filter.should_prune_dir(self._p(".git")))
 
+    def test_embedded_double_star_negation_prevents_pruning(self):
+        self.filter.load_from_text("vendor/\n!vendor/**.c")
+        self.assertFalse(self.filter.should_prune_dir(self._p("vendor")))
+        self.assertFalse(self.filter.should_prune_dir(self._p("vendor/sub")))
+        self.assertTrue(self.filter.should_prune_dir(self._p(".git")))
+
 
 if __name__ == "__main__":
     unittest.main()

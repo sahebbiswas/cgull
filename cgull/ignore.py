@@ -226,7 +226,7 @@ class CGullIgnoreFilter:
             for i in range(min(len(rel_parts), len(neg_parts))):
                 neg_p = neg_parts[i]
                 rel_p = rel_parts[i]
-                if neg_p == "**":
+                if "**" in neg_p:
                     return True
                 if not fnmatch.fnmatch(rel_p, neg_p):
                     possible = False
