@@ -23,7 +23,7 @@ def _is_sensitive_identifier(token: str) -> bool:
     if any(non_sec in t for non_sec in non_sec_terms):
         return False
 
-    if any(k in t for k in ['secret', 'password', 'passwd', 'token', 'auth', 'hash', 'digest', 'mac', 'hmac', 'pin', 'cert', 'credential', 'cred', 'privkey', 'private_key', 'session', 'apikey', 'api_key']):
+    if any(k in t for k in ['secret', 'password', 'passwd', 'token', 'auth', 'hash', 'digest', 'mac', 'hmac', 'pin', 'cert', 'credential', 'cred', 'privkey', 'private_key', 'session', 'apikey', 'api_key', 'nonce', 'salt', 'iv', 'seed']):
         if 'sig' in t and not ('signature' in t or 'sig' in t.split('_') or t.startswith('sig') or t.endswith('sig')):
             return False
         if 'pass' in t and not ('password' in t or 'passwd' in t or 'pass' in t.split('_') or t.startswith('pass') or t.endswith('pass')):
@@ -400,6 +400,113 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
                 engine="Regex",
                 fix_type=FixType.MANUAL_REVIEW,
             ))
+        return issues
+
+
+class NoInsecureRandRule(BaseRule):
+    rule_id = "CGULL-028"
+    name = "Insecure PRNG for Security-Sensitive Use"
+    impact = Severity.HIGH
+    category = RuleCategory.CRYPTO
+    description = "rand(), random(), drand48(), or srand(time(NULL)) are non-cryptographic PRNGs and vulnerable to prediction or seed recovery when used for security-sensitive values."
+    implementation_method = "AST function calls / AST variable tracking & regex pattern matching in security-sensitive contexts"
+    implementation_complexity = "Medium"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-338"
+    remediation_suggestion = "Replace rand()/random()/srand() with cryptographically secure random sources such as getrandom(), arc4random(), arc4random_buf(), or OpenSSL RAND_bytes()."
+    sample_vulnerable_code = "int token = rand();\nsrand(time(NULL));"
+    sample_remediated_code = "uint32_t token = arc4random();\n// Or getrandom(&token, sizeof(token), 0);"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        target_funcs = {"rand", "random", "drand48", "mrand48", "lrand48", "srand", "srandom"}
+
+        for fn in ast_ctx.functions:
+            fn_is_sec_ctx = _is_security_function_context(fn.name)
+
+            # Build scope symbol types and names
+            var_types: dict = {}
+            for p in fn.parameters:
+                var_types[p.name] = p.type_name.lower()
+            for v_name, v_obj in fn.variables.items():
+                var_types[v_name] = v_obj.type_name.lower()
+            for g_name, g_obj in ast_ctx.global_variables.items():
+                if g_name not in var_types:
+                    var_types[g_name] = g_obj.type_name.lower()
+
+            for callee, line_no, raw_args in fn.calls:
+                if callee in target_funcs:
+                    line_content = ast_ctx.source_lines[line_no - 1] if 1 <= line_no <= len(ast_ctx.source_lines) else ""
+                    should_flag = False
+
+                    if callee in {"srand", "srandom"}:
+                        if any(p in raw_args for p in ["time", "getpid", "clock", "0", "NULL"]) or fn_is_sec_ctx:
+                            should_flag = True
+                        else:
+                            tokens = re.findall(r'\b[a-zA-Z_]\w*\b', line_content)
+                            if any(_is_sensitive_identifier(t) for t in tokens):
+                                should_flag = True
+                    else:
+                        if fn_is_sec_ctx:
+                            should_flag = True
+
+                        tokens = re.findall(r'\b[a-zA-Z_]\w*\b', line_content)
+                        if any(_is_sensitive_identifier(t) for t in tokens if t not in target_funcs):
+                            should_flag = True
+
+                        for t_tok in tokens:
+                            if _is_sensitive_type(var_types.get(t_tok, "")):
+                                should_flag = True
+                                break
+
+                    if should_flag:
+                        snippet = line_content.strip() if line_content else f"{callee}({raw_args})"
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=snippet,
+                            message=f"Use of predictable pseudo-random number generator '{callee}()' in security-sensitive context (CWE-338).",
+                            column_number=1,
+                            engine="AST",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement="getrandom(), arc4random(), or OpenSSL RAND_bytes()"
+                        ))
+
+        return issues
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        target_regex = re.compile(r'\b(rand|random|drand48|mrand48|lrand48)\s*\(\s*\)|\b(srand|srandom)\s*\(([^)]*)\)')
+        m = target_regex.search(line_content)
+        if m:
+            callee = m.group(1) or m.group(2)
+            args = m.group(3) if m.group(3) else ""
+            should_flag = False
+
+            if callee in ("srand", "srandom"):
+                if any(p in args for p in ["time", "getpid", "clock", "0", "NULL"]):
+                    should_flag = True
+                else:
+                    tokens = re.findall(r'\b[a-zA-Z_]\w*\b', line_content)
+                    if any(_is_sensitive_identifier(t) for t in tokens):
+                        should_flag = True
+            else:
+                tokens = re.findall(r'\b[a-zA-Z_]\w*\b', line_content)
+                if any(_is_sensitive_identifier(t) for t in tokens if t != callee):
+                    should_flag = True
+
+            if should_flag:
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=f"Use of predictable pseudo-random number generator '{callee}()' in security-sensitive context (CWE-338).",
+                    column_number=m.start() + 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement="getrandom(), arc4random(), or OpenSSL RAND_bytes()"
+                ))
         return issues
 
 

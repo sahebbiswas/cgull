@@ -201,6 +201,7 @@ C-GULL implements all 25 security audit rules from the core specification:
 | **CGULL-023** | Uninitialized Memory Use | **High** | Memory | CWE-457 | AST | Identifies local variables read before explicit assignment. |
 | **CGULL-024** | Insecure Data Storage | **Medium** | Crypto | CWE-312 / 798 | Regex | Flags hardcoded passwords, tokens, and encryption keys in plaintext static memory. |
 | **CGULL-025** | Missing Assertions | **Low** | Code Quality | CWE-617 | AST | Enforces `assert()` validations for state invariants in critical complex routines. |
+| **CGULL-028** | Insecure PRNG for Security Use | **High** | Crypto | CWE-338 | Hybrid | Flags `rand()`, `random()`, or `srand(time(NULL))` calls in security-sensitive contexts. |
 
 ---
 

@@ -448,6 +448,23 @@ class TestMissingAssertions(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestInsecurePRNG(unittest.TestCase):
+    def test_detects_rand_for_token(self):
+        code = "void f(void) {\n    int token = rand();\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_srand_time(self):
+        code = "void f(void) {\n    srand(time(NULL));\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_arc4random(self):
+        code = "void f(uint32_t *token) {\n    *token = arc4random();\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 
