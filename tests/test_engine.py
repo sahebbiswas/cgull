@@ -188,7 +188,7 @@ class TestEngineModes(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def test_rule_exception_does_not_fail_file(self):
+    def test_rule_exception_fails_file_and_reports_scan_error(self):
         from cgull.rules.base import BaseRule
         class BuggyRule(BaseRule):
             rule_id = "BUGGY-001"
@@ -199,8 +199,11 @@ class TestEngineModes(unittest.TestCase):
 
         scanner = CGullScanner(rules=[BuggyRule()])
         result = scanner.scan_text("int main() { return 0; }", "app.c")
-        self.assertEqual(result.files_failed, 0)
-        self.assertEqual(result.get_overall_analysis_status(), "success")
+        self.assertEqual(result.files_failed, 1)
+        self.assertEqual(result.get_overall_analysis_status(), "failed")
+        self.assertEqual(len(result.scan_errors), 1)
+        self.assertEqual(result.scan_errors[0].error_type, "RuntimeError")
+        self.assertEqual(result.scan_errors[0].message, "Buggy rule crashed!")
 
 
 class TestParallelWorkerFunction(unittest.TestCase):

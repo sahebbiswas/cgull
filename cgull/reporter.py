@@ -4,9 +4,28 @@ Generates structured JSON, SARIF 2.1.0, Markdown audit summaries, and terminal o
 """
 
 import json
+import re
 from typing import Dict, Any, List
 from .models import ScanResult, Severity, FixType
 from . import __version__
+
+
+_ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _escape_markdown_cell(text: str) -> str:
+    s = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    s = s.replace("|", "\\|")
+    s = s.replace("`", "\\`")
+    return s
+
+
+def _sanitize_terminal_text(text: str) -> str:
+    s = _ANSI_RE.sub("", text)
+    s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    s = _CONTROL_CHAR_RE.sub("", s)
+    return s
 
 
 class ReportGenerator:
@@ -182,7 +201,10 @@ class ReportGenerator:
                 "| :--- | :--- | :--- |",
             ])
             for err in result.scan_errors:
-                lines.append(f"| `{err.file_path}` | `{err.error_type}` | {err.message} |")
+                p = _escape_markdown_cell(err.file_path)
+                t = _escape_markdown_cell(err.error_type)
+                m = _escape_markdown_cell(err.message)
+                lines.append(f"| `{p}` | `{t}` | {m} |")
 
         if not result.issues:
             msg = "🎉 *No new vulnerabilities since baseline!*" if result.is_baseline_filtered else "🎉 *No vulnerabilities detected! The code complies with all checked security rules.*"
@@ -268,7 +290,10 @@ class ReportGenerator:
                 "=======================================================================",
             ])
             for err in result.scan_errors:
-                lines.append(f" [ERROR] {err.file_path} -> [{err.error_type}] {err.message}")
+                p = _sanitize_terminal_text(err.file_path)
+                t = _sanitize_terminal_text(err.error_type)
+                m = _sanitize_terminal_text(err.message)
+                lines.append(f" [ERROR] {p} -> [{t}] {m}")
             lines.append("=======================================================================")
 
         if not result.issues:

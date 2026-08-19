@@ -457,21 +457,18 @@ def _scan_file_content(
                 for rule in rules:
                     if engine_mode == AnalysisEngine.HYBRID and rule.analysis_engine == AnalysisEngine.AST:
                         continue
-                    try:
-                        found = rule.scan_line(
-                            file_path=file_path,
-                            line_number=line_no,
-                            line_content=line,
-                            full_code=clean_code,
-                            source_lines=clean_lines,
-                            masked_line_content=masked_line,
-                        )
-                        for iss in found:
-                            if iss.confidence is None:
-                                iss.confidence = Confidence(confidence_val)
-                            add_issue_if_unique(iss)
-                    except Exception:
-                        pass
+                    found = rule.scan_line(
+                        file_path=file_path,
+                        line_number=line_no,
+                        line_content=line,
+                        full_code=clean_code,
+                        source_lines=clean_lines,
+                        masked_line_content=masked_line,
+                    )
+                    for iss in found:
+                        if iss.confidence is None:
+                            iss.confidence = Confidence(confidence_val)
+                        add_issue_if_unique(iss)
 
         # 2. AST Pass
         if engine_mode in (AnalysisEngine.AST, AnalysisEngine.HYBRID):
@@ -480,14 +477,11 @@ def _scan_file_content(
                 parser_status = ast_ctx.parser_status
                 confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
             for rule in rules:
-                try:
-                    ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
-                    for iss in ast_found:
-                        if iss.confidence is None:
-                            iss.confidence = Confidence(confidence_val)
-                        add_issue_if_unique(iss)
-                except Exception:
-                    pass
+                ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
+                for iss in ast_found:
+                    if iss.confidence is None:
+                        iss.confidence = Confidence(confidence_val)
+                    add_issue_if_unique(iss)
 
     except Exception as e:
         issues = []

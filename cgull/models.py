@@ -250,7 +250,6 @@ class ScanResult:
     timestamp: str
     issues: List[Issue] = field(default_factory=list)
     file_summaries: List[FileScanSummary] = field(default_factory=list)
-    scan_errors: List[ScanError] = field(default_factory=list)
     ignored_paths: List[str] = field(default_factory=list)
     failed_paths: List[str] = field(default_factory=list)
     files_discovered: int = 0
@@ -267,6 +266,7 @@ class ScanResult:
     baseline_new_count: Optional[int] = None
     baseline_resolved_count: Optional[int] = None
     baseline_total_before_filter: Optional[int] = None
+    scan_errors: List[ScanError] = field(default_factory=list)
 
     def get_overall_parser_status(self) -> str:
         if self.overall_parser_status:

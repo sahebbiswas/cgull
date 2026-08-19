@@ -226,6 +226,22 @@ class TestReportGeneratorMarkdown(unittest.TestCase):
             self.assertIn("## ⚠️ Scan Errors", output)
             self.assertIn("`broken.c`", output)
 
+    def test_markdown_reports_scan_errors_escapes_special_characters(self):
+        from cgull.models import ScanError
+        err = ScanError(
+            file_path="foo|bar`baz\n.c",
+            error_type="Error|Type`Bad\r\n",
+            message="Line 1|Line 2`Line 3\nLine 4",
+        )
+        res = self.scanner.scan_text(CLEAN_CODE, "clean.c")
+        res.scan_errors = [err]
+        output = ReportGenerator.to_markdown(res)
+        self.assertIn("## ⚠️ Scan Errors", output)
+        self.assertIn("foo\\|bar", output)
+        self.assertIn("\\`", output)
+        error_table_lines = [line for line in output.splitlines() if "foo" in line]
+        self.assertEqual(len(error_table_lines), 1)
+
 
 class TestReportGeneratorTerminal(unittest.TestCase):
     def setUp(self):
@@ -258,6 +274,22 @@ class TestReportGeneratorTerminal(unittest.TestCase):
             output = ReportGenerator.to_terminal_text(result)
             self.assertIn("SCAN ERRORS", output)
             self.assertIn("broken.c", output)
+
+    def test_terminal_reports_scan_errors_sanitizes_ansi_and_control_chars(self):
+        from cgull.models import ScanError
+        err = ScanError(
+            file_path="\x1b[31mhostile\x1b[0m.c\n",
+            error_type="Error\x00Type",
+            message="Line 1\nForged Line: [SUCCESS]",
+        )
+        res = self.scanner.scan_text(CLEAN_CODE, "clean.c")
+        res.scan_errors = [err]
+        output = ReportGenerator.to_terminal_text(res)
+        self.assertIn("SCAN ERRORS", output)
+        self.assertNotIn("\x1b[31m", output)
+        self.assertNotIn("\x00", output)
+        self.assertIn("hostile.c", output)
+        self.assertIn("Line 1 Forged Line: [SUCCESS]", output)
 
 
 if __name__ == "__main__":

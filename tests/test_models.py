@@ -141,6 +141,22 @@ class TestScanResultSerialization(unittest.TestCase):
         self.assertEqual(len(d["scan_errors"]), 1)
         self.assertEqual(d["scan_errors"][0]["error_type"], "PermissionError")
 
+    def test_positional_arguments_compatibility(self):
+        issue = Issue(rule_id="CGULL-001", rule_name="Banned", impact=Severity.HIGH, file_path="a.c", line_number=1)
+        fs = FileScanSummary(file_path="a.c", lines_of_code=10, issues_count=1, high_count=1, medium_count=0, low_count=0, scan_duration_ms=0.5)
+        # Verify positional construction up to legacy positional fields
+        res = ScanResult(
+            "src/", 1, 10, 1, 1, 0, 0, 0.5, "timestamp",
+            [issue], [fs], ["ignored.c"], ["failed.c"]
+        )
+        self.assertEqual(res.target_path, "src/")
+        self.assertEqual(res.scanned_files_count, 1)
+        self.assertEqual(res.issues, [issue])
+        self.assertEqual(res.file_summaries, [fs])
+        self.assertEqual(res.ignored_paths, ["ignored.c"])
+        self.assertEqual(res.failed_paths, ["failed.c"])
+        self.assertEqual(res.scan_errors, [])
+
 
 class TestParserStatusAndConfidenceEnums(unittest.TestCase):
     def test_enum_values(self):
