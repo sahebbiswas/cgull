@@ -564,7 +564,8 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
             body_lines = fn.body.splitlines()
 
             # Map memset calls in function
-            for callee, line_no, raw_args in fn.calls:
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
                 if callee == "memset":
                     # Parse args: memset(buf, 0, len)
                     arg_parts = [a.strip() for a in raw_args.split(',')]

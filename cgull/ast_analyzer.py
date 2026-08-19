@@ -349,9 +349,12 @@ class _ASTFunctionAnalyzer:
         class Visitor(c_ast.NodeVisitor):
             def __init__(self, outer: "_ASTFunctionAnalyzer"):
                 self.outer = outer
+                self.current_target_var: Optional[str] = None
 
             def visit_Decl(self, node):
+                prev_target = self.current_target_var
                 if node.name and type(node.type).__name__ != "FuncDecl":
+                    self.current_target_var = node.name
                     line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
                     tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(node.type)
                     c_var = CVariable(
@@ -394,8 +397,10 @@ class _ASTFunctionAnalyzer:
                     )
                     self.outer.owning_fn.cfg_nodes.append(cfg_n)
                 self.generic_visit(node)
+                self.current_target_var = prev_target
 
             def visit_Assignment(self, node):
+                prev_target = self.current_target_var
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
                 lval_ids = _extract_identifiers_from_ast(node.lvalue)
                 rval_ids = _extract_identifiers_from_ast(node.rvalue)
@@ -422,14 +427,22 @@ class _ASTFunctionAnalyzer:
                     read_vars=rval_ids,
                 )
                 self.outer.owning_fn.cfg_nodes.append(cfg_n)
+                self.current_target_var = target
                 self.generic_visit(node)
+                self.current_target_var = prev_target
+
+            def visit_Return(self, node):
+                prev_target = self.current_target_var
+                self.current_target_var = "return"
+                self.generic_visit(node)
+                self.current_target_var = prev_target
 
             def visit_FuncCall(self, node):
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
                 callee = _format_pycparser_expr(node.name)
                 raw_args = _format_pycparser_expr(node.args) if node.args else ""
                 if callee not in ('if', 'for', 'while', 'switch', 'sizeof', 'typeof', '__attribute__'):
-                    self.outer.owning_fn.calls.append((callee, line_no, raw_args))
+                    self.outer.owning_fn.calls.append((callee, line_no, raw_args, self.current_target_var))
 
                 arg_ids = _extract_identifiers_from_ast(node.args) if node.args else set()
                 freed_set: Set[str] = set()
@@ -928,7 +941,17 @@ class CASTParser:
                 callee = match.group(1)
                 args = match.group(2)
                 if callee not in ('if', 'for', 'while', 'switch', 'sizeof', 'typeof', '__attribute__'):
-                    fn.calls.append((callee, line_no, args))
+                    target_var = None
+                    m_target = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?\s*=\s*(?:[^{;]*?)\b' + re.escape(callee) + r'\b', line)
+                    if m_target:
+                        target_var = m_target.group(1)
+                    else:
+                        start_idx = max(0, i - 3)
+                        combined = " ".join(body_lines[start_idx:i+1])
+                        m_target2 = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?\s*=\s*(?:[^{;]*?)\b' + re.escape(callee) + r'\b', combined)
+                        if m_target2:
+                            target_var = m_target2.group(1)
+                    fn.calls.append((callee, line_no, args, target_var))
 
         C_KEYWORDS = {
             'return', 'break', 'continue', 'goto', 'case', 'default', 'if', 'else', 'for', 'while',
