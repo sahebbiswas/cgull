@@ -59,43 +59,49 @@ class SizeofOnPointerRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
-        source_lines = ast_ctx.source_lines
+
         for fn in ast_ctx.functions:
-            # We must map body_lines index to source lines using fn_start, BUT
-            # fn.body might have leading newlines or might not perfectly align
-            # with start_line if formatting differs. However, for most rules, iterating
-            # through the actual line numbers between fn.start_line and fn.end_line
-            # from source_lines is safer.
+            for node in fn.cfg_nodes:
+                if node.kind != "sizeof":
+                    continue
 
-            for line_no in range(fn.start_line, fn.end_line + 1):
-                # Use source lines to match sizeof to get accurate line content and position.
-                source_line = source_lines[line_no - 1] if line_no <= len(source_lines) else ""
+                # node.expr_str will be "sizeof(...)"
+                m = re.match(r'^sizeof\s*\(\s*([a-zA-Z_]\w*)\s*\)$', node.expr_str)
+                if not m:
+                    continue
 
-                # Match sizeof(var) where var is an identifier
-                for m in re.finditer(r'\bsizeof\s*\(\s*([a-zA-Z_]\w*)\s*\)', source_line):
-                    var_name = m.group(1)
+                var_name = m.group(1)
 
-                    is_ptr = False
-                    if var_name in fn.variables:
-                        if fn.variables[var_name].is_pointer or '*' in fn.variables[var_name].type_name or '*' in fn.variables[var_name].name:
+                is_ptr = False
+                if var_name in fn.variables:
+                    if fn.variables[var_name].is_pointer or '*' in fn.variables[var_name].type_name or '*' in fn.variables[var_name].name:
+                        is_ptr = True
+                elif var_name in ast_ctx.global_variables:
+                    if ast_ctx.global_variables[var_name].is_pointer or '*' in ast_ctx.global_variables[var_name].type_name or '*' in ast_ctx.global_variables[var_name].name:
+                        is_ptr = True
+                else:
+                    for param in fn.parameters:
+                        if param.name == var_name and (param.is_pointer or '*' in param.type_name or '*' in param.name):
                             is_ptr = True
-                    else:
-                        for param in fn.parameters:
-                            if param.name == var_name and (param.is_pointer or '*' in param.type_name or '*' in param.name):
-                                is_ptr = True
-                                break
+                            break
 
-                    if is_ptr:
-                        issues.append(self.create_issue(
-                            file_path=file_path,
-                            line_number=line_no,
-                            code_snippet=source_line.strip(),
-                            message=f"sizeof() used on pointer type '{var_name}'. This returns the size of the pointer, not the allocated memory.",
-                            column_number=m.start() + 1,
-                            engine="AST",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=source_line.replace(f"sizeof({var_name})", f"sizeof(*{var_name})").strip()
-                        ))
+                if is_ptr:
+                    # Get snippet safely from clean_source or source_lines
+                    line_no = node.line_number
+                    if line_no > 0 and line_no <= len(ast_ctx.source_lines):
+                        code_snippet = ast_ctx.source_lines[line_no - 1].strip()
+                    else:
+                        code_snippet = node.expr_str
+
+                    issues.append(self.create_issue(
+                        file_path=file_path,
+                        line_number=node.line_number,
+                        code_snippet=code_snippet,
+                        message=f"sizeof() used on pointer type '{var_name}'. This returns the size of the pointer, not the allocated memory.",
+                        column_number=1,
+                        engine="AST",
+                        fix_type=FixType.MANUAL_REVIEW,
+                    ))
         return issues
 
 
