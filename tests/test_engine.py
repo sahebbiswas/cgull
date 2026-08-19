@@ -59,12 +59,20 @@ class TestScanPathUnreadableFile(unittest.TestCase):
                 os.symlink(os.path.join(temp_dir, "does_not_exist_target"), broken_link)
             except OSError:
                 self.skipTest("Symlinks not supported or permitted on this platform/privilege level")
-            result = CGullScanner().scan_path(temp_dir)
-            self.assertEqual(result.files_discovered, 2)  # both discovered
-            self.assertEqual(result.files_analyzed, 1)    # good.c analyzed
-            self.assertEqual(result.files_failed, 1)      # bad.c failed
-            self.assertEqual(len(result.file_summaries), 2)  # summaries for both
-            self.assertTrue(any("good.c" in fs.file_path for fs in result.file_summaries))
+            res_seq = CGullScanner().scan_path(temp_dir, jobs=1)
+            res_par = CGullScanner().scan_path(temp_dir, jobs=2)
+
+            for result in (res_seq, res_par):
+                self.assertEqual(result.files_discovered, 2)  # both discovered
+                self.assertEqual(result.files_analyzed, 1)    # good.c analyzed
+                self.assertEqual(result.files_failed, 1)      # bad.c failed
+                self.assertEqual(len(result.file_summaries), 2)  # summaries for both
+                self.assertTrue(any("good.c" in fs.file_path for fs in result.file_summaries))
+                self.assertEqual(len(result.scan_errors), 1)
+                err = result.scan_errors[0]
+                self.assertEqual(err.file_path, "bad.c")
+                self.assertTrue(err.error_type)
+                self.assertTrue(err.message)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -202,13 +210,14 @@ class TestParallelWorkerFunction(unittest.TestCase):
             file_path = os.path.join(temp_dir, "sample.c")
             with open(file_path, "w") as f:
                 f.write(VULNERABLE_CODE)
-            issues, loc, duration_ms, parser_status, status, confidence = _scan_file_worker(file_path, AnalysisEngine.HYBRID)
+            issues, loc, duration_ms, parser_status, status, confidence, err = _scan_file_worker(file_path, AnalysisEngine.HYBRID)
             self.assertGreaterEqual(len(issues), 1)
             self.assertGreater(loc, 0)
             self.assertGreaterEqual(duration_ms, 0)
             self.assertIn(parser_status, ["pycparser-success", "fallback-parser"])
             self.assertEqual(status, "success")
             self.assertIn(confidence, ["FULL", "FALLBACK"])
+            self.assertIsNone(err)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

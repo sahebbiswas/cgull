@@ -63,6 +63,19 @@ class TestReportGeneratorJSON(unittest.TestCase):
         self.assertEqual(parsed["summary"]["total_issues_count"], 0)
         self.assertEqual(parsed["issues"], [])
 
+    def test_json_reports_scan_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            broken = os.path.join(tmpdir, "broken.c")
+            try:
+                os.symlink(os.path.join(tmpdir, "nope"), broken)
+            except OSError:
+                self.skipTest("Symlinks not supported")
+            result = self.scanner.scan_path(tmpdir)
+            parsed = json.loads(ReportGenerator.to_json(result))
+            self.assertEqual(parsed["summary"]["files_failed"], 1)
+            self.assertEqual(len(parsed["scan_errors"]), 1)
+            self.assertEqual(parsed["scan_errors"][0]["file_path"], "broken.c")
+
 
 class TestReportGeneratorSARIF(unittest.TestCase):
     def setUp(self):
@@ -158,6 +171,27 @@ class TestReportGeneratorSARIF(unittest.TestCase):
         self.assertTrue(fp)
         self.assertEqual(fp, result.issues[0].fingerprint)
 
+    def test_sarif_reports_scan_errors_and_validates_schema(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            broken = os.path.join(tmpdir, "broken.c")
+            try:
+                os.symlink(os.path.join(tmpdir, "nope"), broken)
+            except OSError:
+                self.skipTest("Symlinks not supported")
+            result = self.scanner.scan_path(tmpdir)
+            sarif_str = ReportGenerator.to_sarif(result)
+            parsed = json.loads(sarif_str)
+
+            # Validate against official SARIF 2.1.0 schema
+            jsonschema.validate(instance=parsed, schema=SARIF_SCHEMA)
+
+            inv = parsed["runs"][0]["invocations"][0]
+            self.assertFalse(inv["executionSuccessful"])
+            self.assertEqual(inv["properties"]["filesFailed"], 1)
+            self.assertEqual(len(inv["properties"]["scanErrors"]), 1)
+            self.assertIn("toolExecutionNotifications", inv)
+            self.assertEqual(len(inv["toolExecutionNotifications"]), 1)
+
 
 class TestReportGeneratorMarkdown(unittest.TestCase):
     def setUp(self):
@@ -180,6 +214,18 @@ class TestReportGeneratorMarkdown(unittest.TestCase):
         output = ReportGenerator.to_markdown(result)
         self.assertIn("Suggested Fix", output)
 
+    def test_markdown_reports_scan_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            broken = os.path.join(tmpdir, "broken.c")
+            try:
+                os.symlink(os.path.join(tmpdir, "nope"), broken)
+            except OSError:
+                self.skipTest("Symlinks not supported")
+            result = self.scanner.scan_path(tmpdir)
+            output = ReportGenerator.to_markdown(result)
+            self.assertIn("## ⚠️ Scan Errors", output)
+            self.assertIn("`broken.c`", output)
+
 
 class TestReportGeneratorTerminal(unittest.TestCase):
     def setUp(self):
@@ -200,6 +246,18 @@ class TestReportGeneratorTerminal(unittest.TestCase):
         result = self.scanner.scan_text(VULNERABLE_CODE, "sample.c")
         output = ReportGenerator.to_terminal_text(result)
         self.assertIn(f"Total Findings   : {result.total_issues_count}", output)
+
+    def test_terminal_reports_scan_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            broken = os.path.join(tmpdir, "broken.c")
+            try:
+                os.symlink(os.path.join(tmpdir, "nope"), broken)
+            except OSError:
+                self.skipTest("Symlinks not supported")
+            result = self.scanner.scan_path(tmpdir)
+            output = ReportGenerator.to_terminal_text(result)
+            self.assertIn("SCAN ERRORS", output)
+            self.assertIn("broken.c", output)
 
 
 if __name__ == "__main__":

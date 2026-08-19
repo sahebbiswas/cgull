@@ -211,6 +211,16 @@ class Issue:
 
 
 @dataclass
+class ScanError:
+    file_path: str
+    error_type: str
+    message: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class FileScanSummary:
     file_path: str
     lines_of_code: int
@@ -240,6 +250,7 @@ class ScanResult:
     timestamp: str
     issues: List[Issue] = field(default_factory=list)
     file_summaries: List[FileScanSummary] = field(default_factory=list)
+    scan_errors: List[ScanError] = field(default_factory=list)
     ignored_paths: List[str] = field(default_factory=list)
     failed_paths: List[str] = field(default_factory=list)
     files_discovered: int = 0
@@ -326,6 +337,7 @@ class ScanResult:
             "summary": summary,
             "issues": [issue.to_dict() for issue in self.issues],
             "file_summaries": [fs.to_dict() for fs in self.file_summaries],
+            "scan_errors": [err.to_dict() for err in self.scan_errors],
             "ignored_paths": self.ignored_paths,
             "failed_paths": self.failed_paths,
         }

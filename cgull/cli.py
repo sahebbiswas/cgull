@@ -56,6 +56,7 @@ Suppressing findings inline:
     scan_parser.add_argument("--severity", choices=["high", "medium", "low", "all"], default="all", help="Severity filter threshold")
     scan_parser.add_argument("--engine", choices=["regex", "ast", "hybrid"], default="hybrid", help="Scan engine mode (default: hybrid)")
     scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD)")
+    scan_parser.add_argument("--fail-on-error", action="store_true", help="Exit with code 1 if scan errors or file analysis failures occur (useful for CI/CD)")
     scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count.")
     scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
@@ -163,6 +164,8 @@ def handle_scan(args) -> int:
     else:
         print(output_str)
 
+    if args.fail_on_error and (result.files_failed > 0 or len(result.scan_errors) > 0):
+        return 1
     if args.fail_on_high and result.high_severity_count > 0:
         return 1
     return 0

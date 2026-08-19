@@ -4,7 +4,7 @@ Tests for cgull.models: dataclass serialization and enum behavior.
 
 import unittest
 
-from cgull.models import Issue, ScanResult, FileScanSummary, Severity, AnalysisEngine, FixType, ParserStatus, Confidence
+from cgull.models import Issue, ScanResult, FileScanSummary, ScanError, Severity, AnalysisEngine, FixType, ParserStatus, Confidence
 
 
 class TestSeverityEnum(unittest.TestCase):
@@ -107,10 +107,39 @@ class TestScanResultSerialization(unittest.TestCase):
         d = result.to_dict()
         self.assertEqual(d["issues"], [])
         self.assertEqual(d["file_summaries"], [])
+        self.assertEqual(d["scan_errors"], [])
         self.assertEqual(d["ignored_paths"], [])
         self.assertEqual(d["failed_paths"], [])
         self.assertIn("analysis", d)
         self.assertEqual(d["summary"]["files_discovered"], 0)
+
+    def test_scan_error_to_dict_and_result_integration(self):
+        err = ScanError(file_path="broken.c", error_type="PermissionError", message="Permission denied")
+        self.assertEqual(err.to_dict(), {
+            "file_path": "broken.c",
+            "error_type": "PermissionError",
+            "message": "Permission denied",
+        })
+        result = ScanResult(
+            target_path="src/",
+            scanned_files_count=0,
+            total_lines_of_code=0,
+            total_issues_count=0,
+            high_severity_count=0,
+            medium_severity_count=0,
+            low_severity_count=0,
+            scan_duration_seconds=0.1,
+            timestamp="2026-01-01T00:00:00Z",
+            scan_errors=[err],
+            failed_paths=["broken.c"],
+            files_discovered=1,
+            files_analyzed=0,
+            files_failed=1,
+        )
+        d = result.to_dict()
+        self.assertEqual(d["summary"]["files_failed"], 1)
+        self.assertEqual(len(d["scan_errors"]), 1)
+        self.assertEqual(d["scan_errors"][0]["error_type"], "PermissionError")
 
 
 class TestParserStatusAndConfidenceEnums(unittest.TestCase):

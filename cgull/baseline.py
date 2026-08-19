@@ -109,6 +109,7 @@ def apply_baseline(result: ScanResult, baseline_counts: Counter) -> ScanResult:
         timestamp=result.timestamp,
         issues=new_issues,
         file_summaries=result.file_summaries,
+        scan_errors=result.scan_errors,
         ignored_paths=result.ignored_paths,
         failed_paths=result.failed_paths,
         files_discovered=result.files_discovered,

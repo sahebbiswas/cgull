@@ -85,6 +85,31 @@ class ReportGenerator:
         ignored = result.files_ignored or len(result.ignored_paths)
         failed = result.files_failed or len(result.failed_paths)
 
+        inv_props: Dict[str, Any] = {
+            "parser": result.get_overall_parser_status(),
+            "analysisStatus": result.get_overall_analysis_status(),
+            "filesDiscovered": disc,
+            "filesAnalyzed": analyzed,
+            "filesIgnored": ignored,
+            "filesFailed": failed,
+            "scanErrors": [err.to_dict() for err in result.scan_errors],
+        }
+        inv_obj: Dict[str, Any] = {
+            "executionSuccessful": failed == 0,
+            "properties": inv_props,
+        }
+        if result.scan_errors:
+            inv_obj["toolExecutionNotifications"] = [{
+                "descriptor": {"id": err.error_type},
+                "message": {"text": f"{err.file_path}: [{err.error_type}] {err.message}"},
+                "level": "error",
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": err.file_path.replace("\\", "/")}
+                    }
+                }]
+            } for err in result.scan_errors]
+
         sarif_obj = {
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
             "version": "2.1.0",
@@ -98,17 +123,7 @@ class ReportGenerator:
                         "rules": list(rules_dict.values()),
                     }
                 },
-                "invocations": [{
-                    "executionSuccessful": failed == 0,
-                    "properties": {
-                        "parser": result.get_overall_parser_status(),
-                        "analysisStatus": result.get_overall_analysis_status(),
-                        "filesDiscovered": disc,
-                        "filesAnalyzed": analyzed,
-                        "filesIgnored": ignored,
-                        "filesFailed": failed,
-                    }
-                }],
+                "invocations": [inv_obj],
                 "results": results_list
             }]
         }
@@ -157,6 +172,17 @@ class ReportGenerator:
             "## 🚨 Detected Vulnerabilities & Security Findings",
             "",
         ])
+
+        if result.scan_errors:
+            lines.extend([
+                "",
+                "## ⚠️ Scan Errors",
+                "",
+                "| File Path | Error Type | Message |",
+                "| :--- | :--- | :--- |",
+            ])
+            for err in result.scan_errors:
+                lines.append(f"| `{err.file_path}` | `{err.error_type}` | {err.message} |")
 
         if not result.issues:
             msg = "🎉 *No new vulnerabilities since baseline!*" if result.is_baseline_filtered else "🎉 *No vulnerabilities detected! The code complies with all checked security rules.*"
@@ -233,6 +259,17 @@ class ReportGenerator:
                 f"{result.baseline_new_count} new, {result.baseline_resolved_count} resolved since baseline"
             )
         lines.append("=======================================================================")
+
+        if result.scan_errors:
+            lines.extend([
+                "",
+                "=======================================================================",
+                f" ⚠️  SCAN ERRORS ({len(result.scan_errors)} failed file(s))",
+                "=======================================================================",
+            ])
+            for err in result.scan_errors:
+                lines.append(f" [ERROR] {err.file_path} -> [{err.error_type}] {err.message}")
+            lines.append("=======================================================================")
 
         if not result.issues:
             msg = " ✅ No new vulnerabilities since baseline!" if result.is_baseline_filtered else " ✅ No vulnerabilities found. Clean audit!"

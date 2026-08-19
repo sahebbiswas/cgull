@@ -12,6 +12,7 @@ from collections import Counter
 
 from cgull.engine import CGullScanner
 from cgull.baseline import load_baseline_fingerprints, apply_baseline, BaselineError
+from cgull.models import ScanError
 from cgull.reporter import ReportGenerator
 from cgull.utils import compute_issue_fingerprint
 
@@ -158,6 +159,8 @@ class TestBaselineToDictSerialization(unittest.TestCase):
 
     def test_apply_baseline_preserves_scan_completeness_and_analysis_metadata(self):
         result = CGullScanner().scan_text(VULNERABLE_CODE, "app.c")
+        err = ScanError(file_path="failed.c", error_type="PermissionError", message="Permission denied")
+        result.scan_errors = [err]
         result.failed_paths = ["failed.c"]
         result.files_discovered = 5
         result.files_analyzed = 3
@@ -166,6 +169,7 @@ class TestBaselineToDictSerialization(unittest.TestCase):
         result.analysis_status_counts = {"pycparser-success": 3, "parse-failed": 1}
 
         diffed = apply_baseline(result, Counter())
+        self.assertEqual(diffed.scan_errors, [err])
         self.assertEqual(diffed.failed_paths, ["failed.c"])
         self.assertEqual(diffed.files_discovered, 5)
         self.assertEqual(diffed.files_analyzed, 3)
