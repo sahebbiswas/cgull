@@ -42,6 +42,63 @@ class VariableLengthArraysRule(BaseRule):
         return issues
 
 
+class SizeofOnPointerRule(BaseRule):
+    rule_id = "CGULL-029"
+    name = "sizeof() on Pointer Type"
+    impact = Severity.HIGH
+    category = RuleCategory.ARITHMETIC
+    description = "Flag the use of sizeof() on a pointer variable. This returns the size of the pointer (e.g., 4 or 8 bytes) rather than the size of the pointed-to memory block, often leading to heap buffer overflows or incomplete memory clearing."
+    implementation_method = "AST parsing to check if variables passed to sizeof are declared as pointers"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-467"
+    remediation_suggestion = "Use the size of the underlying type (e.g., sizeof(*ptr)) or track the allocated size explicitly."
+    sample_vulnerable_code = "char *ptr = malloc(256);\nmemset(ptr, 0, sizeof(ptr)); // Clears only 8 bytes"
+    sample_remediated_code = "char *ptr = malloc(256);\nmemset(ptr, 0, 256); // Or track size in a variable"
+    analysis_engine = AnalysisEngine.AST
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        source_lines = ast_ctx.source_lines
+        for fn in ast_ctx.functions:
+            # We must map body_lines index to source lines using fn_start, BUT
+            # fn.body might have leading newlines or might not perfectly align
+            # with start_line if formatting differs. However, for most rules, iterating
+            # through the actual line numbers between fn.start_line and fn.end_line
+            # from source_lines is safer.
+
+            for line_no in range(fn.start_line, fn.end_line + 1):
+                # Use source lines to match sizeof to get accurate line content and position.
+                source_line = source_lines[line_no - 1] if line_no <= len(source_lines) else ""
+
+                # Match sizeof(var) where var is an identifier
+                for m in re.finditer(r'\bsizeof\s*\(\s*([a-zA-Z_]\w*)\s*\)', source_line):
+                    var_name = m.group(1)
+
+                    is_ptr = False
+                    if var_name in fn.variables:
+                        if fn.variables[var_name].is_pointer or '*' in fn.variables[var_name].type_name or '*' in fn.variables[var_name].name:
+                            is_ptr = True
+                    else:
+                        for param in fn.parameters:
+                            if param.name == var_name and (param.is_pointer or '*' in param.type_name or '*' in param.name):
+                                is_ptr = True
+                                break
+
+                    if is_ptr:
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=source_line.strip(),
+                            message=f"sizeof() used on pointer type '{var_name}'. This returns the size of the pointer, not the allocated memory.",
+                            column_number=m.start() + 1,
+                            engine="AST",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=source_line.replace(f"sizeof({var_name})", f"sizeof(*{var_name})").strip()
+                        ))
+        return issues
+
+
 class ArrayIndexOutOfBoundsRule(BaseRule):
     rule_id = "CGULL-007"
     name = "Array Index Out of Bounds"

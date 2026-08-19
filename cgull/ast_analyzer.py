@@ -437,6 +437,25 @@ class _ASTFunctionAnalyzer:
                 self.generic_visit(node)
                 self.current_target_var = prev_target
 
+            def visit_UnaryOp(self, node):
+                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                if node.op == "sizeof":
+                    expr_str = _format_pycparser_expr(node.expr)
+                    ids = _extract_identifiers_from_ast(node.expr)
+                    self.outer.node_counter += 1
+                    cfg_n = CFGNode(
+                        node_id=self.outer.node_counter,
+                        kind="sizeof",
+                        line_number=line_no,
+                        expr_str=f"sizeof({expr_str})",
+                        read_vars=ids,
+                    )
+                    self.outer.owning_fn.cfg_nodes.append(cfg_n)
+
+                    # Ensure sizeof is treated like a call in fallback as well
+                    self.outer.owning_fn.calls.append(("sizeof", line_no, expr_str, self.current_target_var))
+                self.generic_visit(node)
+
             def visit_FuncCall(self, node):
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
                 callee = _format_pycparser_expr(node.name)
