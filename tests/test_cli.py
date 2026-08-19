@@ -220,6 +220,30 @@ class TestScanCommand(unittest.TestCase):
             code = main(["scan", self.c_file, "-o", bad_path])
         self.assertEqual(code, 1)
 
+    def test_fail_on_error_returns_nonzero_when_scan_errors_occur(self):
+        broken_link = os.path.join(self.temp_dir, "broken.c")
+        try:
+            os.symlink(os.path.join(self.temp_dir, "nonexistent"), broken_link)
+        except OSError:
+            self.skipTest("Symlinks not supported")
+        code, out = self._run(["scan", self.temp_dir, "--fail-on-error"])
+        self.assertEqual(code, 1)
+
+    def test_without_fail_on_error_returns_zero_even_with_scan_errors(self):
+        broken_link = os.path.join(self.temp_dir, "broken.c")
+        try:
+            os.symlink(os.path.join(self.temp_dir, "nonexistent"), broken_link)
+        except OSError:
+            self.skipTest("Symlinks not supported")
+        clean_file = os.path.join(self.temp_dir, "clean.c")
+        with open(clean_file, "w") as f:
+            f.write("void noop(void) {}\n")
+        code, out = self._run(["scan", self.temp_dir, "--format", "json"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(out)
+        self.assertEqual(parsed["summary"]["files_failed"], 1)
+        self.assertEqual(len(parsed["scan_errors"]), 1)
+
 
 class TestBaselineFlags(unittest.TestCase):
     def setUp(self):

@@ -4,9 +4,28 @@ Generates structured JSON, SARIF 2.1.0, Markdown audit summaries, and terminal o
 """
 
 import json
+import re
 from typing import Dict, Any, List
 from .models import ScanResult, Severity, FixType
 from . import __version__
+
+
+_ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _escape_markdown_cell(text: str) -> str:
+    s = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    s = s.replace("|", "\\|")
+    s = s.replace("`", "\\`")
+    return s
+
+
+def _sanitize_terminal_text(text: str) -> str:
+    s = _ANSI_RE.sub("", text)
+    s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    s = _CONTROL_CHAR_RE.sub("", s)
+    return s
 
 
 class ReportGenerator:
@@ -85,6 +104,31 @@ class ReportGenerator:
         ignored = result.files_ignored or len(result.ignored_paths)
         failed = result.files_failed or len(result.failed_paths)
 
+        inv_props: Dict[str, Any] = {
+            "parser": result.get_overall_parser_status(),
+            "analysisStatus": result.get_overall_analysis_status(),
+            "filesDiscovered": disc,
+            "filesAnalyzed": analyzed,
+            "filesIgnored": ignored,
+            "filesFailed": failed,
+            "scanErrors": [err.to_dict() for err in result.scan_errors],
+        }
+        inv_obj: Dict[str, Any] = {
+            "executionSuccessful": failed == 0,
+            "properties": inv_props,
+        }
+        if result.scan_errors:
+            inv_obj["toolExecutionNotifications"] = [{
+                "descriptor": {"id": err.error_type},
+                "message": {"text": f"{err.file_path}: [{err.error_type}] {err.message}"},
+                "level": "error",
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": err.file_path.replace("\\", "/")}
+                    }
+                }]
+            } for err in result.scan_errors]
+
         sarif_obj = {
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
             "version": "2.1.0",
@@ -98,17 +142,7 @@ class ReportGenerator:
                         "rules": list(rules_dict.values()),
                     }
                 },
-                "invocations": [{
-                    "executionSuccessful": failed == 0,
-                    "properties": {
-                        "parser": result.get_overall_parser_status(),
-                        "analysisStatus": result.get_overall_analysis_status(),
-                        "filesDiscovered": disc,
-                        "filesAnalyzed": analyzed,
-                        "filesIgnored": ignored,
-                        "filesFailed": failed,
-                    }
-                }],
+                "invocations": [inv_obj],
                 "results": results_list
             }]
         }
@@ -157,6 +191,20 @@ class ReportGenerator:
             "## 🚨 Detected Vulnerabilities & Security Findings",
             "",
         ])
+
+        if result.scan_errors:
+            lines.extend([
+                "",
+                "## ⚠️ Scan Errors",
+                "",
+                "| File Path | Error Type | Message |",
+                "| :--- | :--- | :--- |",
+            ])
+            for err in result.scan_errors:
+                p = _escape_markdown_cell(err.file_path)
+                t = _escape_markdown_cell(err.error_type)
+                m = _escape_markdown_cell(err.message)
+                lines.append(f"| `{p}` | `{t}` | {m} |")
 
         if not result.issues:
             msg = "🎉 *No new vulnerabilities since baseline!*" if result.is_baseline_filtered else "🎉 *No vulnerabilities detected! The code complies with all checked security rules.*"
@@ -233,6 +281,20 @@ class ReportGenerator:
                 f"{result.baseline_new_count} new, {result.baseline_resolved_count} resolved since baseline"
             )
         lines.append("=======================================================================")
+
+        if result.scan_errors:
+            lines.extend([
+                "",
+                "=======================================================================",
+                f" ⚠️  SCAN ERRORS ({len(result.scan_errors)} failed file(s))",
+                "=======================================================================",
+            ])
+            for err in result.scan_errors:
+                p = _sanitize_terminal_text(err.file_path)
+                t = _sanitize_terminal_text(err.error_type)
+                m = _sanitize_terminal_text(err.message)
+                lines.append(f" [ERROR] {p} -> [{t}] {m}")
+            lines.append("=======================================================================")
 
         if not result.issues:
             msg = " ✅ No new vulnerabilities since baseline!" if result.is_baseline_filtered else " ✅ No vulnerabilities found. Clean audit!"

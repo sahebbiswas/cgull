@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union
 from pathlib import Path
 
-from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, Confidence, ScanConfig
+from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, Confidence, ScanConfig, ScanError
 from .ignore import CGullIgnoreFilter
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
@@ -122,6 +122,7 @@ class CGullScanner:
         all_issues: List[Issue] = []
         file_summaries: List[FileScanSummary] = []
         failed_paths: List[str] = []
+        scan_errors: List[ScanError] = []
         total_loc = 0
         analysis_status_counts: Dict[str, int] = {
             ParserStatus.PYCPARSER_SUCCESS.value: 0,
@@ -138,7 +139,7 @@ class CGullScanner:
         analyzed_count = 0
         failed_count = 0
 
-        for file_path, file_issues, loc, duration_ms, parser_status, file_status, file_confidence in results:
+        for file_path, file_issues, loc, duration_ms, parser_status, file_status, file_confidence, scan_err in results:
             display_path = os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path)
 
             analysis_status_counts[parser_status] = analysis_status_counts.get(parser_status, 0) + 1
@@ -147,6 +148,15 @@ class CGullScanner:
                 failed_count += 1
                 failed_paths.append(display_path)
                 file_issues = []
+                if scan_err:
+                    scan_err.file_path = display_path
+                    scan_errors.append(scan_err)
+                else:
+                    scan_errors.append(ScanError(
+                        file_path=display_path,
+                        error_type="UnknownError",
+                        message="File analysis failed with unknown error",
+                    ))
             else:
                 analyzed_count += 1
                 if self.severity_filter:
@@ -185,6 +195,7 @@ class CGullScanner:
         file_summaries.sort(key=lambda fs: fs.file_path)
         all_issues.sort(key=lambda i: (i.file_path, i.line_number, i.column_number, i.rule_id, i.message))
         failed_paths.sort()
+        scan_errors.sort(key=lambda e: (e.file_path, e.error_type, e.message))
 
         rel_ignored = [os.path.relpath(p, base_dir) if os.path.isdir(abs_target) else os.path.basename(p) for p in ignored_paths]
         rel_ignored.sort()
@@ -202,6 +213,7 @@ class CGullScanner:
             timestamp=datetime.now(timezone.utc).isoformat(),
             issues=all_issues,
             file_summaries=file_summaries,
+            scan_errors=scan_errors,
             ignored_paths=rel_ignored,
             failed_paths=failed_paths,
             files_discovered=files_discovered,
@@ -224,10 +236,15 @@ class CGullScanner:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                file_issues, loc, duration_ms, parser_status, status, confidence = self._scan_single_file_content(file_path, content, config=config)
-                results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence))
-            except Exception:
-                results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value))
+                file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = self._scan_single_file_content(file_path, content, config=config)
+                results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence, scan_err))
+            except Exception as e:
+                scan_err = ScanError(
+                    file_path=file_path,
+                    error_type=type(e).__name__,
+                    message=str(e) or f"Failed to read file: {file_path}",
+                )
+                results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err))
             if progress_callback:
                 progress_callback(idx, total_files, file_path)
         return results
@@ -261,10 +278,15 @@ class CGullScanner:
                 file_path = futures[future]
                 completed_count += 1
                 try:
-                    file_issues, loc, duration_ms, parser_status, status, confidence = future.result()
-                    results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence))
-                except Exception:
-                    results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value))
+                    file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = future.result()
+                    results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence, scan_err))
+                except Exception as e:
+                    scan_err = ScanError(
+                        file_path=file_path,
+                        error_type=type(e).__name__,
+                        message=str(e) or f"Worker execution failed for {file_path}",
+                    )
+                    results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err))
                 if progress_callback:
                     progress_callback(completed_count, total_files, file_path)
         return results
@@ -278,7 +300,18 @@ class CGullScanner:
         self.config = config
         self.rules = config.get_rules()
 
-        file_issues, loc, duration_ms, parser_status, status, confidence = self._scan_single_file_content(file_path, source_code, config=config)
+        file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = self._scan_single_file_content(file_path, source_code, config=config)
+        scan_errors = []
+        if status == "failed":
+            if scan_err:
+                scan_errors.append(scan_err)
+            else:
+                scan_errors.append(ScanError(
+                    file_path=file_path,
+                    error_type="UnknownError",
+                    message="File analysis failed with unknown error",
+                ))
+
         for issue in file_issues:
             issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
 
@@ -313,6 +346,7 @@ class CGullScanner:
                 status=status,
                 confidence=confidence,
             )],
+            scan_errors=scan_errors,
             ignored_paths=[],
             failed_paths=[file_path] if status == "failed" else [],
             files_discovered=1,
@@ -328,7 +362,7 @@ class CGullScanner:
         file_path: str,
         content: str,
         config: Optional[ScanConfig] = None,
-    ) -> Tuple[List[Issue], int, float, str, str, str]:
+    ) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
         if config is None:
             config = self._get_active_config()
         return _scan_file_content(content, file_path, ast_parser=self.ast_parser, config=config)
@@ -341,7 +375,7 @@ def _scan_file_content(
     engine_mode: Optional[AnalysisEngine] = None,
     ast_parser: Optional[CASTParser] = None,
     config: Optional[ScanConfig] = None,
-) -> Tuple[List[Issue], int, float, str, str, str]:
+) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
     """
     Module-level scan implementation shared by in-process and
     worker-process scanning paths.
@@ -395,6 +429,7 @@ def _scan_file_content(
     parser_status = ParserStatus.FALLBACK_PARSER.value
     file_status = "success"
     confidence_val = Confidence.FALLBACK.value
+    scan_error: Optional[ScanError] = None
 
     try:
         # A single AST parse (which internally strips comments once) covers
@@ -422,21 +457,18 @@ def _scan_file_content(
                 for rule in rules:
                     if engine_mode == AnalysisEngine.HYBRID and rule.analysis_engine == AnalysisEngine.AST:
                         continue
-                    try:
-                        found = rule.scan_line(
-                            file_path=file_path,
-                            line_number=line_no,
-                            line_content=line,
-                            full_code=clean_code,
-                            source_lines=clean_lines,
-                            masked_line_content=masked_line,
-                        )
-                        for iss in found:
-                            if iss.confidence is None:
-                                iss.confidence = Confidence(confidence_val)
-                            add_issue_if_unique(iss)
-                    except Exception:
-                        pass
+                    found = rule.scan_line(
+                        file_path=file_path,
+                        line_number=line_no,
+                        line_content=line,
+                        full_code=clean_code,
+                        source_lines=clean_lines,
+                        masked_line_content=masked_line,
+                    )
+                    for iss in found:
+                        if iss.confidence is None:
+                            iss.confidence = Confidence(confidence_val)
+                        add_issue_if_unique(iss)
 
         # 2. AST Pass
         if engine_mode in (AnalysisEngine.AST, AnalysisEngine.HYBRID):
@@ -445,31 +477,33 @@ def _scan_file_content(
                 parser_status = ast_ctx.parser_status
                 confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
             for rule in rules:
-                try:
-                    ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
-                    for iss in ast_found:
-                        if iss.confidence is None:
-                            iss.confidence = Confidence(confidence_val)
-                        add_issue_if_unique(iss)
-                except Exception:
-                    pass
+                ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
+                for iss in ast_found:
+                    if iss.confidence is None:
+                        iss.confidence = Confidence(confidence_val)
+                    add_issue_if_unique(iss)
 
-    except Exception:
+    except Exception as e:
         issues = []
         parser_status = ParserStatus.PARSE_FAILED.value
         file_status = "failed"
         confidence_val = Confidence.LIMITED.value
+        scan_error = ScanError(
+            file_path=file_path,
+            error_type=type(e).__name__,
+            message=str(e) or "File analysis failed",
+        )
 
     # Sort issues by line number
     issues.sort(key=lambda x: (x.line_number, x.column_number))
     duration_ms = (time.time() - t0) * 1000.0
-    return issues, loc, duration_ms, parser_status, file_status, confidence_val
+    return issues, loc, duration_ms, parser_status, file_status, confidence_val, scan_error
 
 
 def _scan_file_worker(
     file_path: str,
     config: Union[ScanConfig, AnalysisEngine],
-) -> Tuple[List[Issue], int, float, str, str, str]:
+) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
     """
     Entry point run in a separate process by ProcessPoolExecutor. Rebuilds
     the rules and configuration from the provided ScanConfig.
@@ -479,6 +513,11 @@ def _scan_file_worker(
     try:
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
-    except Exception:
-        return [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value
+    except Exception as e:
+        scan_err = ScanError(
+            file_path=file_path,
+            error_type=type(e).__name__,
+            message=str(e) or f"Failed to read file: {file_path}",
+        )
+        return [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err
     return _scan_file_content(content, file_path, config=config)

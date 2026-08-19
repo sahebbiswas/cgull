@@ -211,6 +211,16 @@ class Issue:
 
 
 @dataclass
+class ScanError:
+    file_path: str
+    error_type: str
+    message: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class FileScanSummary:
     file_path: str
     lines_of_code: int
@@ -256,6 +266,7 @@ class ScanResult:
     baseline_new_count: Optional[int] = None
     baseline_resolved_count: Optional[int] = None
     baseline_total_before_filter: Optional[int] = None
+    scan_errors: List[ScanError] = field(default_factory=list)
 
     def get_overall_parser_status(self) -> str:
         if self.overall_parser_status:
@@ -326,6 +337,7 @@ class ScanResult:
             "summary": summary,
             "issues": [issue.to_dict() for issue in self.issues],
             "file_summaries": [fs.to_dict() for fs in self.file_summaries],
+            "scan_errors": [err.to_dict() for err in self.scan_errors],
             "ignored_paths": self.ignored_paths,
             "failed_paths": self.failed_paths,
         }
