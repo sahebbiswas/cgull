@@ -157,6 +157,11 @@ class TestArrayIndexOutOfBounds(unittest.TestCase):
         issues = scan_with_rule("CGULL-007", code)
         self.assertEqual(len(issues), 0)
 
+    def test_detects_out_of_bounds_index_on_same_line_as_initialized_declaration(self):
+        code = 'void f(void) {\n    char dataBuffer[100] = ""; dataBuffer[100] = \'a\';\n}'
+        issues = scan_with_rule("CGULL-007", code)
+        self.assertEqual(len(issues), 1)
+
 
 class TestUnsafeSensitiveMemoryClearing(unittest.TestCase):
     def test_detects_memset_before_return(self):
