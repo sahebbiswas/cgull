@@ -211,5 +211,40 @@ class TestNegationAndAnchoredPatterns(unittest.TestCase):
         self.assertTrue(self.filter.should_ignore(self._p("other.c")))
 
 
+class TestShouldPruneDir(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.filter = CGullIgnoreFilter(base_dir=self.temp_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _p(self, rel):
+        return os.path.join(self.temp_dir, rel)
+
+    def test_default_ignores_pruned_when_no_negation(self):
+        self.assertTrue(self.filter.should_prune_dir(self._p(".git")))
+        self.assertTrue(self.filter.should_prune_dir(self._p("node_modules")))
+        self.assertTrue(self.filter.should_prune_dir(self._p("build")))
+
+    def test_non_ignored_directory_not_pruned(self):
+        self.assertFalse(self.filter.should_prune_dir(self._p("src")))
+
+    def test_targeted_negation_prevents_pruning_only_for_ancestors(self):
+        self.filter.load_from_text("vendor/\n!vendor/crypto/secure_memcmp.c")
+        # vendor/ and vendor/crypto/ are ancestors of the negated path, so they must not be pruned
+        self.assertFalse(self.filter.should_prune_dir(self._p("vendor")))
+        self.assertFalse(self.filter.should_prune_dir(self._p("vendor/crypto")))
+        # vendor/other/ is not an ancestor of vendor/crypto/secure_memcmp.c, so it is pruned
+        self.assertTrue(self.filter.should_prune_dir(self._p("vendor/other")))
+        # .git/ is unrelated, so it is pruned
+        self.assertTrue(self.filter.should_prune_dir(self._p(".git")))
+
+    def test_unanchored_negation_prevents_pruning_all_ignored_dirs(self):
+        self.filter.load_from_text("vendor/\n!*.c")
+        self.assertFalse(self.filter.should_prune_dir(self._p("vendor")))
+        self.assertFalse(self.filter.should_prune_dir(self._p(".git")))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -102,6 +102,7 @@ class CGullScanner:
                 files_to_scan.append(abs_target)
         elif os.path.isdir(abs_target):
             for root, dirs, files in os.walk(abs_target):
+                dirs[:] = [d for d in dirs if not self.ignore_filter.should_prune_dir(os.path.join(root, d))]
                 for f in files:
                     file_path = os.path.join(root, f)
                     ext = os.path.splitext(f)[1].lower()
