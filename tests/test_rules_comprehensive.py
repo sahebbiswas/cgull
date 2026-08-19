@@ -448,6 +448,48 @@ class TestMissingAssertions(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestInsecurePRNG(unittest.TestCase):
+    def test_detects_rand_for_token(self):
+        code = "void f(void) {\n    int token = rand();\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_multiline_rand_assignment(self):
+        code = "void f(void) {\n    uint32_t session_token =\n        rand();\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_srand_time(self):
+        code = "void f(void) {\n    srand(time(NULL));\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_constant_seed_srand(self):
+        code = "void f(void) {\n    srand(1);\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_ignores_string_literal_rand(self):
+        code = "void f(void) {\n    char *msg = \"don't use rand()\";\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_ignores_driver_variable_name(self):
+        code = "void f(void) {\n    int driver_id = rand() % 10;\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_detects_init_iv_function_context(self):
+        code = "void init_iv(unsigned char *out) {\n    int byte = rand();\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_arc4random(self):
+        code = "void f(uint32_t *token) {\n    *token = arc4random();\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 

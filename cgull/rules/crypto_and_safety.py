@@ -18,16 +18,28 @@ def _is_sensitive_identifier(token: str) -> bool:
         'key_offset', 'key_list', 'key_arr', 'key_array', 'key_table', 'key_slot',
         'keys_count', 'max_keys', 'num_keys', 'keyword', 'keyboard', 'signal',
         'assignment', 'designation', 'header', 'magic', 'version', 'count',
-        'length', 'size', 'index'
+        'length', 'size', 'index', 'driver', 'given', 'derive'
     ]
     if any(non_sec in t for non_sec in non_sec_terms):
         return False
 
-    if any(k in t for k in ['secret', 'password', 'passwd', 'token', 'auth', 'hash', 'digest', 'mac', 'hmac', 'pin', 'cert', 'credential', 'cred', 'privkey', 'private_key', 'session', 'apikey', 'api_key']):
-        if 'sig' in t and not ('signature' in t or 'sig' in t.split('_') or t.startswith('sig') or t.endswith('sig')):
+    substring_terms = [
+        'secret', 'password', 'passwd', 'token', 'auth', 'hash', 'digest',
+        'hmac', 'cert', 'credential', 'cred', 'privkey', 'private_key',
+        'session', 'apikey', 'api_key', 'nonce', 'salt', 'seed'
+    ]
+    segment_terms = ['iv', 'pin', 'mac']
+
+    parts = [p for p in re.split(r'[^a-z0-9]', t) if p]
+
+    if any(k in t for k in substring_terms):
+        if 'sig' in t and not ('signature' in t or 'sig' in parts):
             return False
-        if 'pass' in t and not ('password' in t or 'passwd' in t or 'pass' in t.split('_') or t.startswith('pass') or t.endswith('pass')):
+        if 'pass' in t and not ('password' in t or 'passwd' in t or 'pass' in parts):
             return False
+        return True
+
+    if any(k in parts for k in segment_terms):
         return True
 
     if 'key' in t or 'crypto' in t:
@@ -49,15 +61,54 @@ def _is_sensitive_type(type_name: str) -> bool:
     return False
 
 
+def _is_predictable_or_constant_seed(expr: str) -> bool:
+    """
+    Check if a seed expression for srand/srandom is predictable or constant.
+    Predictable sources include time(), clock(), getpid(), getppid(), gettimeofday(), clock_gettime().
+    Constant seeds include integer literals (0, 1, 42, 0x1234), NULL, or simple constant expressions.
+    """
+    s = expr.strip()
+    if not s:
+        return True
+
+    predictable_fn_regex = re.compile(r'\b(time|clock|getpid|getppid|gettimeofday|clock_gettime|timespec_get)\s*\(')
+    if predictable_fn_regex.search(s):
+        return True
+
+    uncasted = re.sub(r'^\s*\(\s*(?:unsigned\s+|signed\s+|int|long|short|uint32_t|time_t)*\s*\)\s*', '', s).strip()
+
+    if uncasted in ("0", "NULL", "1"):
+        return True
+
+    if re.match(r'^(?:0x[0-9a-fA-F]+|\d+)[uUlL]*$', uncasted):
+        return True
+
+    if re.match(r'^[A-Z_][A-Z0-9_]*$', uncasted):
+        return True
+
+    return False
+
+
 def _is_security_function_context(fn_name: str) -> bool:
     """Check if a function name indicates a security-relevant context."""
     f = fn_name.lower()
-    sec_terms = ['auth', 'login', 'permission', 'credential', 'crypto', 'security', 'token', 'password', 'passwd', 'signature', 'mac', 'hmac', 'pfx', 'cert', 'verifier', 'authenticate', 'sec_cmp']
-    if any(term in f for term in sec_terms):
+    parts = [p for p in re.split(r'[^a-z0-9]', f) if p]
+
+    sec_substrings = [
+        'auth', 'login', 'permission', 'credential', 'crypto', 'security',
+        'token', 'password', 'passwd', 'signature', 'hmac', 'pfx', 'cert',
+        'verifier', 'authenticate', 'sec_cmp', 'nonce', 'salt', 'seed'
+    ]
+    sec_segments = ['iv', 'pin', 'mac']
+
+    if any(term in f for term in sec_substrings):
         return True
 
-    if any(action in f for action in ['check', 'verify', 'validate', 'compare']):
-        if any(noun in f for noun in ['hash', 'token', 'mac', 'sig', 'key', 'secret', 'auth', 'cert', 'pin', 'cred', 'pass']):
+    if any(term in parts for term in sec_segments):
+        return True
+
+    if any(action in f for action in ['check', 'verify', 'validate', 'compare', 'generate', 'create', 'init', 'get', 'make', 'derive']):
+        if any(noun in f for noun in ['hash', 'token', 'mac', 'sig', 'key', 'secret', 'auth', 'cert', 'pin', 'cred', 'pass', 'nonce', 'salt', 'seed']) or any(noun in parts for noun in ['iv']):
             if not any(non_sec in f for non_sec in ['bounds', 'header', 'length', 'len', 'size', 'version', 'count', 'magic', 'index', 'type']):
                 return True
     return False
@@ -95,7 +146,8 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                 if g_name not in var_types:
                     var_types[g_name] = g_obj.type_name.lower()
 
-            for callee, line_no, raw_args in fn.calls:
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
                 if callee in target_funcs:
                     arg_list = [a.strip() for a in raw_args.split(',')] if raw_args else []
 
@@ -400,6 +452,132 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
                 engine="Regex",
                 fix_type=FixType.MANUAL_REVIEW,
             ))
+        return issues
+
+
+class NoInsecureRandRule(BaseRule):
+    rule_id = "CGULL-028"
+    name = "Insecure PRNG for Security-Sensitive Use"
+    impact = Severity.HIGH
+    category = RuleCategory.CRYPTO
+    description = "rand(), random(), drand48(), or srand(time(NULL)) are non-cryptographic PRNGs and vulnerable to prediction or seed recovery when used for security-sensitive values."
+    implementation_method = "AST function calls / AST variable tracking & regex pattern matching in security-sensitive contexts"
+    implementation_complexity = "Medium"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-338"
+    remediation_suggestion = "Replace rand()/random()/srand() with cryptographically secure random sources such as getrandom(), arc4random(), arc4random_buf(), or OpenSSL RAND_bytes()."
+    sample_vulnerable_code = "int token = rand();\nsrand(time(NULL));"
+    sample_remediated_code = "uint32_t token = arc4random();\n// Or getrandom(&token, sizeof(token), 0);"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        target_funcs = {"rand", "random", "drand48", "mrand48", "lrand48", "srand", "srandom"}
+        clean_lines = ast_ctx.clean_source.splitlines() if ast_ctx.clean_source else ast_ctx.source_lines
+
+        for fn in ast_ctx.functions:
+            fn_is_sec_ctx = _is_security_function_context(fn.name)
+
+            # Build scope symbol types and names
+            var_types: dict = {}
+            for p in fn.parameters:
+                var_types[p.name] = p.type_name.lower()
+            for v_name, v_obj in fn.variables.items():
+                var_types[v_name] = v_obj.type_name.lower()
+            for g_name, g_obj in ast_ctx.global_variables.items():
+                if g_name not in var_types:
+                    var_types[g_name] = g_obj.type_name.lower()
+
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
+                target_var = call[3] if len(call) > 3 else None
+
+                if callee in target_funcs:
+                    line_content = ast_ctx.source_lines[line_no - 1] if 1 <= line_no <= len(ast_ctx.source_lines) else ""
+                    clean_line = clean_lines[line_no - 1] if 1 <= line_no <= len(clean_lines) else line_content
+                    should_flag = False
+
+                    if callee in {"srand", "srandom"}:
+                        if _is_predictable_or_constant_seed(raw_args) or fn_is_sec_ctx:
+                            should_flag = True
+                        else:
+                            tokens = re.findall(r'\b[a-zA-Z_]\w*\b', clean_line)
+                            if any(_is_sensitive_identifier(t) for t in tokens):
+                                should_flag = True
+                    else:
+                        if fn_is_sec_ctx:
+                            should_flag = True
+
+                        if target_var and _is_sensitive_identifier(target_var):
+                            should_flag = True
+
+                        start_line_idx = max(0, line_no - 4)
+                        context_snippet = " ".join(clean_lines[start_line_idx:line_no])
+                        tokens = re.findall(r'\b[a-zA-Z_]\w*\b', context_snippet)
+                        if any(_is_sensitive_identifier(t) for t in tokens if t not in target_funcs):
+                            should_flag = True
+
+                        for t_tok in tokens:
+                            if _is_sensitive_type(var_types.get(t_tok, "")):
+                                should_flag = True
+                                break
+
+                    if should_flag:
+                        snippet = line_content.strip() if line_content else f"{callee}({raw_args})"
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=snippet,
+                            message=f"Use of predictable pseudo-random number generator '{callee}()' in security-sensitive context (CWE-338).",
+                            column_number=1,
+                            engine="AST",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement="getrandom(), arc4random(), or OpenSSL RAND_bytes()"
+                        ))
+
+        return issues
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        target_line = masked_line_content if masked_line_content else line_content
+
+        target_regex = re.compile(r'\b(rand|random|drand48|mrand48|lrand48)\s*\(\s*\)|\b(srand|srandom)\s*\(([^)]*)\)')
+        m = target_regex.search(target_line)
+        if m:
+            callee = m.group(1) or m.group(2)
+            args = m.group(3) if m.group(3) else ""
+            should_flag = False
+
+            if callee in ("srand", "srandom"):
+                if _is_predictable_or_constant_seed(args):
+                    should_flag = True
+                else:
+                    tokens = re.findall(r'\b[a-zA-Z_]\w*\b', target_line)
+                    if any(_is_sensitive_identifier(t) for t in tokens):
+                        should_flag = True
+            else:
+                start_line_idx = max(0, line_number - 4)
+                context_lines = [
+                    masked_line_content if i == line_number - 1 and masked_line_content else source_lines[i]
+                    for i in range(start_line_idx, line_number)
+                    if i < len(source_lines)
+                ]
+                context_str = " ".join(context_lines)
+                tokens = re.findall(r'\b[a-zA-Z_]\w*\b', context_str)
+                if any(_is_sensitive_identifier(t) for t in tokens if t != callee):
+                    should_flag = True
+
+            if should_flag:
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=f"Use of predictable pseudo-random number generator '{callee}()' in security-sensitive context (CWE-338).",
+                    column_number=m.start() + 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement="getrandom(), arc4random(), or OpenSSL RAND_bytes()"
+                ))
         return issues
 
 

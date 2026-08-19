@@ -23,6 +23,7 @@ from .crypto_and_safety import (
     NonConstantTimeMemoryComparisonRule,
     StrippingVolatileQualifiersRule,
     IllegalFunctionPointerConversionsRule,
+    NoInsecureRandRule,
     SinglePointOfFailureControlFlowRule,
     InsecureDataStorageRule,
 )
@@ -60,6 +61,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     UseAfterFreeRule,
     DoubleFreeRule,
     UninitializedMemoryUseRule,
+    NoInsecureRandRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     NakedControlFlowStatementsRule,
