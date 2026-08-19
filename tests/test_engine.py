@@ -291,6 +291,34 @@ class TestDirectoryTraversalWithNegation(unittest.TestCase):
         self.assertFalse(any("foo.c" in p for p in scanned_files))
         self.assertFalse(any("other.c" in p for p in scanned_files))
 
+    def test_scan_path_prunes_ignored_tree_without_traversing(self):
+        git_dir = os.path.join(self.temp_dir, ".git", "objects", "pack")
+        os.makedirs(git_dir)
+        git_file = os.path.join(git_dir, "pack.c")
+        with open(git_file, "w") as f:
+            f.write("void dummy() {}")
+
+        scanner = CGullScanner()
+        result = scanner.scan_path(self.temp_dir)
+        scanned_files = [fs.file_path for fs in result.file_summaries]
+        self.assertFalse(any(".git" in p for p in scanned_files))
+        self.assertNotIn(".git/objects/pack/pack.c", result.ignored_paths)
+
+    def test_scan_path_with_embedded_double_star_negation(self):
+        sub_dir = os.path.join(self.temp_dir, "vendor", "sub")
+        os.makedirs(sub_dir)
+        good_file = os.path.join(sub_dir, "good.c")
+        with open(good_file, "w") as f:
+            f.write("void good() { char b[10]; gets(b); }")
+
+        with open(os.path.join(self.temp_dir, ".cgullignore"), "w") as f:
+            f.write("vendor/\n!vendor/**.c\n")
+
+        scanner = CGullScanner()
+        result = scanner.scan_path(self.temp_dir)
+        scanned_files = [fs.file_path for fs in result.file_summaries]
+        self.assertTrue(any("good.c" in p for p in scanned_files))
+
 
 class TestProgressCallback(unittest.TestCase):
     def test_scan_path_sequential_triggers_callback(self):
