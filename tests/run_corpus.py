@@ -48,10 +48,12 @@ def parse_expectations(file_path: str) -> Dict[int, Set[str]]:
 def run_corpus_scan(
     rules_dir: str,
     target_rule_id: str = None,
-    verbose: bool = False
+    verbose: bool = False,
+    min_behavioral_coverage: float = 0.0
 ) -> Tuple[bool, str]:
     """
     Runs corpus verification against tests/rules/.
+    Optionally verifies that Rule Behavioral Coverage meets or exceeds min_behavioral_coverage.
     Returns (success: bool, report_text: str).
     """
     if not os.path.exists(rules_dir):
@@ -81,6 +83,8 @@ def run_corpus_scan(
     log_lines.append("C-GULL Security Rule Behavioral Corpus Verification")
     log_lines.append("=" * 70)
 
+    meaningfully_covered_rules: Set[str] = set()
+
     for rule_id in rule_folders:
         rule_dir = os.path.join(rules_dir, rule_id)
         if rule_id not in RULE_REGISTRY:
@@ -96,7 +100,12 @@ def run_corpus_scan(
         ]
         c_files.sort()
 
+        if not c_files:
+            log_lines.append(f"WARNING: Rule ID '{rule_id}' directory has no .c test files. Skipping coverage count.")
+            continue
+
         log_lines.append(f"\nRule [{rule_id}] - {rule_instance.name}")
+        rule_expectations_count = 0
 
         for c_file in c_files:
             file_path = os.path.join(rule_dir, c_file)
@@ -104,6 +113,9 @@ def run_corpus_scan(
             total_files += 1
 
             expectations = parse_expectations(file_path)
+            for exps in expectations.values():
+                rule_expectations_count += len(exps)
+
             scan_result = scanner.scan_path(file_path)
             reported_issues: List[Issue] = scan_result.issues
 
@@ -139,12 +151,33 @@ def run_corpus_scan(
                         log_lines.append(msg)
 
             if file_missing == 0 and file_unexpected == 0:
-                if verbose or True:
+                if verbose:
                     log_lines.append(f"  PASS: {c_file} ({file_expected} expected findings verified)")
+
+        if rule_expectations_count > 0:
+            meaningfully_covered_rules.add(rule_id)
+        else:
+            log_lines.append(f"WARNING: Rule ID '{rule_id}' directory has test files but zero expectation annotations ('// expect: {rule_id}').")
+
+    total_registered_rules = len(RULE_REGISTRY)
+    evaluated_rules_count = len(meaningfully_covered_rules)
+    behavioral_coverage_pct = (evaluated_rules_count / total_registered_rules * 100.0) if total_registered_rules > 0 else 0.0
+
+    coverage_failed = False
+    if target_rule_id is None and min_behavioral_coverage > 0:
+        if behavioral_coverage_pct < min_behavioral_coverage:
+            coverage_failed = True
+            failures.append(
+                f"Rule Behavioral Coverage ({behavioral_coverage_pct:.2f}%) is below minimum threshold ({min_behavioral_coverage:.2f}%)."
+            )
 
     log_lines.append("\n" + "=" * 70)
     log_lines.append("Corpus Verification Summary:")
-    log_lines.append(f"  Rule Suites Evaluated  : {len(rule_folders)}")
+    log_lines.append(f"  Registered Rules       : {total_registered_rules}")
+    log_lines.append(f"  Rule Suites Evaluated  : {evaluated_rules_count}")
+    log_lines.append(f"  Rule Behavioral Coverage: {behavioral_coverage_pct:.2f}%")
+    if min_behavioral_coverage > 0 and target_rule_id is None:
+        log_lines.append(f"  Required Min Coverage  : {min_behavioral_coverage:.2f}%")
     log_lines.append(f"  Total Files Scanned    : {total_files}")
     log_lines.append(f"  Expected Findings      : {total_expected}")
     log_lines.append(f"  Matched Findings       : {total_matched}")
@@ -152,11 +185,14 @@ def run_corpus_scan(
     log_lines.append(f"  Unexpected Findings(FP): {total_unexpected}")
     log_lines.append("=" * 70)
 
-    success = (total_missing == 0 and total_unexpected == 0 and total_files > 0)
+    success = (total_missing == 0 and total_unexpected == 0 and total_files > 0 and not coverage_failed)
     if success:
-        log_lines.append("SUCCESS: All behavioral corpus tests passed!")
+        log_lines.append("SUCCESS: All behavioral corpus tests and coverage requirements passed!")
     else:
-        log_lines.append("FAILURE: Corpus verification failed due to discrepancies above.")
+        if coverage_failed:
+            log_lines.append(f"FAILURE: Rule Behavioral Coverage ({behavioral_coverage_pct:.2f}%) did not meet required threshold ({min_behavioral_coverage:.2f}%).")
+        else:
+            log_lines.append("FAILURE: Corpus verification failed due to discrepancies above.")
 
     return success, "\n".join(log_lines)
 
@@ -165,10 +201,16 @@ def main():
     parser = argparse.ArgumentParser(description="Run C-GULL Security Rule Behavioral Corpus")
     parser.add_argument("--rule", type=str, help="Specific rule ID to run (e.g. CGULL-003)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument("--min-coverage", type=float, default=0.0, help="Minimum required Rule Behavioral Coverage percentage")
     args = parser.parse_args()
 
     rules_dir = os.path.join(REPO_ROOT, "tests", "rules")
-    success, report = run_corpus_scan(rules_dir, target_rule_id=args.rule, verbose=args.verbose)
+    success, report = run_corpus_scan(
+        rules_dir,
+        target_rule_id=args.rule,
+        verbose=args.verbose,
+        min_behavioral_coverage=args.min_coverage
+    )
     print(report)
     sys.exit(0 if success else 1)
 

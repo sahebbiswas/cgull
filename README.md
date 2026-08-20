@@ -319,15 +319,35 @@ Register it in `cgull.rules.ALL_RULES` to activate it globally across CLI and We
 
 ---
 
-## 🧪 Running the Test Suite
+## 🧪 Running the Test Suite & Coverage Standards
+
+C-GULL enforces a **dual test coverage policy** in CI to guarantee both Python code implementation quality and static security rule analyzer correctness.
+
+### 1. Raw Line Coverage Threshold
+CI enforces a minimum code line coverage threshold of **88.0%** across the `cgull` package (configured via `pyproject.toml` and `--cov-fail-under=88`).
 
 ```bash
-# Run test suite using Python unittest
-python3 -m unittest discover tests
+# Run unit test suite with coverage enforcement
+pytest -v --cov=cgull --cov-report=term-missing --cov-fail-under=88
 
 # Or run specific test modules
-python3 tests/test_scanner.py -v
+python3 -m unittest tests/test_scanner.py
 ```
+
+### 2. Security Rule Behavioral Coverage
+While raw line coverage ensures execution paths are exercised, **rule behavioral coverage** is the primary quality metric for analyzer correctness. Behavioral tests verify that each rule correctly detects true positives and avoids false positives on real C code samples annotated with exact line expectations (`// expect: CGULL-xxx`).
+
+CI enforces a minimum **Rule Behavioral Coverage threshold of 40.0%** across all registered rules (with rule suites in `tests/rules/`).
+
+```bash
+# Run standalone Security Rule Behavioral Corpus runner with coverage threshold
+python3 tests/run_corpus.py --min-coverage 40.0
+
+# Verify a single rule in isolation
+python3 tests/run_corpus.py --rule CGULL-003
+```
+
+Coverage thresholds are maintained as minimum baselines and are increased deliberately over time as new rules and corpus test suites are implemented.
 
 ---
 
