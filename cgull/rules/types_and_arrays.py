@@ -129,6 +129,9 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 expr = var_obj.array_size_expr.strip()
                 if expr.isdigit():
                     return int(expr)
+                m = re.search(r'\b(\d+)\b', expr)
+                if m:
+                    return int(m.group(1))
             return None
 
         def is_index_var_signed(idx_var: str, fn) -> bool:
@@ -152,23 +155,16 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 if re.search(r'\b' + v_esc + r'\s*>=\s*0\b', expr_str) or \
                    re.search(r'\b' + v_esc + r'\s*>\s*-1\b', expr_str) or \
                    re.search(r'\b0\s*<=\s*' + v_esc + r'\b', expr_str) or \
-                   re.search(r'\b-1\s*<\s*' + v_esc + r'\b', expr_str) or \
-                   re.search(r'\b' + v_esc + r'\s*<\s*0\b', expr_str) or \
-                   re.search(r'\b0\s*>\s*' + v_esc + r'\b', expr_str):
+                   re.search(r'\b-1\s*<\s*' + v_esc + r'\b', expr_str):
                     has_lower = True
-
-            if re.search(r'\b(assert|ASSERT|assert_param)\b', expr_str):
-                has_upper = True
-                has_lower = True
-
-            if re.search(r'\b(ARRAY_SIZE|sizeof)\b', expr_str) or \
-               re.search(r'\b[A-Z_]*(?:MAX|LEN|SIZE|CAP|LIMIT|END)\b', expr_str):
-                has_upper = True
+                elif re.search(r'\b' + v_esc + r'\s*<\s*0\b', expr_str) or \
+                     re.search(r'\b0\s*>\s*' + v_esc + r'\b', expr_str):
+                    has_lower = True
 
             if re.search(r'\bmin\s*\(', expr_str):
                 nums = [int(n) for n in re.findall(r'\b\d+\b', expr_str)]
                 if arr_size is not None and nums:
-                    if all(n < arr_size for n in nums):
+                    if any(n <= arr_size for n in nums):
                         has_upper = True
                 else:
                     has_upper = True
@@ -176,40 +172,87 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             if re.search(r'\bclamp\s*\(', expr_str):
                 nums = [int(n) for n in re.findall(r'\b\d+\b', expr_str)]
                 if arr_size is not None and nums:
-                    if all(n < arr_size for n in nums):
+                    if any(n <= arr_size for n in nums):
                         has_upper = True
+                else:
+                    has_upper = True
+                has_lower = True
+
+            for m in re.finditer(r'\b' + v_esc + r'\s*(<|<=|>|>=)\s*([a-zA-Z0-9_]+)\b', expr_str):
+                op, val_str = m.group(1), m.group(2)
+                
+                is_upper = False
+                is_lower = False
+                limit_val = None
+                
+                if val_str.isdigit():
+                    limit_val = int(val_str)
+                    if op == '<':
+                        is_upper = True
+                    elif op == '<=':
+                        is_upper = True
+                        limit_val += 1
+                    elif op == '>':
+                        is_lower = True
+                    elif op == '>=':
+                        is_lower = True
+                        limit_val -= 1
+                else:
+                    if op in ('<', '<='):
+                        is_upper = True
+                    elif op in ('>', '>='):
+                        is_lower = True
+                
+                if is_upper:
+                    if arr_size is not None and limit_val is not None:
+                        if limit_val <= arr_size:
+                            has_upper = True
+                    else:
+                        has_upper = True
+                if is_lower:
+                    if limit_val is not None:
+                        if limit_val >= -1:
+                            has_lower = True
+                    else:
                         has_lower = True
-                else:
-                    has_upper = True
-                    has_lower = True
 
-            for m in re.finditer(r'\b' + v_esc + r'\s*(<|<=|>|>=)\s*(\d+)\b', expr_str):
-                op, num_val = m.group(1), int(m.group(2))
-                if op == '<':
-                    limit = num_val
-                elif op == '<=':
-                    limit = num_val + 1
-                elif op in ('>', '>='):
-                    limit = num_val
-                if arr_size is not None:
-                    if limit <= arr_size:
-                        has_upper = True
+            for m in re.finditer(r'\b([a-zA-Z0-9_]+)\s*(<|<=|>|>=)\s*' + v_esc + r'\b', expr_str):
+                val_str, op = m.group(1), m.group(2)
+                
+                is_upper = False
+                is_lower = False
+                limit_val = None
+                
+                if val_str.isdigit():
+                    limit_val = int(val_str)
+                    if op == '>':
+                        is_upper = True
+                    elif op == '>=':
+                        is_upper = True
+                        limit_val += 1
+                    elif op == '<':
+                        is_lower = True
+                    elif op == '<=':
+                        is_lower = True
+                        limit_val -= 1
                 else:
-                    has_upper = True
-
-            for m in re.finditer(r'\b(\d+)\s*(<|<=|>|>=)\s*' + v_esc + r'\b', expr_str):
-                num_val, op = int(m.group(1)), m.group(2)
-                if op == '>':
-                    limit = num_val
-                elif op == '>=':
-                    limit = num_val + 1
-                elif op in ('<', '<='):
-                    limit = num_val
-                if arr_size is not None:
-                    if limit <= arr_size:
+                    if op in ('>', '>='):
+                        is_upper = True
+                    elif op in ('<', '<='):
+                        is_lower = True
+                
+                if is_upper:
+                    if arr_size is not None and limit_val is not None:
+                        if limit_val <= arr_size:
+                            has_upper = True
+                    else:
                         has_upper = True
-                else:
-                    has_upper = True
+                if is_lower:
+                    if limit_val is not None:
+                        if limit_val >= -1:
+                            has_lower = True
+                    else:
+                        has_lower = True
 
             return has_lower and has_upper
 
