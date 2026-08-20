@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 from cgull.engine import CGullScanner, _scan_file_worker
-from cgull.models import AnalysisEngine, Severity
+from cgull.models import AnalysisEngine, Severity, ScanError
 
 VULNERABLE_CODE = "void f(char *b) {\n    gets(b);\n}\n"
 
@@ -266,6 +266,47 @@ class TestParallelWorkerFunction(unittest.TestCase):
                         scanner.scan_path(temp_dir, jobs=2)
             elapsed = time.time() - t0
             self.assertLess(elapsed, 2.0, f"Interrupt took {elapsed:.2f}s; workers were not terminated promptly")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_parallel_worker_crash_records_scan_error_and_correct_scanned_count(self):
+        from concurrent.futures import Future, ProcessPoolExecutor
+        from unittest.mock import patch, MagicMock
+        temp_dir = tempfile.mkdtemp()
+        try:
+            f1 = os.path.join(temp_dir, "good.c")
+            f2 = os.path.join(temp_dir, "crash.c")
+            with open(f1, "w") as f:
+                f.write(VULNERABLE_CODE)
+            with open(f2, "w") as f:
+                f.write(VULNERABLE_CODE)
+
+            def mock_submit(fn, file_path, config):
+                fut = Future()
+                if "crash.c" in file_path:
+                    fut.set_exception(RuntimeError("Simulated worker process crash"))
+                else:
+                    fut.set_result(fn(file_path, config))
+                return fut
+
+            mock_pool = MagicMock()
+            mock_pool.submit.side_effect = mock_submit
+
+            scanner = CGullScanner()
+            with patch("cgull.engine.ProcessPoolExecutor", return_value=mock_pool):
+                res = scanner.scan_path(temp_dir, jobs=2)
+
+            self.assertEqual(res.files_discovered, 2)
+            self.assertEqual(res.files_analyzed, 1)
+            self.assertEqual(res.files_failed, 1)
+            self.assertEqual(res.scanned_files_count, 1)
+            self.assertEqual(len(res.failed_paths), 1)
+            self.assertTrue(any("crash.c" in p for p in res.failed_paths))
+            self.assertEqual(len(res.scan_errors), 1)
+            err = res.scan_errors[0]
+            self.assertTrue("crash.c" in err.file_path)
+            self.assertEqual(err.error_type, "RuntimeError")
+            self.assertEqual(err.message, "Simulated worker process crash")
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
