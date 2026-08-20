@@ -7,6 +7,7 @@ from typing import List, Optional
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext
+from ..utils import mask_string_and_char_literals
 
 
 class NakedControlFlowStatementsRule(BaseRule):
@@ -32,6 +33,7 @@ class NakedControlFlowStatementsRule(BaseRule):
             return issues
 
         line_idx = line_number - 1
+        masked_source_lines = [mask_string_and_char_literals(l) for l in source_lines]
 
         for m in re.finditer(r'\b(if|else|while|for|do)\b', line_content):
             kw = m.group(1)
@@ -50,8 +52,8 @@ class NakedControlFlowStatementsRule(BaseRule):
             # Handle keywords with condition parens: if, while, for
             if kw in ("if", "while", "for"):
                 found_paren = False
-                while curr_line < len(source_lines):
-                    rem = source_lines[curr_line][curr_pos:]
+                while curr_line < len(masked_source_lines):
+                    rem = masked_source_lines[curr_line][curr_pos:]
                     rem_stripped = rem.strip()
                     if rem_stripped:
                         if rem_stripped.startswith("#"):
@@ -60,7 +62,7 @@ class NakedControlFlowStatementsRule(BaseRule):
                             continue
                         if rem_stripped.startswith("("):
                             found_paren = True
-                            curr_pos = source_lines[curr_line].find("(", curr_pos)
+                            curr_pos = masked_source_lines[curr_line].find("(", curr_pos)
                             break
                         else:
                             break
@@ -73,8 +75,8 @@ class NakedControlFlowStatementsRule(BaseRule):
                 # Parse balanced parens
                 depth = 0
                 found_close = False
-                while curr_line < len(source_lines) and not found_close:
-                    line_str = source_lines[curr_line]
+                while curr_line < len(masked_source_lines) and not found_close:
+                    line_str = masked_source_lines[curr_line]
                     while curr_pos < len(line_str):
                         c = line_str[curr_pos]
                         if c == "(":
@@ -89,20 +91,74 @@ class NakedControlFlowStatementsRule(BaseRule):
                     if not found_close:
                         curr_line += 1
                         curr_pos = 0
-                        while curr_line < len(source_lines) and source_lines[curr_line].strip().startswith("#"):
+                        while curr_line < len(masked_source_lines) and masked_source_lines[curr_line].strip().startswith("#"):
                             curr_line += 1
 
                 if not found_close:
                     continue
+
+                # Check for alternate condition branches (e.g., #if / #else split conditions)
+                while True:
+                    next_line = curr_line
+                    next_pos = curr_pos
+                    next_char = None
+                    while next_line < len(masked_source_lines):
+                        rem = masked_source_lines[next_line][next_pos:].strip()
+                        if rem:
+                            if rem.startswith("#"):
+                                next_line += 1
+                                next_pos = 0
+                                continue
+                            next_char = rem[0]
+                            break
+                        next_line += 1
+                        next_pos = 0
+
+                    if next_char == "(":
+                        curr_line = next_line
+                        curr_pos = masked_source_lines[next_line].find("(", next_pos)
+
+                        depth = 0
+                        found_close = False
+                        while curr_line < len(masked_source_lines) and not found_close:
+                            line_str = masked_source_lines[curr_line]
+                            while curr_pos < len(line_str):
+                                c = line_str[curr_pos]
+                                if c == "(":
+                                    depth += 1
+                                elif c == ")":
+                                    depth -= 1
+                                    if depth == 0:
+                                        found_close = True
+                                        curr_pos += 1
+                                        break
+                                curr_pos += 1
+                            if not found_close:
+                                curr_line += 1
+                                curr_pos = 0
+                                while curr_line < len(masked_source_lines) and masked_source_lines[curr_line].strip().startswith("#"):
+                                    curr_line += 1
+
+                        if not found_close:
+                            break
+                    else:
+                        if next_line < len(masked_source_lines) and next_char is not None:
+                            curr_line = next_line
+                            curr_pos = next_pos
+                        break
 
                 # Special case for while in do-while loop
                 if kw == "while":
                     after_paren_line = curr_line
                     after_paren_pos = curr_pos
                     next_char_after = None
-                    while after_paren_line < len(source_lines):
-                        rem_after = source_lines[after_paren_line][after_paren_pos:].strip()
+                    while after_paren_line < len(masked_source_lines):
+                        rem_after = masked_source_lines[after_paren_line][after_paren_pos:].strip()
                         if rem_after:
+                            if rem_after.startswith("#"):
+                                after_paren_line += 1
+                                after_paren_pos = 0
+                                continue
                             next_char_after = rem_after[0]
                             break
                         after_paren_line += 1
@@ -128,8 +184,8 @@ class NakedControlFlowStatementsRule(BaseRule):
                 look_l = line_idx
                 look_p = kw_end
                 is_else_if = False
-                while look_l < len(source_lines):
-                    rem_else = source_lines[look_l][look_p:].strip()
+                while look_l < len(masked_source_lines):
+                    rem_else = masked_source_lines[look_l][look_p:].strip()
                     if rem_else:
                         if rem_else.startswith("#"):
                             look_l += 1
@@ -146,11 +202,11 @@ class NakedControlFlowStatementsRule(BaseRule):
             # Look ahead for opening brace {
             look_line = curr_line
             look_pos = curr_pos
-            is_braced = True
+            is_braced = False
 
-            while look_line < len(source_lines):
-                line_str = source_lines[look_line][look_pos:].strip()
-                if not line_str or source_lines[look_line].strip().startswith("#"):
+            while look_line < len(masked_source_lines):
+                line_str = masked_source_lines[look_line][look_pos:].strip()
+                if not line_str or line_str.startswith("#"):
                     look_line += 1
                     look_pos = 0
                     continue
