@@ -52,6 +52,7 @@ class TestReportGeneratorJSON(unittest.TestCase):
     def test_json_roundtrips_issue_fields(self):
         result = self.scanner.scan_text(VULNERABLE_CODE, "sample.c")
         parsed = json.loads(ReportGenerator.to_json(result))
+        self.assertEqual(parsed["schema_version"], "1")
         self.assertGreaterEqual(len(parsed["issues"]), 1)
         issue = parsed["issues"][0]
         for key in ("rule_id", "rule_name", "impact", "file_path", "line_number", "message", "cwe_id"):

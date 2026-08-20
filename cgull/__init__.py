@@ -3,10 +3,10 @@ C-GULL: Code Guardian for Unchecked Logic & Leaks
 A lightweight & AST-capable C Static Code Security Analyzer.
 """
 
-__version__ = "0.8.2"
+__version__ = "0.8.3"
 __author__ = "Saheb Biswas"
 
-from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError
+from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError, OUTPUT_SCHEMA_VERSION
 from .engine import CGullScanner
 from .ignore import CGullIgnoreFilter
 from .reporter import ReportGenerator
@@ -26,4 +26,5 @@ __all__ = [
     "ScanError",
     "CGullConfig",
     "load_config",
+    "OUTPUT_SCHEMA_VERSION",
 ]

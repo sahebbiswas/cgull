@@ -65,6 +65,7 @@ class TestScanCommand(unittest.TestCase):
     def test_scan_json_format_is_valid_json(self):
         code, out = self._run(["scan", self.c_file, "--format", "json"])
         parsed = json.loads(out)
+        self.assertEqual(parsed["schema_version"], "1")
         self.assertIn("summary", parsed)
 
     def test_scan_sarif_format_is_valid_json(self):
