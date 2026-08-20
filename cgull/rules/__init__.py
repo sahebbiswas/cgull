@@ -33,6 +33,7 @@ from .types_and_arrays import (
     ArithmeticIntegerOverflowRule,
     BitwiseOperationsOnSignedIntegersRule,
     UseOfMagicNumbersRule,
+    SizeofOnPointerRule,
 )
 from .misra_and_style import (
     NakedControlFlowStatementsRule,
@@ -53,6 +54,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     NonConstantTimeMemoryComparisonRule,
     ArithmeticIntegerOverflowRule,
     ArrayIndexOutOfBoundsRule,
+    SizeofOnPointerRule,
     UnsafeSensitiveMemoryClearingRule,
     StrippingVolatileQualifiersRule,
     VariableLengthArraysRule,
