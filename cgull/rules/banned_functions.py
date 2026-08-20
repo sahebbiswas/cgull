@@ -297,16 +297,89 @@ class CommandInjectionRule(BaseRule):
                         ))
         return issues
 
+    @staticmethod
+    def _extract_first_arg_multiline(line_idx: int, char_offset: int, source_lines: List[str]) -> str:
+        paren_depth = 1
+        in_quote = False
+        quote_char = None
+        chars = []
+
+        cur_line = line_idx
+        cur_pos = char_offset
+
+        while cur_line < len(source_lines):
+            line = source_lines[cur_line]
+            while cur_pos < len(line):
+                c = line[cur_pos]
+                if in_quote:
+                    chars.append(c)
+                    if c == quote_char and (cur_pos == 0 or line[cur_pos - 1] != '\\'):
+                        in_quote = False
+                elif c in ('"', "'"):
+                    in_quote = True
+                    quote_char = c
+                    chars.append(c)
+                elif c == '(':
+                    paren_depth += 1
+                    chars.append(c)
+                elif c == ')':
+                    paren_depth -= 1
+                    if paren_depth == 0:
+                        break
+                    chars.append(c)
+                else:
+                    chars.append(c)
+                cur_pos += 1
+
+            if paren_depth == 0:
+                break
+
+            chars.append('\n')
+            cur_line += 1
+            cur_pos = 0
+
+        full_args_str = "".join(chars).strip()
+        if not full_args_str:
+            return ""
+
+        p_depth = 0
+        q_in = False
+        q_char = None
+        arg_end = -1
+        for i, c in enumerate(full_args_str):
+            if q_in:
+                if c == q_char and (i == 0 or full_args_str[i-1] != '\\'):
+                    q_in = False
+            elif c in ('"', "'"):
+                q_in = True
+                q_char = c
+            elif c == '(':
+                p_depth += 1
+            elif c == ')':
+                p_depth -= 1
+            elif c == ',' and p_depth == 0:
+                arg_end = i
+                break
+
+        if arg_end != -1:
+            return full_args_str[:arg_end].strip()
+        return full_args_str.strip()
+
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
+        if line_content.lstrip().startswith('#'):
+            return issues
+
         match_target = masked_line_content or line_content
         for fn in self.TARGET_FUNCS:
-            m = re.search(rf'\b{re.escape(fn)}\s*\(\s*([^",\s][^,\)]*)\s*', match_target)
-            if m:
-                arg = line_content[m.start(1):m.end(1)].strip()
-                if self._is_type_decl(arg):
+            for m in re.finditer(rf'\b{re.escape(fn)}\s*\(', match_target):
+                char_offset = m.end()
+                first_arg = self._extract_first_arg_multiline(line_number - 1, char_offset, source_lines)
+                if not first_arg:
                     continue
-                if not self._is_literal_arg(arg):
+                if self._is_type_decl(first_arg):
+                    continue
+                if not self._is_literal_arg(first_arg):
                     issues.append(self.create_issue(
                         file_path=file_path,
                         line_number=line_number,
