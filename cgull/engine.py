@@ -270,30 +270,36 @@ class CGullScanner:
         results = []
         total_files = len(files_to_scan)
         completed_count = 0
-        with ProcessPoolExecutor(max_workers=jobs) as pool:
-            try:
-                futures = {
-                    pool.submit(_scan_file_worker, file_path, config): file_path
-                    for file_path in files_to_scan
-                }
-                for future in as_completed(futures):
-                    file_path = futures[future]
-                    completed_count += 1
-                    try:
-                        file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = future.result()
-                        results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence, scan_err))
-                    except Exception as e:
-                        scan_err = ScanError(
-                            file_path=file_path,
-                            error_type=type(e).__name__,
-                            message=str(e) or f"Worker execution failed for {file_path}",
-                        )
-                        results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err))
-                    if progress_callback:
-                        progress_callback(completed_count, total_files, file_path)
-            except KeyboardInterrupt:
-                pool.shutdown(wait=False, cancel_futures=True)
-                raise
+        pool = ProcessPoolExecutor(max_workers=jobs)
+        try:
+            futures = {
+                pool.submit(_scan_file_worker, file_path, config): file_path
+                for file_path in files_to_scan
+            }
+            for future in as_completed(futures):
+                file_path = futures[future]
+                completed_count += 1
+                try:
+                    file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = future.result()
+                    results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence, scan_err))
+                except Exception as e:
+                    scan_err = ScanError(
+                        file_path=file_path,
+                        error_type=type(e).__name__,
+                        message=str(e) or f"Worker execution failed for {file_path}",
+                    )
+                    results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err))
+                if progress_callback:
+                    progress_callback(completed_count, total_files, file_path)
+            pool.shutdown(wait=True)
+        except BaseException:
+            procs = list((getattr(pool, "_processes", {}) or {}).values())
+            pool.shutdown(wait=False, cancel_futures=True)
+            for p in procs:
+                if p and p.is_alive():
+                    p.terminate()
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
         return results
 
     def scan_text(self, source_code: str, file_path: str = "source.c") -> ScanResult:
