@@ -4,7 +4,6 @@ A lightweight & AST-capable C Static Code Security Analyzer.
 """
 
 __version__ = "0.7.0"
-__version__ = "0.6.10"
 __author__ = "Saheb Biswas"
 
 from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError
