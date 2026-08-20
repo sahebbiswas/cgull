@@ -270,7 +270,8 @@ class TestParallelWorkerFunction(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_parallel_worker_crash_records_scan_error_and_correct_scanned_count(self):
-        from unittest.mock import MagicMock
+        from concurrent.futures import Future, ProcessPoolExecutor
+        from unittest.mock import patch, MagicMock
         temp_dir = tempfile.mkdtemp()
         try:
             f1 = os.path.join(temp_dir, "good.c")
@@ -280,29 +281,20 @@ class TestParallelWorkerFunction(unittest.TestCase):
             with open(f2, "w") as f:
                 f.write(VULNERABLE_CODE)
 
+            def mock_submit(fn, file_path, config):
+                fut = Future()
+                if "crash.c" in file_path:
+                    fut.set_exception(RuntimeError("Simulated worker process crash"))
+                else:
+                    fut.set_result(fn(file_path, config))
+                return fut
+
+            mock_pool = MagicMock()
+            mock_pool.submit.side_effect = mock_submit
+
             scanner = CGullScanner()
-            orig_scan_parallel = scanner._scan_files_parallel
-
-            # Simulate worker exception on future.result() in parallel mode
-            def mock_scan_parallel(files_to_scan, jobs, config, progress_callback=None):
-                results = orig_scan_parallel(files_to_scan, jobs, config, progress_callback)
-                # Replace the result for crash.c with a worker crash exception simulation
-                new_results = []
-                for file_path, issues, loc, duration, p_status, status, conf, scan_err in results:
-                    if "crash.c" in file_path:
-                        err = RuntimeError("Simulated worker process crash")
-                        scan_err = ScanError(
-                            file_path=file_path,
-                            error_type=type(err).__name__,
-                            message=str(err),
-                        )
-                        new_results.append((file_path, [], 0, 0.0, "parse-failed", "failed", "LIMITED", scan_err))
-                    else:
-                        new_results.append((file_path, issues, loc, duration, p_status, status, conf, scan_err))
-                return new_results
-
-            scanner._scan_files_parallel = mock_scan_parallel
-            res = scanner.scan_path(temp_dir, jobs=2)
+            with patch("cgull.engine.ProcessPoolExecutor", return_value=mock_pool):
+                res = scanner.scan_path(temp_dir, jobs=2)
 
             self.assertEqual(res.files_discovered, 2)
             self.assertEqual(res.files_analyzed, 1)
