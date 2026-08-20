@@ -141,42 +141,77 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             return True
 
         def is_bounds_check_for_var(expr_str: str, var_name: str, arr_size: Optional[int] = None, is_signed: bool = True) -> bool:
-            if not re.search(r'\b' + re.escape(var_name) + r'\b', expr_str):
+            v_esc = re.escape(var_name)
+            if not re.search(r'\b' + v_esc + r'\b', expr_str):
                 return False
 
+            has_lower = not is_signed
+            has_upper = False
+
+            if not has_lower:
+                if re.search(r'\b' + v_esc + r'\s*>=\s*0\b', expr_str) or \
+                   re.search(r'\b' + v_esc + r'\s*>\s*-1\b', expr_str) or \
+                   re.search(r'\b0\s*<=\s*' + v_esc + r'\b', expr_str) or \
+                   re.search(r'\b-1\s*<\s*' + v_esc + r'\b', expr_str) or \
+                   re.search(r'\b' + v_esc + r'\s*<\s*0\b', expr_str) or \
+                   re.search(r'\b0\s*>\s*' + v_esc + r'\b', expr_str):
+                    has_lower = True
+
             if re.search(r'\b(assert|ASSERT|assert_param)\b', expr_str):
-                return True
+                has_upper = True
+                has_lower = True
 
-            if re.search(r'\b(ARRAY_SIZE|sizeof)\b', expr_str):
-                return True
+            if re.search(r'\b(ARRAY_SIZE|sizeof)\b', expr_str) or \
+               re.search(r'\b[A-Z_]*(?:MAX|LEN|SIZE|CAP|LIMIT|END)\b', expr_str):
+                has_upper = True
 
-            if re.search(r'\b(min|clamp)\s*\(', expr_str):
+            if re.search(r'\bmin\s*\(', expr_str):
                 nums = [int(n) for n in re.findall(r'\b\d+\b', expr_str)]
                 if arr_size is not None and nums:
-                    if any(n >= arr_size for n in nums):
-                        return False
-                return True
-
-            # Upper bound constraint verification
-            m_upper = re.search(r'\b' + re.escape(var_name) + r'\s*<\s*(\d+)', expr_str)
-            if not m_upper:
-                m_upper = re.search(r'\b' + re.escape(var_name) + r'\s*<=\s*(\d+)', expr_str)
-                if m_upper:
-                    upper_val = int(m_upper.group(1)) + 1
+                    if all(n < arr_size for n in nums):
+                        has_upper = True
                 else:
-                    upper_val = None
-            else:
-                upper_val = int(m_upper.group(1))
+                    has_upper = True
 
-            if upper_val is not None and arr_size is not None:
-                if upper_val > arr_size:
-                    return False
+            if re.search(r'\bclamp\s*\(', expr_str):
+                nums = [int(n) for n in re.findall(r'\b\d+\b', expr_str)]
+                if arr_size is not None and nums:
+                    if all(n < arr_size for n in nums):
+                        has_upper = True
+                        has_lower = True
+                else:
+                    has_upper = True
+                    has_lower = True
 
-            if re.search(r'\b' + re.escape(var_name) + r'\s*(?:<|<=|>|>=)', expr_str) or \
-               re.search(r'(?:<|<=|>|>=)\s*' + re.escape(var_name) + r'\b', expr_str):
-                return True
+            for m in re.finditer(r'\b' + v_esc + r'\s*(<|<=|>|>=)\s*(\d+)\b', expr_str):
+                op, num_val = m.group(1), int(m.group(2))
+                if op == '<':
+                    limit = num_val
+                elif op == '<=':
+                    limit = num_val + 1
+                elif op in ('>', '>='):
+                    limit = num_val
+                if arr_size is not None:
+                    if limit <= arr_size:
+                        has_upper = True
+                else:
+                    has_upper = True
 
-            return False
+            for m in re.finditer(r'\b(\d+)\s*(<|<=|>|>=)\s*' + v_esc + r'\b', expr_str):
+                num_val, op = int(m.group(1)), m.group(2)
+                if op == '>':
+                    limit = num_val
+                elif op == '>=':
+                    limit = num_val + 1
+                elif op in ('<', '<='):
+                    limit = num_val
+                if arr_size is not None:
+                    if limit <= arr_size:
+                        has_upper = True
+                else:
+                    has_upper = True
+
+            return has_lower and has_upper
 
         def is_guarded_on_all_cfg_paths(cfg, target_node_id: int, idx_var: str, arr_size: Optional[int], is_signed: bool) -> bool:
             if cfg.entry is None or target_node_id not in cfg.nodes:
