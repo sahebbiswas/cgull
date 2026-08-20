@@ -218,15 +218,33 @@ class CommandInjectionRule(BaseRule):
     name = "Command Injection Vulnerability"
     impact = Severity.HIGH
     category = RuleCategory.CONTROL_FLOW
-    description = "Flag the use of system() or popen() with non-literal string arguments, which can lead to OS command injection."
-    implementation_method = "AST parsing to check for literal arguments"
+    description = "Flag the use of system(), popen(), or execlp/execvp (PATH-searching variants) with non-literal string arguments, which can lead to OS command injection."
+    implementation_method = "AST parsing & regex to check for non-literal command arguments"
     implementation_complexity = "Low"
     chances_of_false_positives = "Low"
     cwe_id = "CWE-78"
-    remediation_suggestion = "Avoid using system() or popen() with user input. Instead, use execve() with properly separated arguments, or avoid invoking shells entirely."
+    remediation_suggestion = "Avoid shell invocation; use execve() with a fixed argv array and no shell interpretation; validate/allowlist input if a shell is unavoidable."
     sample_vulnerable_code = "char cmd[256];\nsnprintf(cmd, sizeof(cmd), \"ls %s\", user_input);\nsystem(cmd);"
     sample_remediated_code = "char *args[] = {\"ls\", user_input, NULL};\nexecve(\"/bin/ls\", args, envp);"
-    analysis_engine = AnalysisEngine.AST
+    analysis_engine = AnalysisEngine.HYBRID
+
+    TARGET_FUNCS = {"system", "popen", "execlp", "execvp", "execvpe", "execlpe"}
+
+    @staticmethod
+    def _is_type_decl(arg: str) -> bool:
+        first_word = arg.strip().split()[0] if arg.strip().split() else ""
+        return first_word in {"const", "char", "int", "void", "struct", "FILE", "unsigned", "signed", "long", "short"}
+
+    @staticmethod
+    def _is_literal_arg(arg: str) -> bool:
+        s = arg.strip()
+        return (
+            (s.startswith('"') and s.endswith('"')) or
+            (s.startswith('L"') and s.endswith('"')) or
+            (s.startswith('u8"') and s.endswith('"')) or
+            (s.startswith('u"') and s.endswith('"')) or
+            (s.startswith('U"') and s.endswith('"'))
+        )
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
@@ -234,51 +252,38 @@ class CommandInjectionRule(BaseRule):
             for call in fn.calls:
                 callee, line_no, raw_args = call[0], call[1], call[2]
 
-                if callee in ("system", "popen"):
+                if callee in self.TARGET_FUNCS:
                     args_str = raw_args.strip()
-                    first_arg = ""
 
-                    if callee == "popen":
-                        # Extract first arg, balancing parens
-                        paren_depth = 0
-                        in_quote = False
-                        quote_char = None
-                        arg_end = -1
-                        for i, c in enumerate(args_str):
-                            if in_quote:
-                                if c == quote_char and (i == 0 or args_str[i-1] != '\\'):
-                                    in_quote = False
-                            elif c in ('"', "'"):
-                                in_quote = True
-                                quote_char = c
-                            elif c == '(':
-                                paren_depth += 1
-                            elif c == ')':
-                                paren_depth -= 1
-                            elif c == ',' and paren_depth == 0:
-                                arg_end = i
-                                break
+                    # Extract first arg, balancing parens/quotes
+                    paren_depth = 0
+                    in_quote = False
+                    quote_char = None
+                    arg_end = -1
+                    for i, c in enumerate(args_str):
+                        if in_quote:
+                            if c == quote_char and (i == 0 or args_str[i-1] != '\\'):
+                                in_quote = False
+                        elif c in ('"', "'"):
+                            in_quote = True
+                            quote_char = c
+                        elif c == '(':
+                            paren_depth += 1
+                        elif c == ')':
+                            paren_depth -= 1
+                        elif c == ',' and paren_depth == 0:
+                            arg_end = i
+                            break
 
-                        if arg_end != -1:
-                            first_arg = args_str[:arg_end].strip()
-                        else:
-                            first_arg = args_str.strip()
+                    if arg_end != -1:
+                        first_arg = args_str[:arg_end].strip()
                     else:
                         first_arg = args_str.strip()
 
                     if not first_arg:
                         continue
 
-                    # Check if string literal
-                    is_literal = False
-                    if (first_arg.startswith('"') and first_arg.endswith('"')) or \
-                       (first_arg.startswith('L"') and first_arg.endswith('"')) or \
-                       (first_arg.startswith('u8"') and first_arg.endswith('"')) or \
-                       (first_arg.startswith('u"') and first_arg.endswith('"')) or \
-                       (first_arg.startswith('U"') and first_arg.endswith('"')):
-                        is_literal = True
-
-                    if not is_literal:
+                    if not self._is_literal_arg(first_arg):
                         code_snippet = ast_ctx.source_lines[line_no - 1].strip() if 0 < line_no <= len(ast_ctx.source_lines) else f"{callee}(...)"
                         issues.append(self.create_issue(
                             file_path=file_path,
@@ -290,4 +295,99 @@ class CommandInjectionRule(BaseRule):
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement="Use exec() family functions (execve) with an array of arguments to bypass the shell."
                         ))
+        return issues
+
+    @staticmethod
+    def _extract_first_arg_multiline(line_idx: int, char_offset: int, source_lines: List[str]) -> str:
+        paren_depth = 1
+        in_quote = False
+        quote_char = None
+        chars = []
+
+        cur_line = line_idx
+        cur_pos = char_offset
+
+        while cur_line < len(source_lines):
+            line = source_lines[cur_line]
+            while cur_pos < len(line):
+                c = line[cur_pos]
+                if in_quote:
+                    chars.append(c)
+                    if c == quote_char and (cur_pos == 0 or line[cur_pos - 1] != '\\'):
+                        in_quote = False
+                elif c in ('"', "'"):
+                    in_quote = True
+                    quote_char = c
+                    chars.append(c)
+                elif c == '(':
+                    paren_depth += 1
+                    chars.append(c)
+                elif c == ')':
+                    paren_depth -= 1
+                    if paren_depth == 0:
+                        break
+                    chars.append(c)
+                else:
+                    chars.append(c)
+                cur_pos += 1
+
+            if paren_depth == 0:
+                break
+
+            chars.append('\n')
+            cur_line += 1
+            cur_pos = 0
+
+        full_args_str = "".join(chars).strip()
+        if not full_args_str:
+            return ""
+
+        p_depth = 0
+        q_in = False
+        q_char = None
+        arg_end = -1
+        for i, c in enumerate(full_args_str):
+            if q_in:
+                if c == q_char and (i == 0 or full_args_str[i-1] != '\\'):
+                    q_in = False
+            elif c in ('"', "'"):
+                q_in = True
+                q_char = c
+            elif c == '(':
+                p_depth += 1
+            elif c == ')':
+                p_depth -= 1
+            elif c == ',' and p_depth == 0:
+                arg_end = i
+                break
+
+        if arg_end != -1:
+            return full_args_str[:arg_end].strip()
+        return full_args_str.strip()
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        if line_content.lstrip().startswith('#'):
+            return issues
+
+        match_target = masked_line_content or line_content
+        for fn in self.TARGET_FUNCS:
+            for m in re.finditer(rf'\b{re.escape(fn)}\s*\(', match_target):
+                char_offset = m.end()
+                first_arg = self._extract_first_arg_multiline(line_number - 1, char_offset, source_lines)
+                if not first_arg:
+                    continue
+                if self._is_type_decl(first_arg):
+                    continue
+                if not self._is_literal_arg(first_arg):
+                    issues.append(self.create_issue(
+                        file_path=file_path,
+                        line_number=line_number,
+                        code_snippet=line_content,
+                        message=f"Non-literal string passed to {fn}(...). An attacker can inject arbitrary OS commands.",
+                        column_number=m.start() + 1,
+                        engine="Regex",
+                        fix_type=FixType.SUGGESTED_FIX,
+                        suggested_fix_replacement="Use exec() family functions (execve) with an array of arguments to bypass the shell."
+                    ))
         return issues

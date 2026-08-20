@@ -533,6 +533,59 @@ class TestInsecurePRNG(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestCommandInjection(unittest.TestCase):
+    def test_detects_system_variable(self):
+        code = "void f(char *cmd) {\n    system(cmd);\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_popen_variable(self):
+        code = "void f(char *cmd) {\n    FILE *fp = popen(cmd, \"r\");\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_execlp_variable(self):
+        code = "void f(char *file) {\n    execlp(file, \"ls\", \"-l\", NULL);\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_execvp_variable(self):
+        code = "void f(char *file, char **argv) {\n    execvp(file, argv);\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_system_literal(self):
+        code = "void f(void) {\n    system(\"ls -la\");\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_execlp_literal(self):
+        code = "void f(void) {\n    execlp(\"ls\", \"ls\", \"-l\", NULL);\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_preprocessor_macro_not_flagged(self):
+        code = "#define system(x) my_system(x)\n#define execvp(x, y) my_execvp(x, y)"
+        rule = get_rule_by_id("CGULL-030")
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.REGEX)
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 0)
+
+    def test_regex_engine_multiline_system(self):
+        code = "void f(char *cmd) {\n    system(\n        cmd\n    );\n}"
+        rule = get_rule_by_id("CGULL-030")
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.REGEX)
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 1)
+
+    def test_regex_engine_multiline_execvp(self):
+        code = "void f(char *file, char **argv) {\n    execvp(\n        file,\n        argv\n    );\n}"
+        rule = get_rule_by_id("CGULL-030")
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.REGEX)
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 
