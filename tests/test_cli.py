@@ -31,6 +31,13 @@ class TestArgumentParsing(unittest.TestCase):
         args = parser.parse_args(["scan", "."])
         self.assertEqual(args.jobs, 1)
 
+    def test_jobs_flag_parsed(self):
+        parser = build_parser()
+        args = parser.parse_args(["scan", ".", "-j", "4"])
+        self.assertEqual(args.jobs, 4)
+        args_long = parser.parse_args(["scan", ".", "--jobs", "0"])
+        self.assertEqual(args_long.jobs, 0)
+
     def test_severity_choices_restricted(self):
         parser = build_parser()
         with self.assertRaises(SystemExit):
@@ -244,6 +251,24 @@ class TestScanCommand(unittest.TestCase):
         parsed = json.loads(out)
         self.assertEqual(parsed["summary"]["files_failed"], 1)
         self.assertEqual(len(parsed["scan_errors"]), 1)
+
+    def test_jobs_sequential_and_parallel_and_auto(self):
+        f2 = os.path.join(self.temp_dir, "vuln2.c")
+        with open(f2, "w") as f:
+            f.write("void g(char *b) {\n    gets(b);\n}\n")
+
+        for flag in ["1", "2", "0"]:
+            code, out = self._run(["scan", self.temp_dir, "-j", flag, "--format", "json"])
+            self.assertEqual(code, 0)
+            parsed = json.loads(out)
+            self.assertEqual(parsed["summary"]["files_analyzed"], 2)
+
+    def test_jobs_negative_value_returns_error(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, out = self._run(["scan", self.temp_dir, "-j", "-1"])
+        self.assertEqual(code, 1)
+        self.assertIn("Invalid -j/--jobs value", stderr.getvalue())
 
 
 class TestBaselineFlags(unittest.TestCase):

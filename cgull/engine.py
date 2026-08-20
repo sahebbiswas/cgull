@@ -76,12 +76,17 @@ class CGullScanner:
         """
         Recursively scans a directory or single file for security vulnerabilities.
 
-        `jobs` controls parallelism across files: 1 (default) scans
-        sequentially in-process; >1 scans files concurrently using a
-        process pool, which matters once a codebase has more than a
-        handful of files since each file's regex + AST passes are
-        independent and CPU-bound.
+        `jobs` controls parallelism across files:
+        - 1 (default): sequential in-process scanning
+        - N > 1: parallel scanning using N worker processes
+        - 0: auto-detect and use all available CPU cores
+        Negative values are invalid and raise a ValueError.
         """
+        if jobs < 0:
+            raise ValueError(f"Invalid jobs value: {jobs}. Must be non-negative (0 or greater).")
+
+        resolved_jobs = (os.cpu_count() or 1) if jobs == 0 else jobs
+
         start_time = time.time()
         abs_target = os.path.abspath(target_path)
 
@@ -132,8 +137,8 @@ class CGullScanner:
             ParserStatus.PARSE_FAILED.value: 0,
         }
 
-        if jobs and jobs > 1 and len(files_to_scan) > 1:
-            results = self._scan_files_parallel(files_to_scan, jobs, config, progress_callback)
+        if resolved_jobs > 1 and len(files_to_scan) > 1:
+            results = self._scan_files_parallel(files_to_scan, resolved_jobs, config, progress_callback)
         else:
             results = self._scan_files_sequential(files_to_scan, config, progress_callback)
 
