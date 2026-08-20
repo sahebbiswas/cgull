@@ -9,6 +9,7 @@ from .banned_functions import (
     FormatStringRule,
     UnsafeIntegerConversionsRule,
     UncheckedSnprintfReturnRule,
+    CommandInjectionRule,
 )
 from .memory_management import (
     UncheckedDynamicAllocationsRule,
@@ -64,6 +65,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     DoubleFreeRule,
     UninitializedMemoryUseRule,
     NoInsecureRandRule,
+    CommandInjectionRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     NakedControlFlowStatementsRule,

@@ -195,3 +195,55 @@ class UnsafeIntegerConversionsRule(BaseRule):
                     suggested_fix_replacement=f"strtol({arg}, &endptr, 10)"
                 ))
         return issues
+
+class CommandInjectionRule(BaseRule):
+    rule_id = "CGULL-030"
+    name = "Command Injection Vulnerability"
+    impact = Severity.HIGH
+    category = RuleCategory.CONTROL_FLOW
+    description = "Flag the use of system() or popen() with non-literal string arguments, which can lead to OS command injection."
+    implementation_method = "Regex string matching"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-78"
+    remediation_suggestion = "Avoid using system() or popen() with user input. Instead, use execve() with properly separated arguments, or avoid invoking shells entirely."
+    sample_vulnerable_code = "char cmd[256];\nsnprintf(cmd, sizeof(cmd), \"ls %s\", user_input);\nsystem(cmd);"
+    sample_remediated_code = "char *args[] = {\"ls\", user_input, NULL};\nexecve(\"/bin/ls\", args, envp);"
+    analysis_engine = AnalysisEngine.REGEX
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        match_target = masked_line_content or line_content
+
+        # system(var)
+        m = re.search(r'\bsystem\s*\(\s*([^",\s][^,\)]*)\s*\)', match_target)
+        if m:
+            arg = line_content[m.start(1):m.end(1)].strip()
+            if not arg.startswith('"') and not arg.startswith('L"'):
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=f"Non-literal string passed to system({arg}). An attacker can inject arbitrary OS commands.",
+                    column_number=m.start() + 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement="Use exec() family functions (execve) with an array of arguments to bypass the shell."
+                ))
+
+        # popen(var, mode)
+        m = re.search(r'\bpopen\s*\(\s*([^",\s][^,\)]*)\s*,', match_target)
+        if m:
+            arg = line_content[m.start(1):m.end(1)].strip()
+            if not arg.startswith('"') and not arg.startswith('L"'):
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=f"Non-literal string passed to popen({arg}, ...). An attacker can inject arbitrary OS commands.",
+                    column_number=m.start() + 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement="Use exec() family functions (execve) with an array of arguments to bypass the shell."
+                ))
+        return issues
