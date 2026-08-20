@@ -172,7 +172,7 @@ cgull init-ignore
 
 ## 🛡️ Supported Security Rules Matrix
 
-C-GULL implements all 25 security audit rules from the core specification:
+C-GULL implements all 26 security audit rules from the core specification:
 
 | Rule ID | Rule Name | Impact | Category | CWE ID | Method | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -203,6 +203,7 @@ C-GULL implements all 25 security audit rules from the core specification:
 | **CGULL-025** | Missing Assertions | **Low** | Code Quality | CWE-617 | AST | Enforces `assert()` validations for state invariants in critical complex routines. |
 | **CGULL-028** | Insecure PRNG for Security Use | **High** | Crypto | CWE-338 | Hybrid | Flags `rand()`, `random()`, or `srand(time(NULL))` calls in security-sensitive contexts. |
 | **CGULL-029** | sizeof() on Pointer Type | **High** | Arithmetic | CWE-467 | AST | Flags use of `sizeof()` on a pointer variable, which returns the size of the pointer instead of the memory block. |
+| **CGULL-030** | Command Injection Vulnerability | **High** | Control Flow | CWE-78 | AST | Flags use of `system()` or `popen()` with non-literal string arguments. |
 
 ---
 

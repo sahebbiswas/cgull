@@ -195,3 +195,82 @@ class UnsafeIntegerConversionsRule(BaseRule):
                     suggested_fix_replacement=f"strtol({arg}, &endptr, 10)"
                 ))
         return issues
+
+class CommandInjectionRule(BaseRule):
+    rule_id = "CGULL-030"
+    name = "Command Injection Vulnerability"
+    impact = Severity.HIGH
+    category = RuleCategory.CONTROL_FLOW
+    description = "Flag the use of system() or popen() with non-literal string arguments, which can lead to OS command injection."
+    implementation_method = "AST parsing to check for literal arguments"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-78"
+    remediation_suggestion = "Avoid using system() or popen() with user input. Instead, use execve() with properly separated arguments, or avoid invoking shells entirely."
+    sample_vulnerable_code = "char cmd[256];\nsnprintf(cmd, sizeof(cmd), \"ls %s\", user_input);\nsystem(cmd);"
+    sample_remediated_code = "char *args[] = {\"ls\", user_input, NULL};\nexecve(\"/bin/ls\", args, envp);"
+    analysis_engine = AnalysisEngine.AST
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        for fn in ast_ctx.functions:
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
+
+                if callee in ("system", "popen"):
+                    args_str = raw_args.strip()
+                    first_arg = ""
+
+                    if callee == "popen":
+                        # Extract first arg, balancing parens
+                        paren_depth = 0
+                        in_quote = False
+                        quote_char = None
+                        arg_end = -1
+                        for i, c in enumerate(args_str):
+                            if in_quote:
+                                if c == quote_char and (i == 0 or args_str[i-1] != '\\'):
+                                    in_quote = False
+                            elif c in ('"', "'"):
+                                in_quote = True
+                                quote_char = c
+                            elif c == '(':
+                                paren_depth += 1
+                            elif c == ')':
+                                paren_depth -= 1
+                            elif c == ',' and paren_depth == 0:
+                                arg_end = i
+                                break
+
+                        if arg_end != -1:
+                            first_arg = args_str[:arg_end].strip()
+                        else:
+                            first_arg = args_str.strip()
+                    else:
+                        first_arg = args_str.strip()
+
+                    if not first_arg:
+                        continue
+
+                    # Check if string literal
+                    is_literal = False
+                    if (first_arg.startswith('"') and first_arg.endswith('"')) or \
+                       (first_arg.startswith('L"') and first_arg.endswith('"')) or \
+                       (first_arg.startswith('u8"') and first_arg.endswith('"')) or \
+                       (first_arg.startswith('u"') and first_arg.endswith('"')) or \
+                       (first_arg.startswith('U"') and first_arg.endswith('"')):
+                        is_literal = True
+
+                    if not is_literal:
+                        code_snippet = ast_ctx.source_lines[line_no - 1].strip() if 0 < line_no <= len(ast_ctx.source_lines) else f"{callee}(...)"
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=code_snippet,
+                            message=f"Non-literal string passed to {callee}(...). An attacker can inject arbitrary OS commands.",
+                            column_number=1,
+                            engine="AST",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement="Use exec() family functions (execve) with an array of arguments to bypass the shell."
+                        ))
+        return issues
