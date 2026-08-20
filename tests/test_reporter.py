@@ -154,6 +154,16 @@ class TestReportGeneratorSARIF(unittest.TestCase):
         gets_results = [r for r in parsed["runs"][0]["results"] if r["ruleId"] == "CGULL-001"]
         self.assertEqual(len(gets_results), 3)
 
+    def test_sarif_full_description_uses_rule_description_not_remediation(self):
+        from cgull.rules.banned_functions import BannedFunctionsRule
+        result = self.scanner.scan_text(VULNERABLE_CODE, "sample.c")
+        parsed = json.loads(ReportGenerator.to_sarif(result))
+        rules = parsed["runs"][0]["tool"]["driver"]["rules"]
+        rule_entry = next(r for r in rules if r["id"] == "CGULL-001")
+        gets_issue = next(i for i in result.issues if i.rule_id == "CGULL-001")
+        self.assertEqual(rule_entry["fullDescription"]["text"], BannedFunctionsRule.description)
+        self.assertNotEqual(rule_entry["fullDescription"]["text"], gets_issue.remediation)
+
     def test_sarif_no_findings_produces_empty_results(self):
         result = self.scanner.scan_text(CLEAN_CODE, "clean.c")
         parsed = json.loads(ReportGenerator.to_sarif(result))

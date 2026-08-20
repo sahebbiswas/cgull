@@ -48,14 +48,18 @@ class ReportGenerator:
         rules_dict: Dict[str, Dict[str, Any]] = {}
         results_list: List[Dict[str, Any]] = []
 
+        from .rules import RULE_REGISTRY
+
         for issue in result.issues:
             # Rule entry
             if issue.rule_id not in rules_dict:
+                rule_cls = RULE_REGISTRY.get(issue.rule_id)
+                full_desc = (getattr(rule_cls, "description", None) or issue.rule_name) if rule_cls else issue.rule_name
                 rules_dict[issue.rule_id] = {
                     "id": issue.rule_id,
                     "name": issue.rule_name.replace(" ", ""),
                     "shortDescription": {"text": issue.rule_name},
-                    "fullDescription": {"text": issue.remediation},
+                    "fullDescription": {"text": full_desc},
                     "help": {
                         "text": f"Remediation: {issue.remediation}\nCWE: {issue.cwe_id}",
                         "markdown": f"### Remediation\n{issue.remediation}\n\n**CWE**: {issue.cwe_id}"
