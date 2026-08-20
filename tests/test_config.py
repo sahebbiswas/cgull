@@ -189,6 +189,46 @@ skip = { "CGULL-019" = "MISRA explicit void disabled" }
             exit_code = main(["rules", "--config", cfg_path])
             self.assertEqual(exit_code, 0)
 
+    def test_missing_explicit_config_fails(self):
+        exit_code = main(["scan", ".", "--config", "non_existent_config.toml"])
+        self.assertEqual(exit_code, 1)
+
+    def test_invalid_fail_on_fails(self):
+        toml_content = """
+schema_version = 1
+[output]
+fail_on = "invalid_severity_level"
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, ".cgull.toml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(toml_content)
+
+            exit_code = main(["scan", ".", "--config", cfg_path])
+            self.assertEqual(exit_code, 1)
+
+    def test_invalid_banned_func_identifier_fails(self):
+        toml_content = """
+schema_version = 1
+[functions.banned]
+"invalid regex (func)" = "reason"
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, ".cgull.toml")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(toml_content)
+
+            exit_code = main(["scan", ".", "--config", cfg_path])
+            self.assertEqual(exit_code, 1)
+
+    def test_string_literal_does_not_suppress(self):
+        lines = [
+            'char *msg = "cgull-disable-next-line CGULL-001";',
+            "gets(buf);"
+        ]
+        sup = SuppressionMap.from_source(lines)
+        self.assertFalse(sup.is_suppressed(2, "CGULL-001"))
+
 
 if __name__ == "__main__":
     unittest.main()

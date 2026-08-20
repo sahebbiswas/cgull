@@ -157,7 +157,7 @@ class ReportGenerator:
         failed = result.files_failed or len(result.failed_paths)
 
         lines = [
-            "# 🛡️ C-GULL Security Audit Report",
+            f"# 🛡️ C-GULL v{__version__} Security Audit Report",
             "",
             f"**Target**: `{result.target_path}`  ",
             f"**Scan Date**: `{result.timestamp}`  ",
@@ -262,7 +262,7 @@ class ReportGenerator:
 
         lines = [
             "=======================================================================",
-            " 🛡️  C-GULL: Code Guardian for Unchecked Logic & Leaks",
+            f" 🛡️  C-GULL v{__version__}: Code Guardian for Unchecked Logic & Leaks",
             "=======================================================================",
             f" Target Path      : {result.target_path}",
             f" Parser Mode      : {result.get_overall_parser_status()}",

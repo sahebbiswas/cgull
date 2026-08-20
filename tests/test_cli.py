@@ -74,7 +74,7 @@ class TestScanCommand(unittest.TestCase):
 
     def test_scan_markdown_format(self):
         code, out = self._run(["scan", self.c_file, "--format", "markdown"])
-        self.assertIn("C-GULL Security Audit Report", out)
+        self.assertIn("Security Audit Report", out)
 
     def test_fail_on_high_returns_nonzero_when_high_severity_found(self):
         code, _ = self._run(["scan", self.c_file, "--fail-on-high"])
@@ -202,7 +202,7 @@ class TestScanCommand(unittest.TestCase):
         code, _ = self._run(["scan", self.c_file, "-o", out_path])
         with open(out_path, encoding="utf-8") as f:
             content = f.read()
-        self.assertIn("C-GULL Security Audit Report", content)
+        self.assertIn("Security Audit Report", content)
 
     def test_scan_quiet_flag_suppresses_stderr_progress(self):
         stderr = io.StringIO()

@@ -143,6 +143,7 @@ class UncheckedDynamicAllocationsRule(BaseRule):
 
     DEFAULT_ALLOC_FUNCS = {"malloc", "calloc", "realloc", "aligned_alloc"}
     DEFAULT_REALLOC_FUNCS = {"realloc"}
+    DEFAULT_DEALLOC_FUNCS = {"free", "cfree", "vfree"}
 
     def __init__(
         self,
@@ -153,10 +154,13 @@ class UncheckedDynamicAllocationsRule(BaseRule):
         super().__init__()
         self.alloc_funcs: Set[str] = set(self.DEFAULT_ALLOC_FUNCS)
         self.realloc_funcs: Set[str] = set(self.DEFAULT_REALLOC_FUNCS)
+        self.dealloc_funcs: Set[str] = set(self.DEFAULT_DEALLOC_FUNCS)
         if extra_alloc_funcs:
             self.add_extra_alloc_funcs(extra_alloc_funcs)
         if extra_realloc_funcs:
             self.add_extra_realloc_funcs(extra_realloc_funcs)
+        if extra_dealloc_funcs:
+            self.add_extra_dealloc_funcs(extra_dealloc_funcs)
 
     def add_extra_alloc_funcs(self, extra_allocs: List[str]) -> None:
         self.alloc_funcs.update(extra_allocs)
@@ -166,13 +170,13 @@ class UncheckedDynamicAllocationsRule(BaseRule):
         self.alloc_funcs.update(extra_reallocs)
 
     def add_extra_dealloc_funcs(self, extra_deallocs: List[str]) -> None:
-        pass
+        self.dealloc_funcs.update(extra_deallocs)
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         alloc_pattern = "|".join(re.escape(f) for f in sorted(self.alloc_funcs, key=len, reverse=True))
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs)
             if cfg is not None:
                 for node in cfg.nodes.values():
                     if not node.allocated:

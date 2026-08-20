@@ -526,7 +526,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
             reads = _ids(ast_node.init)
             writes = {str(ast_node.name)} if ast_node.name else set()
             for call_name in _call_names(ast_node.init):
-                if call_name in alloc_set or any(alloc_kw.lower() in call_name.lower() for alloc_kw in alloc_set if len(alloc_kw) > 3):
+                if call_name in alloc_set:
                     if ast_node.name:
                         allocated.add(str(ast_node.name))
                     break
@@ -534,7 +534,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
         reads = _ids(ast_node.rvalue)
         writes = _assignment_target(ast_node.lvalue)
         for call_name in _call_names(ast_node.rvalue):
-            if call_name in alloc_set or any(alloc_kw.lower() in call_name.lower() for alloc_kw in alloc_set if len(alloc_kw) > 3):
+            if call_name in alloc_set:
                 allocated.update(writes)
                 break
     elif kind == "FuncCall":

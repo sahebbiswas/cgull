@@ -51,7 +51,7 @@ Suppressing findings inline:
     scan_parser.add_argument("target", nargs="?", default=".", help="Target file or directory to scan (default: current directory)")
     scan_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
     scan_parser.add_argument("-o", "--output", help="Path to write the report file (defaults to stdout)")
-    scan_parser.add_argument("-f", "--format", choices=["text", "json", "sarif", "markdown"], default="text", help="Report format (default: text)")
+    scan_parser.add_argument("-f", "--format", choices=["text", "json", "sarif", "markdown"], default=None, help="Report format (default: text or config default_format)")
     scan_parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress indicator during scan")
     scan_parser.add_argument("--ignore-file", help="Path to .cgullignore file")
     scan_parser.add_argument("--ignore-pattern", action="append", default=[], help="Pattern to ignore (can be specified multiple times)")
@@ -81,6 +81,9 @@ def handle_scan(args) -> int:
 
     # Load configuration file
     config = load_config(config_path=args.config, target_path=target)
+    if config.error:
+        print(f"Error: {config.error}", file=sys.stderr)
+        return 1
     for warning in config.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
@@ -90,8 +93,9 @@ def handle_scan(args) -> int:
 
     # Merge custom ignore patterns from config [paths] exclude
     custom_ignores = list(args.ignore_pattern or [])
-    if config.exclude_paths:
-        custom_ignores.extend(config.exclude_paths)
+    resolved_excludes = config.get_resolved_exclude_paths(target)
+    if resolved_excludes:
+        custom_ignores.extend(resolved_excludes)
 
     # Determine severity filter
     sev_filter = None
@@ -151,26 +155,24 @@ def handle_scan(args) -> int:
             return 1
         result = apply_baseline(result, baseline_counts)
 
-    # Format output (CLI flag > config default_format > default)
-    fmt = args.format.lower()
-    user_format_given = False
-    if sys.argv:
-        for a in sys.argv:
-            if a in ("-f", "--format") or a.startswith("--format="):
-                user_format_given = True
-                break
+    # Format output (CLI flag > config default_format > output extension auto-detect > text)
+    user_format_given = args.format is not None
 
-    if not user_format_given and config.default_format:
+    if user_format_given:
+        fmt = args.format.lower()
+    elif config.default_format:
         fmt = config.default_format.lower()
-
-    # Auto-detect format if output filename specified
-    if args.output and not user_format_given:
+    elif args.output:
         if args.output.endswith(".json"):
             fmt = "json"
         elif args.output.endswith(".sarif"):
             fmt = "sarif"
         elif args.output.endswith(".md"):
             fmt = "markdown"
+        else:
+            fmt = "text"
+    else:
+        fmt = "text"
 
     if fmt == "json":
         output_str = ReportGenerator.to_json(result)
@@ -213,6 +215,9 @@ def handle_scan(args) -> int:
 def handle_rules(args=None) -> int:
     config_path = getattr(args, "config", None) if args else None
     config = load_config(config_path=config_path, target_path=".")
+    if config.error:
+        print(f"Error: {config.error}", file=sys.stderr)
+        return 1
     for warning in config.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 

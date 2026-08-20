@@ -54,7 +54,7 @@ class BannedFunctionsRule(BaseRule):
         issues = []
         match_target = masked_line_content or line_content
         for fn_name, (reason, fix) in self.banned_funcs.items():
-            pattern = rf'\b{fn_name}\s*\('
+            pattern = rf'\b{re.escape(fn_name)}\s*\('
             # Match against the string-literal-masked view so a banned
             # function name that only appears as text inside a string
             # literal (e.g. a log message mentioning "gets()") isn't
