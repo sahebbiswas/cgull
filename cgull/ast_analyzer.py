@@ -163,6 +163,7 @@ class CFunction:
     returns_boolean: bool = False
     has_assertions: bool = False
     cfg_nodes: List[CFGNode] = field(default_factory=list)
+    body_start_line: int = 0
 
 
 @dataclass
@@ -306,15 +307,20 @@ def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Opt
     return "int", False, False, False, True, False, None, False
 
 
-def _extract_identifiers_from_ast(node) -> Set[str]:
+def _extract_identifiers_from_ast(node, ignore_callees: bool = False) -> Set[str]:
     """Recursively extracts all identifier names from an AST node."""
     names: Set[str] = set()
     if node is None:
         return names
-    if type(node).__name__ == "ID":
+    kind = type(node).__name__
+    if kind == "ID":
         names.add(str(node.name))
+    elif ignore_callees and kind == "FuncCall":
+        if node.args:
+            names.update(_extract_identifiers_from_ast(node.args, ignore_callees=ignore_callees))
+        return names
     for _, child in node.children():
-        names.update(_extract_identifiers_from_ast(child))
+        names.update(_extract_identifiers_from_ast(child, ignore_callees=ignore_callees))
     return names
 
 
@@ -848,6 +854,7 @@ class CASTParser:
                     body=fn_body,
                     has_void_param_list=has_void_param,
                     is_empty_param_list=is_empty_params,
+                    body_start_line=fn_start,
                 )
 
                 if ext.body:
@@ -900,6 +907,7 @@ class CASTParser:
 
             end_line = full_code[:curr_pos].count('\n') + 1
             body = full_code[body_start_pos:curr_pos - 1]
+            body_start_line = full_code[:body_start_pos].count('\n') + 1
 
             # Parse parameters
             params: List[CParameter] = []
@@ -932,6 +940,7 @@ class CASTParser:
                 body=body,
                 has_void_param_list=has_void_param,
                 is_empty_param_list=is_empty_params,
+                body_start_line=body_start_line,
             )
 
             # Analyze function body variables & calls

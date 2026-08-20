@@ -24,3 +24,16 @@ void test_macro_type_array(void) {
     uint32_t uint_arr[4];
     uint_arr[4] = 100U; // expect: CGULL-007
 }
+
+/* True Positive: Variable index without preceding bounds validation */
+void test_tp_variable_index_unvalidated(int idx) {
+    int table[10];
+    table[idx] = 42; // expect: CGULL-007
+}
+
+/* True Positive: recv return value used as index without bounds check */
+void test_tp_recv_result_unvalidated(int recvResult) {
+    char dataBuffer[100] = "";
+    char *data = dataBuffer;
+    data[recvResult] = '\0'; // expect: CGULL-007
+}
