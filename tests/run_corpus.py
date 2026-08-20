@@ -83,6 +83,8 @@ def run_corpus_scan(
     log_lines.append("C-GULL Security Rule Behavioral Corpus Verification")
     log_lines.append("=" * 70)
 
+    meaningfully_covered_rules: Set[str] = set()
+
     for rule_id in rule_folders:
         rule_dir = os.path.join(rules_dir, rule_id)
         if rule_id not in RULE_REGISTRY:
@@ -98,7 +100,12 @@ def run_corpus_scan(
         ]
         c_files.sort()
 
+        if not c_files:
+            log_lines.append(f"WARNING: Rule ID '{rule_id}' directory has no .c test files. Skipping coverage count.")
+            continue
+
         log_lines.append(f"\nRule [{rule_id}] - {rule_instance.name}")
+        rule_expectations_count = 0
 
         for c_file in c_files:
             file_path = os.path.join(rule_dir, c_file)
@@ -106,6 +113,9 @@ def run_corpus_scan(
             total_files += 1
 
             expectations = parse_expectations(file_path)
+            for exps in expectations.values():
+                rule_expectations_count += len(exps)
+
             scan_result = scanner.scan_path(file_path)
             reported_issues: List[Issue] = scan_result.issues
 
@@ -141,12 +151,16 @@ def run_corpus_scan(
                         log_lines.append(msg)
 
             if file_missing == 0 and file_unexpected == 0:
-                if verbose or True:
+                if verbose:
                     log_lines.append(f"  PASS: {c_file} ({file_expected} expected findings verified)")
 
+        if rule_expectations_count > 0:
+            meaningfully_covered_rules.add(rule_id)
+        else:
+            log_lines.append(f"WARNING: Rule ID '{rule_id}' directory has test files but zero expectation annotations ('// expect: {rule_id}').")
+
     total_registered_rules = len(RULE_REGISTRY)
-    valid_evaluated_rules = [r for r in rule_folders if r in RULE_REGISTRY]
-    evaluated_rules_count = len(valid_evaluated_rules)
+    evaluated_rules_count = len(meaningfully_covered_rules)
     behavioral_coverage_pct = (evaluated_rules_count / total_registered_rules * 100.0) if total_registered_rules > 0 else 0.0
 
     coverage_failed = False
