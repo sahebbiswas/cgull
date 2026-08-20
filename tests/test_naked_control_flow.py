@@ -28,6 +28,63 @@ def test_naked_control_flow_with_intervening_preprocessor():
     assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
 
 
+def test_naked_control_flow_string_literal_parens():
+    code_braced = """
+    int check(const char *s) {
+        if (strcmp(s, "(") == 0) {
+            return 1;
+        }
+        return 0;
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code_braced)
+    assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
+
+    code_naked = """
+    int check(const char *s) {
+        if (strcmp(s, "(") == 0)
+            return 1;
+        return 0;
+    }
+    """
+    errors_naked = run_cgull_rule("naked_control_flow", code_naked)
+    assert len(errors_naked) == 1, f"Expected 1 error, got: {errors_naked}"
+
+
+def test_naked_control_flow_do_while_split_preprocessor_conditions():
+    code_if_else = """
+    void loop(int a, int b) {
+        do {
+            work();
+        } while
+    #if FEATURE_X
+            (a)
+    #else
+            (b)
+    #endif
+        ;
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code_if_else)
+    assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
+
+    code_ifdef_else = """
+    void loop(int a, int b) {
+        do {
+            work();
+        } while
+    #ifdef FEATURE_X
+            (a)
+    #else
+            (b)
+    #endif
+        ;
+    }
+    """
+    errors_ifdef = run_cgull_rule("naked_control_flow", code_ifdef_else)
+    assert len(errors_ifdef) == 0, f"Expected 0 errors, got: {errors_ifdef}"
+
+
 def test_naked_control_flow_multiline_compound_if():
     code = """
     if (this_condition
