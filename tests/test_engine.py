@@ -224,6 +224,51 @@ class TestParallelWorkerFunction(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def test_scan_files_parallel_handles_keyboard_interrupt(self):
+        from unittest.mock import patch
+        temp_dir = tempfile.mkdtemp()
+        try:
+            f1 = os.path.join(temp_dir, "f1.c")
+            f2 = os.path.join(temp_dir, "f2.c")
+            with open(f1, "w") as f:
+                f.write(VULNERABLE_CODE)
+            with open(f2, "w") as f:
+                f.write(VULNERABLE_CODE)
+
+            scanner = CGullScanner()
+            with patch("cgull.engine.as_completed", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    scanner.scan_path(temp_dir, jobs=2)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_parallel_interrupt_terminates_running_workers_promptly(self):
+        import time
+        from unittest.mock import patch
+        temp_dir = tempfile.mkdtemp()
+        try:
+            f1 = os.path.join(temp_dir, "f1.c")
+            f2 = os.path.join(temp_dir, "f2.c")
+            with open(f1, "w") as f:
+                f.write(VULNERABLE_CODE)
+            with open(f2, "w") as f:
+                f.write(VULNERABLE_CODE)
+
+            def _blocking_worker(file_path, config):
+                time.sleep(10)
+                return [], 0, 0.0, "regex", "success", "LIMITED", None
+
+            scanner = CGullScanner()
+            t0 = time.time()
+            with patch("cgull.engine._scan_file_worker", side_effect=_blocking_worker):
+                with patch("cgull.engine.as_completed", side_effect=KeyboardInterrupt):
+                    with self.assertRaises(KeyboardInterrupt):
+                        scanner.scan_path(temp_dir, jobs=2)
+            elapsed = time.time() - t0
+            self.assertLess(elapsed, 2.0, f"Interrupt took {elapsed:.2f}s; workers were not terminated promptly")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 class TestAnalysisStatusAndScanCompleteness(unittest.TestCase):
     def setUp(self):
