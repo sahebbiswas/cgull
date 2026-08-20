@@ -351,10 +351,29 @@ Coverage thresholds are maintained as minimum baselines and are increased delibe
 
 ---
 
+## 📌 Versioning Policy & Output Schema Versioning
+
+C-GULL maintains clear stability boundaries by separating the **Package Version** from the **Finding / Output Schema Version**:
+
+### Package Versioning (`cgull.__version__`)
+- Follows **Semantic Versioning (SemVer 2.0.0)** (`MAJOR.MINOR.PATCH`).
+- **PATCH** increments for bug fixes, performance improvements, and internal refactoring that do not break CLI options or python API behavior.
+- **MINOR** increments for new static analysis rules, features, CLI options, or backward-compatible API additions.
+- **MAJOR** increments for breaking changes to Python module APIs or CLI flag semantics.
+
+### Output Schema Versioning (`schema_version`)
+- The JSON output schema includes an explicit top-level `"schema_version"` field (currently `"1"`).
+- **Finding / Output Schema Version** changes independently from the package version.
+- **Backward-compatible schema additions** (such as adding new optional fields to issue or summary blocks) do not increment `schema_version`.
+- **Backward-incompatible schema changes** (such as removing fields, renaming top-level keys, or restructuring issue lists) will increment `schema_version` (e.g. from `"1"` to `"2"`).
+
+---
+
 ## 📄 Output Schema (JSON Example)
 
 ```json
 {
+  "schema_version": "1",
   "meta": {
     "tool": "C-GULL",
     "version": "<VERSION>",

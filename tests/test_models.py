@@ -80,6 +80,7 @@ class TestScanResultSerialization(unittest.TestCase):
             analysis_status_counts={ParserStatus.FALLBACK_PARSER.value: 2},
         )
         d = result.to_dict()
+        self.assertEqual(d["schema_version"], "1")
         self.assertEqual(d["meta"]["tool"], "C-GULL")
         self.assertIn("analysis", d)
         self.assertEqual(d["analysis"]["parser"], "fallback-parser")

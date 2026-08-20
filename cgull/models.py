@@ -8,6 +8,8 @@ from typing import List, Dict, Any, Optional, Set
 import time
 from . import __version__
 
+OUTPUT_SCHEMA_VERSION = "1"
+
 
 class Severity(str, Enum):
     HIGH = "High"
@@ -325,6 +327,7 @@ class ScanResult:
                 "total_issues_before_baseline_filter": self.baseline_total_before_filter,
             }
         return {
+            "schema_version": OUTPUT_SCHEMA_VERSION,
             "meta": {
                 "tool": "C-GULL",
                 "version": __version__,
