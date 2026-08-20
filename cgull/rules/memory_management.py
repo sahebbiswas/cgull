@@ -33,13 +33,18 @@ def _source_snippet(ast_ctx: CASTContext, line_no: int, fallback: str) -> str:
     return fallback
 
 
-def _ast_cfg_for_function(ast_ctx: CASTContext, fn: CFunction):
+def _ast_cfg_for_function(
+    ast_ctx: CASTContext,
+    fn: CFunction,
+    alloc_funcs: Optional[Set[str]] = None,
+    dealloc_funcs: Optional[Set[str]] = None,
+):
     if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
         return None
     funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
     if funcdef is None:
         return None
-    cfg = build_cfg(funcdef)
+    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
     initial_initialized = set(p.name for p in fn.parameters if p.name) | set(ast_ctx.global_variables.keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
     cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
     return cfg
@@ -136,10 +141,38 @@ class UncheckedDynamicAllocationsRule(BaseRule):
     sample_remediated_code = "char *buf = (char *)malloc(1024);\nif (buf == NULL) {\n    return -ENOMEM;\n}\nbuf[0] = 'A';"
     analysis_engine = AnalysisEngine.HYBRID
 
+    DEFAULT_ALLOC_FUNCS = {"malloc", "calloc", "realloc", "aligned_alloc"}
+    DEFAULT_REALLOC_FUNCS = {"realloc"}
+
+    def __init__(
+        self,
+        extra_alloc_funcs: Optional[List[str]] = None,
+        extra_realloc_funcs: Optional[List[str]] = None,
+        extra_dealloc_funcs: Optional[List[str]] = None,
+    ):
+        super().__init__()
+        self.alloc_funcs: Set[str] = set(self.DEFAULT_ALLOC_FUNCS)
+        self.realloc_funcs: Set[str] = set(self.DEFAULT_REALLOC_FUNCS)
+        if extra_alloc_funcs:
+            self.add_extra_alloc_funcs(extra_alloc_funcs)
+        if extra_realloc_funcs:
+            self.add_extra_realloc_funcs(extra_realloc_funcs)
+
+    def add_extra_alloc_funcs(self, extra_allocs: List[str]) -> None:
+        self.alloc_funcs.update(extra_allocs)
+
+    def add_extra_realloc_funcs(self, extra_reallocs: List[str]) -> None:
+        self.realloc_funcs.update(extra_reallocs)
+        self.alloc_funcs.update(extra_reallocs)
+
+    def add_extra_dealloc_funcs(self, extra_deallocs: List[str]) -> None:
+        pass
+
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        alloc_pattern = "|".join(re.escape(f) for f in sorted(self.alloc_funcs, key=len, reverse=True))
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs)
             if cfg is not None:
                 for node in cfg.nodes.values():
                     if not node.allocated:
@@ -165,7 +198,7 @@ class UncheckedDynamicAllocationsRule(BaseRule):
             # Parser unavailable: retain the existing lexical fallback.
             body_lines = fn.body.splitlines()
             depths = _brace_depths(body_lines)
-            alloc_regex = re.compile(r'\b(\w+)\s*=\s*(?:\([^\)]+\)\s*)?(?:malloc|calloc|realloc|aligned_alloc)\s*\(')
+            alloc_regex = re.compile(rf'\b(\w+)\s*=\s*(?:\([^\)]+\)\s*)?(?:{alloc_pattern})\s*\(')
             for i, line in enumerate(body_lines):
                 line_no = fn.start_line + 1 + i
                 m = alloc_regex.search(line)
@@ -351,12 +384,23 @@ class DoubleFreeRule(BaseRule):
     sample_remediated_code = "free(ptr);\nptr = NULL;\nfree(ptr); // Safe: free(NULL) is a no-op"
     analysis_engine = AnalysisEngine.AST
 
+    DEFAULT_DEALLOC_FUNCS = {"free", "cfree", "vfree"}
     MAX_LOOKAHEAD_LINES = 200
+
+    def __init__(self, extra_dealloc_funcs: Optional[List[str]] = None):
+        super().__init__()
+        self.dealloc_funcs: Set[str] = set(self.DEFAULT_DEALLOC_FUNCS)
+        if extra_dealloc_funcs:
+            self.add_extra_dealloc_funcs(extra_dealloc_funcs)
+
+    def add_extra_dealloc_funcs(self, extra_deallocs: List[str]) -> None:
+        self.dealloc_funcs.update(extra_deallocs)
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs)
             if cfg is not None:
                 for node in cfg.nodes.values():
                     for freed_ptr in node.freed:
@@ -379,7 +423,7 @@ class DoubleFreeRule(BaseRule):
             depths = _brace_depths(body_lines)
             for i, line in enumerate(body_lines):
                 line_no = fn.start_line + 1 + i
-                free_match = re.search(r'\b(?:free|cfree|vfree)\s*\(\s*(\w+)\s*\)', line)
+                free_match = re.search(rf'\b(?:{dealloc_pattern})\s*\(\s*(\w+)\s*\)', line)
                 if not free_match:
                     continue
                 freed_ptr = free_match.group(1)
@@ -422,12 +466,23 @@ class UseAfterFreeRule(BaseRule):
     sample_remediated_code = "free(session);\nsession = NULL;"
     analysis_engine = AnalysisEngine.AST
 
+    DEFAULT_DEALLOC_FUNCS = {"free", "cfree", "vfree"}
     MAX_LOOKAHEAD_LINES = 200
+
+    def __init__(self, extra_dealloc_funcs: Optional[List[str]] = None):
+        super().__init__()
+        self.dealloc_funcs: Set[str] = set(self.DEFAULT_DEALLOC_FUNCS)
+        if extra_dealloc_funcs:
+            self.add_extra_dealloc_funcs(extra_dealloc_funcs)
+
+    def add_extra_dealloc_funcs(self, extra_deallocs: List[str]) -> None:
+        self.dealloc_funcs.update(extra_deallocs)
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs)
             if cfg is not None:
                 for node in cfg.nodes.values():
                     for freed_ptr in node.freed:
@@ -449,7 +504,7 @@ class UseAfterFreeRule(BaseRule):
             depths = _brace_depths(body_lines)
             for i, line in enumerate(body_lines):
                 line_no = fn.start_line + 1 + i
-                free_match = re.search(r'\bfree\s*\(\s*(\w+)\s*\)', line)
+                free_match = re.search(rf'\b(?:{dealloc_pattern})\s*\(\s*(\w+)\s*\)', line)
                 if not free_match:
                     continue
                 freed_ptr = free_match.group(1)

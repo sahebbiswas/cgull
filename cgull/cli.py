@@ -14,6 +14,7 @@ from .reporter import ReportGenerator
 from .rules import get_all_rules
 from .baseline import load_baseline_fingerprints, apply_baseline, BaselineError
 from .utils import ProgressIndicator
+from .config import load_config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,6 +49,7 @@ Suppressing findings inline:
     # SCAN subcommand
     scan_parser = subparsers.add_parser("scan", help="Scan C source files or directories for vulnerabilities")
     scan_parser.add_argument("target", nargs="?", default=".", help="Target file or directory to scan (default: current directory)")
+    scan_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
     scan_parser.add_argument("-o", "--output", help="Path to write the report file (defaults to stdout)")
     scan_parser.add_argument("-f", "--format", choices=["text", "json", "sarif", "markdown"], default="text", help="Report format (default: text)")
     scan_parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress indicator during scan")
@@ -62,7 +64,8 @@ Suppressing findings inline:
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
 
     # RULES subcommand
-    subparsers.add_parser("rules", help="List all security audit rules supported by C-GULL")
+    rules_parser = subparsers.add_parser("rules", help="List all security audit rules supported by C-GULL")
+    rules_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
 
     # INIT-IGNORE subcommand
     subparsers.add_parser("init-ignore", help="Generate a default .cgullignore template file")
@@ -75,6 +78,20 @@ def handle_scan(args) -> int:
     if not os.path.exists(target):
         print(f"Error: Target path '{target}' does not exist.", file=sys.stderr)
         return 1
+
+    # Load configuration file
+    config = load_config(config_path=args.config, target_path=target)
+    for warning in config.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+    # Determine rules to run
+    all_rules = get_all_rules()
+    active_rules = config.apply_to_rules(all_rules)
+
+    # Merge custom ignore patterns from config [paths] exclude
+    custom_ignores = list(args.ignore_pattern or [])
+    if config.exclude_paths:
+        custom_ignores.extend(config.exclude_paths)
 
     # Determine severity filter
     sev_filter = None
@@ -93,6 +110,7 @@ def handle_scan(args) -> int:
         eng_mode = AnalysisEngine.AST
 
     scanner = CGullScanner(
+        rules=active_rules,
         severity_filter=sev_filter,
         engine_mode=eng_mode
     )
@@ -106,7 +124,7 @@ def handle_scan(args) -> int:
         result = scanner.scan_path(
             target_path=target,
             ignore_file=args.ignore_file,
-            custom_ignore_patterns=args.ignore_pattern,
+            custom_ignore_patterns=custom_ignores,
             jobs=jobs,
             progress_callback=progress.update,
         )
@@ -133,10 +151,20 @@ def handle_scan(args) -> int:
             return 1
         result = apply_baseline(result, baseline_counts)
 
-    # Format output
+    # Format output (CLI flag > config default_format > default)
     fmt = args.format.lower()
+    user_format_given = False
+    if sys.argv:
+        for a in sys.argv:
+            if a in ("-f", "--format") or a.startswith("--format="):
+                user_format_given = True
+                break
+
+    if not user_format_given and config.default_format:
+        fmt = config.default_format.lower()
+
     # Auto-detect format if output filename specified
-    if args.output and args.format == "text":
+    if args.output and not user_format_given:
         if args.output.endswith(".json"):
             fmt = "json"
         elif args.output.endswith(".sarif"):
@@ -166,23 +194,50 @@ def handle_scan(args) -> int:
 
     if args.fail_on_error and (result.files_failed > 0 or len(result.scan_errors) > 0):
         return 1
-    if args.fail_on_high and result.high_severity_count > 0:
+
+    # Check fail-on conditions
+    fail_on = config.fail_on
+    if args.fail_on_high:
+        fail_on = "high"
+
+    if fail_on == "high" and result.high_severity_count > 0:
         return 1
+    elif fail_on == "medium" and (result.high_severity_count > 0 or result.medium_severity_count > 0):
+        return 1
+    elif fail_on in ("low", "all") and result.total_issues_count > 0:
+        return 1
+
     return 0
 
 
-def handle_rules() -> int:
-    rules = get_all_rules()
+def handle_rules(args=None) -> int:
+    config_path = getattr(args, "config", None) if args else None
+    config = load_config(config_path=config_path, target_path=".")
+    for warning in config.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+    all_rules = get_all_rules()
+    active_rules = config.apply_to_rules([r() for r in [type(ru) for ru in all_rules]])
+    active_ids = {r.rule_id for r in active_rules}
+
     print("=" * 80)
-    print(f" 🛡️  C-GULL Security Rules Catalog ({len(rules)} Active Rules)")
+    config_note = f" (Config: {config.config_file_path})" if config.config_file_path else ""
+    print(f" 🛡️  C-GULL Security Rules Catalog ({len(active_rules)}/{len(all_rules)} Active Rules){config_note}")
     print("=" * 80)
-    print(f"{'ID':<11} | {'Impact':<7} | {'CWE':<15} | {'Rule Name'}")
+    print(f"{'ID':<11} | {'Status':<8} | {'Impact':<7} | {'CWE':<15} | {'Rule Name'}")
     print("-" * 80)
-    for r in sorted(rules, key=lambda x: (0 if x.impact == Severity.HIGH else (1 if x.impact == Severity.MEDIUM else 2), x.rule_id)):
+    for r in sorted(all_rules, key=lambda x: (0 if x.impact == Severity.HIGH else (1 if x.impact == Severity.MEDIUM else 2), x.rule_id)):
+        status = "ACTIVE" if r.rule_id in active_ids else "SKIPPED"
         imp = r.impact.value.upper()
-        print(f"{r.rule_id:<11} | {imp:<7} | {r.cwe_id:<15} | {r.name}")
-        print(f"   Description : {r.description}")
-        print(f"   Remediation : {r.remediation_suggestion}")
+        if r.rule_id in config.severity_overrides:
+            imp = config.severity_overrides[r.rule_id].value.upper()
+        print(f"{r.rule_id:<11} | {status:<8} | {imp:<7} | {r.cwe_id:<15} | {r.name}")
+        if status == "SKIPPED":
+            reason = config.skipped_rules.get(r.rule_id, "Disabled via configuration")
+            print(f"   Reason      : {reason}")
+        else:
+            print(f"   Description : {r.description}")
+            print(f"   Remediation : {r.remediation_suggestion}")
         print("-" * 80)
     return 0
 
@@ -232,7 +287,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args = parser.parse_args(argv)
 
         if args.command == "rules":
-            return handle_rules()
+            return handle_rules(args)
         elif args.command == "init-ignore":
             return handle_init_ignore()
         elif args.command == "scan":

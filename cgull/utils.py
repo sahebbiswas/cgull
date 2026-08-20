@@ -16,9 +16,11 @@ from typing import Dict, List, Optional, Set, TextIO, Tuple
 #          // cgull-ignore: CGULL-001
 #          // cgull-ignore: CGULL-001,CGULL-003
 #          // cgull-ignore-next-line
-#          // cgull-ignore-next-line: CGULL-001,CGULL-003
+#          // cgull-disable-next-line CGULL-007
+#          // cgull-disable-line CGULL-019
+#          /* cgull-disable-next-line: CGULL-001,CGULL-003 */
 _SUPPRESS_RE = re.compile(
-    r'cgull-ignore(?P<next>-next-line)?(?:\s*:\s*(?P<ids>[A-Za-z0-9_,\-\s]+))?',
+    r'(?:cgull-ignore|cgull-disable)(?P<next>-next-line)?(?P<line>-line)?(?:\s*[:\s]\s*(?P<ids>[A-Za-z0-9_,\-\s]+))?',
     re.IGNORECASE,
 )
 
@@ -222,24 +224,26 @@ class SuppressionMap:
     def from_source(cls, raw_lines: List[str]) -> "SuppressionMap":
         sup = cls()
         for line_no, raw_line in enumerate(raw_lines, 1):
-            # Directives only make sense inside comments; a plain regex
-            # search on the raw line is sufficient here since we only need
-            # to know intent, not re-parse full C syntax.
-            if "cgull-ignore" not in raw_line:
+            line_lower = raw_line.lower()
+            if "cgull-ignore" not in line_lower and "cgull-disable" not in line_lower:
                 continue
-            m = _SUPPRESS_RE.search(raw_line)
-            if not m:
-                continue
-            ids_raw = m.group("ids")
-            if ids_raw:
-                rule_ids = {r.strip().upper() for r in ids_raw.split(",") if r.strip()}
-            else:
-                rule_ids = {"*"}
+            for m in _SUPPRESS_RE.finditer(raw_line):
+                ids_raw = m.group("ids")
+                if ids_raw:
+                    rule_ids = set()
+                    for token in ids_raw.split(","):
+                        cleaned = token.strip().rstrip("*/").strip().upper()
+                        if cleaned:
+                            rule_ids.add(cleaned)
+                    if not rule_ids:
+                        rule_ids = {"*"}
+                else:
+                    rule_ids = {"*"}
 
-            if m.group("next"):
-                sup._next_line.setdefault(line_no + 1, set()).update(rule_ids)
-            else:
-                sup._same_line.setdefault(line_no, set()).update(rule_ids)
+                if m.group("next"):
+                    sup._next_line.setdefault(line_no + 1, set()).update(rule_ids)
+                else:
+                    sup._same_line.setdefault(line_no, set()).update(rule_ids)
         return sup
 
     def is_suppressed(self, line_number: int, rule_id: str) -> bool:

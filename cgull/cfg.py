@@ -418,9 +418,10 @@ def _call_args(node, callee: str):
     return []
 
 
-def _freed_vars(node) -> Set[str]:
+def _freed_vars(node, dealloc_funcs: Optional[Set[str]] = None) -> Set[str]:
     freed: Set[str] = set()
-    for callee in ("free", "cfree", "vfree"):
+    funcs = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
+    for callee in funcs:
         for arg in _call_args_all(node, callee):
             if type(arg).__name__ == "ID":
                 freed.add(str(arg.name))
@@ -508,22 +509,24 @@ def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
     return set(), set()
 
 
-def _event_payload(ast_node) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str]]:
+def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str]]:
     """kind, reads, writes, freed, allocated, derefs, asserted for an executable AST node."""
     kind = type(ast_node).__name__
     reads: Set[str] = set()
     writes: Set[str] = set()
-    freed: Set[str] = _freed_vars(ast_node)
+    freed: Set[str] = _freed_vars(ast_node, dealloc_funcs=dealloc_funcs)
     allocated: Set[str] = set()
     derefs = _deref_vars(ast_node)
     expr = _format_pycparser_expr(ast_node)
+
+    alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc"}
 
     if kind == "Decl":
         if ast_node.init is not None:
             reads = _ids(ast_node.init)
             writes = {str(ast_node.name)} if ast_node.name else set()
             for call_name in _call_names(ast_node.init):
-                if any(alloc_kw in call_name.lower() for alloc_kw in ("malloc", "calloc", "realloc", "aligned_alloc", "alloc")):
+                if call_name in alloc_set or any(alloc_kw.lower() in call_name.lower() for alloc_kw in alloc_set if len(alloc_kw) > 3):
                     if ast_node.name:
                         allocated.add(str(ast_node.name))
                     break
@@ -531,7 +534,7 @@ def _event_payload(ast_node) -> Tuple[str, Set[str], Set[str], Set[str], Set[str
         reads = _ids(ast_node.rvalue)
         writes = _assignment_target(ast_node.lvalue)
         for call_name in _call_names(ast_node.rvalue):
-            if any(alloc_kw in call_name.lower() for alloc_kw in ("malloc", "calloc", "realloc", "aligned_alloc", "alloc")):
+            if call_name in alloc_set or any(alloc_kw.lower() in call_name.lower() for alloc_kw in alloc_set if len(alloc_kw) > 3):
                 allocated.update(writes)
                 break
     elif kind == "FuncCall":
@@ -543,7 +546,8 @@ def _event_payload(ast_node) -> Tuple[str, Set[str], Set[str], Set[str], Set[str
     else:
         reads = _ids(ast_node)
 
-    if kind == "FuncCall" and _format_pycparser_expr(ast_node.name) in {"free", "cfree", "vfree"}:
+    dealloc_set = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
+    if kind == "FuncCall" and _format_pycparser_expr(ast_node.name) in dealloc_set:
         reads = set()
 
     asserted: Set[str] = set()
@@ -552,14 +556,14 @@ def _event_payload(ast_node) -> Tuple[str, Set[str], Set[str], Set[str], Set[str
     return kind, reads, writes, freed, allocated, derefs, asserted
 
 
-def build_cfg(funcdef) -> StructuredCFG:
+def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> StructuredCFG:
     """Build a structured CFG rooted at a pycparser FuncDef body."""
     from pycparser import c_ast
 
     cfg = StructuredCFG()
 
     def make_event(stmt) -> int:
-        kind, reads, writes, freed, allocated, derefs, asserted = _event_payload(stmt)
+        kind, reads, writes, freed, allocated, derefs, asserted = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
         return cfg.new_node(node_kind, stmt, expr_str=_format_pycparser_expr(stmt), reads=reads, writes=writes,
                             freed=freed, allocated=allocated, derefs=derefs, asserted=asserted)

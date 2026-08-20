@@ -33,10 +33,27 @@ class BannedFunctionsRule(BaseRule):
         "scanf": ("scanf() with unbounded %s can overflow input buffers.", "scanf(\"%31s\", dest) with explicit width specifier"),
     }
 
+    def __init__(self, extra_banned_funcs: Optional[dict] = None):
+        super().__init__()
+        self.banned_funcs = dict(self.BANNED_FUNCS)
+        if extra_banned_funcs:
+            self.add_extra_banned_funcs(extra_banned_funcs)
+
+    def add_extra_banned_funcs(self, extra_banned_funcs: dict) -> None:
+        for fn_name, details in extra_banned_funcs.items():
+            if isinstance(details, tuple):
+                self.banned_funcs[fn_name] = details
+            elif isinstance(details, dict):
+                reason = details.get("reason", f"Banned function call '{fn_name}'")
+                remediation = details.get("remediation", f"Avoid using {fn_name}()")
+                self.banned_funcs[fn_name] = (reason, remediation)
+            elif isinstance(details, str):
+                self.banned_funcs[fn_name] = (details, f"Avoid using {fn_name}()")
+
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         match_target = masked_line_content or line_content
-        for fn_name, (reason, fix) in self.BANNED_FUNCS.items():
+        for fn_name, (reason, fix) in self.banned_funcs.items():
             pattern = rf'\b{fn_name}\s*\('
             # Match against the string-literal-masked view so a banned
             # function name that only appears as text inside a string
