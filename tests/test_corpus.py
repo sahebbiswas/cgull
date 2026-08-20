@@ -19,8 +19,16 @@ class TestSecurityRuleBehavioralCorpus(unittest.TestCase):
         self.rules_dir = os.path.join(REPO_ROOT, "tests", "rules")
 
     def test_full_corpus_suite(self):
-        success, report = run_corpus_scan(self.rules_dir, verbose=False)
+        success, report = run_corpus_scan(self.rules_dir, verbose=False, min_behavioral_coverage=40.0)
         self.assertTrue(success, f"Behavioral Corpus Verification Failed:\n{report}")
+
+    def test_rule_behavioral_coverage_threshold(self):
+        min_threshold = 40.0
+        success, report = run_corpus_scan(self.rules_dir, verbose=False, min_behavioral_coverage=min_threshold)
+        self.assertTrue(
+            success,
+            f"Rule Behavioral Coverage threshold ({min_threshold}%) not met:\n{report}"
+        )
 
     def test_rule_cgull_003_unchecked_allocations(self):
         success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-003", verbose=False)
