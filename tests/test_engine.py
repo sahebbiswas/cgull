@@ -224,6 +224,24 @@ class TestParallelWorkerFunction(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def test_scan_files_parallel_handles_keyboard_interrupt(self):
+        from unittest.mock import patch
+        temp_dir = tempfile.mkdtemp()
+        try:
+            f1 = os.path.join(temp_dir, "f1.c")
+            f2 = os.path.join(temp_dir, "f2.c")
+            with open(f1, "w") as f:
+                f.write(VULNERABLE_CODE)
+            with open(f2, "w") as f:
+                f.write(VULNERABLE_CODE)
+
+            scanner = CGullScanner()
+            with patch("cgull.engine.as_completed", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    scanner.scan_path(temp_dir, jobs=2)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 class TestAnalysisStatusAndScanCompleteness(unittest.TestCase):
     def setUp(self):

@@ -391,6 +391,15 @@ class TestMainDispatch(unittest.TestCase):
                 main(["--help"])
         self.assertEqual(ctx.exception.code, 0)
 
+    def test_keyboard_interrupt_returns_exit_code_130_and_prints_message(self):
+        from unittest.mock import patch
+        stderr = io.StringIO()
+        with patch("cgull.cli.handle_scan", side_effect=KeyboardInterrupt):
+            with contextlib.redirect_stderr(stderr):
+                code = main(["scan", "."])
+        self.assertEqual(code, 130)
+        self.assertIn("Scan interrupted by user.", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

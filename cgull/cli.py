@@ -218,27 +218,31 @@ temp_*.c
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = build_parser()
-    if argv is None:
-        argv = sys.argv[1:]
+    try:
+        parser = build_parser()
+        if argv is None:
+            argv = sys.argv[1:]
 
-    # Default to 'scan .' if no args provided or path given without subcommand
-    if not argv:
-        argv = ["scan", "."]
-    elif argv[0] not in ("scan", "rules", "init-ignore", "--help", "-h", "--version", "-v"):
-        argv = ["scan"] + argv
+        # Default to 'scan .' if no args provided or path given without subcommand
+        if not argv:
+            argv = ["scan", "."]
+        elif argv[0] not in ("scan", "rules", "init-ignore", "--help", "-h", "--version", "-v"):
+            argv = ["scan"] + argv
 
-    args = parser.parse_args(argv)
+        args = parser.parse_args(argv)
 
-    if args.command == "rules":
-        return handle_rules()
-    elif args.command == "init-ignore":
-        return handle_init_ignore()
-    elif args.command == "scan":
-        return handle_scan(args)
-    else:
-        parser.print_help()
-        return 0
+        if args.command == "rules":
+            return handle_rules()
+        elif args.command == "init-ignore":
+            return handle_init_ignore()
+        elif args.command == "scan":
+            return handle_scan(args)
+        else:
+            parser.print_help()
+            return 0
+    except KeyboardInterrupt:
+        print("\nScan interrupted by user.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
