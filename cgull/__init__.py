@@ -3,7 +3,7 @@ C-GULL: Code Guardian for Unchecked Logic & Leaks
 A lightweight & AST-capable C Static Code Security Analyzer.
 """
 
-__version__ = "0.8.5"
+__version__ = "0.8.6"
 __author__ = "Saheb Biswas"
 
 from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError, OUTPUT_SCHEMA_VERSION

@@ -27,6 +27,7 @@ from .crypto_and_safety import (
     NoInsecureRandRule,
     SinglePointOfFailureControlFlowRule,
     InsecureDataStorageRule,
+    WeakCryptoPrimitivesRule,
 )
 from .types_and_arrays import (
     VariableLengthArraysRule,
@@ -66,6 +67,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     UninitializedMemoryUseRule,
     NoInsecureRandRule,
     CommandInjectionRule,
+    WeakCryptoPrimitivesRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     NakedControlFlowStatementsRule,
