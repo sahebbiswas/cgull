@@ -16,9 +16,11 @@ from typing import Dict, List, Optional, Set, TextIO, Tuple
 #          // cgull-ignore: CGULL-001
 #          // cgull-ignore: CGULL-001,CGULL-003
 #          // cgull-ignore-next-line
-#          // cgull-ignore-next-line: CGULL-001,CGULL-003
+#          // cgull-disable-next-line CGULL-007
+#          // cgull-disable-line CGULL-019
+#          /* cgull-disable-next-line: CGULL-001,CGULL-003 */
 _SUPPRESS_RE = re.compile(
-    r'cgull-ignore(?P<next>-next-line)?(?:\s*:\s*(?P<ids>[A-Za-z0-9_,\-\s]+))?',
+    r'(?:cgull-ignore|cgull-disable)(?P<next>-next-line)?(?P<line>-line)?(?:\s*[:\s]\s*(?P<ids>[A-Za-z0-9_,\-\s]+))?',
     re.IGNORECASE,
 )
 
@@ -201,16 +203,129 @@ def is_in_string_or_char_literal(line: str, index: int) -> bool:
     return in_string or in_char
 
 
+def extract_comments_from_raw_lines(raw_lines: List[str]) -> List[Tuple[int, str]]:
+    """
+    Extracts all line comments (// ...) and block comments (/* ... */)
+    along with their starting 1-based line numbers.
+    Strings and character literals are skipped so text inside literals
+    is never mistaken for a comment.
+    """
+    source = "\n".join(raw_lines)
+    comments: List[Tuple[int, str]] = []
+
+    i = 0
+    n = len(source)
+    line_no = 1
+
+    in_string = False
+    in_char = False
+    in_line_comment = False
+    in_block_comment = False
+
+    comment_start_line = 1
+    comment_chars: List[str] = []
+
+    while i < n:
+        c = source[i]
+        next_c = source[i + 1] if i + 1 < n else ""
+
+        if in_line_comment:
+            if c == "\n":
+                in_line_comment = False
+                comments.append((comment_start_line, "".join(comment_chars)))
+                comment_chars = []
+                line_no += 1
+            else:
+                comment_chars.append(c)
+            i += 1
+            continue
+
+        if in_block_comment:
+            if c == "*" and next_c == "/":
+                in_block_comment = False
+                comment_chars.append("*/")
+                comments.append((comment_start_line, "".join(comment_chars)))
+                comment_chars = []
+                i += 2
+                continue
+            else:
+                if c == "\n":
+                    line_no += 1
+                comment_chars.append(c)
+                i += 1
+                continue
+
+        if in_string:
+            if c == "\n":
+                line_no += 1
+            elif c == "\\" and i + 1 < n:
+                if source[i + 1] == "\n":
+                    line_no += 1
+                i += 2
+                continue
+            elif c == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if in_char:
+            if c == "\n":
+                line_no += 1
+            elif c == "\\" and i + 1 < n:
+                if source[i + 1] == "\n":
+                    line_no += 1
+                i += 2
+                continue
+            elif c == "'":
+                in_char = False
+            i += 1
+            continue
+
+        if c == "/" and next_c == "/":
+            in_line_comment = True
+            comment_start_line = line_no
+            comment_chars = ["//"]
+            i += 2
+            continue
+
+        if c == "/" and next_c == "*":
+            in_block_comment = True
+            comment_start_line = line_no
+            comment_chars = ["/*"]
+            i += 2
+            continue
+
+        if c == '"':
+            in_string = True
+            i += 1
+            continue
+
+        if c == "'":
+            in_char = True
+            i += 1
+            continue
+
+        if c == "\n":
+            line_no += 1
+
+        i += 1
+
+    if in_line_comment or in_block_comment:
+        comments.append((comment_start_line, "".join(comment_chars)))
+
+    return comments
+
+
 class SuppressionMap:
     """
     Tracks which (line_number, rule_id) pairs should be suppressed based on
-    `cgull-ignore` directives found in comments in the original source.
+    `cgull-ignore` or `cgull-disable` directives found in comments in the source.
 
     Supports:
       // cgull-ignore                (suppress all rules on this line)
       // cgull-ignore: CGULL-001     (suppress specific rule(s) on this line)
-      // cgull-ignore-next-line      (suppress all rules on the NEXT line)
-      // cgull-ignore-next-line: CGULL-001,CGULL-003
+      // cgull-disable-next-line CGULL-007 (suppress rule on NEXT line)
+      /* cgull-disable-line CGULL-019 */
     """
 
     def __init__(self) -> None:
@@ -221,25 +336,28 @@ class SuppressionMap:
     @classmethod
     def from_source(cls, raw_lines: List[str]) -> "SuppressionMap":
         sup = cls()
-        for line_no, raw_line in enumerate(raw_lines, 1):
-            # Directives only make sense inside comments; a plain regex
-            # search on the raw line is sufficient here since we only need
-            # to know intent, not re-parse full C syntax.
-            if "cgull-ignore" not in raw_line:
+        comment_spans = extract_comments_from_raw_lines(raw_lines)
+        for line_no, comment_text in comment_spans:
+            line_lower = comment_text.lower()
+            if "cgull-ignore" not in line_lower and "cgull-disable" not in line_lower:
                 continue
-            m = _SUPPRESS_RE.search(raw_line)
-            if not m:
-                continue
-            ids_raw = m.group("ids")
-            if ids_raw:
-                rule_ids = {r.strip().upper() for r in ids_raw.split(",") if r.strip()}
-            else:
-                rule_ids = {"*"}
+            for m in _SUPPRESS_RE.finditer(comment_text):
+                ids_raw = m.group("ids")
+                if ids_raw:
+                    rule_ids = set()
+                    for token in ids_raw.split(","):
+                        cleaned = token.strip().rstrip("*/").strip().upper()
+                        if cleaned:
+                            rule_ids.add(cleaned)
+                    if not rule_ids:
+                        rule_ids = {"*"}
+                else:
+                    rule_ids = {"*"}
 
-            if m.group("next"):
-                sup._next_line.setdefault(line_no + 1, set()).update(rule_ids)
-            else:
-                sup._same_line.setdefault(line_no, set()).update(rule_ids)
+                if m.group("next"):
+                    sup._next_line.setdefault(line_no + 1, set()).update(rule_ids)
+                else:
+                    sup._same_line.setdefault(line_no, set()).update(rule_ids)
         return sup
 
     def is_suppressed(self, line_number: int, rule_id: str) -> bool:

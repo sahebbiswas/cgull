@@ -16,7 +16,8 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
 - **⚡ Dual Analysis Engine**:
   - **Lightweight Regex Pattern Matching**: fast first-pass scanning for banned API calls, format strings, unsafe casts, and suspicious macros. Runs against a comment-stripped and string-literal-masked view of the source to reduce basic false matches.
   - **AST & CFG-Assisted Structural Analysis**: structural and control-flow aware pattern checks for unchecked `malloc` returns, missing pointer NULL checks, use-after-free (now branch, loop, and switch-sensitive), VLAs, and control flow patterns, built on a lightweight in-repo C parser and cross-checked with `pycparser` where supported.
-- **🔇 Inline Suppression**: silence specific findings with `// cgull-ignore`, `// cgull-ignore: CGULL-001`, or `// cgull-ignore-next-line: CGULL-001,CGULL-003` -- useful since heuristic static analysis rules can produce false positives.
+- **🛠️ Project Configuration File (TOML)**: Auto-discovered `.cgull.toml` or `pyproject.toml` `[tool.cgull]` for project-wide rule skipping, per-rule severity overrides, path exclusions, output defaults, custom allocator/deallocator synonyms (e.g. `xmalloc`/`xfree`, `kmalloc`/`kfree`), and custom banned function wrappers.
+- **🔇 Inline Suppression**: silence specific findings with `// cgull-ignore`, `// cgull-disable-next-line CGULL-007`, `/* cgull-disable-line CGULL-019 */`, or `// cgull-ignore-next-line: CGULL-001,CGULL-003`.
 - **⚙️ Parallel Scanning**: `-j/--jobs` scans multiple files concurrently across CPU cores for larger codebases.
 - **📏 Baseline / Diff Mode**: `--baseline`/`--update-baseline` let CI enforce "no *new* issues" on an existing, imperfect codebase instead of requiring it to already be fully clean -- see "Baseline / Diff Mode" below.
 - **📁 Recursive Directory Scanning**: Automatically discovers and audits C source and header files (`.c`, `.h`) across nested codebases.
@@ -77,11 +78,11 @@ pip install pcpp        # C preprocessor (macro expansion)
 
 ### Basic Scan
 ```bash
-# Scan current directory recursively
+# Scan current directory recursively (auto-discovers .cgull.toml or pyproject.toml)
 cgull scan .
 
-# Scan specific source directory
-cgull scan src/
+# Scan specific source directory with an explicit config file
+cgull scan src/ --config .cgull.toml
 
 # Scan a single C file
 cgull scan main.c
@@ -117,10 +118,53 @@ cgull scan src/ -j 4
 cgull scan src/ -j 0
 ```
 
+### Project Configuration File (.cgull.toml / pyproject.toml)
+
+C-GULL supports auto-discovered project configuration via a standalone `.cgull.toml` file or a `[tool.cgull]` table inside `pyproject.toml`. Explicit `--config path/to/config.toml` overrides auto-discovery.
+
+```toml
+# .cgull.toml (schema_version = 1)
+schema_version = 1
+
+[rules]
+# Rule IDs to skip entirely, mapped to justification strings
+skip = { "CGULL-019" = "team does not follow MISRA explicit-(void) style" }
+
+[rules.severity]
+# Per-rule severity overrides
+CGULL-024 = "high"   # hardcoded secrets: always treat as high
+CGULL-020 = "low"    # unused arguments: downgrade to low
+
+[functions.memory]
+# Extends built-in malloc/calloc/realloc/free recognition
+# for unchecked allocation (CGULL-003) and use-after-free (CGULL-022 / CGULL-027)
+alloc   = ["xmalloc", "kmalloc", "OPENSSL_malloc", "talloc"]
+realloc = ["xrealloc", "krealloc"]
+dealloc = ["xfree", "kfree", "OPENSSL_free", "talloc_free"]
+
+[functions.banned]
+# Custom project-specific banned functions (extends CGULL-001)
+[functions.banned.legacy_string_copy]
+reason = "in-house wrapper around strcpy() with no bounds checking"
+remediation = "use safe_string_copy(dest, sizeof(dest), src) instead"
+
+[paths]
+# Combined with .cgullignore (additive)
+exclude = ["third_party/", "generated/"]
+
+[output]
+default_format = "sarif"
+fail_on = "high"
+```
+
 ### Suppressing Findings Inline
 ```c
 strcpy(dest, src);                        // cgull-ignore: CGULL-001
 strcpy(dest, src);                        // cgull-ignore              (suppresses every rule on this line)
+// cgull-disable-next-line CGULL-007
+arr[i] = 0;
+/* cgull-disable-line CGULL-019 */
+int my_func() {}
 // cgull-ignore-next-line: CGULL-001,CGULL-003
 strcpy(dest, src);
 ```
