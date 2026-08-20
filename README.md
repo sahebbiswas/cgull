@@ -111,12 +111,20 @@ cgull scan src/ --engine ast
 
 ### Parallel Scanning
 ```bash
+# Scan sequentially in-process (default)
+cgull scan src/ -j 1
+
 # Scan files across 4 worker processes
 cgull scan src/ -j 4
 
-# Auto-detect and use all available CPU cores
+# Auto-detect and use all available CPU cores (0)
 cgull scan src/ -j 0
 ```
+`-j`/`--jobs` options:
+- `1`: sequential in-process scanning (default)
+- `N > 1`: parallel scanning across `N` worker processes
+- `0`: auto-detect and use all available CPU cores
+- Negative values (e.g. `-j -1`): invalid, produces an error
 
 ### Project Configuration File (.cgull.toml / pyproject.toml)
 

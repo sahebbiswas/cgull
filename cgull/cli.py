@@ -59,7 +59,7 @@ Suppressing findings inline:
     scan_parser.add_argument("--engine", choices=["regex", "ast", "hybrid"], default="hybrid", help="Scan engine mode (default: hybrid)")
     scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD)")
     scan_parser.add_argument("--fail-on-error", action="store_true", help="Exit with code 1 if scan errors or file analysis failures occur (useful for CI/CD)")
-    scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count.")
+    scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count. Negative values are invalid.")
     scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
 
@@ -120,8 +120,9 @@ def handle_scan(args) -> int:
     )
 
     jobs = args.jobs
-    if jobs == 0:
-        jobs = os.cpu_count() or 1
+    if jobs < 0:
+        print("Error: Invalid -j/--jobs value. Must be non-negative (0 or greater).", file=sys.stderr)
+        return 1
 
     progress = ProgressIndicator(quiet=args.quiet)
     try:
@@ -132,6 +133,9 @@ def handle_scan(args) -> int:
             jobs=jobs,
             progress_callback=progress.update,
         )
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     finally:
         progress.finish()
 

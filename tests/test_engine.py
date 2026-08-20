@@ -444,5 +444,35 @@ class TestIssueFilePathIsRelative(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+class TestJobsParameter(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        with open(os.path.join(self.temp_dir, "f1.c"), "w") as f:
+            f.write(VULNERABLE_CODE)
+        with open(os.path.join(self.temp_dir, "f2.c"), "w") as f:
+            f.write(VULNERABLE_CODE)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_jobs_negative_value_raises_value_error(self):
+        scanner = CGullScanner()
+        with self.assertRaises(ValueError) as ctx:
+            scanner.scan_path(self.temp_dir, jobs=-1)
+        self.assertIn("Invalid jobs value", str(ctx.exception))
+
+    def test_jobs_zero_resolves_and_scans(self):
+        scanner = CGullScanner()
+        res = scanner.scan_path(self.temp_dir, jobs=0)
+        self.assertEqual(res.scanned_files_count, 2)
+
+    def test_jobs_sequential_and_parallel(self):
+        scanner = CGullScanner()
+        res_seq = scanner.scan_path(self.temp_dir, jobs=1)
+        res_par = scanner.scan_path(self.temp_dir, jobs=2)
+        self.assertEqual(res_seq.scanned_files_count, 2)
+        self.assertEqual(res_par.scanned_files_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
