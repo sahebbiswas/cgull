@@ -963,23 +963,51 @@ class CASTParser:
                 fn.returns_boolean = True
 
         # Extract function calls inside body
-        call_regex = re.compile(r'\b([a-zA-Z_]\w*)\s*\(([^;{}]*)\)')
-        for i, line in enumerate(body_lines):
-            line_no = fn_start + i
-            for match in call_regex.finditer(line):
-                callee = match.group(1)
-                args = match.group(2)
-                if callee not in ('if', 'for', 'while', 'switch', 'sizeof', 'typeof', '__attribute__'):
+        # We parse the full body string to handle multiline arguments and nested parentheses
+        call_regex = re.compile(r'\b([a-zA-Z_]\w*)\s*\(')
+        for m in call_regex.finditer(fn.body):
+            callee = m.group(1)
+            if callee not in ('if', 'for', 'while', 'switch', 'sizeof', 'typeof', '__attribute__'):
+                # Match balanced parens to get args
+                args_start = m.end() - 1
+                paren_depth = 0
+                in_string = False
+                in_char = False
+                escape = False
+                j = args_start
+                n = len(fn.body)
+                while j < n:
+                    c = fn.body[j]
+                    if escape:
+                        escape = False
+                    elif c == '\\':
+                        escape = True
+                    elif c == '"' and not in_char:
+                        in_string = not in_string
+                    elif c == "'" and not in_string:
+                        in_char = not in_char
+                    elif not in_string and not in_char:
+                        if c == '(':
+                            paren_depth += 1
+                        elif c == ')':
+                            paren_depth -= 1
+                            if paren_depth == 0:
+                                break
+                    j += 1
+
+                if j < n:
+                    args = fn.body[args_start + 1 : j]
+                    # Calc line number
+                    prefix = fn.body[:m.start()]
+                    line_no = fn_start + prefix.count('\n')
+
                     target_var = None
-                    m_target = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?\s*=\s*(?:[^{;]*?)\b' + re.escape(callee) + r'\b', line)
-                    if m_target:
-                        target_var = m_target.group(1)
-                    else:
-                        start_idx = max(0, i - 3)
-                        combined = " ".join(body_lines[start_idx:i+1])
-                        m_target2 = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?\s*=\s*(?:[^{;]*?)\b' + re.escape(callee) + r'\b', combined)
-                        if m_target2:
-                            target_var = m_target2.group(1)
+                    stmt_prefix_match = re.search(r'(?:^|[;{}])\s*([^;{}]+)\s*=\s*[^;{}]*$', prefix)
+                    if stmt_prefix_match:
+                        m_var = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', stmt_prefix_match.group(1))
+                        if m_var:
+                            target_var = m_var.group(1)
+
                     fn.calls.append((callee, line_no, args, target_var))
 
         C_KEYWORDS = {
