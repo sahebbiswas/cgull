@@ -118,6 +118,9 @@ class CGullScanner:
                             files_to_scan.append(file_path)
 
         total_files = len(files_to_scan)
+        if total_files > 0:
+            resolved_jobs = min(resolved_jobs, total_files)
+
         if progress_callback:
             progress_callback(0, total_files, "")
 
@@ -137,7 +140,7 @@ class CGullScanner:
             ParserStatus.PARSE_FAILED.value: 0,
         }
 
-        if resolved_jobs > 1 and len(files_to_scan) > 1:
+        if resolved_jobs > 1:
             results = self._scan_files_parallel(files_to_scan, resolved_jobs, config, progress_callback)
         else:
             results = self._scan_files_sequential(files_to_scan, config, progress_callback)
