@@ -95,6 +95,53 @@ class NakedControlFlowStatementsRule(BaseRule):
                 if not found_close:
                     continue
 
+                # Check for alternate condition branches (e.g., #if / #else split conditions)
+                while True:
+                    next_line = curr_line
+                    next_pos = curr_pos
+                    next_char = None
+                    while next_line < len(source_lines):
+                        rem = source_lines[next_line][next_pos:].strip()
+                        if rem:
+                            if rem.startswith("#"):
+                                next_line += 1
+                                next_pos = 0
+                                continue
+                            next_char = rem[0]
+                            break
+                        next_line += 1
+                        next_pos = 0
+
+                    if next_char == "(":
+                        curr_line = next_line
+                        curr_pos = source_lines[next_line].find("(", next_pos)
+
+                        depth = 0
+                        found_close = False
+                        while curr_line < len(source_lines) and not found_close:
+                            line_str = source_lines[curr_line]
+                            while curr_pos < len(line_str):
+                                c = line_str[curr_pos]
+                                if c == "(":
+                                    depth += 1
+                                elif c == ")":
+                                    depth -= 1
+                                    if depth == 0:
+                                        found_close = True
+                                        curr_pos += 1
+                                        break
+                                curr_pos += 1
+                            if not found_close:
+                                curr_line += 1
+                                curr_pos = 0
+                                while curr_line < len(source_lines) and source_lines[curr_line].strip().startswith("#"):
+                                    curr_line += 1
+
+                        if not found_close:
+                            break
+                    else:
+                        break
+
                 # Special case for while in do-while loop
                 if kw == "while":
                     after_paren_line = curr_line

@@ -47,3 +47,59 @@ def test_naked_control_flow_true_positive_still_flags():
     """
     errors = run_cgull_rule("naked_control_flow", code)
     assert len(errors) == 1
+
+
+def test_naked_control_flow_split_if_else_preprocessor_conditions():
+    code = """
+    int check(int a, int b, int c, int d) {
+        if
+    #if FEATURE_X
+            (a && b)
+    #else
+            (c || d)
+    #endif
+        {
+            return 1;
+        }
+        return 0;
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code)
+    assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
+
+
+def test_naked_control_flow_split_ifdef_else_preprocessor_conditions():
+    code = """
+    int check(int a, int b, int c, int d) {
+        if
+    #ifdef EXTRA_CHECK
+            (a && b)
+    #else
+            (c || d)
+    #endif
+        {
+            return 1;
+        }
+        return 0;
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code)
+    assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
+
+
+def test_naked_control_flow_shared_paren_ifdef_condition():
+    code = """
+    int check(int a, int b, int c) {
+        if (a && b
+    #ifdef EXTRA_CHECK
+            && c
+    #endif
+            )
+        {
+            return 1;
+        }
+        return 0;
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code)
+    assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
