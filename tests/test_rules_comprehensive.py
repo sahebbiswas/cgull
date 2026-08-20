@@ -162,6 +162,17 @@ class TestArrayIndexOutOfBounds(unittest.TestCase):
         issues = scan_with_rule("CGULL-007", code)
         self.assertEqual(len(issues), 1)
 
+    def test_detects_unchecked_variable_index(self):
+        code = "int table[10];\nvoid f(int idx) {\n    table[idx] = 42;\n}"
+        issues = scan_with_rule("CGULL-007", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("Unchecked Array Indexing", issues[0].message)
+
+    def test_ignores_checked_variable_index(self):
+        code = "int table[10];\nvoid f(int idx) {\n    if (idx >= 0 && idx < 10) {\n        table[idx] = 42;\n    }\n}"
+        issues = scan_with_rule("CGULL-007", code)
+        self.assertEqual(len(issues), 0)
+
 
 class TestUnsafeSensitiveMemoryClearing(unittest.TestCase):
     def test_detects_memset_before_return(self):

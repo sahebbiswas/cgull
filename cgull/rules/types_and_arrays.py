@@ -120,6 +120,101 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
     sample_remediated_code = "int table[10];\nif (idx >= 0 && idx < 10) {\n    table[idx] = 42;\n}"
     analysis_engine = AnalysisEngine.HYBRID
 
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        bounds_op_re = re.compile(r'[<>]=?')
+        bounds_fn_re = re.compile(r'\b(assert|ASSERT|assert_param|min|clamp|ARRAY_SIZE|sizeof)\b')
+
+        def is_bounds_check_for_var(expr_str: str, var_name: str) -> bool:
+            if var_name not in expr_str:
+                return False
+            if bounds_op_re.search(expr_str) or bounds_fn_re.search(expr_str):
+                return True
+            return False
+
+        for fn in ast_ctx.functions:
+            funcdef = None
+            cfg = None
+            if ast_ctx.has_pycparser and ast_ctx.pycparser_ast is not None:
+                from ..cfg import build_cfg, find_function_def, _PRELUDE_LINE_COUNT
+                from pycparser import c_ast
+                funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+                if funcdef is not None:
+                    cfg = build_cfg(funcdef)
+
+            if funcdef is not None and cfg is not None:
+                from ..ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr
+                reported_lines = set()
+
+                class ArrayCheckVisitor(c_ast.NodeVisitor):
+                    def visit_ArrayRef(v_self, node):
+                        line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else fn.start_line
+                        arr_name = _format_pycparser_expr(node.name)
+                        sub_expr = _format_pycparser_expr(node.subscript)
+                        sub_ids = _extract_identifiers_from_ast(node.subscript)
+
+                        for idx_var in sub_ids:
+                            key = (line_no, arr_name, idx_var)
+                            if key in reported_lines:
+                                continue
+
+                            guarded = False
+                            for nid, cfg_node in cfg.nodes.items():
+                                if cfg_node.line_number <= line_no:
+                                    if is_bounds_check_for_var(cfg_node.expr_str, idx_var):
+                                        guarded = True
+                                        break
+
+                            if not guarded:
+                                snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{arr_name}[{sub_expr}]"
+                                issues.append(self.create_issue(
+                                    file_path=file_path,
+                                    line_number=line_no,
+                                    code_snippet=snippet,
+                                    message=f"Unchecked Array Indexing: variable '{idx_var}' is used as an index for '{arr_name}' without preceding bounds validation.",
+                                    column_number=1,
+                                    engine="AST",
+                                    fix_type=FixType.SUGGESTED_FIX,
+                                    suggested_fix_replacement=f"if ({idx_var} >= 0 && {idx_var} < ARRAY_SIZE) {{\n    {snippet}\n}}"
+                                ))
+                                reported_lines.add(key)
+
+                        v_self.generic_visit(node)
+
+                ArrayCheckVisitor().visit(funcdef)
+            else:
+                body_lines = fn.body.splitlines()
+                for i, line in enumerate(body_lines):
+                    line_no = fn.start_line + i
+                    for m in re.finditer(r'\b([a-zA-Z_]\w*)\[\s*([a-zA-Z_]\w*)\s*\]', line):
+                        arr_name = m.group(1)
+                        idx_var = m.group(2)
+
+                        prefix = line[:m.start()]
+                        stmt_prefix = re.split(r'[;{}]', prefix)[-1]
+                        if re.search(r'\b(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\s)*$', stmt_prefix):
+                            continue
+
+                        guarded = False
+                        for prev_l in body_lines[:i]:
+                            if is_bounds_check_for_var(prev_l, idx_var):
+                                guarded = True
+                                break
+
+                        if not guarded:
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=line,
+                                message=f"Unchecked Array Indexing: variable '{idx_var}' is used as an index for '{arr_name}' without preceding bounds validation.",
+                                column_number=m.start() + 1,
+                                engine="AST",
+                                fix_type=FixType.SUGGESTED_FIX,
+                                suggested_fix_replacement=f"if ({idx_var} >= 0 && {idx_var} < ARRAY_SIZE) {{\n    {line.strip()}\n}}"
+                            ))
+
+        return issues
+
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Detect constant out-of-bounds e.g. arr[10] when declared arr[10]

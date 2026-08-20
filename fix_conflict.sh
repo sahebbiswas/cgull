@@ -10,7 +10,7 @@ with open("cgull/__init__.py", "w") as f:
             skip = True
         elif line.startswith("======="):
             skip = False
-            f.write('__version__ = "0.7.0"\n')
+            f.write('__version__ = "0.7.1"\n')
         elif line.startswith(">>>>>>>"):
             pass
         elif not skip:

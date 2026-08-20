@@ -24,6 +24,14 @@ void test_fp_declaration_with_initializer(void) {
     (void)dataBuffer;
 }
 
+/* True Negative: Variable index with bounds check */
+void test_tn_variable_index_checked(int idx) {
+    int table[10];
+    if (idx >= 0 && idx < 10) {
+        table[idx] = 42;
+    }
+}
+
 /* False-Positive Regression: Array declaration with initializer after earlier declaration */
 void other_function_decl(void) {
     char dataBuffer[100];
