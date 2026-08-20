@@ -173,6 +173,33 @@ class TestArrayIndexOutOfBounds(unittest.TestCase):
         issues = scan_with_rule("CGULL-007", code)
         self.assertEqual(len(issues), 0)
 
+    def test_reassignment_invalidates_bounds_check(self):
+        code = "int table[10];\nvoid f(int idx) {\n    if (idx >= 0 && idx < 10) {\n        idx = 20;\n        table[idx] = 42;\n    }\n}"
+        issues = scan_with_rule("CGULL-007", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_bounds_check_exceeding_array_size_not_suppressed(self):
+        code = "int table[10];\nvoid f(int idx) {\n    if (idx < 20) {\n        table[idx] = 42;\n    }\n}"
+        issues = scan_with_rule("CGULL-007", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_substring_identifier_not_confused(self):
+        code = "int table[10];\nvoid f(int idx, int idx2) {\n    if (idx2 >= 0 && idx2 < 10) {\n        table[idx] = 42;\n    }\n}"
+        issues = scan_with_rule("CGULL-007", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_callee_in_subscript_not_treated_as_index_var(self):
+        code = "int table[10]; int get_index(void); void f(void) { table[get_index()] = 42; }"
+        issues = scan_with_rule("CGULL-007", code)
+        # get_index is callee, not an identifier variable
+        self.assertEqual(len(issues), 0)
+
+    def test_multiline_signature_body_line_mapping(self):
+        code = "int table[10];\nvoid f(\n    int idx\n) {\n    table[idx] = 42;\n}"
+        issues = scan_with_rule("CGULL-007", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 5)
+
 
 class TestUnsafeSensitiveMemoryClearing(unittest.TestCase):
     def test_detects_memset_before_return(self):
