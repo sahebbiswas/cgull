@@ -33,6 +33,15 @@ void vulnerable_popen(char *user_input) {
     if (fp) pclose(fp);
 }
 
+void vulnerable_execlp(char *user_input) {
+    execlp(user_input, "ls", "-l", NULL); // expect: CGULL-030
+}
+
+void vulnerable_execvp(char *user_input) {
+    char *args[] = {"ls", "-l", NULL};
+    execvp(user_input, args); // expect: CGULL-030
+}
+
 void safe_system() {
     system("ls -la");
 }
@@ -48,4 +57,13 @@ void safe_system_L() {
 void safe_popen() {
     FILE *fp = popen("cat /etc/passwd", "r");
     if (fp) pclose(fp);
+}
+
+void safe_execlp() {
+    execlp("ls", "ls", "-l", NULL);
+}
+
+void safe_execvp() {
+    char *args[] = {"ls", "-l", NULL};
+    execvp("ls", args);
 }

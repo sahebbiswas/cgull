@@ -533,6 +533,38 @@ class TestInsecurePRNG(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestCommandInjection(unittest.TestCase):
+    def test_detects_system_variable(self):
+        code = "void f(char *cmd) {\n    system(cmd);\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_popen_variable(self):
+        code = "void f(char *cmd) {\n    FILE *fp = popen(cmd, \"r\");\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_execlp_variable(self):
+        code = "void f(char *file) {\n    execlp(file, \"ls\", \"-l\", NULL);\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_execvp_variable(self):
+        code = "void f(char *file, char **argv) {\n    execvp(file, argv);\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_system_literal(self):
+        code = "void f(void) {\n    system(\"ls -la\");\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_execlp_literal(self):
+        code = "void f(void) {\n    execlp(\"ls\", \"ls\", \"-l\", NULL);\n}"
+        issues = scan_with_rule("CGULL-030", code)
+        self.assertEqual(len(issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 
