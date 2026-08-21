@@ -133,6 +133,7 @@ def handle_scan(args) -> int:
             custom_ignore_patterns=custom_ignores,
             jobs=jobs,
             progress_callback=progress.update,
+            quiet=args.quiet,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)

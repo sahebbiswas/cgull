@@ -10,8 +10,7 @@ from .models import ScanResult, Severity, FixType
 from . import __version__
 
 
-_ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
+from .utils import sanitize_terminal_text
 
 
 def _escape_markdown_cell(text: str) -> str:
@@ -21,11 +20,7 @@ def _escape_markdown_cell(text: str) -> str:
     return s
 
 
-def _sanitize_terminal_text(text: str) -> str:
-    s = _ANSI_RE.sub("", text)
-    s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-    s = _CONTROL_CHAR_RE.sub("", s)
-    return s
+_sanitize_terminal_text = sanitize_terminal_text
 
 
 class ReportGenerator:
