@@ -709,3 +709,150 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                     auto_fix_replacement=f"explicit_bzero({buf_name}, {m.group(2).strip()});"
                 ))
         return issues
+
+
+class ReallocOverwriteRule(BaseRule):
+    rule_id = "CGULL-032"
+    name = "Realloc-Overwrite Memory Leak"
+    impact = Severity.HIGH
+    category = RuleCategory.MEMORY
+    description = "Detect assigning realloc() return value directly to the pointer variable passed as its argument, which leaks memory if realloc() fails and returns NULL."
+    implementation_method = "AST / Regex analysis to detect assignment of realloc return value to the same pointer identifier"
+    implementation_complexity = "Medium"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-401"
+    remediation_suggestion = "Assign realloc() result to a temporary pointer, check for NULL, and update original pointer only on success: tmp = realloc(ptr, new_size); if (!tmp) { /* handle error, ptr remains valid */ } else { ptr = tmp; }"
+    sample_vulnerable_code = "ptr = realloc(ptr, new_size);\nif (!ptr) {\n    return -1; // Leaked original memory block!\n}"
+    sample_remediated_code = "void *tmp = realloc(ptr, new_size);\nif (!tmp) {\n    return -1; // ptr still valid\n}\nptr = tmp;"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    DEFAULT_REALLOC_FUNCS = {"realloc"}
+
+    def __init__(self, extra_realloc_funcs: Optional[List[str]] = None):
+        super().__init__()
+        self.realloc_funcs: Set[str] = set(self.DEFAULT_REALLOC_FUNCS)
+        if extra_realloc_funcs:
+            self.add_extra_realloc_funcs(extra_realloc_funcs)
+
+    def add_extra_realloc_funcs(self, extra_reallocs: List[str]) -> None:
+        self.realloc_funcs.update(extra_reallocs)
+
+    @staticmethod
+    def _extract_first_arg(raw_args: str) -> str:
+        s = raw_args.strip()
+        paren_depth = 0
+        in_quote = False
+        quote_char = None
+        for i, c in enumerate(s):
+            if in_quote:
+                if c == quote_char and (i == 0 or s[i-1] != '\\'):
+                    in_quote = False
+            elif c in ('"', "'"):
+                in_quote = True
+                quote_char = c
+            elif c in ('(', '[', '{'):
+                paren_depth += 1
+            elif c in (')', ']', '}'):
+                paren_depth -= 1
+            elif c == ',' and paren_depth == 0:
+                return s[:i].strip()
+        return s.strip()
+
+    @staticmethod
+    def _clean_expr(expr: str) -> str:
+        s = expr.strip()
+        s = re.sub(r'^\s*\(\s*(?:[a-zA-Z_]\w*\s*\*+|\w+)\s*\)\s*', '', s)
+        s = s.strip().lstrip('(').rstrip(')')
+        return re.sub(r'\s+', '', s)
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        realloc_pattern = "|".join(re.escape(f) for f in sorted(self.realloc_funcs, key=len, reverse=True))
+        line_regex = re.compile(
+            rf'\b([a-zA-Z_]\w*(?:\s*->\s*\w+|\s*\.\s*\w+|\[[^\]]+\])*)\s*=\s*'
+            rf'(?:\([^)]+\)\s*)?'
+            rf'({realloc_pattern})\s*\(\s*'
+            rf'([^,]+)\s*,'
+        )
+
+        for fn in ast_ctx.functions:
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
+                if callee in self.realloc_funcs:
+                    arg1 = self._extract_first_arg(raw_args)
+                    if not arg1:
+                        continue
+
+                    line_snippet = _source_snippet(ast_ctx, line_no, f"{callee}({raw_args})")
+                    m = line_regex.search(line_snippet)
+                    if m:
+                        lhs_expr = m.group(1).strip()
+                        callee_fn = m.group(2).strip()
+                        arg1_expr = m.group(3).strip()
+                        if self._clean_expr(lhs_expr) == self._clean_expr(arg1_expr):
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=line_snippet,
+                                message=f"Realloc-overwrite memory leak: return value of {callee_fn}() is directly assigned to '{lhs_expr}'. If {callee_fn}() fails and returns NULL, the original buffer at '{lhs_expr}' is leaked.",
+                                column_number=m.start() + 1,
+                                engine="AST",
+                                fix_type=FixType.SUGGESTED_FIX,
+                                suggested_fix_replacement=f"void *tmp = {callee_fn}({lhs_expr}, ...);\nif (!tmp) {{\n    /* handle allocation failure, {lhs_expr} remains valid */\n}} else {{\n    {lhs_expr} = tmp;\n}}"
+                            ))
+                            continue
+
+            if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
+                body_lines = fn.body.splitlines()
+                for i, line in enumerate(body_lines):
+                    line_no = fn.start_line + 1 + i
+                    for m in line_regex.finditer(line):
+                        lhs_expr = m.group(1).strip()
+                        callee_fn = m.group(2).strip()
+                        arg1_expr = m.group(3).strip()
+                        if self._clean_expr(lhs_expr) == self._clean_expr(arg1_expr):
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=line,
+                                message=f"Realloc-overwrite memory leak: return value of {callee_fn}() is directly assigned to '{lhs_expr}'. If {callee_fn}() fails and returns NULL, the original buffer at '{lhs_expr}' is leaked.",
+                                column_number=m.start() + 1,
+                                engine="AST",
+                                fix_type=FixType.SUGGESTED_FIX,
+                                suggested_fix_replacement=f"void *tmp = {callee_fn}({lhs_expr}, ...);\nif (!tmp) {{\n    /* handle allocation failure, {lhs_expr} remains valid */\n}} else {{\n    {lhs_expr} = tmp;\n}}"
+                            ))
+        return issues
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        if line_content.lstrip().startswith('#'):
+            return issues
+
+        match_target = masked_line_content or line_content
+        realloc_pattern = "|".join(re.escape(f) for f in sorted(self.realloc_funcs, key=len, reverse=True))
+
+        pattern = re.compile(
+            rf'\b([a-zA-Z_]\w*(?:\s*->\s*\w+|\s*\.\s*\w+|\[[^\]]+\])*)\s*=\s*'
+            rf'(?:\([^)]+\)\s*)?'
+            rf'({realloc_pattern})\s*\(\s*'
+            rf'([^,]+)\s*,'
+        )
+
+        for m in pattern.finditer(match_target):
+            lhs_expr = m.group(1).strip()
+            callee_fn = m.group(2).strip()
+            arg1_expr = m.group(3).strip()
+
+            if self._clean_expr(lhs_expr) == self._clean_expr(arg1_expr):
+                col_no = m.start() + 1
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=f"Realloc-overwrite memory leak: return value of {callee_fn}() is directly assigned to '{lhs_expr}'. If {callee_fn}() fails and returns NULL, the original buffer at '{lhs_expr}' is leaked.",
+                    column_number=col_no,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"void *tmp = {callee_fn}({lhs_expr}, ...);\nif (!tmp) {{\n    /* handle allocation failure, {lhs_expr} remains valid */\n}} else {{\n    {lhs_expr} = tmp;\n}}"
+                ))
+        return issues
