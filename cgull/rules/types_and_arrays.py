@@ -697,7 +697,11 @@ class SignedUnsignedComparisonRule(BaseRule):
                     op = m.group(2)
                     right_expr = m.group(3).strip()
 
-                    if "for " in line and line.find("for ") < m.start():
+                    if ("for " in line or "while " in line) and (
+                        re.search(r'\b' + re.escape(left_expr) + r'\s*>=\s*0\b', line) or
+                        re.search(r'\b' + re.escape(left_expr) + r'\s*>\s*-1\b', line) or
+                        re.search(r'\b0\s*<=\s*' + re.escape(left_expr) + r'\b', line)
+                    ):
                         continue
 
                     left_signedness = self._get_var_signedness(left_expr, fn, ast_ctx)
@@ -731,26 +735,38 @@ class SignedUnsignedComparisonRule(BaseRule):
         issues = []
         target_line = masked_line_content or line_content
 
-        m = re.search(r'\bfor\s*\(\s*(size_t|uint\w+_t|unsigned(?:\s+int)?)\s+([a-zA-Z_]\w*)\s*=[^;]*;\s*\2\s*>=\s*0\s*;', target_line)
+        m = re.search(
+            r'\bfor\s*\(\s*(size_t|uint\w+_t|unsigned(?:\s+int)?)\s+([a-zA-Z_]\w*)\s*=\s*([^;]+);\s*\2\s*>=\s*0\s*;\s*([^)]+)\)',
+            target_line
+        )
         if m:
             var_type = m.group(1)
             var_name = m.group(2)
-            issues.append(self.create_issue(
-                file_path=file_path,
-                line_number=line_number,
-                code_snippet=line_content,
-                message=f"Infinite Loop Risk: unsigned loop variable '{var_name}' compared with '{var_name} >= 0' will always evaluate to true as unsigned types cannot be negative.",
-                column_number=m.start() + 1,
-                engine="Regex",
-                fix_type=FixType.SUGGESTED_FIX,
-                suggested_fix_replacement=f"for ({var_type} {var_name} = len; {var_name} > 0; {var_name}--)"
-            ))
+            init_expr = m.group(3).strip()
+            step_expr = m.group(4).strip()
+            is_decrement = '--' in step_expr or '-=' in step_expr or f'{var_name} -' in step_expr
+            if is_decrement:
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=f"Infinite Loop Risk: unsigned loop variable '{var_name}' compared with '{var_name} >= 0' will always evaluate to true as unsigned types cannot be negative.",
+                    column_number=m.start() + 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"for ({var_type} {var_name} = {init_expr}; {var_name} > 0; {var_name}--)"
+                ))
 
-        m = re.search(r'\bfor\s*\(\s*int\s+([a-zA-Z_]\w*)\s*=\s*([a-zA-Z_]\w*)\s*;\s*\1\s*>=\s*0\s*;', target_line)
+        m = re.search(
+            r'\bfor\s*\(\s*int\s+([a-zA-Z_]\w*)\s*=\s*([a-zA-Z_]\w*)\s*;\s*\1\s*>=\s*0\s*;\s*([^)]+)\)',
+            target_line
+        )
         if m:
             i_var = m.group(1)
             len_var = m.group(2)
-            if re.search(rf'\b(?:size_t|uint\w+_t|unsigned)\s+{re.escape(len_var)}\b', full_code):
+            step_expr = m.group(3).strip()
+            is_decrement = '--' in step_expr or '-=' in step_expr or f'{i_var} -' in step_expr
+            if is_decrement and re.search(rf'\b(?:size_t|uint\w+_t|unsigned)\s+{re.escape(len_var)}\b', full_code):
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,

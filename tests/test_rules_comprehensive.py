@@ -695,6 +695,11 @@ class TestCommandInjection(unittest.TestCase):
 
 
 class TestSignedUnsignedComparison(unittest.TestCase):
+    def test_detects_signed_unsigned_comparison_in_for_loop(self):
+        code = "void f(size_t len) {\n    for (int i = 0; i < len; i++) {\n        use(i);\n    }\n}"
+        issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 1)
+
     def test_detects_unsigned_reverse_loop(self):
         code = "void f(size_t len) {\n    for (size_t i = len; i >= 0; i--) {\n        use(i);\n    }\n}"
         issues = scan_with_rule("CGULL-033", code)
