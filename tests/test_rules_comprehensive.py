@@ -13,7 +13,7 @@ points at exactly one rule's logic, not at cross-rule interference.
 import unittest
 
 from cgull.engine import CGullScanner
-from cgull.models import AnalysisEngine, FixType
+from cgull.models import AnalysisEngine, FixType, Severity
 from cgull.rules import get_rule_by_id, get_all_rules, ALL_RULES, RULE_REGISTRY
 
 
@@ -62,6 +62,92 @@ class TestBannedFunctions(unittest.TestCase):
         code = "void f(char *b) {\n    fgets(b, 64, stdin);\n}"
         issues = scan_with_rule("CGULL-001", code)
         self.assertEqual(len(issues), 0)
+
+    def test_strcpy_literal_bounded_by_buffer_downgraded_to_low(self):
+        code = """
+        void f(void) {
+            char * data;
+            char dataBuffer[100] = "";
+            data = dataBuffer;
+            strcpy(data, "hostname");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.LOW)
+        self.assertIn("provably shorter than destination buffer size", issues[0].message)
+
+    def test_strcpy_variable_source_flagged_high(self):
+        code = """
+        void f(char *user_input) {
+            char buf[100];
+            strcpy(buf, user_input);
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
+    def test_strcpy_non_ascii_literal_flagged_high(self):
+        code = """
+        void f(void) {
+            char buf[100];
+            strcpy(buf, "héllo");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
+    def test_strcpy_destination_offset_flagged_high(self):
+        code = """
+        void f(void) {
+            char buf[100];
+            strcpy(buf + 10, "hostname");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
+    def test_strcpy_cross_function_same_name_uses_in_scope_declaration(self):
+        code = """
+        void f1(void) {
+            char buf[100];
+            strcpy(buf, "hostname");
+        }
+        void f2(void) {
+            char buf[5];
+            strcpy(buf, "hostname");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 2)
+        f1_issue = next(i for i in issues if i.line_number < 6)
+        f2_issue = next(i for i in issues if i.line_number >= 6)
+        self.assertEqual(f1_issue.impact, Severity.LOW)
+        self.assertEqual(f2_issue.impact, Severity.HIGH)
+
+    def test_strcpy_literal_overflow_flagged_high(self):
+        code = """
+        void f(void) {
+            char buf[5];
+            strcpy(buf, "hostname");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
+    def test_strcpy_unresolved_destination_flagged_high(self):
+        code = """
+        void f(char *dest) {
+            strcpy(dest, "hostname");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
 
 
 class TestFormatString(unittest.TestCase):

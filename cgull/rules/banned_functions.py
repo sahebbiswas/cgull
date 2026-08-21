@@ -3,7 +3,7 @@ Rules for Banned & Insecure Functions and Format Strings.
 """
 
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext
@@ -36,6 +36,7 @@ class BannedFunctionsRule(BaseRule):
     def __init__(self, extra_banned_funcs: Optional[dict] = None):
         super().__init__()
         self.banned_funcs = dict(self.BANNED_FUNCS)
+        self._dest_size_cache = {}
         if extra_banned_funcs:
             self.add_extra_banned_funcs(extra_banned_funcs)
 
@@ -49,6 +50,178 @@ class BannedFunctionsRule(BaseRule):
                 self.banned_funcs[fn_name] = (reason, remediation)
             elif isinstance(details, str):
                 self.banned_funcs[fn_name] = (details, f"Avoid using {fn_name}()")
+
+    @staticmethod
+    def _extract_call_args(line_content: str, start_offset: int) -> Optional[Tuple[str, str]]:
+        """
+        Extracts top-level two arguments (dest, src) from a function call like strcpy(dest, src).
+        start_offset should be the position of '(' in line_content.
+        """
+        paren_depth = 1
+        in_quote = False
+        quote_char = None
+        escape = False
+        args = []
+        cur_arg = []
+
+        i = start_offset + 1
+        n = len(line_content)
+        while i < n:
+            c = line_content[i]
+            if escape:
+                cur_arg.append(c)
+                escape = False
+            elif c == '\\':
+                cur_arg.append(c)
+                escape = True
+            elif in_quote:
+                cur_arg.append(c)
+                if c == quote_char:
+                    in_quote = False
+            elif c in ('"', "'"):
+                in_quote = True
+                quote_char = c
+                cur_arg.append(c)
+            elif c == '(':
+                paren_depth += 1
+                cur_arg.append(c)
+            elif c == ')':
+                paren_depth -= 1
+                if paren_depth == 0:
+                    args.append("".join(cur_arg).strip())
+                    break
+                cur_arg.append(c)
+            elif c == ',' and paren_depth == 1:
+                args.append("".join(cur_arg).strip())
+                cur_arg = []
+            else:
+                cur_arg.append(c)
+            i += 1
+
+        if len(args) >= 2:
+            return args[0], args[1]
+        return None
+
+    @staticmethod
+    def _get_string_literal_length(src_expr: str) -> Optional[int]:
+        """
+        Computes the unescaped byte length of a C string literal (or concatenated
+        string literals like "foo" "bar"). Returns None if src_expr is not
+        a strictly ASCII string literal (non-ASCII characters or wide prefixes make byte size uncertain).
+        """
+        s = src_expr.strip()
+        if not s:
+            return None
+
+        literal_part_re = re.compile(r'^(?:u8)?"((?:[^"\\]|\\.)*)"')
+        pos = 0
+        total_len = 0
+        matched_any = False
+
+        while pos < len(s):
+            while pos < len(s) and s[pos].isspace():
+                pos += 1
+            if pos >= len(s):
+                break
+
+            m = literal_part_re.match(s[pos:])
+            if not m:
+                return None
+
+            content = m.group(1)
+            if any(ord(c) > 127 for c in content):
+                return None
+
+            unescaped = re.sub(r'\\(?:[0-7]{1,3}|x[0-9a-fA-F]{1,2}|.)', 'x', content)
+            if any(ord(c) > 127 for c in unescaped):
+                return None
+
+            total_len += len(unescaped)
+            pos += m.end()
+            matched_any = True
+
+        return total_len if matched_any else None
+
+    def _resolve_dest_buffer_size(self, dest_expr: str, line_number: int, source_lines: List[str], full_code: str, file_path: str = "") -> Optional[int]:
+        """
+        Resolves the declared array size of dest_expr within current function scope.
+        Requires dest_expr to be a simple identifier (rejects offsets, indexing, member access).
+        Handles direct array declarations, macro array sizes, and pointer variables
+        assigned from fixed-size arrays.
+        """
+        cache_key = (file_path, line_number, dest_expr)
+        if cache_key in self._dest_size_cache:
+            return self._dest_size_cache[cache_key]
+
+        dest_clean = dest_expr.strip()
+        dest_clean = re.sub(r'^\s*\(\s*(?:char|int8_t|uint8_t|void|unsigned\s+char|signed\s+char)\s*\*+\s*\)\s*', '', dest_clean).strip()
+        if not re.match(r'^[a-zA-Z_]\w*$', dest_clean):
+            self._dest_size_cache[cache_key] = None
+            return None
+
+        var_name = dest_clean
+
+        func_header_re = re.compile(
+            r'^[ \t]*(?:(?:static|inline|extern|const|unsigned|signed|struct\s+\w+|\w+)\s+)+(\*?\s*[\w_]+)\s*\([^)]*\)\s*\{?'
+        )
+        fn_start_idx = 0
+        for i in range(min(line_number - 1, len(source_lines) - 1), -1, -1):
+            line = source_lines[i]
+            if func_header_re.match(line):
+                fn_start_idx = i
+                break
+
+        def _find_macro_val(macro_name: str) -> Optional[int]:
+            def_m = re.search(rf'#\s*define\s+{re.escape(macro_name)}\s+(\d+|0x[0-9a-fA-F]+)\b', full_code)
+            if def_m:
+                val_str = def_m.group(1)
+                return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
+            const_m = re.search(rf'\bconst\s+(?:int|size_t|uint\w+_t)\s+{re.escape(macro_name)}\s*=\s*(\d+|0x[0-9a-fA-F]+)\b', full_code)
+            if const_m:
+                val_str = const_m.group(1)
+                return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
+            return None
+
+        def _lookup_array_size_in_lines(target_var: str, start_l: int, end_l: int) -> Optional[int]:
+            decl_pattern = rf'\b(?:char|int8_t|uint8_t|int|unsigned\s+char|signed\s+char|wchar_t|struct\s+\w+|\w+)\s+(?:\*|\s)*\b{re.escape(target_var)}\s*\[\s*([^\]]+)\s*\]'
+            for idx in range(end_l - 1, start_l - 1, -1):
+                if idx < len(source_lines):
+                    line = source_lines[idx]
+                    decl_m = re.search(decl_pattern, line)
+                    if decl_m:
+                        dim_expr = decl_m.group(1).strip()
+                        if dim_expr.isdigit():
+                            return int(dim_expr)
+                        return _find_macro_val(dim_expr)
+            return None
+
+        # 1. Check in-scope local array declaration
+        size = _lookup_array_size_in_lines(var_name, fn_start_idx, line_number)
+        if size is not None:
+            self._dest_size_cache[cache_key] = size
+            return size
+
+        # 2. Check in-scope pointer alias assignment from simple array variable (e.g. data = dataBuffer;)
+        assign_patterns = [
+            rf'^\s*(?:(?:char|int8_t|uint8_t|int|unsigned\s+char|signed\s+char)\s*\*+\s*)?{re.escape(var_name)}\s*=\s*([a-zA-Z_]\w*)\s*;',
+        ]
+        for idx in range(line_number - 1, fn_start_idx - 1, -1):
+            if idx < len(source_lines):
+                line = source_lines[idx]
+                for pat in assign_patterns:
+                    m_assign = re.search(pat, line)
+                    if m_assign:
+                        rhs_var = m_assign.group(1)
+                        if rhs_var != var_name:
+                            size = _lookup_array_size_in_lines(rhs_var, fn_start_idx, line_number)
+                            if size is not None:
+                                self._dest_size_cache[cache_key] = size
+                                return size
+
+        # 3. Fallback: check global array declaration (before any function starts)
+        size = _lookup_array_size_in_lines(var_name, 0, fn_start_idx)
+        self._dest_size_cache[cache_key] = size
+        return size
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
@@ -76,6 +249,39 @@ class BannedFunctionsRule(BaseRule):
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=fix,
                         ))
+                elif fn_name == "strcpy":
+                    args = self._extract_call_args(line_content, m.end() - 1)
+                    if args:
+                        dest_arg, src_arg = args
+                        src_len = self._get_string_literal_length(src_arg)
+                        if src_len is not None:
+                            dest_size = self._resolve_dest_buffer_size(dest_arg, line_number, source_lines, full_code, file_path)
+                            required_bytes = src_len + 1
+                            if dest_size is not None and dest_size > required_bytes:
+                                issue = self.create_issue(
+                                    file_path=file_path,
+                                    line_number=line_number,
+                                    code_snippet=line_content,
+                                    message=f"Insecure function call '{fn_name}': source is a literal ('{src_arg}', length {src_len}) provably shorter than destination buffer size ({dest_size}). Currently bounded, but {fn_name}() is fragile to future edits — prefer snprintf or strncpy_s.",
+                                    column_number=m.start() + 1,
+                                    engine="Regex",
+                                    fix_type=FixType.SUGGESTED_FIX,
+                                    suggested_fix_replacement=fix,
+                                )
+                                issue.impact = Severity.LOW
+                                issues.append(issue)
+                                continue
+
+                    issues.append(self.create_issue(
+                        file_path=file_path,
+                        line_number=line_number,
+                        code_snippet=line_content,
+                        message=f"Banned insecure function call '{fn_name}': {reason}",
+                        column_number=m.start() + 1,
+                        engine="Regex",
+                        fix_type=FixType.SUGGESTED_FIX,
+                        suggested_fix_replacement=fix,
+                    ))
                 else:
                     issues.append(self.create_issue(
                         file_path=file_path,
