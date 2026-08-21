@@ -854,7 +854,7 @@ class CASTParser:
                     body=fn_body,
                     has_void_param_list=has_void_param,
                     is_empty_param_list=is_empty_params,
-                    body_start_line=fn_start,
+                    body_start_line=fn_start + 1 if fn_start < fn_end else fn_start,
                 )
 
                 if ext.body:
