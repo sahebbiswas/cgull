@@ -70,6 +70,10 @@ class TestSecurityRuleBehavioralCorpus(unittest.TestCase):
         success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-030", verbose=False)
         self.assertTrue(success, f"CGULL-030 Corpus Failed:\n{report}")
 
+    def test_rule_cgull_031_weak_crypto_primitives(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-031", verbose=False)
+        self.assertTrue(success, f"CGULL-031 Corpus Failed:\n{report}")
+
 
 if __name__ == "__main__":
     unittest.main()

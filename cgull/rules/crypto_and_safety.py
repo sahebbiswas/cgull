@@ -455,6 +455,204 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
         return issues
 
 
+class WeakCryptoPrimitivesRule(BaseRule):
+    rule_id = "CGULL-031"
+    name = "Weak/Broken Cryptographic Primitives"
+    impact = Severity.HIGH
+    category = RuleCategory.CRYPTO
+    description = "Detect calls to weak or broken cryptographic algorithms (MD5, SHA-1 in security contexts, DES, RC4, ECB cipher mode variants)."
+    implementation_method = "AST function call inspection and lexical matching for weak crypto routines and ECB cipher modes"
+    implementation_complexity = "Medium"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-327"
+    remediation_suggestion = "Use modern cryptographic primitives like SHA-256/3 for hashing, AES-GCM or ChaCha20-Poly1305 for authenticated encryption instead of MD5, SHA-1, DES, RC4, or ECB mode."
+    sample_vulnerable_code = "MD5(data, len, digest);\nEVP_EncryptInit_ex(ctx, EVP_aes_128_ecb(), NULL, key, NULL);"
+    sample_remediated_code = "SHA256(data, len, digest);\nEVP_EncryptInit_ex(ctx, EVP_aes_128_gcm(), NULL, key, iv);"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        clean_lines = ast_ctx.clean_source.splitlines() if ast_ctx.clean_source else ast_ctx.source_lines
+
+        for fn in ast_ctx.functions:
+            fn_is_sec_ctx = _is_security_function_context(fn.name)
+
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
+                line_content = ast_ctx.source_lines[line_no - 1] if 1 <= line_no <= len(ast_ctx.source_lines) else ""
+                clean_line = clean_lines[line_no - 1] if 1 <= line_no <= len(clean_lines) else line_content
+
+                primitive_kind = None
+                message = ""
+
+                # 1. MD5 / EVP_md5
+                if callee in ("MD5", "EVP_md5") or callee.startswith("MD5_"):
+                    primitive_kind = "MD5"
+                    message = f"Use of weak/broken cryptographic hash function '{callee}()' (CWE-327)."
+                # 2. SHA1 / EVP_sha1 / EVP_md5_sha1
+                elif callee in ("SHA1", "EVP_sha1", "EVP_md5_sha1") or callee.startswith("SHA1_"):
+                    should_flag = fn_is_sec_ctx
+                    if not should_flag:
+                        tokens = re.findall(r'\b[a-zA-Z_]\w*\b', clean_line + " " + raw_args)
+                        if any(_is_sensitive_identifier(t) for t in tokens if t not in (callee, "SHA1", "SHA1_Init", "SHA1_Update", "SHA1_Final", "EVP_sha1", "EVP_md5_sha1")):
+                            should_flag = True
+                    if should_flag:
+                        primitive_kind = "SHA1"
+                        message = f"Use of weak cryptographic hash function '{callee}()' in security-sensitive context (CWE-327)."
+                # 3. DES_*
+                elif callee.startswith("DES_") or callee == "DES":
+                    primitive_kind = "DES"
+                    message = f"Use of weak/deprecated encryption algorithm '{callee}()' (CWE-327)."
+                # 4. RC4
+                elif callee == "RC4" or callee.startswith("RC4_"):
+                    primitive_kind = "RC4"
+                    message = f"Use of weak/broken stream cipher '{callee}()' (CWE-327)."
+                # 5. ECB cipher modes
+                elif callee.startswith("EVP_") and ("_ecb" in callee or "ecb" in callee):
+                    primitive_kind = "ECB"
+                    message = f"Use of insecure Electronic Codebook (ECB) cipher mode '{callee}()' (CWE-327)."
+                # Also check if raw_args contains weak hash getters or ECB cipher calls
+                elif re.search(r'\b(?:EVP_md5|EVP_sha1|EVP_md5_sha1|EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*|DES_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(\s*\)', raw_args):
+                    weak_m = re.search(r'\b(EVP_md5|EVP_sha1|EVP_md5_sha1|EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*|DES_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(\s*\)', raw_args)
+                    weak_fn = weak_m.group(1) if weak_m else "weak primitive"
+                    if "sha1" in weak_fn:
+                        primitive_kind = "SHA1"
+                        message = f"Use of weak cryptographic hash function '{weak_fn}()' in security-sensitive context (CWE-327)."
+                    elif "md5" in weak_fn:
+                        primitive_kind = "MD5"
+                        message = f"Use of weak/broken cryptographic hash function '{weak_fn}()' (CWE-327)."
+                    else:
+                        primitive_kind = "ECB"
+                        message = f"Use of insecure Electronic Codebook (ECB) cipher mode '{weak_fn}()' (CWE-327)."
+
+                if primitive_kind and message:
+                    snippet = line_content.strip() if line_content else f"{callee}({raw_args})"
+                    sug_fix = "SHA-256/3, ChaCha20-Poly1305, or AES-GCM"
+                    if primitive_kind in ("MD5", "SHA1"):
+                        sug_fix = "SHA-256 or SHA-3"
+                    elif primitive_kind in ("DES", "RC4", "ECB"):
+                        sug_fix = "AES-256-GCM or ChaCha20-Poly1305"
+
+                    issues.append(self.create_issue(
+                        file_path=file_path,
+                        line_number=line_no,
+                        code_snippet=snippet,
+                        message=message,
+                        column_number=1,
+                        engine="AST",
+                        fix_type=FixType.SUGGESTED_FIX,
+                        suggested_fix_replacement=sug_fix
+                    ))
+
+        return issues
+
+    @staticmethod
+    def _is_decl_or_prototype(line_content: str, match_pos: int) -> bool:
+        prefix = line_content[:match_pos].strip()
+        if not prefix:
+            return False
+        first_token = prefix.split()[0]
+        type_keywords = {"unsigned", "signed", "char", "int", "void", "short", "long", "struct", "enum", "union", "extern", "typedef", "static", "inline", "const", "volatile", "unsigned char", "size_t"}
+        if first_token in type_keywords:
+            if ";" in line_content and not re.search(r'=\s*|\bif\b|\bwhile\b|\breturn\b', prefix):
+                return True
+        return False
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        if line_content.lstrip().startswith('#'):
+            return issues
+
+        target_line = masked_line_content if masked_line_content else line_content
+
+        from ..utils import mask_string_and_char_literals
+
+        # 1. MD5 / EVP_md5
+        m_md5 = re.search(r'\b(MD5|MD5_Init|MD5_Update|MD5_Final|MD5_[A-Za-z0-9_]+|EVP_md5)\s*\(', target_line)
+        if m_md5 and not self._is_decl_or_prototype(line_content, m_md5.start()):
+            fn_name = m_md5.group(1)
+            issues.append(self.create_issue(
+                file_path=file_path,
+                line_number=line_number,
+                code_snippet=line_content,
+                message=f"Use of weak/broken cryptographic hash function '{fn_name}()' (CWE-327).",
+                column_number=m_md5.start() + 1,
+                engine="Regex",
+                fix_type=FixType.SUGGESTED_FIX,
+                suggested_fix_replacement="SHA-256 or SHA-3"
+            ))
+
+        # 2. SHA1 / EVP_sha1 / EVP_md5_sha1 (in sec context)
+        m_sha1 = re.search(r'\b(SHA1|SHA1_Init|SHA1_Update|SHA1_Final|SHA1_[A-Za-z0-9_]+|EVP_sha1|EVP_md5_sha1)\s*\(', target_line)
+        if m_sha1 and not self._is_decl_or_prototype(line_content, m_sha1.start()):
+            fn_name = m_sha1.group(1)
+            start_line_idx = max(0, line_number - 4)
+            end_line_idx = min(line_number, len(source_lines))
+            context_lines = [
+                mask_string_and_char_literals(source_lines[i]) for i in range(start_line_idx, end_line_idx)
+            ]
+            context_str = " ".join(context_lines)
+            tokens = re.findall(r'\b[a-zA-Z_]\w*\b', context_str)
+            if any(_is_sensitive_identifier(t) for t in tokens if not t.startswith("SHA1") and not t.startswith("EVP_sha1") and not t.startswith("EVP_md5")):
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=f"Use of weak cryptographic hash function '{fn_name}()' in security-sensitive context (CWE-327).",
+                    column_number=m_sha1.start() + 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement="SHA-256 or SHA-3"
+                ))
+
+        # 3. DES_*
+        m_des = re.search(r'\b(DES_[A-Za-z0-9_]+|DES)\s*\(', target_line)
+        if m_des and not self._is_decl_or_prototype(line_content, m_des.start()):
+            fn_name = m_des.group(1)
+            issues.append(self.create_issue(
+                file_path=file_path,
+                line_number=line_number,
+                code_snippet=line_content,
+                message=f"Use of weak/deprecated encryption algorithm '{fn_name}()' (CWE-327).",
+                column_number=m_des.start() + 1,
+                engine="Regex",
+                fix_type=FixType.SUGGESTED_FIX,
+                suggested_fix_replacement="AES-256-GCM or ChaCha20-Poly1305"
+            ))
+
+        # 4. RC4
+        m_rc4 = re.search(r'\b(RC4|RC4_set_key|RC4_[A-Za-z0-9_]+)\s*\(', target_line)
+        if m_rc4 and not self._is_decl_or_prototype(line_content, m_rc4.start()):
+            fn_name = m_rc4.group(1)
+            issues.append(self.create_issue(
+                file_path=file_path,
+                line_number=line_number,
+                code_snippet=line_content,
+                message=f"Use of weak/broken stream cipher '{fn_name}()' (CWE-327).",
+                column_number=m_rc4.start() + 1,
+                engine="Regex",
+                fix_type=FixType.SUGGESTED_FIX,
+                suggested_fix_replacement="AES-256-GCM or ChaCha20-Poly1305"
+            ))
+
+        # 5. ECB cipher modes
+        m_ecb = re.search(r'\b(EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(', target_line)
+        if m_ecb and not self._is_decl_or_prototype(line_content, m_ecb.start()):
+            fn_name = m_ecb.group(1)
+            issues.append(self.create_issue(
+                file_path=file_path,
+                line_number=line_number,
+                code_snippet=line_content,
+                message=f"Use of insecure Electronic Codebook (ECB) cipher mode '{fn_name}()' (CWE-327).",
+                column_number=m_ecb.start() + 1,
+                engine="Regex",
+                fix_type=FixType.SUGGESTED_FIX,
+                suggested_fix_replacement="AES-256-GCM or ChaCha20-Poly1305"
+            ))
+
+        return issues
+
+
 class NoInsecureRandRule(BaseRule):
     rule_id = "CGULL-028"
     name = "Insecure PRNG for Security-Sensitive Use"
