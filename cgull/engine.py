@@ -5,6 +5,7 @@ regex scanning, AST parsing, and issue aggregation.
 """
 
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -72,6 +73,7 @@ class CGullScanner:
         custom_ignore_patterns: Optional[List[str]] = None,
         jobs: int = 1,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        quiet: bool = False,
     ) -> ScanResult:
         """
         Recursively scans a directory or single file for security vulnerabilities.
@@ -141,9 +143,9 @@ class CGullScanner:
         }
 
         if resolved_jobs > 1:
-            results = self._scan_files_parallel(files_to_scan, resolved_jobs, config, progress_callback)
+            results = self._scan_files_parallel(files_to_scan, resolved_jobs, config, progress_callback, quiet=quiet)
         else:
-            results = self._scan_files_sequential(files_to_scan, config, progress_callback)
+            results = self._scan_files_sequential(files_to_scan, config, progress_callback, quiet=quiet)
 
         analyzed_count = 0
         failed_count = 0
@@ -238,6 +240,7 @@ class CGullScanner:
         files_to_scan: List[str],
         config: ScanConfig,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        quiet: bool = False,
     ):
         results = []
         total_files = len(files_to_scan)
@@ -245,7 +248,7 @@ class CGullScanner:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = self._scan_single_file_content(file_path, content, config=config)
+                file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = self._scan_single_file_content(file_path, content, config=config, quiet=quiet)
                 results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence, scan_err))
             except Exception as e:
                 scan_err = ScanError(
@@ -253,6 +256,9 @@ class CGullScanner:
                     error_type=type(e).__name__,
                     message=str(e) or f"Failed to read file: {file_path}",
                 )
+                if not quiet:
+                    sys.stderr.write(f"[ERROR] Analysis failed for {file_path}: {scan_err.error_type}: {scan_err.message}\n")
+                    sys.stderr.flush()
                 results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err))
             if progress_callback:
                 progress_callback(idx, total_files, file_path)
@@ -264,6 +270,7 @@ class CGullScanner:
         jobs: int,
         config: ScanConfig,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        quiet: bool = False,
     ):
         import pickle
         try:
@@ -281,7 +288,7 @@ class CGullScanner:
         pool = ProcessPoolExecutor(max_workers=jobs)
         try:
             futures = {
-                pool.submit(_scan_file_worker, file_path, config): file_path
+                pool.submit(_scan_file_worker, file_path, config, quiet): file_path
                 for file_path in files_to_scan
             }
             for future in as_completed(futures):
@@ -296,6 +303,9 @@ class CGullScanner:
                         error_type=type(e).__name__,
                         message=str(e) or f"Worker execution failed for {file_path}",
                     )
+                    if not quiet:
+                        sys.stderr.write(f"[ERROR] Analysis failed for {file_path}: {scan_err.error_type}: {scan_err.message}\n")
+                        sys.stderr.flush()
                     results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err))
                 if progress_callback:
                     progress_callback(completed_count, total_files, file_path)
@@ -310,7 +320,7 @@ class CGullScanner:
             raise
         return results
 
-    def scan_text(self, source_code: str, file_path: str = "source.c") -> ScanResult:
+    def scan_text(self, source_code: str, file_path: str = "source.c", quiet: bool = False) -> ScanResult:
         """
         Directly scans in-memory C source text.
         """
@@ -319,7 +329,7 @@ class CGullScanner:
         self.config = config
         self.rules = config.get_rules()
 
-        file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = self._scan_single_file_content(file_path, source_code, config=config)
+        file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = self._scan_single_file_content(file_path, source_code, config=config, quiet=quiet)
         scan_errors = []
         if status == "failed":
             if scan_err:
@@ -381,10 +391,11 @@ class CGullScanner:
         file_path: str,
         content: str,
         config: Optional[ScanConfig] = None,
+        quiet: bool = False,
     ) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
         if config is None:
             config = self._get_active_config()
-        return _scan_file_content(content, file_path, ast_parser=self.ast_parser, config=config)
+        return _scan_file_content(content, file_path, ast_parser=self.ast_parser, config=config, quiet=quiet)
 
 
 def _scan_file_content(
@@ -394,6 +405,7 @@ def _scan_file_content(
     engine_mode: Optional[AnalysisEngine] = None,
     ast_parser: Optional[CASTParser] = None,
     config: Optional[ScanConfig] = None,
+    quiet: bool = False,
 ) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
     """
     Module-level scan implementation shared by in-process and
@@ -512,6 +524,9 @@ def _scan_file_content(
             error_type=type(e).__name__,
             message=str(e) or "File analysis failed",
         )
+        if not quiet:
+            sys.stderr.write(f"[ERROR] Analysis failed for {file_path}: {scan_error.error_type}: {scan_error.message}\n")
+            sys.stderr.flush()
 
     # Sort issues by line number
     issues.sort(key=lambda x: (x.line_number, x.column_number))
@@ -522,6 +537,7 @@ def _scan_file_content(
 def _scan_file_worker(
     file_path: str,
     config: Union[ScanConfig, AnalysisEngine],
+    quiet: bool = False,
 ) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
     """
     Entry point run in a separate process by ProcessPoolExecutor. Rebuilds
@@ -538,5 +554,8 @@ def _scan_file_worker(
             error_type=type(e).__name__,
             message=str(e) or f"Failed to read file: {file_path}",
         )
+        if not quiet:
+            sys.stderr.write(f"[ERROR] Analysis failed for {file_path}: {scan_err.error_type}: {scan_err.message}\n")
+            sys.stderr.flush()
         return [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err
-    return _scan_file_content(content, file_path, config=config)
+    return _scan_file_content(content, file_path, config=config, quiet=quiet)

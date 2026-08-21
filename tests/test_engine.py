@@ -205,6 +205,121 @@ class TestEngineModes(unittest.TestCase):
         self.assertEqual(result.scan_errors[0].error_type, "RuntimeError")
         self.assertEqual(result.scan_errors[0].message, "Buggy rule crashed!")
 
+    def test_rule_exception_logs_to_stderr_when_not_quiet(self):
+        import io
+        from unittest.mock import patch
+        from cgull.rules.base import BaseRule
+
+        class BuggyRule(BaseRule):
+            rule_id = "BUGGY-001"
+            name = "Buggy Rule"
+            impact = Severity.LOW
+            def scan_line(self, **kwargs):
+                raise AttributeError("AttributeError in rule AST scan")
+
+        scanner = CGullScanner(rules=[BuggyRule()])
+        stderr_buf = io.StringIO()
+        with patch("sys.stderr", stderr_buf):
+            result = scanner.scan_text("int main() { return 0; }", "app.c", quiet=False)
+
+        self.assertEqual(result.files_failed, 1)
+        output = stderr_buf.getvalue()
+        self.assertIn("[ERROR] Analysis failed for app.c: AttributeError: AttributeError in rule AST scan", output)
+
+    def test_rule_exception_suppresses_stderr_when_quiet(self):
+        import io
+        from unittest.mock import patch
+        from cgull.rules.base import BaseRule
+
+        class BuggyRule(BaseRule):
+            rule_id = "BUGGY-001"
+            name = "Buggy Rule"
+            impact = Severity.LOW
+            def scan_line(self, **kwargs):
+                raise AttributeError("AttributeError in rule AST scan")
+
+        scanner = CGullScanner(rules=[BuggyRule()])
+        stderr_buf = io.StringIO()
+        with patch("sys.stderr", stderr_buf):
+            result = scanner.scan_text("int main() { return 0; }", "app.c", quiet=True)
+
+        self.assertEqual(result.files_failed, 1)
+        self.assertEqual(stderr_buf.getvalue(), "")
+
+    def test_parallel_worker_exception_logs_to_stderr_when_not_quiet(self):
+        import io
+        from unittest.mock import patch, MagicMock
+        from concurrent.futures import Future
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            f1 = os.path.join(temp_dir, "crash.c")
+            f2 = os.path.join(temp_dir, "good.c")
+            with open(f1, "w") as f:
+                f.write(VULNERABLE_CODE)
+            with open(f2, "w") as f:
+                f.write(VULNERABLE_CODE)
+
+            def mock_submit(fn, file_path, config, *args, **kwargs):
+                fut = Future()
+                if "crash.c" in file_path:
+                    fut.set_exception(AttributeError("AST node missing attribute"))
+                else:
+                    fut.set_result(fn(file_path, config, *args, **kwargs))
+                return fut
+
+            mock_pool = MagicMock()
+            mock_pool.submit.side_effect = mock_submit
+
+            scanner = CGullScanner()
+            stderr_buf = io.StringIO()
+            with patch("cgull.engine.ProcessPoolExecutor", return_value=mock_pool):
+                with patch("sys.stderr", stderr_buf):
+                    res = scanner.scan_path(temp_dir, jobs=2, quiet=False)
+
+            self.assertEqual(res.files_failed, 1)
+            output = stderr_buf.getvalue()
+            self.assertIn("Analysis failed for", output)
+            self.assertIn("crash.c: AttributeError: AST node missing attribute", output)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_parallel_worker_exception_suppresses_stderr_when_quiet(self):
+        import io
+        from unittest.mock import patch, MagicMock
+        from concurrent.futures import Future
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            f1 = os.path.join(temp_dir, "crash.c")
+            f2 = os.path.join(temp_dir, "good.c")
+            with open(f1, "w") as f:
+                f.write(VULNERABLE_CODE)
+            with open(f2, "w") as f:
+                f.write(VULNERABLE_CODE)
+
+            def mock_submit(fn, file_path, config, *args, **kwargs):
+                fut = Future()
+                if "crash.c" in file_path:
+                    fut.set_exception(AttributeError("AST node missing attribute"))
+                else:
+                    fut.set_result(fn(file_path, config, *args, **kwargs))
+                return fut
+
+            mock_pool = MagicMock()
+            mock_pool.submit.side_effect = mock_submit
+
+            scanner = CGullScanner()
+            stderr_buf = io.StringIO()
+            with patch("cgull.engine.ProcessPoolExecutor", return_value=mock_pool):
+                with patch("sys.stderr", stderr_buf):
+                    res = scanner.scan_path(temp_dir, jobs=2, quiet=True)
+
+            self.assertEqual(res.files_failed, 1)
+            self.assertEqual(stderr_buf.getvalue(), "")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 class TestParallelWorkerFunction(unittest.TestCase):
     def test_scan_file_worker_returns_same_shape_as_sequential(self):
@@ -281,12 +396,12 @@ class TestParallelWorkerFunction(unittest.TestCase):
             with open(f2, "w") as f:
                 f.write(VULNERABLE_CODE)
 
-            def mock_submit(fn, file_path, config):
+            def mock_submit(fn, file_path, config, *args, **kwargs):
                 fut = Future()
                 if "crash.c" in file_path:
                     fut.set_exception(RuntimeError("Simulated worker process crash"))
                 else:
-                    fut.set_result(fn(file_path, config))
+                    fut.set_result(fn(file_path, config, *args, **kwargs))
                 return fut
 
             mock_pool = MagicMock()
