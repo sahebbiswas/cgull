@@ -764,6 +764,16 @@ class TestReallocOverwrite(unittest.TestCase):
         issues = scanner.scan_text(code, "test.c").issues
         self.assertEqual(len(issues), 1)
 
+    def test_detects_multiline_realloc_overwrite(self):
+        code = "void f(char *ptr, size_t sz) {\n    ptr = (char *)realloc(\n        ptr,\n        sz\n    );\n}"
+        issues = scan_with_rule("CGULL-032", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_nested_comma_first_argument(self):
+        code = "char *get_buf(int a, int b);\nvoid f(char *ptr, int x, int y) {\n    ptr = realloc(get_buf(x, y), 100);\n}"
+        issues = scan_with_rule("CGULL-032", code)
+        self.assertEqual(len(issues), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

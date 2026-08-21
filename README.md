@@ -224,7 +224,7 @@ cgull init-ignore
 
 ## 🛡️ Supported Security Rules Matrix
 
-C-GULL implements all 27 security audit rules from the core specification:
+C-GULL implements the security audit rules listed below:
 
 | Rule ID | Rule Name | Impact | Category | CWE ID | Method | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |

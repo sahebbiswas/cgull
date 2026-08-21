@@ -49,6 +49,19 @@ void test_safe_realloc_tmp(void) {
     free(ptr);
 }
 
+/* Positive Test Case 4: Multiline realloc overwrite */
+void test_multiline_overwrite(void) {
+    char *buf = (char *)malloc(64);
+    if (!buf) return;
+
+    buf = (char *)realloc( // expect: CGULL-032
+        buf,
+        128
+    );
+    if (!buf) return;
+    free(buf);
+}
+
 /* Negative Test Case 2: Realloc assigning to a different pointer */
 void test_different_pointer(char *orig) {
     char *new_ptr = realloc(orig, 300);
@@ -58,4 +71,15 @@ void test_different_pointer(char *orig) {
         return;
     }
     free(new_ptr);
+}
+
+/* Negative Test Case 3: Realloc first argument contains nested comma */
+char *get_buffer(int x, int y);
+void test_nested_comma_arg(int a, int b) {
+    char *p = (char *)malloc(100);
+    if (!p) return;
+
+    p = realloc(get_buffer(a, b), 200);
+    if (!p) return;
+    free(p);
 }
