@@ -88,6 +88,46 @@ class TestBannedFunctions(unittest.TestCase):
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].impact, Severity.HIGH)
 
+    def test_strcpy_non_ascii_literal_flagged_high(self):
+        code = """
+        void f(void) {
+            char buf[100];
+            strcpy(buf, "héllo");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
+    def test_strcpy_destination_offset_flagged_high(self):
+        code = """
+        void f(void) {
+            char buf[100];
+            strcpy(buf + 10, "hostname");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
+    def test_strcpy_cross_function_same_name_uses_in_scope_declaration(self):
+        code = """
+        void f1(void) {
+            char buf[100];
+            strcpy(buf, "hostname");
+        }
+        void f2(void) {
+            char buf[5];
+            strcpy(buf, "hostname");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 2)
+        f1_issue = next(i for i in issues if i.line_number < 6)
+        f2_issue = next(i for i in issues if i.line_number >= 6)
+        self.assertEqual(f1_issue.impact, Severity.LOW)
+        self.assertEqual(f2_issue.impact, Severity.HIGH)
+
     def test_strcpy_literal_overflow_flagged_high(self):
         code = """
         void f(void) {

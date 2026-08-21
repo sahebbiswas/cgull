@@ -36,6 +36,7 @@ class BannedFunctionsRule(BaseRule):
     def __init__(self, extra_banned_funcs: Optional[dict] = None):
         super().__init__()
         self.banned_funcs = dict(self.BANNED_FUNCS)
+        self._dest_size_cache = {}
         if extra_banned_funcs:
             self.add_extra_banned_funcs(extra_banned_funcs)
 
@@ -104,15 +105,15 @@ class BannedFunctionsRule(BaseRule):
     @staticmethod
     def _get_string_literal_length(src_expr: str) -> Optional[int]:
         """
-        Computes the unescaped character/byte length of a C string literal (or concatenated
-        string literals like "foo" "bar" or L"hostname"). Returns None if src_expr is not
-        a string literal.
+        Computes the unescaped byte length of a C string literal (or concatenated
+        string literals like "foo" "bar"). Returns None if src_expr is not
+        a strictly ASCII string literal (non-ASCII characters or wide prefixes make byte size uncertain).
         """
         s = src_expr.strip()
         if not s:
             return None
 
-        literal_part_re = re.compile(r'^(?:L|u8|u|U)?"((?:[^"\\]|\\.)*)"')
+        literal_part_re = re.compile(r'^(?:u8)?"((?:[^"\\]|\\.)*)"')
         pos = 0
         total_len = 0
         matched_any = False
@@ -128,24 +129,47 @@ class BannedFunctionsRule(BaseRule):
                 return None
 
             content = m.group(1)
+            if any(ord(c) > 127 for c in content):
+                return None
+
             unescaped = re.sub(r'\\(?:[0-7]{1,3}|x[0-9a-fA-F]{1,2}|.)', 'x', content)
+            if any(ord(c) > 127 for c in unescaped):
+                return None
+
             total_len += len(unescaped)
             pos += m.end()
             matched_any = True
 
         return total_len if matched_any else None
 
-    @staticmethod
-    def _resolve_dest_buffer_size(dest_expr: str, line_number: int, source_lines: List[str], full_code: str) -> Optional[int]:
+    def _resolve_dest_buffer_size(self, dest_expr: str, line_number: int, source_lines: List[str], full_code: str, file_path: str = "") -> Optional[int]:
         """
-        Resolves the declared array size of dest_expr.
+        Resolves the declared array size of dest_expr within current function scope.
+        Requires dest_expr to be a simple identifier (rejects offsets, indexing, member access).
         Handles direct array declarations, macro array sizes, and pointer variables
         assigned from fixed-size arrays.
         """
-        m = re.search(r'\b([a-zA-Z_]\w*)\b', dest_expr)
-        if not m:
+        cache_key = (file_path, line_number, dest_expr)
+        if cache_key in self._dest_size_cache:
+            return self._dest_size_cache[cache_key]
+
+        dest_clean = dest_expr.strip()
+        dest_clean = re.sub(r'^\s*\(\s*(?:char|int8_t|uint8_t|void|unsigned\s+char|signed\s+char)\s*\*+\s*\)\s*', '', dest_clean).strip()
+        if not re.match(r'^[a-zA-Z_]\w*$', dest_clean):
+            self._dest_size_cache[cache_key] = None
             return None
-        var_name = m.group(1)
+
+        var_name = dest_clean
+
+        func_header_re = re.compile(
+            r'^[ \t]*(?:(?:static|inline|extern|const|unsigned|signed|struct\s+\w+|\w+)\s+)+(\*?\s*[\w_]+)\s*\([^)]*\)\s*\{?'
+        )
+        fn_start_idx = 0
+        for i in range(min(line_number - 1, len(source_lines) - 1), -1, -1):
+            line = source_lines[i]
+            if func_header_re.match(line):
+                fn_start_idx = i
+                break
 
         def _find_macro_val(macro_name: str) -> Optional[int]:
             def_m = re.search(rf'#\s*define\s+{re.escape(macro_name)}\s+(\d+|0x[0-9a-fA-F]+)\b', full_code)
@@ -158,45 +182,46 @@ class BannedFunctionsRule(BaseRule):
                 return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
             return None
 
-        def _lookup_array_size(target_var: str) -> Optional[int]:
+        def _lookup_array_size_in_lines(target_var: str, start_l: int, end_l: int) -> Optional[int]:
             decl_pattern = rf'\b(?:char|int8_t|uint8_t|int|unsigned\s+char|signed\s+char|wchar_t|struct\s+\w+|\w+)\s+(?:\*|\s)*\b{re.escape(target_var)}\s*\[\s*([^\]]+)\s*\]'
-            for prev_idx in range(line_number - 1, -1, -1):
-                prev_line = source_lines[prev_idx] if prev_idx < len(source_lines) else ""
-                decl_m = re.search(decl_pattern, prev_line)
-                if decl_m:
-                    dim_expr = decl_m.group(1).strip()
-                    if dim_expr.isdigit():
-                        return int(dim_expr)
-                    return _find_macro_val(dim_expr)
-
-            decl_m = re.search(decl_pattern, full_code)
-            if decl_m:
-                dim_expr = decl_m.group(1).strip()
-                if dim_expr.isdigit():
-                    return int(dim_expr)
-                return _find_macro_val(dim_expr)
+            for idx in range(end_l - 1, start_l - 1, -1):
+                if idx < len(source_lines):
+                    line = source_lines[idx]
+                    decl_m = re.search(decl_pattern, line)
+                    if decl_m:
+                        dim_expr = decl_m.group(1).strip()
+                        if dim_expr.isdigit():
+                            return int(dim_expr)
+                        return _find_macro_val(dim_expr)
             return None
 
-        size = _lookup_array_size(var_name)
+        # 1. Check in-scope local array declaration
+        size = _lookup_array_size_in_lines(var_name, fn_start_idx, line_number)
         if size is not None:
+            self._dest_size_cache[cache_key] = size
             return size
 
+        # 2. Check in-scope pointer alias assignment from simple array variable (e.g. data = dataBuffer;)
         assign_patterns = [
-            rf'\b{re.escape(var_name)}\s*=\s*(?:(?:\([^\)]*\))\s*)?&?\s*([a-zA-Z_]\w*)',
-            rf'\b(?:char|int8_t|uint8_t|int|unsigned\s+char|signed\s+char)\s*\*+\s*{re.escape(var_name)}\s*=\s*(?:(?:\([^\)]*\))\s*)?&?\s*([a-zA-Z_]\w*)',
+            rf'^\s*(?:(?:char|int8_t|uint8_t|int|unsigned\s+char|signed\s+char)\s*\*+\s*)?{re.escape(var_name)}\s*=\s*([a-zA-Z_]\w*)\s*;',
         ]
-        for prev_idx in range(line_number - 1, -1, -1):
-            prev_line = source_lines[prev_idx] if prev_idx < len(source_lines) else ""
-            for pat in assign_patterns:
-                m_assign = re.search(pat, prev_line)
-                if m_assign:
-                    rhs_var = m_assign.group(1)
-                    if rhs_var != var_name:
-                        size = _lookup_array_size(rhs_var)
-                        if size is not None:
-                            return size
+        for idx in range(line_number - 1, fn_start_idx - 1, -1):
+            if idx < len(source_lines):
+                line = source_lines[idx]
+                for pat in assign_patterns:
+                    m_assign = re.search(pat, line)
+                    if m_assign:
+                        rhs_var = m_assign.group(1)
+                        if rhs_var != var_name:
+                            size = _lookup_array_size_in_lines(rhs_var, fn_start_idx, line_number)
+                            if size is not None:
+                                self._dest_size_cache[cache_key] = size
+                                return size
 
-        return None
+        # 3. Fallback: check global array declaration (before any function starts)
+        size = _lookup_array_size_in_lines(var_name, 0, fn_start_idx)
+        self._dest_size_cache[cache_key] = size
+        return size
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
@@ -230,7 +255,7 @@ class BannedFunctionsRule(BaseRule):
                         dest_arg, src_arg = args
                         src_len = self._get_string_literal_length(src_arg)
                         if src_len is not None:
-                            dest_size = self._resolve_dest_buffer_size(dest_arg, line_number, source_lines, full_code)
+                            dest_size = self._resolve_dest_buffer_size(dest_arg, line_number, source_lines, full_code, file_path)
                             required_bytes = src_len + 1
                             if dest_size is not None and dest_size > required_bytes:
                                 issue = self.create_issue(
