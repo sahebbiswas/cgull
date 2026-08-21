@@ -19,6 +19,21 @@ from typing import Dict, List, Optional, Set, TextIO, Tuple
 #          // cgull-disable-next-line CGULL-007
 #          // cgull-disable-line CGULL-019
 #          /* cgull-disable-next-line: CGULL-001,CGULL-003 */
+_ANSI_RE = re.compile(r'\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def sanitize_terminal_text(text: str) -> str:
+    """
+    Strips ANSI escape sequences, replaces newlines and carriage returns with spaces,
+    and strips control characters from text before writing to terminal/stderr.
+    """
+    s = _ANSI_RE.sub("", text)
+    s = s.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    s = _CONTROL_CHAR_RE.sub("", s)
+    return s
+
+
 _SUPPRESS_RE = re.compile(
     r'(?:cgull-ignore|cgull-disable)(?P<next>-next-line)?(?P<line>-line)?(?:\s*[:\s]\s*(?P<ids>[A-Za-z0-9_,\-\s]+))?',
     re.IGNORECASE,

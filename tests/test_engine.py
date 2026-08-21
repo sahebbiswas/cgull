@@ -226,6 +226,60 @@ class TestEngineModes(unittest.TestCase):
         output = stderr_buf.getvalue()
         self.assertIn("[ERROR] Analysis failed for app.c: AttributeError: AttributeError in rule AST scan", output)
 
+    def test_stderr_error_logging_sanitizes_ansi_escapes_and_control_chars(self):
+        import io
+        from unittest.mock import patch
+        from cgull.rules.base import BaseRule
+
+        class MaliciousErrorRule(BaseRule):
+            rule_id = "MAL-001"
+            name = "Malicious Rule"
+            impact = Severity.LOW
+            def scan_line(self, **kwargs):
+                raise RuntimeError("Exploit \x1b[2J\r\nInjected line")
+
+        scanner = CGullScanner(rules=[MaliciousErrorRule()])
+        stderr_buf = io.StringIO()
+        file_path_with_escape = "bad_\x1b[31mfile\x1b[0m.c"
+        with patch("sys.stderr", stderr_buf):
+            scanner.scan_text("int main() { return 0; }", file_path_with_escape, quiet=False)
+
+        output = stderr_buf.getvalue()
+        self.assertNotIn("\x1b[2J", output)
+        self.assertNotIn("\x1b[31m", output)
+        self.assertNotIn("\r", output)
+        self.assertIn("Analysis failed for bad_file.c: RuntimeError: Exploit  Injected line", output)
+
+    def test_stderr_error_logging_adds_leading_newline_when_progress_active(self):
+        import io
+        from unittest.mock import patch
+        from cgull.rules.base import BaseRule
+
+        class BuggyRule(BaseRule):
+            rule_id = "BUGGY-001"
+            name = "Buggy Rule"
+            impact = Severity.LOW
+            def scan_line(self, **kwargs):
+                raise RuntimeError("Crash during scan")
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            f1 = os.path.join(temp_dir, "sample.c")
+            with open(f1, "w") as f:
+                f.write("int x = 0;")
+
+            scanner = CGullScanner(rules=[BuggyRule()])
+            stderr_buf = io.StringIO()
+            def dummy_cb(c, t, p): pass
+
+            with patch("sys.stderr", stderr_buf):
+                scanner.scan_path(temp_dir, jobs=1, progress_callback=dummy_cb, quiet=False)
+
+            output = stderr_buf.getvalue()
+            self.assertTrue(output.startswith("\n[ERROR] Analysis failed for"))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
     def test_rule_exception_suppresses_stderr_when_quiet(self):
         import io
         from unittest.mock import patch
