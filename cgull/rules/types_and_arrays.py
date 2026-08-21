@@ -6,7 +6,7 @@ import re
 from typing import List, Optional
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
-from ..ast_analyzer import CASTContext
+from ..ast_analyzer import CASTContext, is_unsigned_type
 
 
 class VariableLengthArraysRule(BaseRule):
@@ -140,7 +140,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 return var_obj.is_signed
             for param in fn.parameters:
                 if param.name == idx_var:
-                    return 'unsigned' not in param.type_name
+                    return not is_unsigned_type(param.type_name, getattr(ast_ctx, "unsigned_typedefs", None))
             return True
 
         def is_bounds_check_for_var(expr_str: str, var_name: str, arr_size: Optional[int] = None, is_signed: bool = True) -> bool:
@@ -561,14 +561,8 @@ class SignedUnsignedComparisonRule(BaseRule):
     analysis_engine = AnalysisEngine.HYBRID
 
     @staticmethod
-    def _is_unsigned_type(type_name: str) -> bool:
-        tn = type_name.lower()
-        if "unsigned" in tn:
-            return True
-        for u_type in ("size_t", "size_type", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "uintptr_t", "uintmax_t", "u_int32_t", "u_int64_t", "u_char", "u_int", "u_long", "u_short"):
-            if re.search(r'\b' + re.escape(u_type) + r'\b', tn):
-                return True
-        return False
+    def _is_unsigned_type(type_name: str, custom_typedefs: Optional[set] = None) -> bool:
+        return is_unsigned_type(type_name, custom_typedefs)
 
     @staticmethod
     def _is_signed_type(type_name: str) -> bool:
@@ -594,24 +588,25 @@ class SignedUnsignedComparisonRule(BaseRule):
             return None
         var_name = expr_clean
 
+        custom_typedefs = getattr(ast_ctx, "unsigned_typedefs", None)
         if fn:
             var_obj = fn.variables.get(var_name)
             if var_obj:
-                if self._is_unsigned_type(var_obj.type_name) or not var_obj.is_signed:
+                if self._is_unsigned_type(var_obj.type_name, custom_typedefs) or not var_obj.is_signed:
                     return True
                 if self._is_signed_type(var_obj.type_name) or var_obj.is_signed:
                     return False
 
             for param in fn.parameters:
                 if param.name == var_name:
-                    if self._is_unsigned_type(param.type_name):
+                    if self._is_unsigned_type(param.type_name, custom_typedefs):
                         return True
                     if self._is_signed_type(param.type_name):
                         return False
 
         if ast_ctx and var_name in ast_ctx.global_variables:
             var_obj = ast_ctx.global_variables[var_name]
-            if self._is_unsigned_type(var_obj.type_name) or not var_obj.is_signed:
+            if self._is_unsigned_type(var_obj.type_name, custom_typedefs) or not var_obj.is_signed:
                 return True
             if self._is_signed_type(var_obj.type_name) or var_obj.is_signed:
                 return False
@@ -657,7 +652,7 @@ class SignedUnsignedComparisonRule(BaseRule):
 
                     var_is_unsigned = None
                     if decl_type:
-                        var_is_unsigned = self._is_unsigned_type(decl_type)
+                        var_is_unsigned = self._is_unsigned_type(decl_type, getattr(ast_ctx, "unsigned_typedefs", None))
                     else:
                         var_is_unsigned = self._get_var_signedness(var_name, fn, ast_ctx)
 

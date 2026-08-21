@@ -320,6 +320,43 @@ class TestComplexASTConstructs(unittest.TestCase):
         self.assertFalse(q_var.is_pointer)
         self.assertTrue(pp_var.is_pointer)
 
+    def test_standard_unsigned_typedefs_signedness(self):
+        from cgull.ast_analyzer import is_unsigned_type
+        self.assertTrue(is_unsigned_type("size_t"))
+        self.assertTrue(is_unsigned_type("uint8_t"))
+        self.assertTrue(is_unsigned_type("uint32_t"))
+        self.assertTrue(is_unsigned_type("uintptr_t"))
+        self.assertTrue(is_unsigned_type("unsigned int"))
+        self.assertFalse(is_unsigned_type("int"))
+        self.assertFalse(is_unsigned_type("ssize_t"))
+        self.assertFalse(is_unsigned_type("int32_t"))
+        self.assertFalse(is_unsigned_type("wint_t"))
+
+        src = """
+        typedef unsigned long my_custom_size_t;
+        void memset_test(uint8_t *ptr, size_t sz, my_custom_size_t c_sz) {
+            size_t idx = 0;
+            my_custom_size_t c_idx = 0;
+        }
+        """
+        ctx = self.parser.parse(src)
+        fn = ctx.functions[0]
+        self.assertFalse(fn.variables["idx"].is_signed)
+        self.assertFalse(fn.variables["c_idx"].is_signed)
+
+    def test_multi_declarator_and_fn_ptr_typedef_extraction(self):
+        from unittest.mock import patch
+        src = """
+        typedef unsigned int u32, *pu32;
+        typedef uint8_t (*func_ptr_t)(int a, int b);
+        """
+        # Test in regex fallback mode specifically
+        with patch.object(self.parser, "_try_pycparser", return_value=(None, False)):
+            ctx = self.parser.parse(src)
+            self.assertIn("u32", ctx.unsigned_typedefs)
+            self.assertIn("pu32", ctx.unsigned_typedefs)
+            self.assertIn("func_ptr_t", ctx.unsigned_typedefs)
+
     def test_multiline_function_headers_and_declarations(self):
         src = """
         int

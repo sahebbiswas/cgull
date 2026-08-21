@@ -26,6 +26,34 @@ from typing import List, Dict, Any, Optional, Set, Tuple
 from .models import ParserStatus
 from .utils import strip_comments_keep_lines
 
+STANDARD_UNSIGNED_TYPES = {
+    "size_t", "size_type", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "uintptr_t", "uintmax_t", "u_int8_t", "u_int16_t", "u_int32_t", "u_int64_t",
+    "u_char", "u_int", "u_long", "u_short", "char16_t", "char32_t"
+}
+
+
+def is_unsigned_type(type_name: str, custom_typedefs: Optional[Set[str]] = None) -> bool:
+    """
+    Returns True if type_name represents an unsigned integer or pointer-size type.
+    Resolves standard C unsigned typedefs (e.g. size_t, uint8_t, uintptr_t)
+    as well as any custom unsigned typedefs provided.
+    """
+    if not type_name:
+        return False
+    tn = type_name.lower()
+    if "unsigned" in tn:
+        return True
+    for u_type in STANDARD_UNSIGNED_TYPES:
+        if re.search(r'\b' + re.escape(u_type) + r'\b', tn):
+            return True
+    if custom_typedefs:
+        for u_type in custom_typedefs:
+            if re.search(r'\b' + re.escape(u_type.lower()) + r'\b', tn):
+                return True
+    return False
+
+
 # Common standard-library typedefs that pycparser needs a definition for
 # since it never sees <stdint.h>/<stddef.h>/etc. Injected as a prelude
 # before parsing; stripped back out via line-count offset afterwards.
@@ -176,6 +204,7 @@ class CASTContext:
     has_pycparser: bool = False
     pycparser_ast: Optional[Any] = None
     parser_status: str = ParserStatus.FALLBACK_PARSER.value
+    unsigned_typedefs: Set[str] = field(default_factory=set)
 
 
 def _format_pycparser_expr(node) -> str:
@@ -217,7 +246,7 @@ def _format_pycparser_expr(node) -> str:
     return ""
 
 
-def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Optional[str], bool]:
+def _format_pycparser_type(node, custom_typedefs: Optional[Set[str]] = None) -> Tuple[str, bool, bool, bool, bool, bool, Optional[str], bool]:
     """
     Recursively formats a pycparser type node.
     Returns:
@@ -232,7 +261,7 @@ def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Opt
     type_name = type(node).__name__
 
     if type_name == "PtrDecl":
-        sub_t, sub_ptr, is_fp, sub_vol, sub_sig, sub_vla, sub_dim, is_arr = _format_pycparser_type(node.type)
+        sub_t, sub_ptr, is_fp, sub_vol, sub_sig, sub_vla, sub_dim, is_arr = _format_pycparser_type(node.type, custom_typedefs)
         vol = is_volatile or sub_vol
         sig = is_signed and sub_sig
         if is_fp:
@@ -240,7 +269,7 @@ def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Opt
         return f"{sub_t} *", True, False, vol, sig, False, None, False
 
     elif type_name == "ArrayDecl":
-        sub_t, sub_ptr, sub_fp, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type)
+        sub_t, sub_ptr, sub_fp, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type, custom_typedefs)
         dim_str = None
         is_vla = False
         if node.dim:
@@ -258,7 +287,7 @@ def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Opt
         return f"{sub_t}[{dim_str or ''}]", sub_ptr, sub_fp, vol, sig, is_vla, dim_str, True
 
     elif type_name == "FuncDecl":
-        ret_t, _, _, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type)
+        ret_t, _, _, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type, custom_typedefs)
         p_list = []
         if node.args and getattr(node.args, "params", None):
             for p in node.args.params:
@@ -266,10 +295,10 @@ def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Opt
                 if p_type_name == "EllipsisParam" or not hasattr(p, "type"):
                     p_list.append("...")
                 elif p_type_name == "Typename":
-                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type)
+                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type, custom_typedefs)
                     p_list.append(pt)
                 elif p_type_name == "Decl":
-                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type)
+                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type, custom_typedefs)
                     p_list.append(f"{pt} {p.name}" if getattr(p, "name", None) else pt)
         params_str = ", ".join(p_list) if p_list else "void"
         return f"{ret_t} ({params_str})", False, True, sub_vol, sub_sig, False, None, False
@@ -282,8 +311,7 @@ def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Opt
         if inner_type_name == "IdentifierType":
             names = getattr(inner, "names", ["int"])
             tname = " ".join(names)
-            if "unsigned" in names:
-                sig = False
+            sig = not is_unsigned_type(tname, custom_typedefs)
         elif inner_type_name == "Struct":
             tname = f"struct {inner.name}" if getattr(inner, "name", None) else "struct"
         elif inner_type_name == "Union":
@@ -292,17 +320,19 @@ def _format_pycparser_type(node) -> Tuple[str, bool, bool, bool, bool, bool, Opt
             tname = f"enum {inner.name}" if getattr(inner, "name", None) else "enum"
         else:
             tname = getattr(node, "declname", "int") or "int"
+            sig = not is_unsigned_type(tname, custom_typedefs)
         if "volatile" in (getattr(inner, "quals", []) or []):
             vol = True
         return tname, False, False, vol, sig, False, None, False
 
     elif type_name == "IdentifierType":
         names = getattr(node, "names", ["int"])
-        sig = "unsigned" not in names
-        return " ".join(names), False, False, False, sig, False, None, False
+        tname = " ".join(names)
+        sig = not is_unsigned_type(tname, custom_typedefs)
+        return tname, False, False, False, sig, False, None, False
 
     elif type_name == "Typename":
-        return _format_pycparser_type(node.type)
+        return _format_pycparser_type(node.type, custom_typedefs)
 
     return "int", False, False, False, True, False, None, False
 
@@ -341,10 +371,11 @@ class _ASTFunctionAnalyzer:
     function calls, dataflow events, and CFG nodes.
     """
 
-    def __init__(self, owning_fn: CFunction, prelude_offset: int, clean_lines: List[str]):
+    def __init__(self, owning_fn: CFunction, prelude_offset: int, clean_lines: List[str], custom_typedefs: Optional[Set[str]] = None):
         self.owning_fn = owning_fn
         self.prelude_offset = prelude_offset
         self.clean_lines = clean_lines
+        self.custom_typedefs = custom_typedefs
         self.node_counter = 0
 
     def analyze(self, body_node) -> None:
@@ -362,7 +393,7 @@ class _ASTFunctionAnalyzer:
                 if node.name and type(node.type).__name__ != "FuncDecl":
                     self.current_target_var = node.name
                     line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
-                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(node.type)
+                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(node.type, self.outer.custom_typedefs)
                     c_var = CVariable(
                         name=node.name,
                         type_name=tname,
@@ -617,13 +648,16 @@ class CASTParser:
         lines = source_code.splitlines()
         clean_lines, clean_code = strip_comments_keep_lines(source_code)
 
+        unsigned_typedefs: Set[str] = set()
+        self._extract_unsigned_typedefs(clean_code, unsigned_typedefs)
+
         pycparser_ast, has_pycparser = self._try_pycparser(clean_code)
         if has_pycparser and pycparser_ast is not None:
-            functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code)
+            functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code, unsigned_typedefs)
             parser_status = ParserStatus.PYCPARSER_SUCCESS.value
         else:
-            functions = self._extract_functions(clean_lines, clean_code)
-            global_vars = self._extract_global_vars(clean_lines, functions)
+            functions = self._extract_functions(clean_lines, clean_code, unsigned_typedefs)
+            global_vars = self._extract_global_vars(clean_lines, functions, unsigned_typedefs)
             parser_status = ParserStatus.FALLBACK_PARSER.value
 
         return CASTContext(
@@ -635,7 +669,73 @@ class CASTParser:
             has_pycparser=has_pycparser,
             pycparser_ast=pycparser_ast,
             parser_status=parser_status,
+            unsigned_typedefs=unsigned_typedefs,
         )
+
+    def _extract_unsigned_typedefs(self, clean_code: str, target_set: Set[str]) -> None:
+        """
+        Extracts custom unsigned typedef names from comment-stripped source code,
+        supporting single and multi-declarator typedef statements as well as pointer declarators.
+        """
+        typedef_stmt_regex = re.compile(r'\btypedef\s+([^;]+);', re.MULTILINE)
+        for match in typedef_stmt_regex.finditer(clean_code):
+            stmt_body = match.group(1).strip()
+            if not stmt_body:
+                continue
+
+            # Split on top-level commas (ignoring commas inside nested parentheses/brackets)
+            tokens: List[str] = []
+            current = []
+            paren_depth = 0
+            bracket_depth = 0
+            for char in stmt_body:
+                if char == '(':
+                    paren_depth += 1
+                elif char == ')':
+                    paren_depth = max(0, paren_depth - 1)
+                elif char == '[':
+                    bracket_depth += 1
+                elif char == ']':
+                    bracket_depth = max(0, bracket_depth - 1)
+
+                if char == ',' and paren_depth == 0 and bracket_depth == 0:
+                    tokens.append(''.join(current).strip())
+                    current = []
+                else:
+                    current.append(char)
+            if current:
+                tokens.append(''.join(current).strip())
+
+            if not tokens:
+                continue
+
+            # First token contains the base type and the first declarator
+            first_part = tokens[0]
+            # Match base type and declarator identifier
+            # e.g. "unsigned int u32", "unsigned int *pu32", "uint8_t (*func_ptr)(int)"
+            m_fn_ptr = re.search(r'^(.*?)\(\s*\*\s*([a-zA-Z_]\w*)\s*\)\s*\(.*?\)$', first_part)
+            if m_fn_ptr:
+                base_type = m_fn_ptr.group(1).strip()
+                alias = m_fn_ptr.group(2).strip()
+                if is_unsigned_type(base_type, target_set):
+                    target_set.add(alias)
+            else:
+                m_decl = re.search(r'^(.*?)\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', first_part)
+                if m_decl:
+                    base_type = m_decl.group(1).strip()
+                    first_alias = m_decl.group(2).strip()
+                    if is_unsigned_type(base_type, target_set):
+                        target_set.add(first_alias)
+
+                        # Subsequent tokens in multi-declarator typedef share the same base_type
+                        for sub_tok in tokens[1:]:
+                            m_sub_fn = re.search(r'\(\s*\*\s*([a-zA-Z_]\w*)\s*\)', sub_tok)
+                            if m_sub_fn:
+                                target_set.add(m_sub_fn.group(1).strip())
+                            else:
+                                m_sub = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', sub_tok)
+                                if m_sub:
+                                    target_set.add(m_sub.group(1).strip())
 
     @staticmethod
     def strip_only(source_code: str) -> Tuple[List[str], str]:
@@ -770,7 +870,7 @@ class CASTParser:
             return None
 
     def _build_model_from_ast(
-        self, pycparser_ast, clean_lines: List[str], clean_code: str
+        self, pycparser_ast, clean_lines: List[str], clean_code: str, custom_typedefs: Optional[Set[str]] = None
     ) -> Tuple[List[CFunction], Dict[str, CVariable]]:
         """
         Builds the authoritative structural representation (functions, parameters,
@@ -783,9 +883,13 @@ class CASTParser:
         global_vars: Dict[str, CVariable] = {}
 
         for ext in pycparser_ast.ext:
-            if isinstance(ext, c_ast.Decl) and type(ext.type).__name__ != "FuncDecl" and type(ext).__name__ != "Typedef":
+            if isinstance(ext, c_ast.Typedef) and custom_typedefs is not None:
+                tname, _, _, _, is_sig, _, _, _ = _format_pycparser_type(ext.type, custom_typedefs)
+                if not is_sig and ext.name:
+                    custom_typedefs.add(ext.name)
+            elif isinstance(ext, c_ast.Decl) and type(ext.type).__name__ != "FuncDecl" and type(ext).__name__ != "Typedef":
                 line_no = (ext.coord.line - _PRELUDE_LINE_COUNT) if ext.coord else 1
-                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(ext.type)
+                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(ext.type, custom_typedefs)
                 if ext.name and ext.name not in ('typedef', '#include', '#define', '#ifdef', '#ifndef'):
                     global_vars[ext.name] = CVariable(
                         name=ext.name,
@@ -803,7 +907,7 @@ class CASTParser:
                 fname = ext.decl.name
                 fn_start = (ext.decl.coord.line - _PRELUDE_LINE_COUNT) if ext.decl.coord else 1
 
-                ret_t, _, _, _, _, _, _, _ = _format_pycparser_type(ext.decl.type.type)
+                ret_t, _, _, _, _, _, _, _ = _format_pycparser_type(ext.decl.type.type, custom_typedefs)
 
                 params: List[CParameter] = []
                 has_void_param = False
@@ -816,7 +920,7 @@ class CASTParser:
                     if len(func_args.params) == 1:
                         p0 = func_args.params[0]
                         if hasattr(p0, "type"):
-                            p0_type, _, _, _, _, _, _, _ = _format_pycparser_type(p0.type)
+                            p0_type, _, _, _, _, _, _, _ = _format_pycparser_type(p0.type, custom_typedefs)
                             if p0_type == "void" and (not getattr(p0, "name", None) or p0.name == "void"):
                                 has_void_param = True
 
@@ -825,7 +929,7 @@ class CASTParser:
                             if type(param).__name__ == "EllipsisParam" or not hasattr(param, "type"):
                                 continue
                             p_name = getattr(param, "name", None) or ""
-                            p_type, p_is_ptr, p_is_fp, _, _, _, _, _ = _format_pycparser_type(param.type)
+                            p_type, p_is_ptr, p_is_fp, _, _, _, _, _ = _format_pycparser_type(param.type, custom_typedefs)
                             p_line = (param.coord.line - _PRELUDE_LINE_COUNT) if param.coord else fn_start
                             params.append(CParameter(
                                 name=p_name,
@@ -858,13 +962,13 @@ class CASTParser:
                 )
 
                 if ext.body:
-                    _ASTFunctionAnalyzer(fn, _PRELUDE_LINE_COUNT, clean_lines).analyze(ext.body)
+                    _ASTFunctionAnalyzer(fn, _PRELUDE_LINE_COUNT, clean_lines, custom_typedefs).analyze(ext.body)
 
                 functions.append(fn)
 
         return functions, global_vars
 
-    def _extract_functions(self, lines: List[str], full_code: str) -> List[CFunction]:
+    def _extract_functions(self, lines: List[str], full_code: str, custom_typedefs: Optional[Set[str]] = None) -> List[CFunction]:
         functions: List[CFunction] = []
         # Pattern to match C function header: return_type func_name(params) {
         # e.g., int auth_user(char *user, const char *pass)
@@ -944,12 +1048,12 @@ class CASTParser:
             )
 
             # Analyze function body variables & calls
-            self._analyze_function_body(fn, lines)
+            self._analyze_function_body(fn, lines, custom_typedefs)
             functions.append(fn)
 
         return functions
 
-    def _analyze_function_body(self, fn: CFunction, all_lines: List[str]) -> None:
+    def _analyze_function_body(self, fn: CFunction, all_lines: List[str], custom_typedefs: Optional[Set[str]] = None) -> None:
         body_lines = fn.body.splitlines()
         fn_start = fn.start_line
 
@@ -1037,7 +1141,7 @@ class CASTParser:
                     continue
 
                 is_ptr = '*' in type_prefix or '*' in v_name
-                is_signed = 'unsigned' not in type_prefix
+                is_signed = not is_unsigned_type(type_prefix, custom_typedefs)
                 is_volatile = 'volatile' in type_prefix
                 is_vla = False
                 if array_dim is not None:
@@ -1079,7 +1183,7 @@ class CASTParser:
                     if v_name in fn.variables:
                         fn.variables[v_name].checked_null_lines.append(line_no)
 
-    def _extract_global_vars(self, lines: List[str], functions: List[CFunction]) -> Dict[str, CVariable]:
+    def _extract_global_vars(self, lines: List[str], functions: List[CFunction], custom_typedefs: Optional[Set[str]] = None) -> Dict[str, CVariable]:
         global_vars: Dict[str, CVariable] = {}
         func_line_ranges = set()
         for fn in functions:
@@ -1105,7 +1209,7 @@ class CASTParser:
                         name=v_name,
                         type_name=type_prefix,
                         is_pointer='*' in type_prefix,
-                        is_signed='unsigned' not in type_prefix,
+                        is_signed=not is_unsigned_type(type_prefix, custom_typedefs),
                         is_volatile='volatile' in type_prefix,
                         is_vla=False,
                         array_size_expr=m.group(3),
