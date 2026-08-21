@@ -37,6 +37,12 @@ class ParserStatus(str, Enum):
     PARSE_FAILED = "parse-failed"
 
 
+class ParseTier(str, Enum):
+    PCPP_PYCPARSER = "pcpp+pycparser"
+    DIRECTIVE_STRIPPED = "directive-stripped"
+    REGEX_FALLBACK = "regex-fallback"
+
+
 class Confidence(str, Enum):
     FULL = "FULL"
     FALLBACK = "FALLBACK"
@@ -234,6 +240,7 @@ class FileScanSummary:
     parser: str = ParserStatus.FALLBACK_PARSER.value
     status: str = "success"
     confidence: str = Confidence.FALLBACK.value
+    parse_tier: str = ParseTier.REGEX_FALLBACK.value
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -97,6 +97,49 @@ fail_on = "high"
             self.assertEqual(config.fail_on, "high")
             self.assertTrue(any("unknown_future_key" in w for w in config.warnings))
 
+    def test_warn_on_fallback_config(self):
+        toml_content = """
+schema_version = 1
+[output]
+warn_on_fallback = true
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_file = os.path.join(tmpdir, ".cgull.toml")
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                f.write(toml_content)
+
+            config = load_config(config_path=cfg_file)
+            self.assertTrue(config.warn_on_fallback)
+
+    def test_warn_on_fallback_string_and_invalid_types(self):
+        import json
+        for val, expected_bool, expects_warning in [
+            ("false", False, False),
+            ("0", False, False),
+            ("no", False, False),
+            ("true", True, False),
+            ("1", True, False),
+            ("yes", True, False),
+            (1, True, False),
+            (0, False, False),
+            ("invalid", False, True),
+            ([1, 2], False, True),
+        ]:
+            toml_content = f"""
+schema_version = 1
+[output]
+warn_on_fallback = {json.dumps(val)}
+"""
+            with tempfile.TemporaryDirectory() as tmpdir:
+                cfg_file = os.path.join(tmpdir, ".cgull.toml")
+                with open(cfg_file, "w", encoding="utf-8") as f:
+                    f.write(toml_content)
+
+                config = load_config(config_path=cfg_file)
+                self.assertEqual(config.warn_on_fallback, expected_bool)
+                if expects_warning:
+                    self.assertTrue(any("Invalid boolean value" in w for w in config.warnings))
+
 
 class TestRuleCustomization(unittest.TestCase):
     def test_rule_skipping(self):

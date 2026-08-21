@@ -4,7 +4,7 @@ Tests for cgull.models: dataclass serialization and enum behavior.
 
 import unittest
 
-from cgull.models import Issue, ScanResult, FileScanSummary, ScanError, Severity, AnalysisEngine, FixType, ParserStatus, Confidence
+from cgull.models import Issue, ScanResult, FileScanSummary, ScanError, Severity, AnalysisEngine, FixType, ParserStatus, ParseTier, Confidence
 
 
 class TestSeverityEnum(unittest.TestCase):
@@ -157,6 +157,27 @@ class TestScanResultSerialization(unittest.TestCase):
         self.assertEqual(res.ignored_paths, ["ignored.c"])
         self.assertEqual(res.failed_paths, ["failed.c"])
         self.assertEqual(res.scan_errors, [])
+
+
+class TestParseTierEnum(unittest.TestCase):
+    def test_parsetier_values(self):
+        self.assertEqual(ParseTier.PCPP_PYCPARSER.value, "pcpp+pycparser")
+        self.assertEqual(ParseTier.DIRECTIVE_STRIPPED.value, "directive-stripped")
+        self.assertEqual(ParseTier.REGEX_FALLBACK.value, "regex-fallback")
+
+    def test_file_scan_summary_includes_parse_tier(self):
+        fs = FileScanSummary(
+            file_path="a.c",
+            lines_of_code=100,
+            issues_count=1,
+            high_count=1,
+            medium_count=0,
+            low_count=0,
+            scan_duration_ms=1.0,
+            parse_tier=ParseTier.PCPP_PYCPARSER.value,
+        )
+        d = fs.to_dict()
+        self.assertEqual(d["parse_tier"], "pcpp+pycparser")
 
 
 class TestParserStatusAndConfidenceEnums(unittest.TestCase):

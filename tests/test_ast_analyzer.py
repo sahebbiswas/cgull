@@ -520,5 +520,28 @@ class TestPcppFallback(unittest.TestCase):
             self.assertEqual(ctx.functions[0].name, "add")
 
 
+class TestParseTiers(unittest.TestCase):
+    def test_regex_fallback_parse_tier(self):
+        from unittest.mock import patch
+        parser = CASTParser()
+        with patch.object(parser, "_try_pycparser", return_value=(None, False, "regex-fallback")):
+            ctx = parser.parse("int main(void) { return 0; }")
+            self.assertEqual(ctx.parse_tier, "regex-fallback")
+
+    @unittest.skipUnless(_pycparser_available(), "pycparser required")
+    def test_directive_stripped_parse_tier(self):
+        from unittest.mock import patch
+        parser = CASTParser()
+        with patch.object(parser, "_try_pcpp_preprocess", return_value=None):
+            ctx = parser.parse("int main(void) { return 0; }")
+            self.assertEqual(ctx.parse_tier, "directive-stripped")
+
+    @unittest.skipUnless(_pycparser_available() and _pcpp_available(), "pycparser and pcpp required")
+    def test_pcpp_pycparser_parse_tier(self):
+        parser = CASTParser()
+        ctx = parser.parse("int main(void) { return 0; }")
+        self.assertEqual(ctx.parse_tier, "pcpp+pycparser")
+
+
 if __name__ == "__main__":
     unittest.main()

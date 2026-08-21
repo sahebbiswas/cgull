@@ -382,11 +382,12 @@ class TestParallelWorkerFunction(unittest.TestCase):
             file_path = os.path.join(temp_dir, "sample.c")
             with open(file_path, "w") as f:
                 f.write(VULNERABLE_CODE)
-            issues, loc, duration_ms, parser_status, status, confidence, err = _scan_file_worker(file_path, AnalysisEngine.HYBRID)
+            issues, loc, duration_ms, parser_status, parse_tier, status, confidence, err = _scan_file_worker(file_path, AnalysisEngine.HYBRID)
             self.assertGreaterEqual(len(issues), 1)
             self.assertGreater(loc, 0)
             self.assertGreaterEqual(duration_ms, 0)
             self.assertIn(parser_status, ["pycparser-success", "fallback-parser"])
+            self.assertIn(parse_tier, ["pcpp+pycparser", "directive-stripped", "regex-fallback"])
             self.assertEqual(status, "success")
             self.assertIn(confidence, ["FULL", "FALLBACK"])
             self.assertIsNone(err)

@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, Tuple
 
-from .models import ParserStatus
+from .models import ParserStatus, ParseTier
 from .utils import strip_comments_keep_lines
 
 STANDARD_UNSIGNED_TYPES = {
@@ -204,6 +204,7 @@ class CASTContext:
     has_pycparser: bool = False
     pycparser_ast: Optional[Any] = None
     parser_status: str = ParserStatus.FALLBACK_PARSER.value
+    parse_tier: str = ParseTier.REGEX_FALLBACK.value
     unsigned_typedefs: Set[str] = field(default_factory=set)
 
 
@@ -651,7 +652,13 @@ class CASTParser:
         unsigned_typedefs: Set[str] = set()
         self._extract_unsigned_typedefs(clean_code, unsigned_typedefs)
 
-        pycparser_ast, has_pycparser = self._try_pycparser(clean_code)
+        pycparser_res = self._try_pycparser(clean_code)
+        if len(pycparser_res) == 3:
+            pycparser_ast, has_pycparser, parse_tier = pycparser_res
+        else:
+            pycparser_ast, has_pycparser = pycparser_res
+            parse_tier = ParseTier.DIRECTIVE_STRIPPED.value if has_pycparser else ParseTier.REGEX_FALLBACK.value
+
         if has_pycparser and pycparser_ast is not None:
             functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code, unsigned_typedefs)
             parser_status = ParserStatus.PYCPARSER_SUCCESS.value
@@ -659,6 +666,7 @@ class CASTParser:
             functions = self._extract_functions(clean_lines, clean_code, unsigned_typedefs)
             global_vars = self._extract_global_vars(clean_lines, functions, unsigned_typedefs)
             parser_status = ParserStatus.FALLBACK_PARSER.value
+            parse_tier = ParseTier.REGEX_FALLBACK.value
 
         return CASTContext(
             functions=functions,
@@ -669,6 +677,7 @@ class CASTParser:
             has_pycparser=has_pycparser,
             pycparser_ast=pycparser_ast,
             parser_status=parser_status,
+            parse_tier=parse_tier,
             unsigned_typedefs=unsigned_typedefs,
         )
 
@@ -768,7 +777,7 @@ class CASTParser:
         try:
             from pycparser import c_parser
         except ImportError:
-            return None, False
+            return None, False, ParseTier.REGEX_FALLBACK.value
 
         # Tier 1: pcpp preprocessing (if available)
         pcpp_result = self._try_pcpp_preprocess(clean_code)
@@ -776,7 +785,7 @@ class CASTParser:
             try:
                 parser = c_parser.CParser()
                 pycparser_ast = parser.parse(pcpp_result, filename='<input>')
-                return pycparser_ast, True
+                return pycparser_ast, True, ParseTier.PCPP_PYCPARSER.value
             except Exception:
                 pass  # Fall through to tier 2
 
@@ -791,9 +800,9 @@ class CASTParser:
         try:
             parser = c_parser.CParser()
             pycparser_ast = parser.parse(prepared, filename='<input>')
-            return pycparser_ast, True
+            return pycparser_ast, True, ParseTier.DIRECTIVE_STRIPPED.value
         except Exception:
-            return None, False
+            return None, False, ParseTier.REGEX_FALLBACK.value
 
     def _try_pcpp_preprocess(self, clean_code: str) -> "Optional[str]":
         """

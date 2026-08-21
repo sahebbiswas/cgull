@@ -27,6 +27,7 @@ class CGullConfig:
     exclude_paths: List[str] = field(default_factory=list)
     default_format: Optional[str] = None
     fail_on: Optional[str] = None
+    warn_on_fallback: bool = False
     warnings: List[str] = field(default_factory=list)
     config_file_path: Optional[str] = None
     config_dir: Optional[str] = None
@@ -139,6 +140,25 @@ def find_config_file(target_path: str) -> Optional[str]:
             break
         curr_dir = parent
 
+    return None
+
+
+def parse_bool_val(val: Any) -> Optional[bool]:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, int):
+        if val == 1:
+            return True
+        if val == 0:
+            return False
+        return None
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "1", "yes"):
+            return True
+        if v in ("false", "0", "no"):
+            return False
+        return None
     return None
 
 
@@ -284,5 +304,12 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
             else:
                 cfg.error = f"Invalid [output].fail_on value '{fail_val}' in {config_path}. Expected one of: high, medium, low, all."
                 return cfg
+        if "warn_on_fallback" in output_sec:
+            raw_wof = output_sec["warn_on_fallback"]
+            b_val = parse_bool_val(raw_wof)
+            if b_val is not None:
+                cfg.warn_on_fallback = b_val
+            else:
+                cfg.warnings.append(f"Invalid boolean value '{raw_wof}' for [output].warn_on_fallback in {config_path}")
 
     return cfg

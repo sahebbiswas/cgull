@@ -13,6 +13,14 @@ import unittest
 from cgull.cli import main, build_parser
 
 
+def _pycparser_available():
+    try:
+        import pycparser  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 class TestArgumentParsing(unittest.TestCase):
     def test_default_command_is_scan_current_dir(self):
         parser = build_parser()
@@ -322,6 +330,30 @@ class TestScanCommand(unittest.TestCase):
             code, out = self._run(["scan", self.temp_dir, "-j", "-1"])
         self.assertEqual(code, 1)
         self.assertIn("Invalid -j/--jobs value", stderr.getvalue())
+
+    def test_warn_on_fallback_returns_nonzero_when_regex_fallback_occurs(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, out = self._run(["scan", self.c_file, "--warn-on-fallback", "--engine", "regex"])
+        self.assertEqual(code, 1)
+        self.assertIn("Warning: 1 file(s) fell back to regex-fallback AST parse tier.", stderr.getvalue())
+
+    @unittest.skipUnless(_pycparser_available(), "pycparser required")
+    def test_warn_on_fallback_returns_zero_when_ast_parses_cleanly(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, out = self._run(["scan", self.c_file, "--warn-on-fallback"])
+        self.assertEqual(code, 0)
+
+    def test_warn_on_fallback_returns_nonzero_when_pycparser_missing(self):
+        from unittest.mock import patch
+        from cgull.ast_analyzer import CASTParser
+        stderr = io.StringIO()
+        with patch.object(CASTParser, "_try_pycparser", return_value=(None, False, "regex-fallback")):
+            with contextlib.redirect_stderr(stderr):
+                code, out = self._run(["scan", self.c_file, "--warn-on-fallback"])
+        self.assertEqual(code, 1)
+        self.assertIn("Warning: 1 file(s) fell back to regex-fallback AST parse tier.", stderr.getvalue())
 
 
 class TestBaselineFlags(unittest.TestCase):
