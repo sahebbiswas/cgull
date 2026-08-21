@@ -88,6 +88,26 @@ class TestBannedFunctions(unittest.TestCase):
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].impact, Severity.HIGH)
 
+    def test_detects_mktemp(self):
+        code = "void f(char *template) {\n    mktemp(template);\n}"
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_tmpnam(self):
+        code = "void f(char *s) {\n    tmpnam(s);\n}"
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_tempnam(self):
+        code = "void f(char *dir, char *pfx) {\n    tempnam(dir, pfx);\n}"
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_mkstemp(self):
+        code = "void f(char *template) {\n    int fd = mkstemp(template);\n}"
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 0)
+
     def test_strcpy_non_ascii_literal_flagged_high(self):
         code = """
         void f(void) {

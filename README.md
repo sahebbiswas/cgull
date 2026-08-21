@@ -228,7 +228,7 @@ C-GULL implements the security audit rules listed below:
 
 | Rule ID | Rule Name | Impact | Category | CWE ID | Method | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **CGULL-001** | Banned Functions | **High** | Strings | CWE-676 / 120 | Regex | Flags insecure legacy functions (`gets`, `strcpy`, `strcat`, `sprintf`, `scanf %s`). |
+| **CGULL-001** | Banned Functions | **High** | Strings | CWE-676 / 120 / 377 | Regex | Flags insecure legacy functions (`gets`, `strcpy`, `strcat`, `sprintf`, `scanf %s`, `mktemp`, `tmpnam`, `tempnam`). |
 | **CGULL-002** | Format String Vulnerabilities | **High** | Strings | CWE-134 | Hybrid | Detects non-literal format strings in `printf(buf)` and `syslog`. |
 | **CGULL-003** | Unchecked Dynamic Allocations | **High** | Memory | CWE-476 / 252 | AST | Ensures `malloc`, `calloc`, `realloc` returns are checked against NULL before dereference. |
 | **CGULL-004** | Missing Null Check on Params | **High** | Memory | CWE-476 | AST | Flags pointer parameters dereferenced without prior NULL verification. |
