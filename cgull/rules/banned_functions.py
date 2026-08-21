@@ -14,12 +14,12 @@ class BannedFunctionsRule(BaseRule):
     name = "Banned Functions"
     impact = Severity.HIGH
     category = RuleCategory.STRINGS
-    description = "Flag the usage of legacy string/memory functions that lack bounds checking (gets, strcpy, strcat, sprintf, vsprintf, scanf %s)."
+    description = "Flag the usage of legacy string/memory/file functions that lack bounds checking or introduce race conditions (gets, strcpy, strcat, sprintf, vsprintf, scanf %s, mktemp, tmpnam, tempnam)."
     implementation_method = "Regex string matching"
     implementation_complexity = "Low"
     chances_of_false_positives = "Low"
-    cwe_id = "CWE-676 / CWE-120"
-    remediation_suggestion = "Replace with safe, bounds-checking alternatives: use gets_s / fgets instead of gets; strncpy_s / snprintf instead of strcpy/strcat; snprintf instead of sprintf."
+    cwe_id = "CWE-676 / CWE-120 / CWE-377"
+    remediation_suggestion = "Replace with safe, bounds-checking or race-free alternatives: use gets_s / fgets instead of gets; strncpy_s / snprintf instead of strcpy/strcat; snprintf instead of sprintf; mkstemp instead of mktemp/tmpnam/tempnam."
     sample_vulnerable_code = "char dest[32];\ngets(dest);\nstrcpy(dest, src);\nsprintf(dest, \"%s\", input);"
     sample_remediated_code = "char dest[32];\nfgets(dest, sizeof(dest), stdin);\nsnprintf(dest, sizeof(dest), \"%s\", src);"
     analysis_engine = AnalysisEngine.REGEX
@@ -31,6 +31,9 @@ class BannedFunctionsRule(BaseRule):
         "sprintf": ("sprintf() writes unbounded output into the buffer.", "snprintf(dest, sizeof(dest), fmt, ...)"),
         "vsprintf": ("vsprintf() lacks buffer bounds protection.", "vsnprintf(dest, sizeof(dest), fmt, ap)"),
         "scanf": ("scanf() with unbounded %s can overflow input buffers.", "scanf(\"%31s\", dest) with explicit width specifier"),
+        "mktemp": ("mktemp() generates a temporary file name with race condition risks (CWE-377); it does not safely open the file.", "mkstemp(template)"),
+        "tmpnam": ("tmpnam() generates a temporary file name vulnerable to race conditions (CWE-377). Use mkstemp() instead.", "mkstemp(template)"),
+        "tempnam": ("tempnam() generates a temporary file name vulnerable to race conditions (CWE-377). Use mkstemp() instead.", "mkstemp(template)"),
     }
 
     def __init__(self, extra_banned_funcs: Optional[dict] = None):
@@ -225,6 +228,9 @@ class BannedFunctionsRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
+        if line_content.lstrip().startswith('#'):
+            return issues
+
         match_target = masked_line_content or line_content
         for fn_name, (reason, fix) in self.banned_funcs.items():
             pattern = rf'\b{re.escape(fn_name)}\s*\('
@@ -234,6 +240,10 @@ class BannedFunctionsRule(BaseRule):
             # flagged as an actual call.
             m = re.search(pattern, match_target)
             if m:
+                # Skip function prototypes and definition headers (e.g., "char *mktemp(char *template);")
+                decl_pattern = rf'^\s*(?!(?:return|if|while|for|switch|else)\b)(?:(?:extern|static|inline|const|volatile|unsigned|signed|short|long|char|int|void|double|float|struct\s+\w+|union\s+\w+|enum\s+\w+|\w+)\s*|\*\s*)+\b{re.escape(fn_name)}\s*\([^;{{}}]*\)[^;{{}}]*\s*(?:;|\{{)?\s*$'
+                if re.match(decl_pattern, line_content.strip()):
+                    continue
                 # Special check for scanf: only flag if format specifier has %s without width.
                 # This needs the REAL (unmasked) format-string content, so it
                 # intentionally checks line_content rather than match_target.
