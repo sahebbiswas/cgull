@@ -28,7 +28,7 @@ from .utils import strip_comments_keep_lines
 
 STANDARD_UNSIGNED_TYPES = {
     "size_t", "size_type", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
-    "uintptr_t", "uintmax_t", "wint_t", "u_int8_t", "u_int16_t", "u_int32_t", "u_int64_t",
+    "uintptr_t", "uintmax_t", "u_int8_t", "u_int16_t", "u_int32_t", "u_int64_t",
     "u_char", "u_int", "u_long", "u_short", "char16_t", "char32_t"
 }
 
@@ -673,16 +673,69 @@ class CASTParser:
         )
 
     def _extract_unsigned_typedefs(self, clean_code: str, target_set: Set[str]) -> None:
-        """Extracts custom unsigned typedef names from comment-stripped source code."""
-        typedef_regex = re.compile(
-            r'^\s*typedef\s+((?:volatile\s+|static\s+|const\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?)\s*([a-zA-Z_]\w*)\s*;',
-            re.MULTILINE
-        )
-        for m in typedef_regex.finditer(clean_code):
-            base_type = m.group(1).strip()
-            alias = m.group(2).strip()
-            if is_unsigned_type(base_type, target_set):
-                target_set.add(alias)
+        """
+        Extracts custom unsigned typedef names from comment-stripped source code,
+        supporting single and multi-declarator typedef statements as well as pointer declarators.
+        """
+        typedef_stmt_regex = re.compile(r'\btypedef\s+([^;]+);', re.MULTILINE)
+        for match in typedef_stmt_regex.finditer(clean_code):
+            stmt_body = match.group(1).strip()
+            if not stmt_body:
+                continue
+
+            # Split on top-level commas (ignoring commas inside nested parentheses/brackets)
+            tokens: List[str] = []
+            current = []
+            paren_depth = 0
+            bracket_depth = 0
+            for char in stmt_body:
+                if char == '(':
+                    paren_depth += 1
+                elif char == ')':
+                    paren_depth = max(0, paren_depth - 1)
+                elif char == '[':
+                    bracket_depth += 1
+                elif char == ']':
+                    bracket_depth = max(0, bracket_depth - 1)
+
+                if char == ',' and paren_depth == 0 and bracket_depth == 0:
+                    tokens.append(''.join(current).strip())
+                    current = []
+                else:
+                    current.append(char)
+            if current:
+                tokens.append(''.join(current).strip())
+
+            if not tokens:
+                continue
+
+            # First token contains the base type and the first declarator
+            first_part = tokens[0]
+            # Match base type and declarator identifier
+            # e.g. "unsigned int u32", "unsigned int *pu32", "uint8_t (*func_ptr)(int)"
+            m_fn_ptr = re.search(r'^(.*?)\(\s*\*\s*([a-zA-Z_]\w*)\s*\)\s*\(.*?\)$', first_part)
+            if m_fn_ptr:
+                base_type = m_fn_ptr.group(1).strip()
+                alias = m_fn_ptr.group(2).strip()
+                if is_unsigned_type(base_type, target_set):
+                    target_set.add(alias)
+            else:
+                m_decl = re.search(r'^(.*?)\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', first_part)
+                if m_decl:
+                    base_type = m_decl.group(1).strip()
+                    first_alias = m_decl.group(2).strip()
+                    if is_unsigned_type(base_type, target_set):
+                        target_set.add(first_alias)
+
+                        # Subsequent tokens in multi-declarator typedef share the same base_type
+                        for sub_tok in tokens[1:]:
+                            m_sub_fn = re.search(r'\(\s*\*\s*([a-zA-Z_]\w*)\s*\)', sub_tok)
+                            if m_sub_fn:
+                                target_set.add(m_sub_fn.group(1).strip())
+                            else:
+                                m_sub = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', sub_tok)
+                                if m_sub:
+                                    target_set.add(m_sub.group(1).strip())
 
     @staticmethod
     def strip_only(source_code: str) -> Tuple[List[str], str]:
