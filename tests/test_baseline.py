@@ -82,17 +82,19 @@ class TestLoadBaselineFingerprints(unittest.TestCase):
     def test_valid_report_loads_fingerprint_counts(self):
         result = CGullScanner().scan_text(VULNERABLE_CODE, "app.c")
         path = self._write("baseline.json", ReportGenerator.to_json(result))
-        counts = load_baseline_fingerprints(path)
+        counts, rules_count = load_baseline_fingerprints(path)
         self.assertIsInstance(counts, Counter)
         self.assertEqual(sum(counts.values()), len(result.issues))
+        self.assertEqual(rules_count, result.rules_applied)
 
     def test_issues_missing_fingerprint_key_are_skipped_not_fatal(self):
         # Defensive: a hand-edited or older-format baseline file might have
         # an issue entry with no fingerprint; it should be ignored rather
         # than crash the whole load.
         path = self._write("baseline.json", json.dumps({"issues": [{"rule_id": "CGULL-001"}]}))
-        counts = load_baseline_fingerprints(path)
+        counts, rules_count = load_baseline_fingerprints(path)
         self.assertEqual(sum(counts.values()), 0)
+        self.assertIsNone(rules_count)
 
 
 class TestApplyBaseline(unittest.TestCase):
@@ -154,8 +156,10 @@ class TestBaselineToDictSerialization(unittest.TestCase):
     def test_baseline_summary_present_only_when_filtered(self):
         result = CGullScanner().scan_text(VULNERABLE_CODE, "app.c")
         self.assertNotIn("baseline", result.to_dict()["summary"])
-        diffed = apply_baseline(result, Counter())
-        self.assertIn("baseline", diffed.to_dict()["summary"])
+        diffed = apply_baseline(result, Counter(), baseline_rules_count=20)
+        summary_dict = diffed.to_dict()["summary"]
+        self.assertIn("baseline", summary_dict)
+        self.assertEqual(summary_dict["baseline"]["rules_applied_count"], 20)
 
     def test_apply_baseline_preserves_scan_completeness_and_analysis_metadata(self):
         result = CGullScanner().scan_text(VULNERABLE_CODE, "app.c")

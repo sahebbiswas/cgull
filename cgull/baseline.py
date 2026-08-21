@@ -21,7 +21,7 @@ previous JSON report can be reused as a baseline directly.
 
 import json
 from collections import Counter
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from .models import ScanResult, Issue, Severity
 
@@ -30,10 +30,10 @@ class BaselineError(Exception):
     """Raised when a baseline file can't be read or doesn't look like a C-GULL report."""
 
 
-def load_baseline_fingerprints(path: str) -> Counter:
+def load_baseline_fingerprints(path: str) -> Tuple[Counter, Optional[int]]:
     """
-    Loads a baseline JSON report and returns a Counter of
-    fingerprint -> occurrence count.
+    Loads a baseline JSON report and returns a tuple of:
+    (Counter of fingerprint -> occurrence count, rules_applied_count or None).
 
     A Counter (multiset) rather than a plain set is used deliberately: if
     a rule matches textually-identical code at two different call sites,
@@ -60,15 +60,30 @@ def load_baseline_fingerprints(path: str) -> Counter:
             "or 'cgull scan ... --update-baseline <path>'."
         )
 
+    rules_applied_count = None
+    summary = data.get("summary")
+    if isinstance(summary, dict) and "rules_applied_count" in summary:
+        rules_applied_count = summary.get("rules_applied_count")
+    else:
+        meta = data.get("meta")
+        if isinstance(meta, dict) and "rules_applied_count" in meta:
+            rules_applied_count = meta.get("rules_applied_count")
+
+    if rules_applied_count is not None:
+        try:
+            rules_applied_count = int(rules_applied_count)
+        except (ValueError, TypeError):
+            rules_applied_count = None
+
     counts: Counter = Counter()
     for issue in issues:
         fp = issue.get("fingerprint")
         if fp:
             counts[fp] += 1
-    return counts
+    return counts, rules_applied_count
 
 
-def apply_baseline(result: ScanResult, baseline_counts: Counter) -> ScanResult:
+def apply_baseline(result: ScanResult, baseline_counts: Counter, baseline_rules_count: Optional[int] = None) -> ScanResult:
     """
     Returns a NEW ScanResult containing only the issues from `result` that
     are not already accounted for in `baseline_counts` -- i.e. genuinely
@@ -124,4 +139,5 @@ def apply_baseline(result: ScanResult, baseline_counts: Counter) -> ScanResult:
         baseline_new_count=len(new_issues),
         baseline_resolved_count=resolved_count,
         baseline_total_before_filter=result.total_issues_count,
+        baseline_rules_count=baseline_rules_count,
     )

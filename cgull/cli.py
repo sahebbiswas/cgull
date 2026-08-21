@@ -153,11 +153,20 @@ def handle_scan(args) -> int:
 
     if args.baseline:
         try:
-            baseline_counts = load_baseline_fingerprints(args.baseline)
+            baseline_counts, baseline_rules_count = load_baseline_fingerprints(args.baseline)
         except BaselineError as e:
             print(f"Error loading baseline: {e}", file=sys.stderr)
             return 1
-        result = apply_baseline(result, baseline_counts)
+
+        if baseline_rules_count is not None and baseline_rules_count != result.rules_applied:
+            print(
+                f"Warning: Baseline ruleset count ({baseline_rules_count}) differs from "
+                f"current scan ruleset count ({result.rules_applied}). "
+                "Findings from new or modified rules will be reported as new.",
+                file=sys.stderr,
+            )
+
+        result = apply_baseline(result, baseline_counts, baseline_rules_count=baseline_rules_count)
 
     # Format output (CLI flag > config default_format > output extension auto-detect > text)
     user_format_given = args.format is not None

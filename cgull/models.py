@@ -268,6 +268,7 @@ class ScanResult:
     baseline_new_count: Optional[int] = None
     baseline_resolved_count: Optional[int] = None
     baseline_total_before_filter: Optional[int] = None
+    baseline_rules_count: Optional[int] = None
     scan_errors: List[ScanError] = field(default_factory=list)
 
     def get_overall_parser_status(self) -> str:
@@ -325,6 +326,7 @@ class ScanResult:
                 "new_issues_count": self.baseline_new_count,
                 "resolved_issues_count": self.baseline_resolved_count,
                 "total_issues_before_baseline_filter": self.baseline_total_before_filter,
+                "rules_applied_count": self.baseline_rules_count,
             }
         return {
             "schema_version": OUTPUT_SCHEMA_VERSION,
