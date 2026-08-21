@@ -228,6 +228,9 @@ class BannedFunctionsRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
+        if line_content.lstrip().startswith('#'):
+            return issues
+
         match_target = masked_line_content or line_content
         for fn_name, (reason, fix) in self.banned_funcs.items():
             pattern = rf'\b{re.escape(fn_name)}\s*\('
@@ -237,6 +240,10 @@ class BannedFunctionsRule(BaseRule):
             # flagged as an actual call.
             m = re.search(pattern, match_target)
             if m:
+                # Skip function prototypes and definition headers (e.g., "char *mktemp(char *template);")
+                decl_pattern = rf'^\s*(?!(?:return|if|while|for|switch|else)\b)(?:(?:extern|static|inline|const|volatile|unsigned|signed|short|long|char|int|void|double|float|struct\s+\w+|union\s+\w+|enum\s+\w+|\w+)\s*|\*\s*)+\b{re.escape(fn_name)}\s*\([^;{{}}]*\)[^;{{}}]*\s*(?:;|\{{)?\s*$'
+                if re.match(decl_pattern, line_content.strip()):
+                    continue
                 # Special check for scanf: only flag if format specifier has %s without width.
                 # This needs the REAL (unmasked) format-string content, so it
                 # intentionally checks line_content rather than match_target.

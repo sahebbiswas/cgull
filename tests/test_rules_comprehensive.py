@@ -108,6 +108,17 @@ class TestBannedFunctions(unittest.TestCase):
         issues = scan_with_rule("CGULL-001", code)
         self.assertEqual(len(issues), 0)
 
+    def test_clean_prototypes_and_macros_not_flagged(self):
+        code = """
+        #define tmpnam(x) custom_tmpnam(x)
+        char *mktemp(char *template);
+        char *tempnam(const char *dir, const char *pfx);
+        extern char *tmpnam(char *s);
+        void gets(char *buf);
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 0)
+
     def test_strcpy_non_ascii_literal_flagged_high(self):
         code = """
         void f(void) {
