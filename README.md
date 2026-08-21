@@ -259,6 +259,7 @@ C-GULL implements the security audit rules listed below:
 | **CGULL-031** | Weak/Broken Crypto Primitives | **High** | Crypto | CWE-327 | Hybrid | Detects calls to weak or broken cryptographic algorithms (`MD5`, `SHA-1` in security contexts, `DES_*`, `RC4`, `EVP_*` ECB cipher mode variants). |
 | **CGULL-032** | Realloc-Overwrite Memory Leak | **High** | Memory | CWE-401 | Hybrid | Detects `x = realloc(x, ...)` directly overwriting pointer variable before NULL check, leaking memory on OOM. |
 | **CGULL-033** | Signed/Unsigned Comparison | **Medium** | Arithmetic | CWE-195 / INT02-C | Hybrid | Detects signed/unsigned integer comparisons and loop-bound mismatches causing infinite loops or promotion bugs. |
+| **CGULL-035** | TOCTOU File Access | **High** | Control Flow | CWE-367 | Hybrid | Detects time-of-check to time-of-use race conditions where file checks (access, stat) are followed by file operations (open, fopen, chmod). |
 
 ---
 

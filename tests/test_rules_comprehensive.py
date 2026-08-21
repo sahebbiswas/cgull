@@ -731,6 +731,23 @@ class TestSignedUnsignedComparison(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestToctouFileAccess(unittest.TestCase):
+    def test_detects_access_then_open(self):
+        code = "void f(char *path) {\n    if (access(path, 0) == 0) {\n        int fd = open(path, 0);\n        if (fd >= 0) close(fd);\n    }\n}"
+        issues = scan_with_rule("CGULL-035", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_stat_then_fopen(self):
+        code = "void f(char *path) {\n    struct stat st;\n    if (stat(path, &st) == 0) {\n        FILE *fp = fopen(path, \"r\");\n        if (fp) fclose(fp);\n    }\n}"
+        issues = scan_with_rule("CGULL-035", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_open_then_fstat(self):
+        code = "void f(char *path) {\n    int fd = open(path, 0);\n    if (fd >= 0) {\n        struct stat st;\n        fstat(fd, &st);\n        close(fd);\n    }\n}"
+        issues = scan_with_rule("CGULL-035", code)
+        self.assertEqual(len(issues), 0)
+
+
 class TestReallocOverwrite(unittest.TestCase):
     def test_detects_direct_realloc_overwrite(self):
         code = "void f(char *ptr, size_t sz) {\n    ptr = realloc(ptr, sz);\n}"

@@ -455,6 +455,211 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
         return issues
 
 
+def _split_fn_args(raw_args: str) -> List[str]:
+    """Split comma-separated arguments at top paren/quote depth."""
+    args = []
+    curr = []
+    paren = 0
+    in_quote = False
+    quote_char = None
+    for i, c in enumerate(raw_args):
+        if in_quote:
+            curr.append(c)
+            if c == quote_char and (i == 0 or raw_args[i - 1] != '\\'):
+                in_quote = False
+        elif c in ('"', "'"):
+            in_quote = True
+            quote_char = c
+            curr.append(c)
+        elif c in ('(', '[', '{'):
+            paren += 1
+            curr.append(c)
+        elif c in (')', ']', '}'):
+            paren -= 1
+            curr.append(c)
+        elif c == ',' and paren == 0:
+            args.append("".join(curr).strip())
+            curr = []
+        else:
+            curr.append(c)
+    if curr:
+        args.append("".join(curr).strip())
+    return args
+
+
+def _clean_path_arg(expr: str) -> str:
+    """Normalize path argument expression for comparison by removing casts and parens."""
+    s = expr.strip()
+    s = re.sub(r'^\s*\(\s*(?:const\s+)?char\s*\*+\s*\)\s*', '', s)
+    s = re.sub(r'^\s*\(\s*(?:void\s*\*|int|long)\s*\)\s*', '', s)
+    s = s.strip().lstrip('(').rstrip(')')
+    return re.sub(r'\s+', '', s)
+
+
+CHECK_FILE_FUNCS: dict = {
+    "access": 0,
+    "faccessat": 1,
+    "stat": 0,
+    "lstat": 0,
+    "fstatat": 1,
+}
+
+USE_FILE_FUNCS: dict = {
+    "open": 0,
+    "openat": 1,
+    "fopen": 0,
+    "freopen": 0,
+    "chmod": 0,
+    "fchmodat": 1,
+    "chown": 0,
+    "fchownat": 1,
+    "remove": 0,
+    "unlink": 0,
+    "unlinkat": 1,
+    "rmdir": 0,
+    "truncate": 0,
+}
+
+
+class ToctouFileAccessRule(BaseRule):
+    rule_id = "CGULL-035"
+    name = "Time-of-Check to Time-of-Use (TOCTOU) File Access"
+    impact = Severity.HIGH
+    category = RuleCategory.CONTROL_FLOW
+    description = "Detect time-of-check to time-of-use (TOCTOU) file access race conditions where file status/access checks (access, stat, lstat, faccessat, fstatat) are followed by file operations (open, fopen, chmod, chown, remove, unlink, rmdir, truncate, etc.) on the same file path."
+    implementation_method = "AST / CFG call sequencing & regex lookahead for path argument identity"
+    implementation_complexity = "Medium"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-367"
+    remediation_suggestion = "Avoid separate check-then-act file access calls. Open the file first and perform status/access checks directly on the opened file descriptor using fstat(), fchmod(), or fchown() to eliminate race conditions."
+    sample_vulnerable_code = "if (access(filepath, R_OK) == 0) {\n    fd = open(filepath, O_RDONLY);\n}"
+    sample_remediated_code = "fd = open(filepath, O_RDONLY);\nif (fd >= 0) {\n    fstat(fd, &st);\n}"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        for fn in ast_ctx.functions:
+            check_calls = []
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
+                if callee in CHECK_FILE_FUNCS:
+                    args = _split_fn_args(raw_args)
+                    arg_idx = CHECK_FILE_FUNCS[callee]
+                    if arg_idx < len(args):
+                        raw_path = args[arg_idx]
+                        clean_path = _clean_path_arg(raw_path)
+                        if clean_path:
+                            check_calls.append((callee, line_no, raw_path, clean_path))
+
+            if not check_calls:
+                continue
+
+            reported_pairs = set()
+            for check_fn, check_line, raw_path, clean_path in check_calls:
+                path_var = re.findall(r'\b[a-zA-Z_]\w*\b', clean_path)
+                var_name = path_var[0] if path_var else None
+
+                for call in fn.calls:
+                    use_fn, use_line, raw_use_args = call[0], call[1], call[2]
+                    if use_line <= check_line:
+                        continue
+                    if use_fn in USE_FILE_FUNCS:
+                        use_args = _split_fn_args(raw_use_args)
+                        use_arg_idx = USE_FILE_FUNCS[use_fn]
+                        if use_arg_idx < len(use_args):
+                            raw_use_path = use_args[use_arg_idx]
+                            clean_use_path = _clean_path_arg(raw_use_path)
+
+                            if clean_use_path == clean_path:
+                                reassigned = False
+                                if var_name and var_name in fn.variables:
+                                    v_obj = fn.variables[var_name]
+                                    if any(check_line < assign_l <= use_line for assign_l in v_obj.assigned_lines):
+                                        reassigned = True
+
+                                if not reassigned and (check_line, use_line) not in reported_pairs:
+                                    snippet = ast_ctx.source_lines[use_line - 1].strip() if 1 <= use_line <= len(ast_ctx.source_lines) else f"{use_fn}({raw_use_args})"
+                                    issues.append(self.create_issue(
+                                        file_path=file_path,
+                                        line_number=use_line,
+                                        code_snippet=snippet,
+                                        message=f"TOCTOU (Time-of-Check to Time-of-Use) file access risk: '{check_fn}()' check at line {check_line} on '{raw_path}' followed by '{use_fn}()' operation (CWE-367).",
+                                        column_number=1,
+                                        engine="AST",
+                                        fix_type=FixType.SUGGESTED_FIX,
+                                        suggested_fix_replacement="Open file descriptor directly and perform operations on fd (e.g. open() then fstat())",
+                                    ))
+                                    reported_pairs.add((check_line, use_line))
+
+        return issues
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        if line_content.lstrip().startswith('#'):
+            return issues
+
+        target_line = masked_line_content if masked_line_content else line_content
+        check_pattern = re.compile(
+            r'\b(access|faccessat|stat|lstat|fstatat)\s*\(([^)]+)\)'
+        )
+
+        m = check_pattern.search(target_line)
+        if not m:
+            return issues
+
+        check_fn = m.group(1)
+        raw_args_str = m.group(2)
+        args = _split_fn_args(raw_args_str)
+        arg_idx = CHECK_FILE_FUNCS.get(check_fn, 0)
+        if arg_idx >= len(args):
+            return issues
+
+        raw_path = args[arg_idx]
+        clean_path = _clean_path_arg(raw_path)
+        if not clean_path:
+            return issues
+
+        path_var = re.findall(r'\b[a-zA-Z_]\w*\b', clean_path)
+        var_name = path_var[0] if path_var else None
+
+        use_pattern = re.compile(
+            r'\b(open|openat|fopen|freopen|chmod|fchmodat|chown|fchownat|remove|unlink|unlinkat|rmdir|truncate)\s*\(([^)]+)\)'
+        )
+
+        limit = min(line_number + 50, len(source_lines))
+        for j in range(line_number, limit):
+            future_line = source_lines[j]
+            if future_line.strip() == "}":
+                break
+
+            if var_name and re.search(rf'\b{re.escape(var_name)}\s*=', future_line):
+                break
+
+            m_use = use_pattern.search(future_line)
+            if m_use:
+                use_fn = m_use.group(1)
+                use_args_str = m_use.group(2)
+                u_args = _split_fn_args(use_args_str)
+                u_arg_idx = USE_FILE_FUNCS.get(use_fn, 0)
+                if u_arg_idx < len(u_args):
+                    clean_u_path = _clean_path_arg(u_args[u_arg_idx])
+                    if clean_u_path == clean_path:
+                        use_line_no = j + 1
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=use_line_no,
+                            code_snippet=future_line.strip(),
+                            message=f"TOCTOU (Time-of-Check to Time-of-Use) file access risk: '{check_fn}()' check at line {line_number} on '{raw_path}' followed by '{use_fn}()' operation (CWE-367).",
+                            column_number=m_use.start() + 1,
+                            engine="Regex",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement="Open file descriptor directly and perform operations on fd (e.g. open() then fstat())",
+                        ))
+                        break
+
+        return issues
+
+
 class WeakCryptoPrimitivesRule(BaseRule):
     rule_id = "CGULL-031"
     name = "Weak/Broken Cryptographic Primitives"
