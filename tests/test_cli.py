@@ -340,6 +340,21 @@ class TestBaselineFlags(unittest.TestCase):
         code, out = self._run(["scan", self.c_file, "--baseline", self.baseline_path])
         self.assertIn("Baseline Diff", out)
 
+    def test_baseline_ruleset_mismatch_prints_warning_on_stderr(self):
+        self._run(["scan", self.c_file, "--update-baseline", self.baseline_path])
+        # Modify baseline JSON to simulate a report produced by a different number of rules
+        with open(self.baseline_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["summary"]["rules_applied_count"] = 999
+        with open(self.baseline_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, out = self._run(["scan", self.c_file, "--baseline", self.baseline_path])
+        self.assertEqual(code, 0)
+        self.assertIn("Warning: Baseline ruleset count (999) differs from current scan ruleset count", stderr.getvalue())
+
     def test_update_baseline_write_failure_returns_error(self):
         bad_path = os.path.join(self.temp_dir, "no_such_dir", "baseline.json")
         stderr = io.StringIO()
