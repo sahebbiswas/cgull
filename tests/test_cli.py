@@ -323,6 +323,19 @@ class TestScanCommand(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Invalid -j/--jobs value", stderr.getvalue())
 
+    def test_warn_on_fallback_returns_nonzero_when_regex_fallback_occurs(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, out = self._run(["scan", self.c_file, "--warn-on-fallback", "--engine", "regex"])
+        self.assertEqual(code, 1)
+        self.assertIn("Warning: 1 file(s) fell back to regex-fallback AST parse tier.", stderr.getvalue())
+
+    def test_warn_on_fallback_returns_zero_when_ast_parses_cleanly(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, out = self._run(["scan", self.c_file, "--warn-on-fallback"])
+        self.assertEqual(code, 0)
+
 
 class TestBaselineFlags(unittest.TestCase):
     def setUp(self):

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union
 from pathlib import Path
 
-from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, Confidence, ScanConfig, ScanError
+from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError
 from .ignore import CGullIgnoreFilter
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
@@ -168,7 +168,7 @@ class CGullScanner:
         analyzed_count = 0
         failed_count = 0
 
-        for file_path, file_issues, loc, duration_ms, parser_status, file_status, file_confidence, scan_err in results:
+        for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err in results:
             display_path = os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path)
 
             analysis_status_counts[parser_status] = analysis_status_counts.get(parser_status, 0) + 1
@@ -212,6 +212,7 @@ class CGullScanner:
                 parser=parser_status,
                 status=file_status,
                 confidence=file_confidence,
+                parse_tier=parse_tier,
             ))
 
         duration = time.time() - start_time
@@ -267,8 +268,8 @@ class CGullScanner:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = self._scan_single_file_content(file_path, content, config=config, quiet=quiet, progress_active=progress_active)
-                results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence, scan_err))
+                file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(file_path, content, config=config, quiet=quiet, progress_active=progress_active)
+                results.append((file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err))
             except Exception as e:
                 scan_err = ScanError(
                     file_path=file_path,
@@ -276,7 +277,7 @@ class CGullScanner:
                     message=str(e) or f"Failed to read file: {file_path}",
                 )
                 _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
-                results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err))
+                results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err))
             if progress_callback:
                 progress_callback(idx, total_files, file_path)
         return results
@@ -313,8 +314,8 @@ class CGullScanner:
                 file_path = futures[future]
                 completed_count += 1
                 try:
-                    file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = future.result()
-                    results.append((file_path, file_issues, loc, duration_ms, parser_status, status, confidence, scan_err))
+                    file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = future.result()
+                    results.append((file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err))
                 except Exception as e:
                     scan_err = ScanError(
                         file_path=file_path,
@@ -322,7 +323,7 @@ class CGullScanner:
                         message=str(e) or f"Worker execution failed for {file_path}",
                     )
                     _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
-                    results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err))
+                    results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err))
                 if progress_callback:
                     progress_callback(completed_count, total_files, file_path)
             pool.shutdown(wait=True)
@@ -345,7 +346,7 @@ class CGullScanner:
         self.config = config
         self.rules = config.get_rules()
 
-        file_issues, loc, duration_ms, parser_status, status, confidence, scan_err = self._scan_single_file_content(file_path, source_code, config=config, quiet=quiet)
+        file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(file_path, source_code, config=config, quiet=quiet)
         scan_errors = []
         if status == "failed":
             if scan_err:
@@ -390,6 +391,7 @@ class CGullScanner:
                 parser=parser_status,
                 status=status,
                 confidence=confidence,
+                parse_tier=parse_tier,
             )],
             scan_errors=scan_errors,
             ignored_paths=[],
@@ -409,7 +411,7 @@ class CGullScanner:
         config: Optional[ScanConfig] = None,
         quiet: bool = False,
         progress_active: bool = False,
-    ) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
+    ) -> Tuple[List[Issue], int, float, str, str, str, str, Optional[ScanError]]:
         if config is None:
             config = self._get_active_config()
         return _scan_file_content(content, file_path, ast_parser=self.ast_parser, config=config, quiet=quiet, progress_active=progress_active)
@@ -424,7 +426,7 @@ def _scan_file_content(
     config: Optional[ScanConfig] = None,
     quiet: bool = False,
     progress_active: bool = False,
-) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
+) -> Tuple[List[Issue], int, float, str, str, str, str, Optional[ScanError]]:
     """
     Module-level scan implementation shared by in-process and
     worker-process scanning paths.
@@ -476,6 +478,7 @@ def _scan_file_content(
             issues.append(issue)
 
     parser_status = ParserStatus.FALLBACK_PARSER.value
+    parse_tier = ParseTier.REGEX_FALLBACK.value
     file_status = "success"
     confidence_val = Confidence.FALLBACK.value
     scan_error: Optional[ScanError] = None
@@ -488,12 +491,14 @@ def _scan_file_content(
             clean_lines, clean_code = CASTParser.strip_only(content)
             ast_ctx = None
             parser_status = ParserStatus.REGEX.value
+            parse_tier = ParseTier.REGEX_FALLBACK.value
             confidence_val = Confidence.LIMITED.value
         else:
             ast_ctx = ast_parser.parse(content)
             clean_lines = ast_ctx.clean_source.splitlines()
             clean_code = ast_ctx.clean_source
             parser_status = ast_ctx.parser_status
+            parse_tier = ast_ctx.parse_tier
             confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
 
         # 1. Regex Pass
@@ -535,6 +540,7 @@ def _scan_file_content(
     except Exception as e:
         issues = []
         parser_status = ParserStatus.PARSE_FAILED.value
+        parse_tier = ParseTier.REGEX_FALLBACK.value
         file_status = "failed"
         confidence_val = Confidence.LIMITED.value
         scan_error = ScanError(
@@ -547,7 +553,7 @@ def _scan_file_content(
     # Sort issues by line number
     issues.sort(key=lambda x: (x.line_number, x.column_number))
     duration_ms = (time.time() - t0) * 1000.0
-    return issues, loc, duration_ms, parser_status, file_status, confidence_val, scan_error
+    return issues, loc, duration_ms, parser_status, parse_tier, file_status, confidence_val, scan_error
 
 
 def _scan_file_worker(
@@ -555,7 +561,7 @@ def _scan_file_worker(
     config: Union[ScanConfig, AnalysisEngine],
     quiet: bool = False,
     progress_active: bool = False,
-) -> Tuple[List[Issue], int, float, str, str, str, Optional[ScanError]]:
+) -> Tuple[List[Issue], int, float, str, str, str, str, Optional[ScanError]]:
     """
     Entry point run in a separate process by ProcessPoolExecutor. Rebuilds
     the rules and configuration from the provided ScanConfig.
@@ -572,5 +578,5 @@ def _scan_file_worker(
             message=str(e) or f"Failed to read file: {file_path}",
         )
         _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
-        return [], 0, 0.0, ParserStatus.PARSE_FAILED.value, "failed", Confidence.LIMITED.value, scan_err
+        return [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err
     return _scan_file_content(content, file_path, config=config, quiet=quiet, progress_active=progress_active)

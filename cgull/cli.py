@@ -8,7 +8,7 @@ import argparse
 from typing import List, Optional
 
 from .engine import CGullScanner
-from .models import Severity, AnalysisEngine
+from .models import Severity, AnalysisEngine, ParseTier
 from .ignore import CGullIgnoreFilter
 from .reporter import ReportGenerator
 from .rules import get_all_rules
@@ -60,6 +60,7 @@ Suppressing findings inline:
     scan_parser.add_argument("--fail-on", choices=["high", "medium", "low", "all"], default=None, help="Exit with code 1 if vulnerabilities at or above severity threshold are found (useful for CI/CD)")
     scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD; alias for --fail-on high)")
     scan_parser.add_argument("--fail-on-error", action="store_true", help="Exit with code 1 if scan errors or file analysis failures occur (useful for CI/CD)")
+    scan_parser.add_argument("--warn-on-fallback", action="store_true", help="Exit with code 1 if AST parsing falls back to regex-fallback mode for any file")
     scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count. Negative values are invalid.")
     scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
@@ -211,6 +212,13 @@ def handle_scan(args) -> int:
 
     if args.fail_on_error and (result.files_failed > 0 or len(result.scan_errors) > 0):
         return 1
+
+    warn_on_fallback = args.warn_on_fallback or config.warn_on_fallback
+    if warn_on_fallback:
+        fallback_files = [fs.file_path for fs in result.file_summaries if fs.parse_tier == ParseTier.REGEX_FALLBACK.value]
+        if fallback_files:
+            print(f"Warning: {len(fallback_files)} file(s) fell back to regex-fallback AST parse tier.", file=sys.stderr)
+            return 1
 
     # Check fail-on conditions
     fail_on = config.fail_on

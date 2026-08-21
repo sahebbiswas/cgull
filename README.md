@@ -39,7 +39,7 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
 
 3. **Regex extractor** (fallback, always available): A lightweight regex/brace-counting extractor for function and variable structure. Weaker (e.g. it cannot represent multi-declarator lines like `int a, b, c;` on its own) but never crashes the scan.
 
-In all cases, files that rely on external header definitions, project-specific typedefs, or complex macro expansion patterns may still fail the AST parse and silently fall back to the regex extractor. AST-tagged findings are most reliable when `pcpp` and `pycparser` are both installed.
+In all cases, files that rely on external header definitions, project-specific typedefs, or complex macro expansion patterns may still fail the AST parse and fall back to the regex extractor. Each file's result surfaces its exact parse tier (`pcpp+pycparser`, `directive-stripped`, or `regex-fallback`) in `file_summaries`. CI pipelines can enforce full AST parsing by passing `--warn-on-fallback` (or setting `warn_on_fallback = true` in config) to fail the build whenever a file falls back to `regex-fallback` mode.
 
 ---
 
@@ -163,6 +163,7 @@ exclude = ["third_party/", "generated/"]
 [output]
 default_format = "sarif"
 fail_on = "high"
+warn_on_fallback = true
 ```
 
 ### Suppressing Findings Inline
@@ -212,6 +213,9 @@ cgull scan src/ --fail-on low
 
 # Note: --fail-on-high is supported as a backward-compatible alias for --fail-on high
 cgull scan src/ --fail-on-high
+
+# Exits with code 1 if AST parsing falls back to regex-fallback mode for any file
+cgull scan src/ --warn-on-fallback
 ```
 
 ### Listing All Active Rules
@@ -460,7 +464,7 @@ C-GULL strictly separates mechanically safe transformations from code suggestion
 - **C++ is NOT supported**: C-GULL is strictly designed for C source code (`.c`, `.h`). C++ features (classes, namespaces, templates, references, operator overloading, etc.) are not supported by the parser or rules engine.
 - **Heuristic Static Analysis**: C-GULL relies on regex pattern matching and lightweight AST structural checks. It is not a formal verification tool or full symbolic execution solver and may produce false positives or miss complex interprocedural control flow vulnerabilities.
 - **Performance on very large or macro-heavy codebases is not yet optimized.** Function/variable extraction is currently regex-based (`O(n)` per file but with a real constant-factor cost), and the `pycparser` cross-check adds further parse time on top of that. On pathological inputs (e.g. thousands of small functions in one file) total scan time can be significant. Use `-j/--jobs` to parallelize across files in the meantime; a follow-up pass on the extraction/parse hot path is planned.
-- **AST-tagged rules degrade gracefully but silently** when `pycparser` can't parse a file (see "AST Engine Notes" above) -- there is currently no per-file indicator in the report distinguishing "analyzed with pycparser" from "regex-fallback only."
+- **AST-tagged rules degrade gracefully when `pycparser` can't parse a file** (see "AST Engine Notes" above) -- the report surfaces each file's exact AST `parse_tier` (`pcpp+pycparser`, `directive-stripped`, or `regex-fallback`) in `file_summaries`, and CI pipelines can enforce non-degraded AST analysis using `--warn-on-fallback`.
 - Several rules have a documented **high false-positive rate** by design trade-off -- use inline suppression (`// cgull-ignore`) rather than disabling the rule entirely if it's noisy on your codebase but still valuable.
 - **Baseline fingerprints are content-based, not a cryptographic identity.** Two textually-identical findings from the same rule in the same file (e.g. the same unsafe call copy-pasted at two call sites) share a fingerprint; baseline diffing correctly counts "how many instances are new" via multiset comparison, but if you rename/move code such that the *normalized* snippet text changes, the finding will look new even though it's the same underlying issue moved elsewhere. Re-running `--update-baseline` after intentional refactors is the expected workflow.
 

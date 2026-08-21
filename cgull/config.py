@@ -27,6 +27,7 @@ class CGullConfig:
     exclude_paths: List[str] = field(default_factory=list)
     default_format: Optional[str] = None
     fail_on: Optional[str] = None
+    warn_on_fallback: bool = False
     warnings: List[str] = field(default_factory=list)
     config_file_path: Optional[str] = None
     config_dir: Optional[str] = None
@@ -284,5 +285,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
             else:
                 cfg.error = f"Invalid [output].fail_on value '{fail_val}' in {config_path}. Expected one of: high, medium, low, all."
                 return cfg
+        if "warn_on_fallback" in output_sec:
+            cfg.warn_on_fallback = bool(output_sec["warn_on_fallback"])
 
     return cfg

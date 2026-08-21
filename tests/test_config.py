@@ -97,6 +97,20 @@ fail_on = "high"
             self.assertEqual(config.fail_on, "high")
             self.assertTrue(any("unknown_future_key" in w for w in config.warnings))
 
+    def test_warn_on_fallback_config(self):
+        toml_content = """
+schema_version = 1
+[output]
+warn_on_fallback = true
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_file = os.path.join(tmpdir, ".cgull.toml")
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                f.write(toml_content)
+
+            config = load_config(config_path=cfg_file)
+            self.assertTrue(config.warn_on_fallback)
+
 
 class TestRuleCustomization(unittest.TestCase):
     def test_rule_skipping(self):
