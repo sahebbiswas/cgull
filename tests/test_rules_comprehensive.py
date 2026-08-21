@@ -747,6 +747,38 @@ class TestToctouFileAccess(unittest.TestCase):
         issues = scan_with_rule("CGULL-035", code)
         self.assertEqual(len(issues), 0)
 
+    def test_nested_parens_and_unmasked_path_scan_line(self):
+        code = 'void f(void) {\n    if (access(get_path("file.txt"), 0) == 0) {\n        int fd = open(get_path("file.txt"), 0);\n        if (fd >= 0) close(fd);\n    }\n}'
+        rule = get_rule_by_id("CGULL-035")
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.REGEX)
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 1)
+        self.assertIn('get_path("file.txt")', issues[0].message)
+
+    def test_same_line_check_and_use(self):
+        code = 'void f(char *p) {\n    if (access(p, 0) == 0 && open(p, 0) >= 0) { return; }\n}'
+        issues = scan_with_rule("CGULL-035", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_nested_inner_block_closed_lookahead(self):
+        code = 'void f(char *p, int cond) {\n    if (access(p, 0) == 0) {\n        if (cond) { do_something(); }\n        int fd = open(p, 0);\n        if (fd >= 0) close(fd);\n    }\n}'
+        rule = get_rule_by_id("CGULL-035")
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.REGEX)
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 1)
+
+    def test_if_else_exclusive_branch_safe(self):
+        code = 'void f(char *p) {\n    if (access(p, 0) == 0) {\n        log_ok();\n    } else {\n        int fd = open(p, 0);\n        if (fd >= 0) close(fd);\n    }\n}'
+        issues = scan_with_rule("CGULL-035", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_fallback_parser_reassigned_path_safe(self):
+        code = 'void f(char *initial_path) {\n    char *p = initial_path;\n    if (access(p, 0) == 0) {\n        p = "/tmp/other_file";\n        int fd = open(p, 0);\n        if (fd >= 0) close(fd);\n    }\n}'
+        rule = get_rule_by_id("CGULL-035")
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.AST)
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 0)
+
 
 class TestReallocOverwrite(unittest.TestCase):
     def test_detects_direct_realloc_overwrite(self):

@@ -3,7 +3,7 @@ Rules for Cryptography, Timing Attack Prevention, Type Qualifiers, and Fault Inj
 """
 
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple, Set, Dict
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
@@ -496,6 +496,82 @@ def _clean_path_arg(expr: str) -> str:
     return re.sub(r'\s+', '', s)
 
 
+def _extract_balanced_parens(text: str, start_paren_pos: int) -> Tuple[Optional[str], int]:
+    """
+    Given text and position of opening '(', returns (inside_args_str, closing_paren_pos).
+    Handles string literals, character literals, escape sequences, and nested parens.
+    """
+    if start_paren_pos >= len(text) or text[start_paren_pos] != '(':
+        return None, start_paren_pos
+
+    paren_depth = 0
+    in_string = False
+    in_char = False
+    escape = False
+    j = start_paren_pos
+    n = len(text)
+
+    while j < n:
+        c = text[j]
+        if escape:
+            escape = False
+        elif c == '\\':
+            escape = True
+        elif c == '"' and not in_char:
+            in_string = not in_string
+        elif c == "'" and not in_string:
+            in_char = not in_char
+        elif not in_string and not in_char:
+            if c == '(':
+                paren_depth += 1
+            elif c == ')':
+                paren_depth -= 1
+                if paren_depth == 0:
+                    return text[start_paren_pos + 1 : j], j
+        j += 1
+
+    return None, j
+
+
+def _find_else_branch_calls(pycparser_ast) -> Set[Tuple[int, int]]:
+    """Find pairs of (check_line, else_use_line) where use is in the iffalse branch of check_cond."""
+    from pycparser import c_ast
+    excluded_pairs = set()
+
+    class IfVisitor(c_ast.NodeVisitor):
+        def visit_If(self, node):
+            if node.cond and node.iffalse:
+                cond_calls = []
+                class CondVisitor(c_ast.NodeVisitor):
+                    def visit_FuncCall(self, call_node):
+                        callee = _format_pycparser_expr(call_node.name)
+                        if callee in CHECK_FILE_FUNCS:
+                            line_no = (call_node.coord.line - _PRELUDE_LINE_COUNT) if call_node.coord else 1
+                            cond_calls.append((callee, line_no))
+                CondVisitor().visit(node.cond)
+
+                if cond_calls:
+                    iffalse_line_nos = []
+                    class ElseVisitor(c_ast.NodeVisitor):
+                        def visit_FuncCall(self, call_node):
+                            callee = _format_pycparser_expr(call_node.name)
+                            if callee in USE_FILE_FUNCS:
+                                line_no = (call_node.coord.line - _PRELUDE_LINE_COUNT) if call_node.coord else 1
+                                iffalse_line_nos.append(line_no)
+                    ElseVisitor().visit(node.iffalse)
+
+                    for _, check_line in cond_calls:
+                        for use_line in iffalse_line_nos:
+                            excluded_pairs.add((check_line, use_line))
+
+            self.generic_visit(node)
+
+    if pycparser_ast:
+        IfVisitor().visit(pycparser_ast)
+
+    return excluded_pairs
+
+
 CHECK_FILE_FUNCS: dict = {
     "access": 0,
     "faccessat": 1,
@@ -538,9 +614,11 @@ class ToctouFileAccessRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        else_pairs = _find_else_branch_calls(ast_ctx.pycparser_ast) if ast_ctx.pycparser_ast else set()
+
         for fn in ast_ctx.functions:
             check_calls = []
-            for call in fn.calls:
+            for idx, call in enumerate(fn.calls):
                 callee, line_no, raw_args = call[0], call[1], call[2]
                 if callee in CHECK_FILE_FUNCS:
                     args = _split_fn_args(raw_args)
@@ -549,20 +627,24 @@ class ToctouFileAccessRule(BaseRule):
                         raw_path = args[arg_idx]
                         clean_path = _clean_path_arg(raw_path)
                         if clean_path:
-                            check_calls.append((callee, line_no, raw_path, clean_path))
+                            check_calls.append((idx, callee, line_no, raw_path, clean_path))
 
             if not check_calls:
                 continue
 
             reported_pairs = set()
-            for check_fn, check_line, raw_path, clean_path in check_calls:
+            for check_idx, check_fn, check_line, raw_path, clean_path in check_calls:
                 path_var = re.findall(r'\b[a-zA-Z_]\w*\b', clean_path)
                 var_name = path_var[0] if path_var else None
 
-                for call in fn.calls:
-                    use_fn, use_line, raw_use_args = call[0], call[1], call[2]
-                    if use_line <= check_line:
+                for use_idx in range(check_idx + 1, len(fn.calls)):
+                    use_call = fn.calls[use_idx]
+                    use_fn, use_line, raw_use_args = use_call[0], use_call[1], use_call[2]
+                    if use_line < check_line:
                         continue
+                    if (check_line, use_line) in else_pairs:
+                        continue
+
                     if use_fn in USE_FILE_FUNCS:
                         use_args = _split_fn_args(raw_use_args)
                         use_arg_idx = USE_FILE_FUNCS[use_fn]
@@ -575,6 +657,14 @@ class ToctouFileAccessRule(BaseRule):
                                 if var_name and var_name in fn.variables:
                                     v_obj = fn.variables[var_name]
                                     if any(check_line < assign_l <= use_line for assign_l in v_obj.assigned_lines):
+                                        reassigned = True
+
+                                if not ast_ctx.pycparser_ast:
+                                    body_lines = fn.body.splitlines()
+                                    start_offset = max(0, check_line - fn.start_line)
+                                    end_offset = min(len(body_lines), use_line - fn.start_line + 1)
+                                    sub_body = " ".join(body_lines[start_offset:end_offset])
+                                    if "else" in sub_body and any(re.search(r'\belse\b', l) for l in body_lines[start_offset:max(start_offset, end_offset - 1)]):
                                         reassigned = True
 
                                 if not reassigned and (check_line, use_line) not in reported_pairs:
@@ -600,7 +690,7 @@ class ToctouFileAccessRule(BaseRule):
 
         target_line = masked_line_content if masked_line_content else line_content
         check_pattern = re.compile(
-            r'\b(access|faccessat|stat|lstat|fstatat)\s*\(([^)]+)\)'
+            r'\b(access|faccessat|stat|lstat|fstatat)\s*\('
         )
 
         m = check_pattern.search(target_line)
@@ -608,14 +698,25 @@ class ToctouFileAccessRule(BaseRule):
             return issues
 
         check_fn = m.group(1)
-        raw_args_str = m.group(2)
-        args = _split_fn_args(raw_args_str)
-        arg_idx = CHECK_FILE_FUNCS.get(check_fn, 0)
-        if arg_idx >= len(args):
+        start_paren_pos = m.end() - 1
+
+        raw_args_masked, _ = _extract_balanced_parens(target_line, start_paren_pos)
+        if raw_args_masked is None:
             return issues
 
-        raw_path = args[arg_idx]
-        clean_path = _clean_path_arg(raw_path)
+        raw_args_unmasked, _ = _extract_balanced_parens(line_content, start_paren_pos)
+        raw_args_display = raw_args_unmasked if raw_args_unmasked is not None else raw_args_masked
+
+        args_masked = _split_fn_args(raw_args_masked)
+        args_display = _split_fn_args(raw_args_display)
+
+        arg_idx = CHECK_FILE_FUNCS.get(check_fn, 0)
+        if arg_idx >= len(args_masked):
+            return issues
+
+        clean_path = _clean_path_arg(args_masked[arg_idx])
+        raw_path_display = args_display[arg_idx] if arg_idx < len(args_display) else args_masked[arg_idx]
+
         if not clean_path:
             return issues
 
@@ -623,39 +724,62 @@ class ToctouFileAccessRule(BaseRule):
         var_name = path_var[0] if path_var else None
 
         use_pattern = re.compile(
-            r'\b(open|openat|fopen|freopen|chmod|fchmodat|chown|fchownat|remove|unlink|unlinkat|rmdir|truncate)\s*\(([^)]+)\)'
+            r'\b(open|openat|fopen|freopen|chmod|fchmodat|chown|fchownat|remove|unlink|unlinkat|rmdir|truncate)\s*\('
         )
 
+        from ..utils import mask_string_and_char_literals
+        masked_lines = [mask_string_and_char_literals(l) for l in source_lines]
         limit = min(line_number + 50, len(source_lines))
-        for j in range(line_number, limit):
+        net_depth = 0
+        in_else_branch = False
+
+        for j in range(line_number - 1, limit):
             future_line = source_lines[j]
-            if future_line.strip() == "}":
+            future_target_line = masked_lines[j] if j < len(masked_lines) else future_line
+
+            if j > line_number - 1 and var_name and re.search(rf'\b{re.escape(var_name)}\s*=(?!=)', future_target_line):
                 break
 
-            if var_name and re.search(rf'\b{re.escape(var_name)}\s*=', future_line):
-                break
+            if j > line_number - 1 and re.search(r'\belse\b', future_target_line):
+                in_else_branch = True
 
-            m_use = use_pattern.search(future_line)
-            if m_use:
-                use_fn = m_use.group(1)
-                use_args_str = m_use.group(2)
-                u_args = _split_fn_args(use_args_str)
-                u_arg_idx = USE_FILE_FUNCS.get(use_fn, 0)
-                if u_arg_idx < len(u_args):
-                    clean_u_path = _clean_path_arg(u_args[u_arg_idx])
-                    if clean_u_path == clean_path:
-                        use_line_no = j + 1
-                        issues.append(self.create_issue(
-                            file_path=file_path,
-                            line_number=use_line_no,
-                            code_snippet=future_line.strip(),
-                            message=f"TOCTOU (Time-of-Check to Time-of-Use) file access risk: '{check_fn}()' check at line {line_number} on '{raw_path}' followed by '{use_fn}()' operation (CWE-367).",
-                            column_number=m_use.start() + 1,
-                            engine="Regex",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement="Open file descriptor directly and perform operations on fd (e.g. open() then fstat())",
-                        ))
-                        break
+            if not in_else_branch:
+                for m_use in use_pattern.finditer(future_target_line):
+                    use_fn = m_use.group(1)
+                    u_start_paren = m_use.end() - 1
+
+                    u_args_masked, _ = _extract_balanced_parens(future_target_line, u_start_paren)
+                    if u_args_masked is None:
+                        continue
+
+                    u_args = _split_fn_args(u_args_masked)
+                    u_arg_idx = USE_FILE_FUNCS.get(use_fn, 0)
+                    if u_arg_idx < len(u_args):
+                        clean_u_path = _clean_path_arg(u_args[u_arg_idx])
+                        if clean_u_path == clean_path:
+                            use_line_no = j + 1
+                            if use_line_no == line_number and u_start_paren <= start_paren_pos:
+                                continue
+
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=use_line_no,
+                                code_snippet=future_line.strip(),
+                                message=f"TOCTOU (Time-of-Check to Time-of-Use) file access risk: '{check_fn}()' check at line {line_number} on '{raw_path_display}' followed by '{use_fn}()' operation (CWE-367).",
+                                column_number=m_use.start() + 1,
+                                engine="Regex",
+                                fix_type=FixType.SUGGESTED_FIX,
+                                suggested_fix_replacement="Open file descriptor directly and perform operations on fd (e.g. open() then fstat())",
+                            ))
+                            break
+                if issues:
+                    break
+
+            if j >= line_number - 1:
+                depth_delta = future_line.count('{') - future_line.count('}')
+                net_depth += depth_delta
+                if j > line_number - 1 and net_depth < 0:
+                    break
 
         return issues
 
