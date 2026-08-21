@@ -111,6 +111,16 @@ class TestWeakCryptoPrimitives(unittest.TestCase):
         issues = scan_with_rule("CGULL-031", code)
         self.assertGreaterEqual(len(issues), 4)
 
+    def test_detects_evp_md5_and_sha1_digest_getters(self):
+        code = "void authenticate(void *ctx) {\n    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);\n    EVP_DigestInit_ex(ctx, EVP_md5(), NULL);\n}"
+        issues = scan_with_rule("CGULL-031", code)
+        self.assertEqual(len(issues), 2)
+
+    def test_clean_prototypes_macros_and_unrelated_ecb(self):
+        code = "#define MD5(x) custom_md5(x)\nunsigned char *MD5(const unsigned char *d, size_t n, unsigned char *md);\nvoid process_ecb(void) {\n    my_project_ecb();\n}"
+        issues = scan_with_rule("CGULL-031", code)
+        self.assertEqual(len(issues), 0)
+
     def test_clean_sha256_aes_gcm(self):
         code = "void f(unsigned char *data, size_t len) {\n    SHA256(data, len, NULL);\n    EVP_EncryptInit_ex(NULL, EVP_aes_128_gcm(), NULL, NULL, NULL);\n}"
         issues = scan_with_rule("CGULL-031", code)
