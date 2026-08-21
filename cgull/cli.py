@@ -28,10 +28,10 @@ Examples:
   cgull scan src/ -o report.json --format json
   cgull scan src/ --engine regex --severity high
   cgull scan main.c --format sarif -o results.sarif
-  cgull scan src/ --ignore-file .cgullignore --fail-on-high
+  cgull scan src/ --ignore-file .cgullignore --fail-on high
   cgull scan src/ -j 0            # parallelize across all CPU cores
   cgull scan src/ --update-baseline baseline.json     # snapshot current findings
-  cgull scan src/ --baseline baseline.json --fail-on-high  # only fail on NEW issues
+  cgull scan src/ --baseline baseline.json --fail-on medium  # only fail on NEW issues (medium or higher)
   cgull rules
   cgull init-ignore
 
@@ -57,7 +57,8 @@ Suppressing findings inline:
     scan_parser.add_argument("--ignore-pattern", action="append", default=[], help="Pattern to ignore (can be specified multiple times)")
     scan_parser.add_argument("--severity", choices=["high", "medium", "low", "all"], default="all", help="Severity filter threshold")
     scan_parser.add_argument("--engine", choices=["regex", "ast", "hybrid"], default="hybrid", help="Scan engine mode (default: hybrid)")
-    scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD)")
+    scan_parser.add_argument("--fail-on", choices=["high", "medium", "low", "all"], default=None, help="Exit with code 1 if vulnerabilities at or above severity threshold are found (useful for CI/CD)")
+    scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD; alias for --fail-on high)")
     scan_parser.add_argument("--fail-on-error", action="store_true", help="Exit with code 1 if scan errors or file analysis failures occur (useful for CI/CD)")
     scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count. Negative values are invalid.")
     scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
@@ -212,6 +213,8 @@ def handle_scan(args) -> int:
 
     # Check fail-on conditions
     fail_on = config.fail_on
+    if args.fail_on is not None:
+        fail_on = args.fail_on
     if args.fail_on_high:
         fail_on = "high"
 
