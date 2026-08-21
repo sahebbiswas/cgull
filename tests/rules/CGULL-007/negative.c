@@ -24,6 +24,27 @@ void test_fp_declaration_with_initializer(void) {
     (void)dataBuffer;
 }
 
+/* False-Positive Regression: memset/memcpy style loop using size_t */
+void test_memset_size_t_loop(uint8_t *ptr, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        ptr[i] = 0;
+    }
+}
+
+/* False-Positive Regression: memset/memcpy style loop using uint8_t index */
+void test_memset_uint8_t_loop(uint8_t *ptr, uint8_t size) {
+    for (uint8_t i = 0; i < size; i++) {
+        ptr[i] = 0;
+    }
+}
+
+/* False-Positive Regression: memset/memcpy style loop using unsigned int index */
+void test_memset_unsigned_int_loop(uint8_t *ptr, unsigned int size) {
+    for (unsigned int i = 0; i < size; i++) {
+        ptr[i] = 0;
+    }
+}
+
 /* True Negative: Variable index with bounds check */
 void test_tn_variable_index_checked(int idx) {
     int table[10];
