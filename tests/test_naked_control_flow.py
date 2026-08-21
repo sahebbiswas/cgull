@@ -28,6 +28,19 @@ def test_naked_control_flow_with_intervening_preprocessor():
     assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
 
 
+def test_naked_control_flow_nested_if_without_braces():
+    code = """
+    void check(int x, int y) {
+        if (x)
+            if (y) {
+                do_something();
+            }
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code)
+    assert len(errors) == 1, f"Expected 1 error for outer naked 'if', got: {errors}"
+
+
 def test_naked_control_flow_repeated_else_if_per_branch():
     code = """
     int handle(int a, int b, int c) {

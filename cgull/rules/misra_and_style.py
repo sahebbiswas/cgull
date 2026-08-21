@@ -13,19 +13,21 @@ from ..utils import mask_string_and_char_literals
 def _find_next_code_token(lines: List[str], start_line: int, start_pos: int):
     line = start_line
     pos = start_pos
+    saw_preprocessor = False
     while line < len(lines):
         rem = lines[line][pos:]
         stripped = rem.lstrip()
         if stripped:
             if stripped.startswith("#"):
+                saw_preprocessor = True
                 line += 1
                 pos = 0
                 continue
             token_pos = len(lines[line]) - len(rem) + (len(rem) - len(stripped))
-            return line, token_pos, stripped
+            return line, token_pos, stripped, saw_preprocessor
         line += 1
         pos = 0
-    return None, None, None
+    return None, None, None, saw_preprocessor
 
 
 class NakedControlFlowStatementsRule(BaseRule):
@@ -69,7 +71,7 @@ class NakedControlFlowStatementsRule(BaseRule):
 
             # Handle keywords with condition parens: if, while, for
             if kw in ("if", "while", "for"):
-                n_line, n_pos, rem = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
+                n_line, n_pos, rem, _ = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
                 if n_line is None or not rem.startswith("("):
                     continue
 
@@ -103,8 +105,8 @@ class NakedControlFlowStatementsRule(BaseRule):
 
                 # Check for alternate condition branches (e.g., #if / #else split conditions)
                 while True:
-                    n_line, n_pos, rem = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
-                    if rem is None:
+                    n_line, n_pos, rem, saw_prep = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
+                    if rem is None or not saw_prep:
                         break
 
                     target_line, target_pos = None, None
@@ -112,16 +114,16 @@ class NakedControlFlowStatementsRule(BaseRule):
                         target_line, target_pos = n_line, n_pos
                     elif re.match(r'^if\b', rem):
                         m_if = re.match(r'^if\b', rem)
-                        p_line, p_pos, p_rem = _find_next_code_token(masked_source_lines, n_line, n_pos + m_if.end())
+                        p_line, p_pos, p_rem, _ = _find_next_code_token(masked_source_lines, n_line, n_pos + m_if.end())
                         if p_rem is None or not p_rem.startswith("("):
                             break
                         target_line, target_pos = p_line, p_pos
                     elif re.match(r'^else\b', rem):
                         m_else = re.match(r'^else\b', rem)
-                        next_line2, next_pos2, rem2 = _find_next_code_token(masked_source_lines, n_line, n_pos + m_else.end())
+                        next_line2, next_pos2, rem2, _ = _find_next_code_token(masked_source_lines, n_line, n_pos + m_else.end())
                         if rem2 and re.match(r'^if\b', rem2):
                             m_if2 = re.match(r'^if\b', rem2)
-                            p_line, p_pos, p_rem = _find_next_code_token(masked_source_lines, next_line2, next_pos2 + m_if2.end())
+                            p_line, p_pos, p_rem, _ = _find_next_code_token(masked_source_lines, next_line2, next_pos2 + m_if2.end())
                             if p_rem is None or not p_rem.startswith("("):
                                 break
                             target_line, target_pos = p_line, p_pos
@@ -160,7 +162,7 @@ class NakedControlFlowStatementsRule(BaseRule):
 
                 # Special case for while in do-while loop
                 if kw == "while":
-                    after_line, after_pos, rem_after = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
+                    after_line, after_pos, rem_after, _ = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
                     if rem_after and rem_after.startswith(";"):
                         before_str = line_content[:kw_start].strip()
                         if before_str.endswith("}"):
@@ -179,12 +181,12 @@ class NakedControlFlowStatementsRule(BaseRule):
                             continue
 
             elif kw == "else":
-                look_l, look_p, rem_else = _find_next_code_token(masked_source_lines, line_idx, kw_end)
+                look_l, look_p, rem_else, _ = _find_next_code_token(masked_source_lines, line_idx, kw_end)
                 if rem_else and rem_else.startswith("if") and (len(rem_else) == 2 or not rem_else[2].isalnum()):
                     continue
 
             # Look ahead for opening brace {
-            look_line, look_pos, rem_brace = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
+            look_line, look_pos, rem_brace, _ = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
             is_braced = rem_brace is not None and rem_brace.startswith("{")
 
             if not is_braced:
