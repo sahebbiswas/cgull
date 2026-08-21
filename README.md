@@ -179,7 +179,7 @@ strcpy(dest, src);
 
 ### Baseline / Diff Mode
 
-Adopting a scanner on an existing, imperfect codebase is usually impractical if `--fail-on-high` fails the build on every pre-existing issue on day one. Baseline mode fixes that: snapshot the findings you're accepting for now, then only fail CI on findings introduced *after* that snapshot.
+Adopting a scanner on an existing, imperfect codebase is usually impractical if `--fail-on high` fails the build on every pre-existing issue on day one. Baseline mode fixes that: snapshot the findings you're accepting for now, then only fail CI on findings introduced *after* that snapshot.
 
 A baseline file is just an ordinary `cgull scan --format json` report -- there's no separate format. Findings are matched between scans by a content-based fingerprint (rule + file + normalized code snippet), not line number, so unrelated edits elsewhere in a file won't make an untouched finding look "new".
 
@@ -188,11 +188,11 @@ A baseline file is just an ordinary `cgull scan --format json` report -- there's
 cgull scan src/ --update-baseline .cgull-baseline.json
 
 # 2. In CI: only fail on issues introduced since the baseline
-cgull scan src/ --baseline .cgull-baseline.json --fail-on-high
+cgull scan src/ --baseline .cgull-baseline.json --fail-on medium
 
 # --update-baseline and --baseline can be combined in one invocation to
 # both check against the current baseline AND immediately refresh it:
-cgull scan src/ --baseline .cgull-baseline.json --update-baseline .cgull-baseline.json --fail-on-high
+cgull scan src/ --baseline .cgull-baseline.json --update-baseline .cgull-baseline.json --fail-on medium
 ```
 
 The report (any format) shows both the new-issue count and how many baseline findings have since been resolved:
@@ -203,10 +203,14 @@ Baseline Diff    : 12 total, 1 new, 3 resolved since baseline
 
 > **Note:** run the baseline snapshot and the later diffed scan with the same `--severity`/`--engine` flags. A baseline captured with `--severity all` compared against a later scan run with `--severity high` will make the filtered-out medium/low findings look "resolved" even though they were just excluded, not fixed.
 
-### CI/CD Pipeline Enforcement (Fail on High Severity)
+### CI/CD Pipeline Enforcement (Fail on Severity Threshold)
 ```bash
-# Exits with non-zero exit code if High severity issues are found
+# Exits with non-zero exit code if issues at or above severity threshold are found
+cgull scan src/ --fail-on high
+cgull scan src/ --fail-on medium
+cgull scan src/ --fail-on low
 
+# Note: --fail-on-high is supported as a backward-compatible alias for --fail-on high
 cgull scan src/ --fail-on-high
 ```
 

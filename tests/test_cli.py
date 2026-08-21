@@ -95,6 +95,59 @@ class TestScanCommand(unittest.TestCase):
         code, _ = self._run(["scan", clean_file, "--fail-on-high"])
         self.assertEqual(code, 0)
 
+    def test_fail_on_thresholds(self):
+        # File with only a MEDIUM severity issue (naked control flow / atoi / magic number / etc.)
+        med_file = os.path.join(self.temp_dir, "medium_only.c")
+        with open(med_file, "w") as f:
+            f.write("void g(char *str) {\n    int val = atoi(str);\n}\n")
+
+        # File with only a LOW severity issue
+        low_file = os.path.join(self.temp_dir, "low_only.c")
+        with open(low_file, "w") as f:
+            f.write("void h(void) {\n    goto start;\nstart:\n    return;\n}\n")
+
+        # Clean file
+        clean_file = os.path.join(self.temp_dir, "clean.c")
+        with open(clean_file, "w") as f:
+            f.write("void noop(void) {\n    int total = 0;\n    total = total + 1;\n}\n")
+
+        # --fail-on high on medium_only file should pass (0)
+        code, _ = self._run(["scan", med_file, "--fail-on", "high"])
+        self.assertEqual(code, 0)
+
+        # --fail-on medium on medium_only file should fail (1)
+        code, _ = self._run(["scan", med_file, "--fail-on", "medium"])
+        self.assertEqual(code, 1)
+
+        # --fail-on medium on high_only file (self.c_file has gets -> high) should fail (1)
+        code, _ = self._run(["scan", self.c_file, "--fail-on", "medium"])
+        self.assertEqual(code, 1)
+
+        # --fail-on medium on low_only file should pass (0)
+        code, _ = self._run(["scan", low_file, "--fail-on", "medium"])
+        self.assertEqual(code, 0)
+
+        # --fail-on low on low_only file should fail (1)
+        code, _ = self._run(["scan", low_file, "--fail-on", "low"])
+        self.assertEqual(code, 1)
+
+        # --fail-on all on low_only file should fail (1)
+        code, _ = self._run(["scan", low_file, "--fail-on", "all"])
+        self.assertEqual(code, 1)
+
+        # --fail-on all on clean file should pass (0)
+        code, _ = self._run(["scan", clean_file, "--fail-on", "all"])
+        self.assertEqual(code, 0)
+
+    def test_fail_on_high_precedence_over_fail_on_flag(self):
+        med_file = os.path.join(self.temp_dir, "medium_only.c")
+        with open(med_file, "w") as f:
+            f.write("void g(char *str) {\n    int val = atoi(str);\n}\n")
+
+        # Passing --fail-on low but also --fail-on-high should force threshold to high (so medium_only passes)
+        code, _ = self._run(["scan", med_file, "--fail-on", "low", "--fail-on-high"])
+        self.assertEqual(code, 0)
+
     def test_output_file_written_and_reported(self):
         out_path = os.path.join(self.temp_dir, "report.json")
         code, out = self._run(["scan", self.c_file, "-o", out_path, "--format", "json"])
