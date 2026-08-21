@@ -776,6 +776,7 @@ class SignedUnsignedComparisonRule(BaseRule):
         return issues
 
 
+
 class DivisionByZeroRule(BaseRule):
     rule_id = "CGULL-034"
     name = "Division or Modulo by Zero"
@@ -820,11 +821,12 @@ class DivisionByZeroRule(BaseRule):
             if cfg.entry is None or target_node_id not in cfg.nodes:
                 return False
             visited = set()
-            queue = [(cfg.entry, False)]
+            import collections
+            queue = collections.deque([(cfg.entry, False)])
             path_reached = False
 
             while queue:
-                curr_id, guarded = queue.pop(0)
+                curr_id, guarded = queue.popleft()
                 if (curr_id, guarded) in visited:
                     continue
                 visited.add((curr_id, guarded))
@@ -878,21 +880,56 @@ class DivisionByZeroRule(BaseRule):
                     def visit_BinaryOp(v_self, node):
                         if node.op in ('/', '%'):
                             line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else fn.start_line
-                            divisor = _format_pycparser_expr(node.right)
-                            divisor_ids = _extract_identifiers_from_ast(node.right, ignore_callees=True)
+                            divisor_str = _format_pycparser_expr(node.right)
 
-                            if divisor.isdigit() and int(divisor) != 0:
-                                pass
-                            else:
-                                cfg_nodes_for_line = [nid for nid, cfg_n in cfg.nodes.items() if cfg_n.line_number == line_no]
-                                target_node_id = cfg_nodes_for_line[0] if cfg_nodes_for_line else None
+                            # 1. Check for literal zero (e.g. 0, 0x0, 0U)
+                            if type(node.right).__name__ == "Constant":
+                                try:
+                                    val_str = str(node.right.value).rstrip("ULul")
+                                    val = int(val_str, 0)
+                                    if val == 0:
+                                        key = (line_no, "literal_0")
+                                        if key not in reported_lines:
+                                            reported_lines.add(key)
+                                            issues.append(self.create_issue(
+                                                file_path=file_path,
+                                                line_number=line_no,
+                                                code_snippet=ast_ctx.source_lines[line_no - 1] if line_no <= len(ast_ctx.source_lines) else "",
+                                                message="Division/Modulo by literal zero is undefined behavior and will cause a crash.",
+                                                column_number=1,
+                                                engine="AST",
+                                                fix_type=FixType.MANUAL_REVIEW
+                                            ))
+                                        v_self.generic_visit(node)
+                                        return
+                                    else:
+                                        v_self.generic_visit(node)
+                                        return
+                                except ValueError:
+                                    pass
 
-                                for div_var in divisor_ids:
+                            # 2. CFG node matching
+                            cfg_nodes_for_line = [nid for nid, cfg_n in cfg.nodes.items() if cfg_n.line_number == line_no]
+                            target_node_id = None
+                            if cfg_nodes_for_line:
+                                # First try to find nodes that are NOT if_cond if there's multiple on the same line
+                                non_if_nodes = [nid for nid in cfg_nodes_for_line if cfg.nodes[nid].kind != "if_cond"]
+                                if non_if_nodes:
+                                    # Then see if any exact match divisor
+                                    exact_nodes = [nid for nid in non_if_nodes if divisor_str in cfg.nodes[nid].expr_str]
+                                    if exact_nodes:
+                                        target_node_id = max(exact_nodes)
+                                    else:
+                                        target_node_id = max(non_if_nodes)
+                                else:
+                                    target_node_id = max(cfg_nodes_for_line)
+
+                            if target_node_id is not None:
+                                # 3. Restrict CFG guard to simple variable names
+                                if type(node.right).__name__ == "ID":
+                                    div_var = str(node.right.name)
                                     key = (line_no, div_var)
-                                    if key in reported_lines:
-                                        continue
-
-                                    if target_node_id is not None:
+                                    if key not in reported_lines:
                                         guarded = is_guarded_on_all_cfg_paths(cfg, target_node_id, div_var)
                                         if not guarded:
                                             reported_lines.add(key)
@@ -906,6 +943,21 @@ class DivisionByZeroRule(BaseRule):
                                                 fix_type=FixType.SUGGESTED_FIX,
                                                 suggested_fix_replacement=f"if ({div_var} != 0) {{ ... }}"
                                             ))
+                                else:
+                                    # Compound expression (like y + 1). Conservatively report.
+                                    key = (line_no, "compound_expr")
+                                    if key not in reported_lines:
+                                        reported_lines.add(key)
+                                        issues.append(self.create_issue(
+                                            file_path=file_path,
+                                            line_number=line_no,
+                                            code_snippet=ast_ctx.source_lines[line_no - 1] if line_no <= len(ast_ctx.source_lines) else "",
+                                            message=f"Division/Modulo by zero risk: compound divisor '{divisor_str}' might evaluate to zero.",
+                                            column_number=1,
+                                            engine="AST",
+                                            fix_type=FixType.MANUAL_REVIEW
+                                        ))
+
                         v_self.generic_visit(node)
                 DivVisitor().visit(funcdef.body)
 

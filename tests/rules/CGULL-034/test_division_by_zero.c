@@ -26,9 +26,26 @@ int safe_literal() {
     return 100 / 2;
 }
 
+int vulnerable_literal_zero() {
+    return 100 / 0; // expect: CGULL-034
+}
+
+int vulnerable_literal_hex_zero() {
+    return 100 % 0x0; // expect: CGULL-034
+}
+
 int safe_early_return(int x) {
     if (x == 0) return 0;
     return 100 / x;
+}
+
+int safe_single_line(int x) {
+    if (x != 0) return 100 / x;
+    return 0;
+}
+
+int vulnerable_compound(int y) {
+    return 100 / (y + 1); // expect: CGULL-034
 }
 
 int safe_assign(int w) {
