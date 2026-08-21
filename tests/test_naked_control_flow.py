@@ -28,6 +28,60 @@ def test_naked_control_flow_with_intervening_preprocessor():
     assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
 
 
+def test_naked_control_flow_nested_if_without_braces():
+    code = """
+    void check(int x, int y) {
+        if (x)
+            if (y) {
+                do_something();
+            }
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code)
+    assert len(errors) == 1, f"Expected 1 error for outer naked 'if', got: {errors}"
+
+
+def test_naked_control_flow_repeated_else_if_per_branch():
+    code = """
+    int handle(int a, int b, int c) {
+        if (a) {
+            return 1;
+        }
+    #if FEATURE_Y
+        else if ( check_this(b) )
+    #else
+        else if ( check_that(c) )
+    #endif
+        {
+            return 2;
+        }
+        return 0;
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code)
+    assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
+
+
+def test_naked_control_flow_repeated_if_per_branch_multiline_condition():
+    code = """
+    int handle(void) {
+    #if CONDITION_1
+        if ( ( check_1() && ( check_2(data_1) == VALUE ) ) ||
+             ( !check_1() && ( check_3(data_1) == VALUE ) )
+           )
+    #else
+        if ( check_3(data_1) == VALUE )
+    #endif
+        {
+            return 1;
+        }
+        return 0;
+    }
+    """
+    errors = run_cgull_rule("naked_control_flow", code)
+    assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
+
+
 def test_naked_control_flow_string_literal_parens():
     code_braced = """
     int check(const char *s) {

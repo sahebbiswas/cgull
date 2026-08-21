@@ -10,6 +10,26 @@ from ..ast_analyzer import CASTContext
 from ..utils import mask_string_and_char_literals
 
 
+def _find_next_code_token(lines: List[str], start_line: int, start_pos: int):
+    line = start_line
+    pos = start_pos
+    saw_preprocessor = False
+    while line < len(lines):
+        rem = lines[line][pos:]
+        stripped = rem.lstrip()
+        if stripped:
+            if stripped.startswith("#"):
+                saw_preprocessor = True
+                line += 1
+                pos = 0
+                continue
+            token_pos = len(lines[line]) - len(rem) + (len(rem) - len(stripped))
+            return line, token_pos, stripped, saw_preprocessor
+        line += 1
+        pos = 0
+    return None, None, None, saw_preprocessor
+
+
 class NakedControlFlowStatementsRule(BaseRule):
     rule_id = "CGULL-013"
     name = "Naked Control Flow Statements"
@@ -51,26 +71,12 @@ class NakedControlFlowStatementsRule(BaseRule):
 
             # Handle keywords with condition parens: if, while, for
             if kw in ("if", "while", "for"):
-                found_paren = False
-                while curr_line < len(masked_source_lines):
-                    rem = masked_source_lines[curr_line][curr_pos:]
-                    rem_stripped = rem.strip()
-                    if rem_stripped:
-                        if rem_stripped.startswith("#"):
-                            curr_line += 1
-                            curr_pos = 0
-                            continue
-                        if rem_stripped.startswith("("):
-                            found_paren = True
-                            curr_pos = masked_source_lines[curr_line].find("(", curr_pos)
-                            break
-                        else:
-                            break
-                    curr_line += 1
-                    curr_pos = 0
-
-                if not found_paren:
+                n_line, n_pos, rem, _ = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
+                if n_line is None or not rem.startswith("("):
                     continue
+
+                curr_line = n_line
+                curr_pos = n_pos
 
                 # Parse balanced parens
                 depth = 0
@@ -99,71 +105,65 @@ class NakedControlFlowStatementsRule(BaseRule):
 
                 # Check for alternate condition branches (e.g., #if / #else split conditions)
                 while True:
-                    next_line = curr_line
-                    next_pos = curr_pos
-                    next_char = None
-                    while next_line < len(masked_source_lines):
-                        rem = masked_source_lines[next_line][next_pos:].strip()
-                        if rem:
-                            if rem.startswith("#"):
-                                next_line += 1
-                                next_pos = 0
-                                continue
-                            next_char = rem[0]
+                    n_line, n_pos, rem, saw_prep = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
+                    if rem is None or not saw_prep:
+                        break
+
+                    target_line, target_pos = None, None
+                    if rem.startswith("("):
+                        target_line, target_pos = n_line, n_pos
+                    elif re.match(r'^if\b', rem):
+                        m_if = re.match(r'^if\b', rem)
+                        p_line, p_pos, p_rem, _ = _find_next_code_token(masked_source_lines, n_line, n_pos + m_if.end())
+                        if p_rem is None or not p_rem.startswith("("):
                             break
-                        next_line += 1
-                        next_pos = 0
-
-                    if next_char == "(":
-                        curr_line = next_line
-                        curr_pos = masked_source_lines[next_line].find("(", next_pos)
-
-                        depth = 0
-                        found_close = False
-                        while curr_line < len(masked_source_lines) and not found_close:
-                            line_str = masked_source_lines[curr_line]
-                            while curr_pos < len(line_str):
-                                c = line_str[curr_pos]
-                                if c == "(":
-                                    depth += 1
-                                elif c == ")":
-                                    depth -= 1
-                                    if depth == 0:
-                                        found_close = True
-                                        curr_pos += 1
-                                        break
-                                curr_pos += 1
-                            if not found_close:
-                                curr_line += 1
-                                curr_pos = 0
-                                while curr_line < len(masked_source_lines) and masked_source_lines[curr_line].strip().startswith("#"):
-                                    curr_line += 1
-
-                        if not found_close:
+                        target_line, target_pos = p_line, p_pos
+                    elif re.match(r'^else\b', rem):
+                        m_else = re.match(r'^else\b', rem)
+                        next_line2, next_pos2, rem2, _ = _find_next_code_token(masked_source_lines, n_line, n_pos + m_else.end())
+                        if rem2 and re.match(r'^if\b', rem2):
+                            m_if2 = re.match(r'^if\b', rem2)
+                            p_line, p_pos, p_rem, _ = _find_next_code_token(masked_source_lines, next_line2, next_pos2 + m_if2.end())
+                            if p_rem is None or not p_rem.startswith("("):
+                                break
+                            target_line, target_pos = p_line, p_pos
+                        else:
+                            # Bare else branch: position past 'else' and stop alternate branch scanning
+                            curr_line, curr_pos = n_line, n_pos + m_else.end()
                             break
                     else:
-                        if next_line < len(masked_source_lines) and next_char is not None:
-                            curr_line = next_line
-                            curr_pos = next_pos
+                        break
+
+                    curr_line = target_line
+                    curr_pos = target_pos
+                    depth = 0
+                    found_close = False
+                    while curr_line < len(masked_source_lines) and not found_close:
+                        line_str = masked_source_lines[curr_line]
+                        while curr_pos < len(line_str):
+                            c = line_str[curr_pos]
+                            if c == "(":
+                                depth += 1
+                            elif c == ")":
+                                depth -= 1
+                                if depth == 0:
+                                    found_close = True
+                                    curr_pos += 1
+                                    break
+                            curr_pos += 1
+                        if not found_close:
+                            curr_line += 1
+                            curr_pos = 0
+                            while curr_line < len(masked_source_lines) and masked_source_lines[curr_line].strip().startswith("#"):
+                                curr_line += 1
+
+                    if not found_close:
                         break
 
                 # Special case for while in do-while loop
                 if kw == "while":
-                    after_paren_line = curr_line
-                    after_paren_pos = curr_pos
-                    next_char_after = None
-                    while after_paren_line < len(masked_source_lines):
-                        rem_after = masked_source_lines[after_paren_line][after_paren_pos:].strip()
-                        if rem_after:
-                            if rem_after.startswith("#"):
-                                after_paren_line += 1
-                                after_paren_pos = 0
-                                continue
-                            next_char_after = rem_after[0]
-                            break
-                        after_paren_line += 1
-                        after_paren_pos = 0
-                    if next_char_after == ";":
+                    after_line, after_pos, rem_after, _ = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
+                    if rem_after and rem_after.startswith(";"):
                         before_str = line_content[:kw_start].strip()
                         if before_str.endswith("}"):
                             continue
@@ -181,41 +181,13 @@ class NakedControlFlowStatementsRule(BaseRule):
                             continue
 
             elif kw == "else":
-                look_l = line_idx
-                look_p = kw_end
-                is_else_if = False
-                while look_l < len(masked_source_lines):
-                    rem_else = masked_source_lines[look_l][look_p:].strip()
-                    if rem_else:
-                        if rem_else.startswith("#"):
-                            look_l += 1
-                            look_p = 0
-                            continue
-                        if rem_else.startswith("if") and (len(rem_else) == 2 or not rem_else[2].isalnum()):
-                            is_else_if = True
-                        break
-                    look_l += 1
-                    look_p = 0
-                if is_else_if:
+                look_l, look_p, rem_else, _ = _find_next_code_token(masked_source_lines, line_idx, kw_end)
+                if rem_else and rem_else.startswith("if") and (len(rem_else) == 2 or not rem_else[2].isalnum()):
                     continue
 
             # Look ahead for opening brace {
-            look_line = curr_line
-            look_pos = curr_pos
-            is_braced = False
-
-            while look_line < len(masked_source_lines):
-                line_str = masked_source_lines[look_line][look_pos:].strip()
-                if not line_str or line_str.startswith("#"):
-                    look_line += 1
-                    look_pos = 0
-                    continue
-                else:
-                    if line_str.startswith("{"):
-                        is_braced = True
-                    else:
-                        is_braced = False
-                    break
+            look_line, look_pos, rem_brace, _ = _find_next_code_token(masked_source_lines, curr_line, curr_pos)
+            is_braced = rem_brace is not None and rem_brace.startswith("{")
 
             if not is_braced:
                 if kw in ("if", "while", "for"):
