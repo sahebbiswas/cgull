@@ -224,7 +224,7 @@ cgull init-ignore
 
 ## 🛡️ Supported Security Rules Matrix
 
-C-GULL implements all 27 security audit rules from the core specification:
+C-GULL implements the security audit rules listed below:
 
 | Rule ID | Rule Name | Impact | Category | CWE ID | Method | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -257,6 +257,7 @@ C-GULL implements all 27 security audit rules from the core specification:
 | **CGULL-029** | sizeof() on Pointer Type | **High** | Arithmetic | CWE-467 | AST | Flags use of `sizeof()` on a pointer variable, which returns the size of the pointer instead of the memory block. |
 | **CGULL-030** | Command Injection Vulnerability | **High** | Control Flow | CWE-78 | Hybrid | Flags use of `system()`, `popen()`, or PATH-searching `exec` variants (`execlp`/`execvp`/`execvpe`/`execlpe`) with non-literal string arguments. |
 | **CGULL-031** | Weak/Broken Crypto Primitives | **High** | Crypto | CWE-327 | Hybrid | Detects calls to weak or broken cryptographic algorithms (`MD5`, `SHA-1` in security contexts, `DES_*`, `RC4`, `EVP_*` ECB cipher mode variants). |
+| **CGULL-032** | Realloc-Overwrite Memory Leak | **High** | Memory | CWE-401 | Hybrid | Detects `x = realloc(x, ...)` directly overwriting pointer variable before NULL check, leaking memory on OOM. |
 | **CGULL-033** | Signed/Unsigned Comparison | **Medium** | Arithmetic | CWE-195 / INT02-C | Hybrid | Detects signed/unsigned integer comparisons and loop-bound mismatches causing infinite loops or promotion bugs. |
 
 ---

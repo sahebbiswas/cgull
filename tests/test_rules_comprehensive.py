@@ -14,7 +14,7 @@ import unittest
 
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine, FixType, Severity
-from cgull.rules import get_rule_by_id, get_all_rules, ALL_RULES, RULE_REGISTRY
+from cgull.rules import get_rule_by_id, get_all_rules, ALL_RULES, RULE_REGISTRY, ReallocOverwriteRule
 
 
 def scan_with_rule(rule_id: str, code: str):
@@ -728,6 +728,50 @@ class TestSignedUnsignedComparison(unittest.TestCase):
     def test_clean_signed_comparison(self):
         code = "void f(int a, int b) {\n    if (a < b) {\n        use();\n    }\n}"
         issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 0)
+
+
+class TestReallocOverwrite(unittest.TestCase):
+    def test_detects_direct_realloc_overwrite(self):
+        code = "void f(char *ptr, size_t sz) {\n    ptr = realloc(ptr, sz);\n}"
+        issues = scan_with_rule("CGULL-032", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_realloc_overwrite_with_type_cast(self):
+        code = "void f(int *arr, size_t n) {\n    arr = (int *)realloc(arr, n * sizeof(int));\n}"
+        issues = scan_with_rule("CGULL-032", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_struct_member_realloc_overwrite(self):
+        code = "struct Buffer { char *buf; };\nvoid f(struct Buffer *b, size_t sz) {\n    b->buf = (char *)realloc(b->buf, sz);\n}"
+        issues = scan_with_rule("CGULL-032", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_safe_realloc_tmp(self):
+        code = "void f(char *ptr, size_t sz) {\n    char *tmp = realloc(ptr, sz);\n    if (!tmp) return;\n    ptr = tmp;\n}"
+        issues = scan_with_rule("CGULL-032", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_realloc_different_variable(self):
+        code = "void f(char *old_buf, size_t sz) {\n    char *new_buf = realloc(old_buf, sz);\n}"
+        issues = scan_with_rule("CGULL-032", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_custom_realloc_function(self):
+        rule = ReallocOverwriteRule(extra_realloc_funcs=["krealloc"])
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.HYBRID)
+        code = "void f(char *p, size_t sz) {\n    p = krealloc(p, sz);\n}"
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_multiline_realloc_overwrite(self):
+        code = "void f(char *ptr, size_t sz) {\n    ptr = (char *)realloc(\n        ptr,\n        sz\n    );\n}"
+        issues = scan_with_rule("CGULL-032", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_nested_comma_first_argument(self):
+        code = "char *get_buf(int a, int b);\nvoid f(char *ptr, int x, int y) {\n    ptr = realloc(get_buf(x, y), 100);\n}"
+        issues = scan_with_rule("CGULL-032", code)
         self.assertEqual(len(issues), 0)
 
 
