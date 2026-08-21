@@ -29,6 +29,7 @@ from .crypto_and_safety import (
     SinglePointOfFailureControlFlowRule,
     InsecureDataStorageRule,
     WeakCryptoPrimitivesRule,
+    ToctouFileAccessRule,
 )
 from .types_and_arrays import (
     VariableLengthArraysRule,
@@ -73,6 +74,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     CommandInjectionRule,
     WeakCryptoPrimitivesRule,
     ReallocOverwriteRule,
+    ToctouFileAccessRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     NakedControlFlowStatementsRule,

@@ -1166,8 +1166,16 @@ class CASTParser:
                 fn.variables[v_name] = c_var
 
         # Track variable life cycles (free, null-checks, reads, assignments)
+        assign_regex = re.compile(r'^\s*([a-zA-Z_]\w*)\s*(?:\[[^\]]*\]|\.\w+|->\w+)*\s*=(?!=)')
         for i, line in enumerate(body_lines):
             line_no = fn_start + i
+            m_assign = assign_regex.match(line)
+            if m_assign:
+                v_name = m_assign.group(1)
+                if v_name in fn.variables:
+                    if line_no not in fn.variables[v_name].assigned_lines:
+                        fn.variables[v_name].assigned_lines.append(line_no)
+
             # free(x)
             free_match = re.search(r'\bfree\s*\(\s*(\w+)\s*\)', line)
             if free_match:
