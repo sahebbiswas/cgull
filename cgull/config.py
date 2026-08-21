@@ -143,6 +143,25 @@ def find_config_file(target_path: str) -> Optional[str]:
     return None
 
 
+def parse_bool_val(val: Any) -> Optional[bool]:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, int):
+        if val == 1:
+            return True
+        if val == 0:
+            return False
+        return None
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "1", "yes"):
+            return True
+        if v in ("false", "0", "no"):
+            return False
+        return None
+    return None
+
+
 def parse_severity_str(sev_str: str) -> Optional[Severity]:
     sev_map = {
         "high": Severity.HIGH,
@@ -286,6 +305,11 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 cfg.error = f"Invalid [output].fail_on value '{fail_val}' in {config_path}. Expected one of: high, medium, low, all."
                 return cfg
         if "warn_on_fallback" in output_sec:
-            cfg.warn_on_fallback = bool(output_sec["warn_on_fallback"])
+            raw_wof = output_sec["warn_on_fallback"]
+            b_val = parse_bool_val(raw_wof)
+            if b_val is not None:
+                cfg.warn_on_fallback = b_val
+            else:
+                cfg.warnings.append(f"Invalid boolean value '{raw_wof}' for [output].warn_on_fallback in {config_path}")
 
     return cfg

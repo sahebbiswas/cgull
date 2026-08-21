@@ -215,7 +215,10 @@ def handle_scan(args) -> int:
 
     warn_on_fallback = args.warn_on_fallback or config.warn_on_fallback
     if warn_on_fallback:
-        fallback_files = [fs.file_path for fs in result.file_summaries if fs.parse_tier == ParseTier.REGEX_FALLBACK.value]
+        fallback_files = [
+            fs.file_path for fs in result.file_summaries
+            if fs.status == "success" and fs.parse_tier == ParseTier.REGEX_FALLBACK.value
+        ]
         if fallback_files:
             print(f"Warning: {len(fallback_files)} file(s) fell back to regex-fallback AST parse tier.", file=sys.stderr)
             return 1
