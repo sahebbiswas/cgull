@@ -36,6 +36,7 @@ from .types_and_arrays import (
     BitwiseOperationsOnSignedIntegersRule,
     UseOfMagicNumbersRule,
     SizeofOnPointerRule,
+    SignedUnsignedComparisonRule,
 )
 from .misra_and_style import (
     NakedControlFlowStatementsRule,
@@ -75,6 +76,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     BitwiseOperationsOnSignedIntegersRule,
     SinglePointOfFailureControlFlowRule,
     InsecureDataStorageRule,
+    SignedUnsignedComparisonRule,
     # Low Impact
     MissingDefaultCaseInSwitchStatementsRule,
     UseOfGotoStatementsRule,

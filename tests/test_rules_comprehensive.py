@@ -694,6 +694,43 @@ class TestCommandInjection(unittest.TestCase):
         self.assertEqual(len(issues), 1)
 
 
+class TestSignedUnsignedComparison(unittest.TestCase):
+    def test_detects_signed_unsigned_comparison_in_for_loop(self):
+        code = "void f(size_t len) {\n    for (int i = 0; i < len; i++) {\n        use(i);\n    }\n}"
+        issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_unsigned_reverse_loop(self):
+        code = "void f(size_t len) {\n    for (size_t i = len; i >= 0; i--) {\n        use(i);\n    }\n}"
+        issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_loop_bound_mismatch(self):
+        code = "void f(size_t len) {\n    for (int i = len; i >= 0; i--) {\n        use(i);\n    }\n}"
+        issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_signed_unsigned_comparison(self):
+        code = "void f(int signed_val, size_t unsigned_val) {\n    if (signed_val < unsigned_val) {\n        use();\n    }\n}"
+        issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_sizeof_comparison(self):
+        code = "void f(int idx) {\n    char buf[100];\n    if (idx < sizeof(buf)) {\n        buf[idx] = 'a';\n    }\n}"
+        issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_unsigned_reverse_loop(self):
+        code = "void f(size_t len) {\n    for (size_t i = len; i > 0; i--) {\n        use(i - 1);\n    }\n}"
+        issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_signed_comparison(self):
+        code = "void f(int a, int b) {\n    if (a < b) {\n        use();\n    }\n}"
+        issues = scan_with_rule("CGULL-033", code)
+        self.assertEqual(len(issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 
