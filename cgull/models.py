@@ -268,8 +268,8 @@ class ScanResult:
     baseline_new_count: Optional[int] = None
     baseline_resolved_count: Optional[int] = None
     baseline_total_before_filter: Optional[int] = None
-    baseline_rules_count: Optional[int] = None
     scan_errors: List[ScanError] = field(default_factory=list)
+    baseline_rules_count: Optional[int] = None
 
     def get_overall_parser_status(self) -> str:
         if self.overall_parser_status:
