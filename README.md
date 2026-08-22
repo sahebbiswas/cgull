@@ -261,12 +261,15 @@ C-GULL implements the security audit rules listed below:
 | **CGULL-023** | Uninitialized Memory Use | **High** | Memory | CWE-457 | AST | Identifies local variables read before explicit assignment. |
 | **CGULL-024** | Insecure Data Storage | **Medium** | Crypto | CWE-312 / 798 | Regex | Flags hardcoded passwords, tokens, and encryption keys in plaintext static memory. |
 | **CGULL-025** | Missing Assertions | **Low** | Code Quality | CWE-617 | AST | Enforces `assert()` validations for state invariants in critical complex routines. |
+| **CGULL-026** | Unchecked snprintf() Return Value | **High** | Strings | CWE-131 | Regex | Flag the direct accumulation of snprintf() return value into an offset without checking for truncation. snprintf() returns the number of bytes it *would* have written, leading to underflow if used directly on truncation. |
+| **CGULL-027** | Double Free | **High** | Memory | CWE-415 | Ast | Detect calling free() on a pointer that has already been freed. |
 | **CGULL-028** | Insecure PRNG for Security Use | **High** | Crypto | CWE-338 | Hybrid | Flags `rand()`, `random()`, or `srand(time(NULL))` calls in security-sensitive contexts. |
 | **CGULL-029** | sizeof() on Pointer Type | **High** | Arithmetic | CWE-467 | AST | Flags use of `sizeof()` on a pointer variable, which returns the size of the pointer instead of the memory block. |
 | **CGULL-030** | Command Injection Vulnerability | **High** | Control Flow | CWE-78 | Hybrid | Flags use of `system()`, `popen()`, or PATH-searching `exec` variants (`execlp`/`execvp`/`execvpe`/`execlpe`) with non-literal string arguments. |
 | **CGULL-031** | Weak/Broken Crypto Primitives | **High** | Crypto | CWE-327 | Hybrid | Detects calls to weak or broken cryptographic algorithms (`MD5`, `SHA-1` in security contexts, `DES_*`, `RC4`, `EVP_*` ECB cipher mode variants). |
 | **CGULL-032** | Realloc-Overwrite Memory Leak | **High** | Memory | CWE-401 | Hybrid | Detects `x = realloc(x, ...)` directly overwriting pointer variable before NULL check, leaking memory on OOM. |
 | **CGULL-033** | Signed/Unsigned Comparison | **Medium** | Arithmetic | CWE-195 / INT02-C | Hybrid | Detects signed/unsigned integer comparisons and loop-bound mismatches causing infinite loops or promotion bugs. |
+| **CGULL-034** | Division or Modulo by Zero | **High** | Arithmetic | CWE-369 | Hybrid | Detect division (/) or modulo (%) operations where the divisor might be zero, causing a crash or undefined behavior. |
 | **CGULL-035** | TOCTOU File Access | **High** | Control Flow | CWE-367 | Hybrid | Detects time-of-check to time-of-use race conditions where file checks (access, stat) are followed by file operations (open, fopen, chmod). |
 
 ---
