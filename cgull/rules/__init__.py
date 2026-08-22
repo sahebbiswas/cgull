@@ -22,6 +22,7 @@ from .memory_management import (
     UnsafeSensitiveMemoryClearingRule,
     ReallocOverwriteRule,
     MemoryLeakRule,
+    ReturnStackVariableRule,
 )
 from .crypto_and_safety import (
     NonConstantTimeMemoryComparisonRule,
@@ -77,6 +78,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     WeakCryptoPrimitivesRule,
     ReallocOverwriteRule,
     MemoryLeakRule,
+    ReturnStackVariableRule,
     ToctouFileAccessRule,
     StrncpyNullTerminationRule,
     # Medium Impact
