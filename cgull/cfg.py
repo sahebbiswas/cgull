@@ -228,7 +228,7 @@ class StructuredCFG:
                     curr_init[v] = Initialization.INITIALIZED
                     if v not in node.allocated:
                         curr_alloc[v] = Allocation.NOT_ALLOCATED
-                        if v in node.null_writes or "NULL" in node.expr_str or "nullptr" in node.expr_str:
+                        if v in node.null_writes:
                             curr_null[v] = Nullness.NULL
                         else:
                             curr_null[v] = Nullness.UNKNOWN
@@ -320,7 +320,7 @@ class StructuredCFG:
                     curr_init[v] = Initialization.INITIALIZED
                     if v not in node.allocated:
                         curr_alloc[v] = Allocation.NOT_ALLOCATED
-                        if v in node.null_writes or "NULL" in node.expr_str or "nullptr" in node.expr_str:
+                        if v in node.null_writes:
                             curr_null[v] = Nullness.NULL
                         else:
                             curr_null[v] = Nullness.UNKNOWN

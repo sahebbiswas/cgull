@@ -253,7 +253,6 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
         issues = []
         for fn in ast_ctx.functions:
             ptr_params = [p for p in fn.parameters if p.is_pointer and p.name]
-            param_names = {p.name for p in ptr_params}
             cfg = _ast_cfg_for_function(ast_ctx, fn)
 
             if cfg is not None:
@@ -338,7 +337,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                         break
 
             # 2. Local NULL assignment dereference fallback
-            null_assign_regex = re.compile(r'\b([a-zA-Z_]\w*)\s*=\s*(?:\([^)]+\)\s*)?(?:NULL|nullptr|0|0x0)\b')
+            null_assign_regex = re.compile(r'(?<![\*->\.\w])\b([a-zA-Z_]\w*)\s*=\s*(?:\([^)]+\)\s*)?(?:NULL|nullptr|0|0x0)\b')
             for i, line in enumerate(body_lines):
                 m = null_assign_regex.search(line)
                 if not m:
@@ -350,7 +349,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                         break
                     sub_line = body_lines[j]
                     sub_line_no = body_start + j
-                    if re.search(rf'\b{re.escape(v_name)}\s*=\s*', sub_line):
+                    if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
                     deref_match = re.search(rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[)', sub_line)
                     if deref_match:
@@ -373,13 +372,13 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                 if not m:
                     continue
                 v_name = m.group(1) or m.group(2)
-                base_depth = depths[i]
+                target_depth = depths[i] - 1 if '{' in line else depths[i]
                 for j in range(i + 1, len(body_lines)):
-                    if depths[j] <= base_depth and j > i and ('}' in body_lines[j]):
+                    if j > i + 1 and depths[j] <= target_depth:
                         break
                     sub_line = body_lines[j]
                     sub_line_no = body_start + j
-                    if re.search(rf'\b{re.escape(v_name)}\s*=\s*', sub_line):
+                    if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
                     deref_match = re.search(rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[)', sub_line)
                     if deref_match:
