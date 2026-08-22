@@ -20,6 +20,7 @@ from .memory_management import (
     UninitializedMemoryUseRule,
     UnsafeSensitiveMemoryClearingRule,
     ReallocOverwriteRule,
+    MemoryLeakRule,
 )
 from .crypto_and_safety import (
     NonConstantTimeMemoryComparisonRule,
@@ -74,6 +75,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     CommandInjectionRule,
     WeakCryptoPrimitivesRule,
     ReallocOverwriteRule,
+    MemoryLeakRule,
     ToctouFileAccessRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,

@@ -904,6 +904,24 @@ class TestReallocOverwrite(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestMemoryLeak(unittest.TestCase):
+    def test_detects_unfreed_malloc(self):
+        code = "void f(void) {\n    char *data = (char *)malloc(100);\n    if (data == NULL) return;\n    strcpy(data, \"hello\");\n}"
+        issues = scan_with_rule("CGULL-036", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("never freed or transferred", issues[0].message)
+
+    def test_clean_freed_malloc(self):
+        code = "void f(void) {\n    char *data = (char *)malloc(100);\n    if (data == NULL) return;\n    strcpy(data, \"hello\");\n    free(data);\n}"
+        issues = scan_with_rule("CGULL-036", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_returned_malloc(self):
+        code = "char *f(void) {\n    char *data = (char *)malloc(100);\n    if (data == NULL) return NULL;\n    return data;\n}"
+        issues = scan_with_rule("CGULL-036", code)
+        self.assertEqual(len(issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 
