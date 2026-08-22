@@ -52,3 +52,28 @@ void CWE121_Stack_Based_Buffer_Overflow__CWE805_int_declare_loop_01_bad(void) {
         }
     }
 }
+
+/* True Positive: Offset pointer aliasing reduces effective buffer capacity */
+void test_tp_pointer_alias_offset_oob(int idx) {
+    char buf[10];
+    char *ptr = &buf[3];
+    ptr[7] = 'A'; // expect: CGULL-007
+}
+
+void test_tp_pointer_alias_arith_oob(int idx) {
+    char buf[10];
+    char *ptr = buf + 5;
+    ptr[5] = 'B'; // expect: CGULL-007
+}
+
+/* Scope isolation: function 1 has buf[100], function 2 has buf[10] */
+void helper_large_buf(void) {
+    char buf[100];
+    buf[0] = 'X';
+}
+
+void test_scope_isolated_small_buf(void) {
+    char buf[10];
+    char *ptr = buf;
+    ptr[15] = 'Y'; // expect: CGULL-007
+}

@@ -151,19 +151,52 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             if line_no is not None and line_no >= fn_start:
                 max_idx = min(len(body_lines), line_no - fn_start)
 
-            assign_pattern = re.compile(
-                rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*=(?!=)\s*(?:\([^\)]+\)\s*)*(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?\s*(?:;|\b)'
+            assign_stmt_pattern = re.compile(
+                rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*=(?!=)\s*(.+?)(?:;|$)'
             )
 
             for idx in range(max_idx - 1, -1, -1):
                 line = body_lines[idx]
-                m = assign_pattern.search(line)
+                m = assign_stmt_pattern.search(line)
                 if m:
-                    alias_target = m.group(1)
-                    if alias_target != arr_name and alias_target not in ('NULL', 'nullptr'):
+                    rhs = m.group(1).strip()
+                    # Strip leading casts e.g. (int *) or (char *)
+                    rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
+
+                    alias_target = None
+                    offset = 0
+                    valid_match = False
+
+                    # Case 1: &arr[K] or &arr[0]
+                    m_idx = re.match(r'^&\s*([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\]$', rhs_clean)
+                    if m_idx:
+                        alias_target = m_idx.group(1)
+                        offset = int(m_idx.group(2))
+                        valid_match = True
+                    else:
+                        # Case 2: arr + K or K + arr
+                        m_add1 = re.match(r'^([a-zA-Z_]\w*)\s*\+\s*(\d+)$', rhs_clean)
+                        m_add2 = re.match(r'^(\d+)\s*\+\s*([a-zA-Z_]\w*)$', rhs_clean)
+                        if m_add1:
+                            alias_target = m_add1.group(1)
+                            offset = int(m_add1.group(2))
+                            valid_match = True
+                        elif m_add2:
+                            alias_target = m_add2.group(2)
+                            offset = int(m_add2.group(1))
+                            valid_match = True
+                        else:
+                            # Case 3: arr or &arr or &arr[0]
+                            m_simple = re.match(r'^(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?$', rhs_clean)
+                            if m_simple:
+                                alias_target = m_simple.group(1)
+                                offset = 0
+                                valid_match = True
+
+                    if valid_match and alias_target and alias_target != arr_name and alias_target not in ('NULL', 'nullptr'):
                         target_size = get_array_declared_size(alias_target, fn, line_no=fn_start + idx, visited=visited)
                         if target_size is not None:
-                            return target_size
+                            return max(0, target_size - offset)
 
             return None
 
@@ -440,21 +473,54 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             if re.search(r'\b(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\s)*$', stmt_prefix):
                 continue
 
-            # Look for declaration or pointer alias in earlier lines or earlier on current line
-            alias_pattern = rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*=(?!=)\s*(?:\([^\)]+\)\s*)*(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?\s*(?:;|\b)'
+            # Determine function start boundary for current line to prevent scanning across function boundaries
+            fn_header_re = re.compile(
+                r'^[ \t]*(?:(?:static|inline|extern|const|unsigned|signed|struct\s+\w+|\w+)\s+)+(\*?\s*[\w_]+)\s*\([^)]*\)\s*\{?'
+            )
+            fn_start_idx = 0
+            for idx in range(line_number - 1, -1, -1):
+                line_str = source_lines[idx]
+                if fn_header_re.match(line_str):
+                    fn_start_idx = idx
+                    break
+
+            alias_assign_pattern = re.compile(
+                rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*=(?!=)\s*(.+?)(?:;|$)'
+            )
             target_name = arr_name
             declared_size = None
+            offset = 0
 
-            for prev_idx in range(line_number - 1, -1, -1):
+            for prev_idx in range(line_number - 1, fn_start_idx - 1, -1):
                 prev_line = line_content[:m.start()] if prev_idx == line_number - 1 else source_lines[prev_idx]
                 decl_m = re.search(rf'\b(?:char|int|float|double|uint\w+_t|size_t|struct\s+\w+|\w+)\s+(?:\*|\s)*\b{re.escape(target_name)}\s*\[\s*(\d+)\s*\]', prev_line)
                 if decl_m:
-                    declared_size = int(decl_m.group(1))
+                    declared_size = max(0, int(decl_m.group(1)) - offset)
                     break
+
                 if target_name == arr_name:
-                    alias_m = re.search(alias_pattern, prev_line)
+                    alias_m = alias_assign_pattern.search(prev_line)
                     if alias_m:
-                        target_name = alias_m.group(1)
+                        rhs = alias_m.group(1).strip()
+                        rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
+
+                        m_idx = re.match(r'^&\s*([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\]$', rhs_clean)
+                        m_add1 = re.match(r'^([a-zA-Z_]\w*)\s*\+\s*(\d+)$', rhs_clean)
+                        m_add2 = re.match(r'^(\d+)\s*\+\s*([a-zA-Z_]\w*)$', rhs_clean)
+                        m_simple = re.match(r'^(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?$', rhs_clean)
+
+                        if m_idx:
+                            target_name = m_idx.group(1)
+                            offset = int(m_idx.group(2))
+                        elif m_add1:
+                            target_name = m_add1.group(1)
+                            offset = int(m_add1.group(2))
+                        elif m_add2:
+                            target_name = m_add2.group(2)
+                            offset = int(m_add2.group(1))
+                        elif m_simple:
+                            target_name = m_simple.group(1)
+                            offset = 0
 
             if declared_size is not None and idx_val >= declared_size:
                 issues.append(self.create_issue(
