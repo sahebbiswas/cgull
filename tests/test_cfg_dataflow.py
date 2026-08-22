@@ -135,7 +135,6 @@ class TestCFGBasicBlocksAndDataflow(unittest.TestCase):
         )
 
         code = """
-        typedef unsigned long size_t;
         void *malloc(size_t);
         void free(void *);
 
@@ -163,6 +162,8 @@ class TestCFGBasicBlocksAndDataflow(unittest.TestCase):
         """
         parser = CASTParser()
         ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+        self.assertIsNotNone(ast_ctx.pycparser_ast)
 
         rule_alloc = UncheckedDynamicAllocationsRule()
         issues_alloc = rule_alloc.scan_ast("test.c", ast_ctx)
@@ -310,7 +311,6 @@ class TestCFGGotoAndLabeledControlFlow(unittest.TestCase):
         )
 
         code = """
-        typedef unsigned long size_t;
         void *malloc(size_t);
         void free(void *);
 
@@ -335,6 +335,8 @@ class TestCFGGotoAndLabeledControlFlow(unittest.TestCase):
         """
         parser = CASTParser()
         ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+        self.assertIsNotNone(ast_ctx.pycparser_ast)
 
         rule_alloc = UncheckedDynamicAllocationsRule()
         issues_alloc = rule_alloc.scan_ast("test.c", ast_ctx)
