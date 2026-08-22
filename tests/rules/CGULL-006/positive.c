@@ -25,3 +25,10 @@ void test_macro_mult(size_t n) {
     char *arr = ALLOC_ARRAY(n, 128);
     (void)arr;
 }
+
+/* True Positive: General CWE-190 addition near INT_MAX */
+void test_tp_int_max_add(void) {
+    int data = 2147483647; // INT_MAX
+    int result = data + 1; // expect: CGULL-006
+    (void)result;
+}

@@ -284,6 +284,17 @@ class TestArithmeticIntegerOverflow(unittest.TestCase):
         issues = scan_with_rule("CGULL-006", code)
         self.assertEqual(len(issues), 0)
 
+    def test_detects_unchecked_general_int_max_addition(self):
+        code = "void f(void) {\n    int data = 2147483647;\n    int result = data + 1;\n}"
+        issues = scan_with_rule("CGULL-006", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("Potential Integer Overflow", issues[0].message)
+
+    def test_clean_checked_general_int_max_addition(self):
+        code = "void f(void) {\n    int data = 2147483647;\n    if (data < 2147483647) {\n        int result = data + 1;\n    }\n}"
+        issues = scan_with_rule("CGULL-006", code)
+        self.assertEqual(len(issues), 0)
+
 
 class TestArrayIndexOutOfBounds(unittest.TestCase):
     def test_detects_constant_out_of_bounds_index(self):

@@ -9,6 +9,15 @@ void test_tn_checked_mult(size_t count) {
     (void)buf;
 }
 
+/* True Negative: Checked general integer arithmetic near INT_MAX */
+void test_tn_checked_int_max_add(void) {
+    int data = 2147483647; // INT_MAX
+    if (data < 2147483647) {
+        int result = data + 1;
+        (void)result;
+    }
+}
+
 /* True Negative: Fixed constant size without variable arithmetic */
 void test_tn_constant_size(void) {
     char *buf = malloc(1024);
