@@ -27,6 +27,7 @@ class Initialization(Enum):
 class Allocation(Enum):
     NOT_ALLOCATED = "NOT_ALLOCATED"
     ALLOCATED = "ALLOCATED"
+    MAYBE_ALLOCATED = "MAYBE_ALLOCATED"
     FREED = "FREED"
     MAYBE_FREED = "MAYBE_FREED"
 
@@ -403,9 +404,11 @@ def meet_allocation(a: Allocation, b: Allocation) -> Allocation:
         return Allocation.MAYBE_FREED
     if a == Allocation.FREED or b == Allocation.FREED:
         return Allocation.MAYBE_FREED
+    if a == Allocation.MAYBE_ALLOCATED or b == Allocation.MAYBE_ALLOCATED:
+        return Allocation.MAYBE_ALLOCATED
     if (a == Allocation.ALLOCATED and b == Allocation.NOT_ALLOCATED) or \
        (a == Allocation.NOT_ALLOCATED and b == Allocation.ALLOCATED):
-        return Allocation.NOT_ALLOCATED
+        return Allocation.MAYBE_ALLOCATED
     return Allocation.NOT_ALLOCATED
 
 

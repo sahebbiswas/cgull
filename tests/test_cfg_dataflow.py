@@ -109,6 +109,74 @@ class TestCFGBasicBlocksAndDataflow(unittest.TestCase):
         p_alloc = cfg.query_allocation('p', use_node_id)
         self.assertEqual(p_alloc, Allocation.ALLOCATED)
 
+    def test_allocation_branch_join_maybe_allocated(self):
+        code = """
+        void f(int cond) {
+            int *p;
+            if (cond) {
+                p = malloc(sizeof(*p));
+            }
+            *p = 1;
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+        use_nodes = [n for n in cfg.nodes.values() if "*p = 1" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        use_node_id = use_nodes[0].node_id
+        p_alloc = cfg.query_allocation('p', use_node_id)
+        self.assertEqual(p_alloc, Allocation.MAYBE_ALLOCATED)
+
+    def test_branch_join_free_and_use_rules(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import (
+            UncheckedDynamicAllocationsRule,
+            UseAfterFreeRule,
+            DoubleFreeRule,
+        )
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void free(void *);
+
+        void test_maybe_alloc(int cond) {
+            int *p;
+            if (cond) {
+                p = malloc(sizeof(int));
+            }
+            *p = 1;
+        }
+
+        void test_maybe_free(int cond, char *p) {
+            if (cond) {
+                free(p);
+            }
+            free(p);
+        }
+
+        void test_uaf_maybe_free(int cond, char *p) {
+            if (cond) {
+                free(p);
+            }
+            *p = 'a';
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+
+        rule_alloc = UncheckedDynamicAllocationsRule()
+        issues_alloc = rule_alloc.scan_ast("test.c", ast_ctx)
+        self.assertGreaterEqual(len(issues_alloc), 1)
+        self.assertIn("p", issues_alloc[0].message)
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertGreaterEqual(len(issues_df), 1)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertGreaterEqual(len(issues_uaf), 1)
+
     def test_query_facts_at_program_location(self):
         code = """
         void f(char *ptr) {
