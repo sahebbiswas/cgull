@@ -424,8 +424,9 @@ class UninitializedPointersRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        summaries = analyze_function_summaries(ast_ctx)
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, summaries=summaries)
             if cfg is not None:
                 uninit_ptrs = [v_name for v_name, var in fn.variables.items() if var.is_pointer and not var.has_initializer]
                 if not uninit_ptrs:
@@ -588,8 +589,9 @@ class UseAfterFreeRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
+        summaries = analyze_function_summaries(ast_ctx, dealloc_funcs=self.dealloc_funcs)
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
                 reported_uafs = set()
                 for node in cfg.nodes.values():
@@ -660,8 +662,9 @@ class UninitializedMemoryUseRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        summaries = analyze_function_summaries(ast_ctx)
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, summaries=summaries)
             if cfg is not None:
                 uninit_vars = [v_name for v_name, var in fn.variables.items() if not var.has_initializer and not var.is_volatile]
                 if not uninit_vars:
