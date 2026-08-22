@@ -57,6 +57,12 @@ class BasicBlock:
     alloc_in: Dict[str, Allocation] = field(default_factory=dict)
     alloc_out: Dict[str, Allocation] = field(default_factory=dict)
 
+    # Alias and location lifecycle tracking facts
+    loc_state_in: Dict[str, Allocation] = field(default_factory=dict)
+    loc_state_out: Dict[str, Allocation] = field(default_factory=dict)
+    loc_map_in: Dict[str, Set[str]] = field(default_factory=dict)
+    loc_map_out: Dict[str, Set[str]] = field(default_factory=dict)
+
 
 @dataclass
 class CFGEvent:
@@ -71,6 +77,8 @@ class CFGEvent:
     allocated: Set[str] = field(default_factory=set)
     derefs: Set[str] = field(default_factory=set)
     asserted: Set[str] = field(default_factory=set)
+    alias_writes: Dict[str, str] = field(default_factory=dict)
+    realloc_inputs: Set[str] = field(default_factory=set)
     successors: List[int] = field(default_factory=list)
 
 
@@ -185,6 +193,8 @@ class StructuredCFG:
                 all_vars.update(node.freed)
                 all_vars.update(node.asserted)
                 all_vars.update(node.derefs)
+                all_vars.update(node.alias_writes.keys())
+                all_vars.update(node.alias_writes.values())
 
         init_nonnull = set(initial_nonnull) if initial_nonnull else set()
         init_initialized = set(initial_initialized) if initial_initialized else set()
@@ -196,6 +206,10 @@ class StructuredCFG:
             block.init_out = {}
             block.alloc_in = {}
             block.alloc_out = {}
+            block.loc_state_in = {}
+            block.loc_state_out = {}
+            block.loc_map_in = {}
+            block.loc_map_out = {}
 
         entry_block_id = self.node_to_block.get(self.entry) if self.entry else min(self.blocks.keys())
 
@@ -218,6 +232,9 @@ class StructuredCFG:
                 entry_block.nullness_in[v] = Nullness.NON_NULL if v in init_nonnull else Nullness.UNKNOWN
                 entry_block.init_in[v] = Initialization.INITIALIZED if v in init_initialized else Initialization.UNINITIALIZED
                 entry_block.alloc_in[v] = Allocation.NOT_ALLOCATED
+                loc_id = f"var_{v}"
+                entry_block.loc_map_in[v] = {loc_id}
+                entry_block.loc_state_in[loc_id] = Allocation.NOT_ALLOCATED
 
         worklist = [entry_block_id] if entry_block_id in reachable_blocks else []
 
@@ -229,25 +246,55 @@ class StructuredCFG:
 
             curr_null = dict(block.nullness_in)
             curr_init = dict(block.init_in)
-            curr_alloc = dict(block.alloc_in)
+            curr_loc_state = dict(block.loc_state_in)
+            curr_loc_map = {v: set(locs) for v, locs in block.loc_map_in.items()}
 
             for node in block.nodes:
+                for ptr in node.realloc_inputs:
+                    locs = curr_loc_map.get(ptr, set())
+                    for loc in locs:
+                        curr_loc_state[loc] = meet_allocation(curr_loc_state.get(loc, Allocation.NOT_ALLOCATED), Allocation.MAYBE_FREED)
+
                 for v in node.allocated:
-                    curr_alloc[v] = Allocation.ALLOCATED
+                    base_loc_id = f"alloc_{node.node_id}_{v}"
+                    loc_id = base_loc_id
+                    if curr_loc_state.get(base_loc_id) in (Allocation.FREED, Allocation.MAYBE_FREED) or any(other != v and base_loc_id in curr_loc_map.get(other, set()) for other in all_vars):
+                        loc_id = f"alloc_{node.node_id}_{v}_fresh"
+                    curr_loc_state[loc_id] = Allocation.ALLOCATED
+                    curr_loc_map[v] = {loc_id}
                     curr_null[v] = Nullness.MAYBE_NULL
                     curr_init[v] = Initialization.INITIALIZED
 
                 for v in node.freed:
-                    curr_alloc[v] = Allocation.FREED
+                    locs = curr_loc_map.get(v, set())
+                    if not locs:
+                        loc_id = f"var_{v}"
+                        locs = {loc_id}
+                        curr_loc_map[v] = locs
+                    for loc in locs:
+                        curr_loc_state[loc] = Allocation.FREED
 
                 for v in node.writes:
                     curr_init[v] = Initialization.INITIALIZED
                     if v not in node.allocated:
-                        curr_alloc[v] = Allocation.NOT_ALLOCATED
-                        if v in node.null_writes:
-                            curr_null[v] = Nullness.NULL
+                        if v in node.alias_writes:
+                            rhs_var = node.alias_writes[v]
+                            rhs_locs = curr_loc_map.get(rhs_var, set())
+                            if not rhs_locs:
+                                loc_id = f"var_{rhs_var}"
+                                rhs_locs = {loc_id}
+                                curr_loc_state[loc_id] = Allocation.NOT_ALLOCATED
+                                curr_loc_map[rhs_var] = rhs_locs
+                            curr_loc_map[v] = set(rhs_locs)
+                            curr_null[v] = curr_null.get(rhs_var, Nullness.UNKNOWN)
                         else:
-                            curr_null[v] = Nullness.UNKNOWN
+                            loc_id = f"write_{node.node_id}_{v}"
+                            curr_loc_state[loc_id] = Allocation.NOT_ALLOCATED
+                            curr_loc_map[v] = {loc_id}
+                            if v in node.null_writes:
+                                curr_null[v] = Nullness.NULL
+                            else:
+                                curr_null[v] = Nullness.UNKNOWN
 
                 for v in node.asserted:
                     curr_null[v] = Nullness.NON_NULL
@@ -256,6 +303,20 @@ class StructuredCFG:
 
             block.nullness_out = curr_null
             block.init_out = curr_init
+            block.loc_state_out = curr_loc_state
+            block.loc_map_out = curr_loc_map
+
+            curr_alloc: Dict[str, Allocation] = {}
+            for v in all_vars:
+                locs = curr_loc_map.get(v, set())
+                if not locs:
+                    curr_alloc[v] = Allocation.NOT_ALLOCATED
+                else:
+                    v_alloc: Optional[Allocation] = None
+                    for loc in locs:
+                        loc_st = curr_loc_state.get(loc, Allocation.NOT_ALLOCATED)
+                        v_alloc = loc_st if v_alloc is None else meet_allocation(v_alloc, loc_st)
+                    curr_alloc[v] = v_alloc if v_alloc is not None else Allocation.NOT_ALLOCATED
             block.alloc_out = curr_alloc
 
             for succ_id in block.successors:
@@ -294,12 +355,39 @@ class StructuredCFG:
                         succ_block.init_in[v] = new_init
                         changed = True
 
-                    # Alloc
-                    e_alloc = curr_alloc.get(v, Allocation.NOT_ALLOCATED)
-                    if v not in succ_block.alloc_in:
-                        new_alloc = e_alloc
+                    # Loc Map
+                    out_map = curr_loc_map.get(v, set())
+                    if v not in succ_block.loc_map_in:
+                        new_map = set(out_map)
                     else:
-                        new_alloc = meet_allocation(succ_block.alloc_in[v], e_alloc)
+                        new_map = succ_block.loc_map_in[v].union(out_map)
+                    if succ_block.loc_map_in.get(v) != new_map:
+                        succ_block.loc_map_in[v] = new_map
+                        changed = True
+
+                # Loc State
+                all_loc_ids = set(curr_loc_state.keys()).union(succ_block.loc_state_in.keys())
+                for loc in all_loc_ids:
+                    e_loc_st = curr_loc_state.get(loc, Allocation.NOT_ALLOCATED)
+                    if loc not in succ_block.loc_state_in:
+                        new_loc_st = e_loc_st
+                    else:
+                        new_loc_st = meet_allocation(succ_block.loc_state_in[loc], e_loc_st)
+                    if succ_block.loc_state_in.get(loc) != new_loc_st:
+                        succ_block.loc_state_in[loc] = new_loc_st
+                        changed = True
+
+                # Recompute succ_block.alloc_in from loc_map_in and loc_state_in
+                for v in all_vars:
+                    locs = succ_block.loc_map_in.get(v, set())
+                    if not locs:
+                        new_alloc = Allocation.NOT_ALLOCATED
+                    else:
+                        v_alloc = None
+                        for loc in locs:
+                            l_st = succ_block.loc_state_in.get(loc, Allocation.NOT_ALLOCATED)
+                            v_alloc = l_st if v_alloc is None else meet_allocation(v_alloc, l_st)
+                        new_alloc = v_alloc if v_alloc is not None else Allocation.NOT_ALLOCATED
                     if succ_block.alloc_in.get(v) != new_alloc:
                         succ_block.alloc_in[v] = new_alloc
                         changed = True
@@ -311,37 +399,83 @@ class StructuredCFG:
 
     def _compute_node_level_facts(self, all_vars: Set[str]) -> None:
         self.node_facts: Dict[int, Dict[str, VariableFacts]] = {}
+        self.node_loc_maps: Dict[int, Dict[str, Set[str]]] = {}
         for block in self.blocks.values():
             curr_null = dict(block.nullness_in)
             curr_init = dict(block.init_in)
-            curr_alloc = dict(block.alloc_in)
+            curr_loc_state = dict(block.loc_state_in)
+            curr_loc_map = {v: set(locs) for v, locs in block.loc_map_in.items()}
 
             for node in block.nodes:
+                curr_node_alloc: Dict[str, Allocation] = {}
+                for v in all_vars:
+                    locs = curr_loc_map.get(v, set())
+                    if not locs:
+                        curr_node_alloc[v] = Allocation.NOT_ALLOCATED
+                    else:
+                        v_alloc: Optional[Allocation] = None
+                        for loc in locs:
+                            l_st = curr_loc_state.get(loc, Allocation.NOT_ALLOCATED)
+                            v_alloc = l_st if v_alloc is None else meet_allocation(v_alloc, l_st)
+                        curr_node_alloc[v] = v_alloc if v_alloc is not None else Allocation.NOT_ALLOCATED
+
                 self.node_facts[node.node_id] = {
                     v: VariableFacts(
                         nullness=curr_null.get(v, Nullness.UNKNOWN),
                         initialization=curr_init.get(v, Initialization.UNINITIALIZED),
-                        allocation=curr_alloc.get(v, Allocation.NOT_ALLOCATED),
+                        allocation=curr_node_alloc.get(v, Allocation.NOT_ALLOCATED),
                     )
                     for v in all_vars
                 }
+                self.node_loc_maps[node.node_id] = {
+                    v: set(locs) for v, locs in curr_loc_map.items()
+                }
+
+                for ptr in node.realloc_inputs:
+                    locs = curr_loc_map.get(ptr, set())
+                    for loc in locs:
+                        curr_loc_state[loc] = meet_allocation(curr_loc_state.get(loc, Allocation.NOT_ALLOCATED), Allocation.MAYBE_FREED)
 
                 for v in node.allocated:
-                    curr_alloc[v] = Allocation.ALLOCATED
+                    base_loc_id = f"alloc_{node.node_id}_{v}"
+                    loc_id = base_loc_id
+                    if curr_loc_state.get(base_loc_id) in (Allocation.FREED, Allocation.MAYBE_FREED) or any(other != v and base_loc_id in curr_loc_map.get(other, set()) for other in all_vars):
+                        loc_id = f"alloc_{node.node_id}_{v}_fresh"
+                    curr_loc_state[loc_id] = Allocation.ALLOCATED
+                    curr_loc_map[v] = {loc_id}
                     curr_null[v] = Nullness.MAYBE_NULL
                     curr_init[v] = Initialization.INITIALIZED
 
                 for v in node.freed:
-                    curr_alloc[v] = Allocation.FREED
+                    locs = curr_loc_map.get(v, set())
+                    if not locs:
+                        loc_id = f"var_{v}"
+                        locs = {loc_id}
+                        curr_loc_map[v] = locs
+                    for loc in locs:
+                        curr_loc_state[loc] = Allocation.FREED
 
                 for v in node.writes:
                     curr_init[v] = Initialization.INITIALIZED
                     if v not in node.allocated:
-                        curr_alloc[v] = Allocation.NOT_ALLOCATED
-                        if v in node.null_writes:
-                            curr_null[v] = Nullness.NULL
+                        if v in node.alias_writes:
+                            rhs_var = node.alias_writes[v]
+                            rhs_locs = curr_loc_map.get(rhs_var, set())
+                            if not rhs_locs:
+                                loc_id = f"var_{rhs_var}"
+                                rhs_locs = {loc_id}
+                                curr_loc_state[loc_id] = Allocation.NOT_ALLOCATED
+                                curr_loc_map[rhs_var] = rhs_locs
+                            curr_loc_map[v] = set(rhs_locs)
+                            curr_null[v] = curr_null.get(rhs_var, Nullness.UNKNOWN)
                         else:
-                            curr_null[v] = Nullness.UNKNOWN
+                            loc_id = f"write_{node.node_id}_{v}"
+                            curr_loc_state[loc_id] = Allocation.NOT_ALLOCATED
+                            curr_loc_map[v] = {loc_id}
+                            if v in node.null_writes:
+                                curr_null[v] = Nullness.NULL
+                            else:
+                                curr_null[v] = Nullness.UNKNOWN
 
                 for v in node.asserted:
                     curr_null[v] = Nullness.NON_NULL
@@ -370,6 +504,11 @@ class StructuredCFG:
         if var_name in facts:
             return facts[var_name].allocation
         return Allocation.NOT_ALLOCATED
+
+    def get_loc_map_at_node(self, node_id: int) -> Dict[str, Set[str]]:
+        if not hasattr(self, "node_loc_maps"):
+            self.analyze_dataflow()
+        return self.node_loc_maps.get(node_id, {})
 
 
 def meet_nullness(a: Nullness, b: Nullness) -> Nullness:
@@ -441,11 +580,12 @@ def _call_args(node, callee: str):
 
 def _freed_vars(node, dealloc_funcs: Optional[Set[str]] = None) -> Set[str]:
     freed: Set[str] = set()
-    funcs = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
+    funcs = (dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}) | {"realloc"}
     for callee in funcs:
         for arg in _call_args_all(node, callee):
-            if type(arg).__name__ == "ID":
-                freed.add(str(arg.name))
+            arg_unwrapped = _unwrap_cast(arg)
+            if arg_unwrapped is not None and type(arg_unwrapped).__name__ == "ID":
+                freed.add(str(arg_unwrapped.name))
     return freed
 
 
@@ -556,8 +696,8 @@ def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
     return set(), set()
 
 
-def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str]]:
-    """kind, reads, writes, null_writes, freed, allocated, derefs, asserted for an executable AST node."""
+def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str]]:
+    """kind, reads, writes, null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs for an executable AST node."""
     kind = type(ast_node).__name__
     reads: Set[str] = set()
     writes: Set[str] = set()
@@ -565,9 +705,12 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     freed: Set[str] = _freed_vars(ast_node, dealloc_funcs=dealloc_funcs)
     allocated: Set[str] = set()
     derefs = _deref_vars(ast_node)
+    alias_writes: Dict[str, str] = {}
+    realloc_inputs: Set[str] = set()
     expr = _format_pycparser_expr(ast_node)
 
     alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc"}
+    realloc_set = {"realloc"}
 
     if kind == "Decl":
         if ast_node.init is not None:
@@ -579,7 +722,19 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
                 if call_name in alloc_set:
                     if ast_node.name:
                         allocated.add(str(ast_node.name))
+                    if call_name in realloc_set:
+                        args = _call_args(ast_node.init, call_name)
+                        if args:
+                            arg1 = _unwrap_cast(args[0])
+                            if type(arg1).__name__ == "ID":
+                                realloc_inputs.add(str(arg1.name))
                     break
+            if not allocated and ast_node.name and not _is_nullish(ast_node.init):
+                rhs_unwrapped = _unwrap_cast(ast_node.init)
+                if type(rhs_unwrapped).__name__ == "ID":
+                    rhs_var = str(rhs_unwrapped.name)
+                    if rhs_var not in alloc_set and rhs_var not in {"NULL", "nullptr"}:
+                        alias_writes[str(ast_node.name)] = rhs_var
     elif kind == "Assignment":
         reads = _ids(ast_node.rvalue)
         writes = _assignment_target(ast_node.lvalue)
@@ -588,13 +743,27 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
         for call_name in _call_names(ast_node.rvalue):
             if call_name in alloc_set:
                 allocated.update(writes)
+                if call_name in realloc_set:
+                    args = _call_args(ast_node.rvalue, call_name)
+                    if args:
+                        arg1 = _unwrap_cast(args[0])
+                        if type(arg1).__name__ == "ID":
+                            realloc_inputs.add(str(arg1.name))
                 break
+        if not allocated and writes and getattr(ast_node, "op", "=") == "=" and not _is_nullish(ast_node.rvalue):
+            lhs_unwrapped = _unwrap_cast(ast_node.lvalue)
+            rhs_unwrapped = _unwrap_cast(ast_node.rvalue)
+            if lhs_unwrapped is not None and type(lhs_unwrapped).__name__ == "ID" and rhs_unwrapped is not None and type(rhs_unwrapped).__name__ == "ID":
+                lhs_var = str(lhs_unwrapped.name)
+                rhs_var = str(rhs_unwrapped.name)
+                if rhs_var not in alloc_set and rhs_var not in {"NULL", "nullptr"}:
+                    alias_writes[lhs_var] = rhs_var
     elif kind == "FuncCall":
         reads = _ids(ast_node.args) if ast_node.args is not None else set()
     elif kind == "Return":
         reads = _ids(ast_node.expr) if ast_node.expr is not None else set()
     elif kind in {"Label", "Goto"}:
-        return kind, set(), set(), set(), set(), set(), set(), set()
+        return kind, set(), set(), set(), set(), set(), set(), set(), {}, set()
     elif kind in {"UnaryOp", "BinaryOp", "Cast", "ExprList", "ArrayRef", "StructRef"}:
         reads = _ids(ast_node)
     else:
@@ -607,7 +776,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     asserted: Set[str] = set()
     if kind == "FuncCall" and _format_pycparser_expr(ast_node.name) in {"assert", "ASSERT", "assert_param"}:
         asserted = _ids(ast_node.args) if ast_node.args is not None else set()
-    return kind, reads, writes, null_writes, freed, allocated, derefs, asserted
+    return kind, reads, writes, null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs
 
 
 def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> StructuredCFG:
@@ -619,10 +788,10 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     pending_gotos: List[Tuple[int, str]] = []
 
     def make_event(stmt) -> int:
-        kind, reads, writes, null_writes, freed, allocated, derefs, asserted = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
+        kind, reads, writes, null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
         return cfg.new_node(node_kind, stmt, expr_str=_format_pycparser_expr(stmt), reads=reads, writes=writes, null_writes=null_writes,
-                            freed=freed, allocated=allocated, derefs=derefs, asserted=asserted)
+                            freed=freed, allocated=allocated, derefs=derefs, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs)
 
     def build_compound(items, next_entry, break_target, continue_target):
         current = next_entry
