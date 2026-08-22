@@ -613,6 +613,18 @@ class CommandInjectionRule(BaseRule):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 class StrncpyNullTerminationRule(BaseRule):
     rule_id = "CGULL-037"
     name = "Improper Null Termination (strncpy)"
@@ -632,13 +644,13 @@ class StrncpyNullTerminationRule(BaseRule):
         issues = []
         target = masked_line_content or line_content
 
-        # Skip preprocessor directives and declarations.
+        # Skip preprocessor directives
         if target.lstrip().startswith('#'):
             return issues
 
-        # Avoid flagging prototypes: if no '{' or '}' in line and ends with ';' it's likely a standalone call or prototype.
-        # But wait, `strncpy(dest, src, n);` IS a valid call. We can't skip `ends with ;`.
-        # However, prototypes don't typically call strncpy. Macros do, but we skipped '#'.
+        # Avoid function prototypes/declarations e.g., void *strncpy(void *dest, const void *src, size_t n);
+        if re.search(r'^\s*(?:extern\s+)?(?:[a-zA-Z_]\w*\s+)+\*?\s*strncpy\s*\(', target):
+            return issues
 
         for m in re.finditer(r'\b(strncpy)\s*\(', target):
             func_name = m.group(1)
@@ -655,12 +667,10 @@ class StrncpyNullTerminationRule(BaseRule):
                     base_var_name = base_var.group(1)
                     for i in range(line_number, min(line_number + 5, len(source_lines))):
                         next_line = source_lines[i]
-                        # Corrected regex string to match '\\0' literally instead of NUL byte
-                        if re.search(r'\b' + base_var_name + r'\s*\[[^\]]+\]\s*=\s*(?:\'\\0\'|0)\s*;', next_line):
+                        if re.search(r'\b' + base_var_name + r'\s*\[[^\]]+\]\s*=\s*(?:\'\\\\0\'|\'\\0\'|0)\s*;', next_line):
                             has_null_term = True
                             break
 
-            # Allow tests to explicitly fail even if we're a bit fuzzy
             if not has_null_term:
                 issues.append(self.create_issue(
                     file_path=file_path,
