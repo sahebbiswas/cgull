@@ -43,3 +43,12 @@ void test_formatting_uaf_call(char *msg) {
     free(msg);
     printf("%s", msg); // expect: CGULL-022
 }
+
+/* True Positive: UAF through direct alias */
+void test_tp_uaf_alias(void) {
+    char *p = (char *)malloc(16);
+    if (!p) return;
+    char *q = p;
+    free(p);
+    q[0] = 'A'; // expect: CGULL-022
+}

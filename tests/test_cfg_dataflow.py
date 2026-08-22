@@ -372,5 +372,137 @@ class TestCFGGotoAndLabeledControlFlow(unittest.TestCase):
         self.assertEqual(p_alloc, Allocation.ALLOCATED)
 
 
+class TestAliasLifetimeTracking(unittest.TestCase):
+
+    def test_uaf_and_double_free_through_direct_alias(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UseAfterFreeRule, DoubleFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void free(void *);
+
+        void test_uaf_alias() {
+            int *p = (int *)malloc(sizeof(*p));
+            int *q = p;
+            free(p);
+            *q = 1;
+        }
+
+        void test_double_free_alias() {
+            int *p = (int *)malloc(sizeof(*p));
+            int *q = p;
+            free(p);
+            free(q);
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 1)
+        self.assertIn("q", issues_uaf[0].message)
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_df), 1)
+        self.assertIn("q", issues_df[0].message)
+
+    def test_alias_reassignment_before_free_or_use(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UseAfterFreeRule, DoubleFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void free(void *);
+
+        void test_reassign_q() {
+            int *p = (int *)malloc(sizeof(*p));
+            int *q = p;
+            q = (int *)malloc(sizeof(*q));
+            free(p);
+            *q = 1;
+            free(q);
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 0)
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_df), 0)
+
+    def test_original_ptr_reassigned_after_alias(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UseAfterFreeRule, DoubleFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void free(void *);
+
+        void test_reassign_p() {
+            int *p = (int *)malloc(sizeof(*p));
+            int *q = p;
+            p = (int *)malloc(sizeof(*p));
+            free(q);
+            *p = 1;
+            free(p);
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 0)
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_df), 0)
+
+    def test_transitive_aliases(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UseAfterFreeRule, DoubleFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void free(void *);
+
+        void test_transitive() {
+            int *p = (int *)malloc(sizeof(*p));
+            int *q = p;
+            int *r = q;
+            free(p);
+            *r = 1;
+            free(r);
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 1)
+        self.assertIn("r", issues_uaf[0].message)
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_df), 1)
+        self.assertIn("r", issues_df[0].message)
+
+
 if __name__ == "__main__":
     unittest.main()
