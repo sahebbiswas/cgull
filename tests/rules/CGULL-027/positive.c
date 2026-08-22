@@ -48,3 +48,12 @@ void test_fp_set_to_null(char *p) {
     p = NULL;
     free(p); /* Safe: free(NULL) is a no-op */
 }
+
+/* True Positive: Double free through direct alias */
+void test_tp_double_free_alias(void) {
+    char *p = (char *)malloc(16);
+    if (!p) return;
+    char *q = p;
+    free(p);
+    free(q); // expect: CGULL-027
+}
