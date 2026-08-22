@@ -221,6 +221,44 @@ class TestMissingNullCheckOnParameters(unittest.TestCase):
         issues = scan_with_rule("CGULL-004", code)
         self.assertEqual(len(issues), 0)
 
+    def test_detects_direct_null_assignment_deref(self):
+        code = "void f(void) {\n    char *data;\n    data = NULL;\n    data[0] = 'A';\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("known to be NULL", issues[0].message)
+
+    def test_detects_inverted_null_check_deref(self):
+        code = "void f(void) {\n    int *intPointer = NULL;\n    if (intPointer == NULL) {\n        *intPointer = 42;\n    }\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("known to be NULL", issues[0].message)
+
+    def test_clean_direct_null_reassigned_buffer(self):
+        code = "void f(void) {\n    char *data;\n    char buf[100] = \"hello\";\n    data = buf;\n    data[0] = 'H';\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_inverted_not_null_check(self):
+        code = "void f(void) {\n    int *intPointer = NULL;\n    int val = 5;\n    intPointer = &val;\n    if (intPointer != NULL) {\n        *intPointer = 42;\n    }\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_alloc_or_NULL_substring_not_null_deref(self):
+        code = "char *alloc_or_NULL(void);\nvoid f(void) {\n    char *ptr = alloc_or_NULL();\n    *ptr = 'a';\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_fallback_inverted_null_check_with_nested_block(self):
+        from cgull.ast_analyzer import CASTParser
+        code = "void f(int *p) {\n    if (p == NULL) {\n        { int x = 0; }\n        *p = 1;\n    }\n}"
+        ast_parser = CASTParser()
+        ast_ctx = ast_parser.parse(code)
+        ast_ctx.has_pycparser = False  # force fallback path in scan_ast
+        rule = get_rule_by_id("CGULL-004")
+        issues = rule.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("known to be NULL", issues[0].message)
+
 
 class TestWeakCryptoPrimitives(unittest.TestCase):
     def test_detects_md5_sha1_des_rc4_ecb(self):

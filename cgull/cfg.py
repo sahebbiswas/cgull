@@ -65,6 +65,7 @@ class CFGEvent:
     expr_str: str = ""
     reads: Set[str] = field(default_factory=set)
     writes: Set[str] = field(default_factory=set)
+    null_writes: Set[str] = field(default_factory=set)
     freed: Set[str] = field(default_factory=set)
     allocated: Set[str] = field(default_factory=set)
     derefs: Set[str] = field(default_factory=set)
@@ -227,7 +228,7 @@ class StructuredCFG:
                     curr_init[v] = Initialization.INITIALIZED
                     if v not in node.allocated:
                         curr_alloc[v] = Allocation.NOT_ALLOCATED
-                        if "NULL" in node.expr_str or "nullptr" in node.expr_str:
+                        if v in node.null_writes:
                             curr_null[v] = Nullness.NULL
                         else:
                             curr_null[v] = Nullness.UNKNOWN
@@ -319,7 +320,7 @@ class StructuredCFG:
                     curr_init[v] = Initialization.INITIALIZED
                     if v not in node.allocated:
                         curr_alloc[v] = Allocation.NOT_ALLOCATED
-                        if "NULL" in node.expr_str or "nullptr" in node.expr_str:
+                        if v in node.null_writes:
                             curr_null[v] = Nullness.NULL
                         else:
                             curr_null[v] = Nullness.UNKNOWN
@@ -439,19 +440,32 @@ def _call_args_all(node, callee: str):
     return result
 
 
+def _unwrap_cast(node):
+    while node is not None and type(node).__name__ in {"Cast", "ExprList"}:
+        if type(node).__name__ == "Cast":
+            node = node.expr
+        elif type(node).__name__ == "ExprList":
+            node = node.exprs[-1] if getattr(node, "exprs", None) else None
+    return node
+
+
 def _deref_vars(node) -> Set[str]:
     result: Set[str] = set()
     if node is None:
         return result
     kind = type(node).__name__
     if kind == "UnaryOp" and getattr(node, "op", None) == "*":
-        if type(node.expr).__name__ == "ID":
-            result.add(str(node.expr.name))
+        inner = _unwrap_cast(node.expr)
+        if inner is not None and type(inner).__name__ == "ID":
+            result.add(str(inner.name))
     elif kind == "ArrayRef":
-        if type(node.name).__name__ == "ID":
-            result.add(str(node.name.name))
-    elif kind == "StructRef" and type(node.name).__name__ == "ID":
-        result.add(str(node.name.name))
+        inner = _unwrap_cast(node.name)
+        if inner is not None and type(inner).__name__ == "ID":
+            result.add(str(inner.name))
+    elif kind == "StructRef":
+        inner = _unwrap_cast(node.name)
+        if inner is not None and type(inner).__name__ == "ID":
+            result.add(str(inner.name))
     for _, child in node.children():
         result.update(_deref_vars(child))
     return result
@@ -460,60 +474,74 @@ def _deref_vars(node) -> Set[str]:
 def _assignment_target(node) -> Set[str]:
     if node is None:
         return set()
-    if type(node).__name__ == "ID":
-        return {str(node.name)}
+    inner = _unwrap_cast(node)
+    if inner is not None and type(inner).__name__ == "ID":
+        return {str(inner.name)}
     return set()
 
 
 def _is_nullish(node) -> bool:
     if node is None:
         return False
-    kind = type(node).__name__
+    inner = _unwrap_cast(node)
+    if inner is None:
+        return False
+    kind = type(inner).__name__
     if kind == "ID":
-        return str(node.name) in {"NULL", "nullptr"}
+        return str(inner.name) in {"NULL", "nullptr"}
     if kind == "Cast":
-        return _is_nullish(node.expr)
-    return kind == "Constant" and str(getattr(node, "value", "")) in {"0", "0L", "0UL", "0LL", "0ULL"}
+        return _is_nullish(inner.expr)
+    if kind == "UnaryOp" and getattr(inner, "op", None) in {"+", "-"}:
+        return _is_nullish(inner.expr)
+    return kind == "Constant" and str(getattr(inner, "value", "")) in {"0", "0x0", "0L", "0UL", "0LL", "0ULL"}
 
 
 def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
     """Return (true-edge nonnull facts, false-edge nonnull facts)."""
     if cond is None:
         return set(), set()
-    kind = type(cond).__name__
+    cond_unwrapped = _unwrap_cast(cond)
+    if cond_unwrapped is None:
+        return set(), set()
+    kind = type(cond_unwrapped).__name__
     if kind == "ID":
-        return {str(cond.name)}, set()
-    if kind == "UnaryOp" and getattr(cond, "op", None) == "!" and type(cond.expr).__name__ == "ID":
-        return set(), {str(cond.expr.name)}
+        return {str(cond_unwrapped.name)}, set()
+    if kind == "UnaryOp" and getattr(cond_unwrapped, "op", None) == "!":
+        inner = _unwrap_cast(cond_unwrapped.expr)
+        if inner is not None and type(inner).__name__ == "ID":
+            return set(), {str(inner.name)}
     if kind == "BinaryOp":
-        op = getattr(cond, "op", None)
+        op = getattr(cond_unwrapped, "op", None)
         if op in {"==", "!="}:
-            lhs, rhs = cond.left, cond.right
-            if type(lhs).__name__ == "ID" and _is_nullish(rhs):
-                var = str(lhs.name)
-            elif type(rhs).__name__ == "ID" and _is_nullish(lhs):
-                var = str(rhs.name)
-            else:
-                return set(), set()
-            if op == "!=":
-                return {var}, set()
-            return set(), {var}
+            lhs = _unwrap_cast(cond_unwrapped.left)
+            rhs = _unwrap_cast(cond_unwrapped.right)
+            if lhs is not None and rhs is not None:
+                if type(lhs).__name__ == "ID" and _is_nullish(rhs):
+                    var = str(lhs.name)
+                elif type(rhs).__name__ == "ID" and _is_nullish(lhs):
+                    var = str(rhs.name)
+                else:
+                    return set(), set()
+                if op == "!=":
+                    return {var}, set()
+                return set(), {var}
         elif op == "||":
-            l_t, l_f = _simple_null_facts(cond.left)
-            r_t, r_f = _simple_null_facts(cond.right)
+            l_t, l_f = _simple_null_facts(cond_unwrapped.left)
+            r_t, r_f = _simple_null_facts(cond_unwrapped.right)
             return l_t.intersection(r_t), l_f.union(r_f)
         elif op == "&&":
-            l_t, l_f = _simple_null_facts(cond.left)
-            r_t, r_f = _simple_null_facts(cond.right)
+            l_t, l_f = _simple_null_facts(cond_unwrapped.left)
+            r_t, r_f = _simple_null_facts(cond_unwrapped.right)
             return l_t.union(r_t), l_f.intersection(r_f)
     return set(), set()
 
 
-def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str]]:
-    """kind, reads, writes, freed, allocated, derefs, asserted for an executable AST node."""
+def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str]]:
+    """kind, reads, writes, null_writes, freed, allocated, derefs, asserted for an executable AST node."""
     kind = type(ast_node).__name__
     reads: Set[str] = set()
     writes: Set[str] = set()
+    null_writes: Set[str] = set()
     freed: Set[str] = _freed_vars(ast_node, dealloc_funcs=dealloc_funcs)
     allocated: Set[str] = set()
     derefs = _deref_vars(ast_node)
@@ -525,6 +553,8 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
         if ast_node.init is not None:
             reads = _ids(ast_node.init)
             writes = {str(ast_node.name)} if ast_node.name else set()
+            if _is_nullish(ast_node.init):
+                null_writes.update(writes)
             for call_name in _call_names(ast_node.init):
                 if call_name in alloc_set:
                     if ast_node.name:
@@ -533,6 +563,8 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     elif kind == "Assignment":
         reads = _ids(ast_node.rvalue)
         writes = _assignment_target(ast_node.lvalue)
+        if _is_nullish(ast_node.rvalue):
+            null_writes.update(writes)
         for call_name in _call_names(ast_node.rvalue):
             if call_name in alloc_set:
                 allocated.update(writes)
@@ -553,7 +585,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     asserted: Set[str] = set()
     if kind == "FuncCall" and _format_pycparser_expr(ast_node.name) in {"assert", "ASSERT", "assert_param"}:
         asserted = _ids(ast_node.args) if ast_node.args is not None else set()
-    return kind, reads, writes, freed, allocated, derefs, asserted
+    return kind, reads, writes, null_writes, freed, allocated, derefs, asserted
 
 
 def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> StructuredCFG:
@@ -563,9 +595,9 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     cfg = StructuredCFG()
 
     def make_event(stmt) -> int:
-        kind, reads, writes, freed, allocated, derefs, asserted = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
+        kind, reads, writes, null_writes, freed, allocated, derefs, asserted = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
-        return cfg.new_node(node_kind, stmt, expr_str=_format_pycparser_expr(stmt), reads=reads, writes=writes,
+        return cfg.new_node(node_kind, stmt, expr_str=_format_pycparser_expr(stmt), reads=reads, writes=writes, null_writes=null_writes,
                             freed=freed, allocated=allocated, derefs=derefs, asserted=asserted)
 
     def build_compound(items, next_entry, break_target, continue_target):

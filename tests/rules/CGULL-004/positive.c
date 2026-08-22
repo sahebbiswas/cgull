@@ -45,3 +45,18 @@ void test_macro_multi_params(int *a, char *b) {
     *a = 10;
     *b = 'K'; // expect: CGULL-004
 }
+
+/* True Positive: Direct local pointer assigned NULL and dereferenced */
+void test_tp_direct_null_assignment(void) {
+    char *data;
+    data = NULL;
+    data[0] = 'A'; // expect: CGULL-004
+}
+
+/* True Positive: Inverted NULL check dereference */
+void test_tp_inverted_null_check(void) {
+    int *intPointer = NULL;
+    if (intPointer == NULL) {
+        *intPointer = 42; // expect: CGULL-004
+    }
+}
