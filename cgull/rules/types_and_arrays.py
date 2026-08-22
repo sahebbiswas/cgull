@@ -551,9 +551,9 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                                 ))
 
             # 3. Check for general CWE-190 arithmetic integer overflow
-            # Patterns like: result = data + 1; or data += 1; or data + INT_MAX;
+            # Patterns like: result = data + 1; or data += 1; or data + INT_MAX; or 2147483647 + 1
             arith_expr_pattern = re.compile(
-                r'\b([a-zA-Z_]\w*)\s*([\+\-\*]|<<|\+=|-=|\*=|\<<=)\s*([a-zA-Z_]\w*|\d+|INT_MAX|UINT_MAX|SIZE_MAX)\b'
+                r'\b([a-zA-Z_]\w*|\d+)\s*([\+\-\*]|<<|\+=|-=|\*=|\<<=)\s*([a-zA-Z_]\w*|\d+)\b'
             )
 
             for i, line in enumerate(body_lines):
@@ -567,12 +567,16 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                     op = m_arith.group(2)
                     rhs = m_arith.group(3)
 
+                    # Skip pure small integer literals (e.g. 1 + 2)
+                    if lhs.isdigit() and rhs.isdigit() and not (self.MAX_CONSTANTS_PATTERN.search(lhs) or self.MAX_CONSTANTS_PATTERN.search(rhs)):
+                        continue
+
                     # Determine if this arithmetic operation involves a MAX assigned variable or MAX constant directly
                     is_max_op = (
                         lhs in max_assigned_vars or
                         rhs in max_assigned_vars or
-                        self.MAX_CONSTANTS_PATTERN.search(lhs) or
-                        self.MAX_CONSTANTS_PATTERN.search(rhs)
+                        bool(self.MAX_CONSTANTS_PATTERN.search(lhs)) or
+                        bool(self.MAX_CONSTANTS_PATTERN.search(rhs))
                     )
 
                     if is_max_op:
@@ -621,23 +625,25 @@ class ArithmeticIntegerOverflowRule(BaseRule):
 
         # Also regex check for direct arithmetic on MAX constants in scan_line if scan_ast isn't run
         if self.MAX_CONSTANTS_PATTERN.search(target_line) and not target_line.lstrip().startswith('#'):
-            m_arith = re.search(r'\b([a-zA-Z_]\w*)\s*([\+\-\*]|<<|\+=|-=|\*=|\<<=)\s*(INT_MAX|UINT_MAX|SIZE_MAX|SHRT_MAX|LONG_MAX|LLONG_MAX)\b', target_line)
-            if not m_arith:
-                m_arith = re.search(r'\b(INT_MAX|UINT_MAX|SIZE_MAX|SHRT_MAX|LONG_MAX|LLONG_MAX)\s*([\+\-\*]|<<|\+=|-=|\*=|\<<=)\s*([a-zA-Z_]\w*|\d+)\b', target_line)
-            if m_arith:
+            arith_expr_pattern = re.compile(
+                r'\b([a-zA-Z_]\w*|\d+)\s*([\+\-\*]|<<|\+=|-=|\*=|\<<=)\s*([a-zA-Z_]\w*|\d+)\b'
+            )
+            for m_arith in arith_expr_pattern.finditer(target_line):
                 lhs = m_arith.group(1)
                 op = m_arith.group(2)
                 rhs = m_arith.group(3)
-                if not self._has_preceding_overflow_check(source_lines, line_number, [lhs, rhs]):
-                    issues.append(self.create_issue(
-                        file_path=file_path,
-                        line_number=line_number,
-                        code_snippet=line_content,
-                        message=f"Potential Integer Overflow (CWE-190): unchecked arithmetic '{lhs} {op} {rhs}' on variable or constant assigned near maximum integer value.",
-                        column_number=m_arith.start() + 1,
-                        engine="Regex",
-                        fix_type=FixType.MANUAL_REVIEW,
-                    ))
+
+                if self.MAX_CONSTANTS_PATTERN.search(lhs) or self.MAX_CONSTANTS_PATTERN.search(rhs):
+                    if not self._has_preceding_overflow_check(source_lines, line_number, [lhs, rhs]):
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_number,
+                            code_snippet=line_content,
+                            message=f"Potential Integer Overflow (CWE-190): unchecked arithmetic '{lhs} {op} {rhs}' on variable or constant assigned near maximum integer value.",
+                            column_number=m_arith.start() + 1,
+                            engine="Regex",
+                            fix_type=FixType.MANUAL_REVIEW,
+                        ))
 
         return issues
 
