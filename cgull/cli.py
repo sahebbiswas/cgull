@@ -18,9 +18,10 @@ from .config import load_config
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from . import __version__
     parser = argparse.ArgumentParser(
         prog="cgull",
-        description="C-GULL: Code Guardian for Unchecked Logic & Leaks (C Code Security Static Analyzer)",
+        description=f"C-GULL v{__version__}: Code Guardian for Unchecked Logic & Leaks (C Code Security Static Analyzer)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -41,7 +42,6 @@ Suppressing findings inline:
   // cgull-ignore-next-line: CGULL-001,CGULL-003
         """
     )
-    from . import __version__
     parser.add_argument("--version", "-v", action="version", version=f"C-GULL {__version__}")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
