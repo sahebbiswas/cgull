@@ -49,3 +49,10 @@ void early_return_leak(int flag) {
     }
     free(ptr);
 }
+
+// Overwritten allocation leak (bad)
+void f(void){ 
+    char* p = malloc(10); // expect: CGULL-036
+    p = malloc(20); 
+    free(p); 
+}

@@ -1013,8 +1013,9 @@ def _find_memory_leak_exits(
     ptr_name: str,
     dealloc_funcs: Set[str],
 ) -> List[CFGEvent]:
+    import collections
     alloc_node = cfg.nodes[alloc_node_id]
-    queue: List[Tuple[int, Set[int], Set[str]]] = [(succ, {alloc_node_id, succ}, {ptr_name}) for succ in alloc_node.successors]
+    queue = collections.deque([(succ, {alloc_node_id, succ}, {ptr_name}) for succ in alloc_node.successors])
     visited_states: Set[Tuple[int, Tuple[str, ...]]] = set()
     leak_nodes: List[CFGEvent] = []
     reported_node_ids: Set[int] = set()
@@ -1022,7 +1023,7 @@ def _find_memory_leak_exits(
     exit_call_names = {"exit", "_exit", "_Exit", "abort", "quick_exit", "fatal", "panic", "err", "errx"}
 
     while queue:
-        curr_id, path_visited, aliases = queue.pop(0)
+        curr_id, path_visited, aliases = queue.popleft()
         state_key = (curr_id, tuple(sorted(aliases)))
         if state_key in visited_states:
             continue
@@ -1064,7 +1065,10 @@ def _find_memory_leak_exits(
             continue
 
         # 5. Overwrite check
-        overwritten = [w for w in node.writes if w in aliases and w not in node.allocated]
+        if curr_id == alloc_node_id:
+            overwritten = []
+        else:
+            overwritten = [w for w in node.writes if w in aliases]
         if overwritten:
             remaining_aliases = aliases - set(overwritten)
             if not remaining_aliases:
@@ -1177,9 +1181,10 @@ class MemoryLeakRule(BaseRule):
             body_lines = fn.body.splitlines()
             depths = _brace_depths(body_lines)
             alloc_regex = re.compile(rf'\b(\w+)\s*=\s*(?:\([^\)]+\)\s*)?(?:{alloc_pattern})\s*\(')
+            body_start = getattr(fn, "body_start_line", fn.start_line + 1)
 
             for i, line in enumerate(body_lines):
-                line_no = fn.start_line + 1 + i
+                line_no = body_start + i
                 m = alloc_regex.search(line)
                 if not m:
                     continue
@@ -1205,7 +1210,7 @@ class MemoryLeakRule(BaseRule):
                         code_snippet=snippet,
                         message=f"Memory leak: memory allocated for '{ptr_name}' at line {line_no} is never freed or transferred before scope exit.",
                         column_number=m.start() + 1,
-                        engine="AST",
+                        engine="Regex",
                         fix_type=FixType.SUGGESTED_FIX,
                         suggested_fix_replacement=f"free({ptr_name});"
                     ))
