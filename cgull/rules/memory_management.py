@@ -63,8 +63,9 @@ def _find_unsafe_allocation_use(cfg: StructuredCFG, alloc_node_id: int, ptr_name
 
         if not node.kind.endswith('_cond'):
             if ptr_name in node.derefs or (ptr_name in node.reads and ptr_name not in node.freed and ptr_name not in node.asserted):
-                if cfg.query_nullness(ptr_name, nid) != Nullness.NON_NULL:
-                    return node
+                if cfg.query_allocation(ptr_name, nid) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED):
+                    if cfg.query_nullness(ptr_name, nid) != Nullness.NON_NULL:
+                        return node
 
         if ptr_name in node.writes:
             # Variable reassigned; ends scope of this allocation
@@ -101,7 +102,7 @@ def _find_unsafe_param_deref(cfg: StructuredCFG, param: str):
 
 
 def _find_uaf_uses(cfg: StructuredCFG, freed_node_id: int, ptr_name: str):
-    """Yield all reachable nodes where ptr_name is accessed after free."""
+    """Yield all reachable nodes where ptr_name is accessed after free (checking FREED / MAYBE_FREED lattice states)."""
     work = list(cfg.nodes[freed_node_id].successors)
     visited = set()
     while work:
@@ -111,14 +112,15 @@ def _find_uaf_uses(cfg: StructuredCFG, freed_node_id: int, ptr_name: str):
         visited.add(nid)
         node = cfg.nodes[nid]
 
-        if cfg.query_allocation(ptr_name, nid) in (Allocation.FREED, Allocation.MAYBE_FREED):
+        alloc_state = cfg.query_allocation(ptr_name, nid)
+        if alloc_state in (Allocation.FREED, Allocation.MAYBE_FREED):
             if not node.kind.endswith('_cond'):
                 if ptr_name in node.derefs or (ptr_name in node.reads and ptr_name not in node.writes):
                     yield node
                     continue
 
         if ptr_name in node.writes:
-            # Reassignment ends freed lifetime
+            # Reassignment (e.g. ptr = malloc(...) transition to ALLOCATED / MAYBE_ALLOCATED) ends freed lifetime
             continue
 
         for succ in node.successors:
@@ -471,7 +473,7 @@ class DoubleFreeRule(BaseRule):
     impact = Severity.HIGH
     category = RuleCategory.MEMORY
     description = "Detect calling free() on a pointer that has already been freed."
-    implementation_method = "AST dataflow analysis tracking free() state"
+    implementation_method = "AST dataflow analysis tracking allocation lifecycle across control flow joins (ALLOCATED, MAYBE_ALLOCATED, FREED, MAYBE_FREED)"
     implementation_complexity = "High"
     chances_of_false_positives = "High"
     cwe_id = "CWE-415"
@@ -553,7 +555,7 @@ class UseAfterFreeRule(BaseRule):
     impact = Severity.HIGH
     category = RuleCategory.MEMORY
     description = "Detect dereferencing or reusing a pointer after the memory it points to has been released with free()."
-    implementation_method = "AST dataflow analysis tracking free() and subsequent pointer references"
+    implementation_method = "AST dataflow analysis tracking allocation lifecycle across control flow joins (ALLOCATED, MAYBE_ALLOCATED, FREED, MAYBE_FREED)"
     implementation_complexity = "High"
     chances_of_false_positives = "High"
     cwe_id = "CWE-416"
