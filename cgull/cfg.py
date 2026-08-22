@@ -197,6 +197,19 @@ class StructuredCFG:
             block.alloc_out = {}
 
         entry_block_id = self.node_to_block.get(self.entry) if self.entry else min(self.blocks.keys())
+
+        reachable_blocks: Set[int] = set()
+        if entry_block_id in self.blocks:
+            queue = [entry_block_id]
+            while queue:
+                b_id = queue.pop(0)
+                if b_id in reachable_blocks:
+                    continue
+                reachable_blocks.add(b_id)
+                for succ in self.blocks[b_id].successors:
+                    if succ not in reachable_blocks:
+                        queue.append(succ)
+
         entry_block = self.blocks.get(entry_block_id)
 
         if entry_block:
@@ -205,10 +218,12 @@ class StructuredCFG:
                 entry_block.init_in[v] = Initialization.INITIALIZED if v in init_initialized else Initialization.UNINITIALIZED
                 entry_block.alloc_in[v] = Allocation.NOT_ALLOCATED
 
-        worklist = list(self.blocks.keys())
+        worklist = [entry_block_id] if entry_block_id in reachable_blocks else []
 
         while worklist:
             b_id = worklist.pop(0)
+            if b_id not in reachable_blocks:
+                continue
             block = self.blocks[b_id]
 
             curr_null = dict(block.nullness_in)
@@ -243,6 +258,8 @@ class StructuredCFG:
             block.alloc_out = curr_alloc
 
             for succ_id in block.successors:
+                if succ_id not in reachable_blocks:
+                    continue
                 succ_block = self.blocks[succ_id]
                 edge_fact = block.edge_facts.get(succ_id, (set(), set()))
                 add_nonnull, remove_nonnull = edge_fact

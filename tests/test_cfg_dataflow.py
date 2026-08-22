@@ -276,6 +276,31 @@ class TestCFGGotoAndLabeledControlFlow(unittest.TestCase):
         issues_param = rule_param.scan_ast("test.c", ast_ctx)
         self.assertEqual(len(issues_param), 0, "No missing null check on param should be reported")
 
+    def test_unreachable_statements_after_goto_do_not_degrade_facts(self):
+        code = """
+        void f() {
+            int x = 42;
+            char *p = malloc(16);
+            goto out;
+            x = 0;
+            free(p);
+        out:
+            use(x);
+            use(p);
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        use_x_nodes = [n for n in cfg.nodes.values() if "use(x)" in n.expr_str]
+        self.assertEqual(len(use_x_nodes), 1)
+        x_init = cfg.query_initialization('x', use_x_nodes[0].node_id)
+        self.assertEqual(x_init, Initialization.INITIALIZED)
+
+        use_p_nodes = [n for n in cfg.nodes.values() if "use(p)" in n.expr_str]
+        self.assertEqual(len(use_p_nodes), 1)
+        p_alloc = cfg.query_allocation('p', use_p_nodes[0].node_id)
+        self.assertEqual(p_alloc, Allocation.ALLOCATED)
+
 
 if __name__ == "__main__":
     unittest.main()
