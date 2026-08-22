@@ -607,3 +607,63 @@ class CommandInjectionRule(BaseRule):
                         suggested_fix_replacement="Use exec() family functions (execve) with an array of arguments to bypass the shell."
                     ))
         return issues
+
+class StrncpyNullTerminationRule(BaseRule):
+    rule_id = "CGULL-037"
+    name = "Improper Null Termination (strncpy)"
+    impact = Severity.HIGH
+    category = RuleCategory.STRINGS
+    description = "strncpy() does not guarantee null termination if the source string is larger than or equal to the specified length. This causes out-of-bounds reads/writes."
+    implementation_method = "Regex line matching for strncpy calls"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Medium"
+    cwe_id = "CWE-170"
+    remediation_suggestion = "Explicitly null-terminate the destination buffer after calling strncpy: dest[sizeof(dest) - 1] = '\\0'; or use safe alternatives like strncpy_s or snprintf."
+    sample_vulnerable_code = "char buf[10];\nstrncpy(buf, input, sizeof(buf));\nprintf(\"%s\", buf);"
+    sample_remediated_code = "char buf[10];\nstrncpy(buf, input, sizeof(buf));\nbuf[sizeof(buf) - 1] = '\\0';\nprintf(\"%s\", buf);"
+    analysis_engine = AnalysisEngine.REGEX
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        target = masked_line_content or line_content
+
+        # Skip preprocessor directives
+        if target.lstrip().startswith('#'):
+            return issues
+
+        # Avoid function prototypes/declarations e.g., void *strncpy(void *dest, const void *src, size_t n);
+        if re.search(r'^\s*(?:extern\s+)?(?:[a-zA-Z_]\w*\s+)+\*?\s*strncpy\s*\(', target):
+            return issues
+
+        for m in re.finditer(r'\b(strncpy)\s*\(', target):
+            func_name = m.group(1)
+            # Try to extract destination buffer name using the substring starting at the match
+            substr = target[m.start():]
+            m_args = re.search(r'^strncpy\s*\(\s*([a-zA-Z_]\w*(?:->\w+|\.\w+|\[[^\]]+\])?)\s*,', substr)
+            dest_buf = m_args.group(1) if m_args else "unknown"
+
+            # Check next few lines for null termination explicitly
+            has_null_term = False
+            if dest_buf != "unknown":
+                base_var = re.match(r'^([a-zA-Z_]\w*)', dest_buf)
+                if base_var:
+                    base_var_name = base_var.group(1)
+                    for i in range(line_number, min(line_number + 5, len(source_lines))):
+                        next_line = source_lines[i]
+                        if re.search(r"\b" + base_var_name + r"\s*\[[^\]]+\]\s*=\s*(?:'\\0'|0)\s*;", next_line):
+                            has_null_term = True
+                            break
+
+            if not has_null_term:
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content.strip(),
+                    message=f"'{func_name}()' does not guarantee null termination. Explicitly null-terminate the buffer (CWE-170).",
+                    column_number=m.start() + 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"{line_content.strip()}\n{dest_buf}[/*size*/ - 1] = '\\0';" if dest_buf != "unknown" else None
+                ))
+
+        return issues
