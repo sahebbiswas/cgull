@@ -609,6 +609,10 @@ class CommandInjectionRule(BaseRule):
         return issues
 
 
+
+
+
+
 class StrncpyNullTerminationRule(BaseRule):
     rule_id = "CGULL-037"
     name = "Improper Null Termination (strncpy)"
@@ -628,11 +632,19 @@ class StrncpyNullTerminationRule(BaseRule):
         issues = []
         target = masked_line_content or line_content
 
-        m = re.search(r'\b(strncpy)\s*\(', target)
-        if m:
+        # Skip preprocessor directives and declarations.
+        if target.lstrip().startswith('#'):
+            return issues
+
+        # Avoid flagging prototypes: if no '{' or '}' in line and ends with ';' it's likely a standalone call or prototype.
+        # But wait, `strncpy(dest, src, n);` IS a valid call. We can't skip `ends with ;`.
+        # However, prototypes don't typically call strncpy. Macros do, but we skipped '#'.
+
+        for m in re.finditer(r'\b(strncpy)\s*\(', target):
             func_name = m.group(1)
-            # Try to extract destination buffer name
-            m_args = re.search(r'\bstrncpy\s*\(\s*([a-zA-Z_]\w*(?:->\w+|\.\w+|\[[^\]]+\])?)\s*,', target)
+            # Try to extract destination buffer name using the substring starting at the match
+            substr = target[m.start():]
+            m_args = re.search(r'^strncpy\s*\(\s*([a-zA-Z_]\w*(?:->\w+|\.\w+|\[[^\]]+\])?)\s*,', substr)
             dest_buf = m_args.group(1) if m_args else "unknown"
 
             # Check next few lines for null termination explicitly
@@ -643,6 +655,7 @@ class StrncpyNullTerminationRule(BaseRule):
                     base_var_name = base_var.group(1)
                     for i in range(line_number, min(line_number + 5, len(source_lines))):
                         next_line = source_lines[i]
+                        # Corrected regex string to match '\\0' literally instead of NUL byte
                         if re.search(r'\b' + base_var_name + r'\s*\[[^\]]+\]\s*=\s*(?:\'\\0\'|0)\s*;', next_line):
                             has_null_term = True
                             break
