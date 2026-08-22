@@ -608,23 +608,6 @@ class CommandInjectionRule(BaseRule):
                     ))
         return issues
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class StrncpyNullTerminationRule(BaseRule):
     rule_id = "CGULL-037"
     name = "Improper Null Termination (strncpy)"
@@ -667,7 +650,7 @@ class StrncpyNullTerminationRule(BaseRule):
                     base_var_name = base_var.group(1)
                     for i in range(line_number, min(line_number + 5, len(source_lines))):
                         next_line = source_lines[i]
-                        if re.search(r'\b' + base_var_name + r'\s*\[[^\]]+\]\s*=\s*(?:\'\\\\0\'|\'\\0\'|0)\s*;', next_line):
+                        if re.search(r"\b" + base_var_name + r"\s*\[[^\]]+\]\s*=\s*(?:'\\0'|0)\s*;", next_line):
                             has_null_term = True
                             break
 
