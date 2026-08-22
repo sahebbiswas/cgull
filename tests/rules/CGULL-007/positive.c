@@ -37,3 +37,18 @@ void test_tp_recv_result_unvalidated(int recvResult) {
     char *data = dataBuffer;
     data[recvResult] = '\0'; // expect: CGULL-007
 }
+
+/* True Positive: NIST Juliet CWE-121 stack buffer overflow via pointer aliasing */
+void CWE121_Stack_Based_Buffer_Overflow__CWE805_int_declare_loop_01_bad(void) {
+    int * data;
+    int dataBadBuffer[50];
+    int dataGoodBuffer[100];
+    data = dataBadBuffer;
+    {
+        int source[100] = {0};
+        unsigned long i;
+        for (i = 0; i < 100; i++) {
+            data[i] = source[i]; // expect: CGULL-007
+        }
+    }
+}

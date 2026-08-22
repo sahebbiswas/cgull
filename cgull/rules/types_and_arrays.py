@@ -123,15 +123,48 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
 
-        def get_array_declared_size(arr_name: str, fn) -> Optional[int]:
+        def get_array_declared_size(arr_name: str, fn, line_no: Optional[int] = None, visited: Optional[set] = None) -> Optional[int]:
+            if visited is None:
+                visited = set()
+            if arr_name in visited:
+                return None
+            visited.add(arr_name)
+
             var_obj = fn.variables.get(arr_name) or ast_ctx.global_variables.get(arr_name)
             if var_obj and var_obj.array_size_expr:
                 expr = var_obj.array_size_expr.strip()
                 if expr.isdigit():
                     return int(expr)
+                def_m = re.search(rf'#\s*define\s+{re.escape(expr)}\s+(\d+|0x[0-9a-fA-F]+)\b', ast_ctx.clean_source)
+                if def_m:
+                    val_str = def_m.group(1)
+                    return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
                 m = re.search(r'\b(\d+)\b', expr)
                 if m:
                     return int(m.group(1))
+
+            # If arr_name is not directly an array with declared dimension, check for pointer aliasing
+            body_lines = fn.body.splitlines()
+            fn_start = getattr(fn, "body_start_line", fn.start_line)
+
+            max_idx = len(body_lines)
+            if line_no is not None and line_no >= fn_start:
+                max_idx = min(len(body_lines), line_no - fn_start)
+
+            assign_pattern = re.compile(
+                rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*=(?!=)\s*(?:\([^\)]+\)\s*)*(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?\s*(?:;|\b)'
+            )
+
+            for idx in range(max_idx - 1, -1, -1):
+                line = body_lines[idx]
+                m = assign_pattern.search(line)
+                if m:
+                    alias_target = m.group(1)
+                    if alias_target != arr_name and alias_target not in ('NULL', 'nullptr'):
+                        target_size = get_array_declared_size(alias_target, fn, line_no=fn_start + idx, visited=visited)
+                        if target_size is not None:
+                            return target_size
+
             return None
 
         def is_index_var_signed(idx_var: str, fn) -> bool:
@@ -308,7 +341,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                         sub_expr = _format_pycparser_expr(node.subscript)
                         sub_ids = _extract_identifiers_from_ast(node.subscript, ignore_callees=True)
 
-                        arr_size = get_array_declared_size(arr_name, fn)
+                        arr_size = get_array_declared_size(arr_name, fn, line_no=line_no)
 
                         # Find corresponding CFG node
                         cfg_nodes_for_line = [nid for nid, cfg_n in cfg.nodes.items() if cfg_n.line_number == line_no]
@@ -365,7 +398,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                         if re.search(r'\b(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\s)*$', stmt_prefix):
                             continue
 
-                        arr_size = get_array_declared_size(arr_name, fn)
+                        arr_size = get_array_declared_size(arr_name, fn, line_no=line_no)
                         is_signed = is_index_var_signed(idx_var, fn)
 
                         guarded = False
@@ -407,25 +440,33 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             if re.search(r'\b(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\s)*$', stmt_prefix):
                 continue
 
-            # Look for declaration in earlier lines or earlier on current line
-            decl_pattern = rf'\b(?:char|int|float|double|uint\w+_t|size_t|struct\s+\w+|\w+)\s+(?:\*|\s)*\b{re.escape(arr_name)}\s*\[\s*(\d+)\s*\]'
-            for prev_idx in range(0, line_number):
+            # Look for declaration or pointer alias in earlier lines or earlier on current line
+            alias_pattern = rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*=(?!=)\s*(?:\([^\)]+\)\s*)*(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?\s*(?:;|\b)'
+            target_name = arr_name
+            declared_size = None
+
+            for prev_idx in range(line_number - 1, -1, -1):
                 prev_line = line_content[:m.start()] if prev_idx == line_number - 1 else source_lines[prev_idx]
-                decl_m = re.search(decl_pattern, prev_line)
+                decl_m = re.search(rf'\b(?:char|int|float|double|uint\w+_t|size_t|struct\s+\w+|\w+)\s+(?:\*|\s)*\b{re.escape(target_name)}\s*\[\s*(\d+)\s*\]', prev_line)
                 if decl_m:
                     declared_size = int(decl_m.group(1))
-                    if idx_val >= declared_size:
-                        issues.append(self.create_issue(
-                            file_path=file_path,
-                            line_number=line_number,
-                            code_snippet=line_content,
-                            message=f"Static Array Out-of-Bounds: index [{idx_val}] exceeds declared dimension of '{arr_name}[{declared_size}]'.",
-                            column_number=m.start() + 1,
-                            engine="Regex",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=f"{arr_name}[{declared_size - 1}]"
-                        ))
                     break
+                if target_name == arr_name:
+                    alias_m = re.search(alias_pattern, prev_line)
+                    if alias_m:
+                        target_name = alias_m.group(1)
+
+            if declared_size is not None and idx_val >= declared_size:
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content,
+                    message=f"Static Array Out-of-Bounds: index [{idx_val}] exceeds declared dimension of '{arr_name}[{declared_size}]'.",
+                    column_number=m.start() + 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"{arr_name}[{declared_size - 1}]"
+                ))
         return issues
 
 
