@@ -458,7 +458,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
 
         from ..utils import strip_comments_keep_lines
 
-        start_line = max(0, line_no - 15)
+        start_line = max(0, line_no - 16)
         preceding_slice = source_lines[start_line:line_no - 1]
 
         for prev_l in reversed(preceding_slice):
@@ -472,11 +472,19 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             if not is_guard_stmt:
                 continue
 
-            # Look for explicit bounds checks involving MAX/MIN constants in guard expressions
-            if any(m_const in p_strip for m_const in ("SIZE_MAX", "INT_MAX", "UINT_MAX", "MAX_", "MIN_")):
+            # Ensure the guard statement references at least one variable involved in the arithmetic
+            refs_var = any(
+                bool(re.search(r'\b' + re.escape(v) + r'\b', p_strip))
+                for v in var_names if v and not v.isdigit()
+            )
+
+            # Look for explicit bounds checks involving MAX/MIN constants in guard expressions for the variable(s)
+            if refs_var and any(m_const in p_strip for m_const in ("SIZE_MAX", "INT_MAX", "UINT_MAX", "MAX_", "MIN_")):
                 return True
 
             for v_name in var_names:
+                if not v_name or v_name.isdigit():
+                    continue
                 v_esc = re.escape(v_name)
                 if re.search(r'\b' + v_esc + r'\b\s*(?:<|<=|>|>=)', p_strip) or \
                    re.search(r'(?:<|<=|>|>=)\s*\b' + v_esc + r'\b', p_strip) or \
@@ -498,8 +506,8 @@ class ArithmeticIntegerOverflowRule(BaseRule):
 
             # 1. First pass over function body: identify variables holding max constants
             for i, line in enumerate(body_lines):
-                # Check variable declarations or assignments: var = INT_MAX
-                m_assign = re.search(r'\b([a-zA-Z_]\w*)\s*=\s*([^;]+)', line)
+                # Check variable declarations or assignments: var = INT_MAX (excluding ==, !=, <=, >=, +=, etc.)
+                m_assign = re.search(r'(?<![!=<>\+\-\*\/%&|^])\b([a-zA-Z_]\w*)\s*=\s*([^;=]+)', line)
                 if m_assign:
                     v_name = m_assign.group(1).strip()
                     val_expr = m_assign.group(2).strip()
@@ -530,6 +538,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                             if key not in reported_lines:
                                 reported_lines.add(key)
                                 snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else line.strip()
+                                guard_expr = f"{var1} > SIZE_MAX - ({var2})" if op == '+' else f"{var1} > SIZE_MAX / ({var2})"
                                 issues.append(self.create_issue(
                                     file_path=file_path,
                                     line_number=line_no,
@@ -538,13 +547,13 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                                     column_number=m_alloc.start() + 1,
                                     engine="AST",
                                     fix_type=FixType.SUGGESTED_FIX,
-                                    suggested_fix_replacement=f"if ({var1} > SIZE_MAX / ({var2})) return -EOVERFLOW;\n{snippet}"
+                                    suggested_fix_replacement=f"if ({guard_expr}) return -EOVERFLOW;\n{snippet}"
                                 ))
 
             # 3. Check for general CWE-190 arithmetic integer overflow
             # Patterns like: result = data + 1; or data += 1; or data + INT_MAX;
             arith_expr_pattern = re.compile(
-                r'\b([a-zA-Z_]\w*)\s*([\+\-\*]|<<)\s*([a-zA-Z_]\w*|\d+|INT_MAX|UINT_MAX|SIZE_MAX)\b'
+                r'\b([a-zA-Z_]\w*)\s*([\+\-\*]|<<|\+=|-=|\*=|\<<=)\s*([a-zA-Z_]\w*|\d+|INT_MAX|UINT_MAX|SIZE_MAX)\b'
             )
 
             for i, line in enumerate(body_lines):
@@ -567,7 +576,6 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                     )
 
                     if is_max_op:
-                        target_var = lhs if lhs in max_assigned_vars else rhs
                         if not self._has_preceding_overflow_check(ast_ctx.source_lines, line_no, [lhs, rhs]):
                             key = (line_no, lhs, op, rhs)
                             if key not in reported_lines:
@@ -580,8 +588,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                                     message=f"Potential Integer Overflow (CWE-190): unchecked arithmetic '{lhs} {op} {rhs}' on variable or constant assigned near maximum integer value.",
                                     column_number=m_arith.start() + 1,
                                     engine="AST",
-                                    fix_type=FixType.SUGGESTED_FIX,
-                                    suggested_fix_replacement=f"if ({lhs} < INT_MAX - {rhs}) {{\n    {snippet}\n}}"
+                                    fix_type=FixType.MANUAL_REVIEW,
                                 ))
 
         return issues
@@ -600,6 +607,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             has_overflow_check = self._has_preceding_overflow_check(source_lines, line_number, [var1, var2])
 
             if not has_overflow_check:
+                guard_expr = f"{var1} > SIZE_MAX - ({var2})" if op == '+' else f"{var1} > SIZE_MAX / ({var2})"
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,
@@ -608,14 +616,14 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                     column_number=m.start() + 1,
                     engine="Regex",
                     fix_type=FixType.SUGGESTED_FIX,
-                    suggested_fix_replacement=f"if ({var1} > SIZE_MAX / ({var2})) return -EOVERFLOW;\n{line_content.strip()}"
+                    suggested_fix_replacement=f"if ({guard_expr}) return -EOVERFLOW;\n{line_content.strip()}"
                 ))
 
         # Also regex check for direct arithmetic on MAX constants in scan_line if scan_ast isn't run
         if self.MAX_CONSTANTS_PATTERN.search(target_line) and not target_line.lstrip().startswith('#'):
-            m_arith = re.search(r'\b([a-zA-Z_]\w*)\s*([\+\-\*]|<<)\s*(INT_MAX|UINT_MAX|SIZE_MAX|SHRT_MAX|LONG_MAX|LLONG_MAX)\b', target_line)
+            m_arith = re.search(r'\b([a-zA-Z_]\w*)\s*([\+\-\*]|<<|\+=|-=|\*=|\<<=)\s*(INT_MAX|UINT_MAX|SIZE_MAX|SHRT_MAX|LONG_MAX|LLONG_MAX)\b', target_line)
             if not m_arith:
-                m_arith = re.search(r'\b(INT_MAX|UINT_MAX|SIZE_MAX|SHRT_MAX|LONG_MAX|LLONG_MAX)\s*([\+\-\*]|<<)\s*([a-zA-Z_]\w*|\d+)\b', target_line)
+                m_arith = re.search(r'\b(INT_MAX|UINT_MAX|SIZE_MAX|SHRT_MAX|LONG_MAX|LLONG_MAX)\s*([\+\-\*]|<<|\+=|-=|\*=|\<<=)\s*([a-zA-Z_]\w*|\d+)\b', target_line)
             if m_arith:
                 lhs = m_arith.group(1)
                 op = m_arith.group(2)
@@ -628,8 +636,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                         message=f"Potential Integer Overflow (CWE-190): unchecked arithmetic '{lhs} {op} {rhs}' on variable or constant assigned near maximum integer value.",
                         column_number=m_arith.start() + 1,
                         engine="Regex",
-                        fix_type=FixType.SUGGESTED_FIX,
-                        suggested_fix_replacement=f"if ({lhs} < INT_MAX - {rhs}) {{\n    {line_content.strip()}\n}}"
+                        fix_type=FixType.MANUAL_REVIEW,
                     ))
 
         return issues
