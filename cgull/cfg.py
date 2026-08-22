@@ -33,6 +33,14 @@ class Allocation(Enum):
 
 
 @dataclass
+class FunctionSummary:
+    freed_params: Set[int] = field(default_factory=set)
+    return_nullness: Nullness = Nullness.UNKNOWN
+    returns_allocation: bool = False
+    is_unknown: bool = False
+
+
+@dataclass
 class VariableFacts:
     nullness: Nullness = Nullness.UNKNOWN
     initialization: Initialization = Initialization.UNINITIALIZED
@@ -73,6 +81,7 @@ class CFGEvent:
     reads: Set[str] = field(default_factory=set)
     writes: Set[str] = field(default_factory=set)
     null_writes: Set[str] = field(default_factory=set)
+    maybe_null_writes: Set[str] = field(default_factory=set)
     freed: Set[str] = field(default_factory=set)
     allocated: Set[str] = field(default_factory=set)
     derefs: Set[str] = field(default_factory=set)
@@ -101,6 +110,7 @@ class StructuredCFG:
         if ast_node is not None and getattr(ast_node, "coord", None):
             line = max(1, ast_node.coord.line - _PRELUDE_LINE_COUNT)
         node = CFGEvent(node_id=self._next_id, kind=kind, line_number=line, **kwargs)
+        setattr(node, "_ast_node", ast_node)
         return self.add_node(node)
 
     def connect(self, src: int, dst: Optional[int], *, add: Iterable[str] = (), remove: Iterable[str] = ()) -> None:
@@ -293,6 +303,8 @@ class StructuredCFG:
                             curr_loc_map[v] = {loc_id}
                             if v in node.null_writes:
                                 curr_null[v] = Nullness.NULL
+                            elif v in node.maybe_null_writes:
+                                curr_null[v] = Nullness.MAYBE_NULL
                             else:
                                 curr_null[v] = Nullness.UNKNOWN
 
@@ -474,6 +486,8 @@ class StructuredCFG:
                             curr_loc_map[v] = {loc_id}
                             if v in node.null_writes:
                                 curr_null[v] = Nullness.NULL
+                            elif v in node.maybe_null_writes:
+                                curr_null[v] = Nullness.MAYBE_NULL
                             else:
                                 curr_null[v] = Nullness.UNKNOWN
 
@@ -696,12 +710,48 @@ def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
     return set(), set()
 
 
-def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str]]:
-    """kind, reads, writes, null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs for an executable AST node."""
+def _process_call_effects(call_node, target_var: Optional[str], summaries: Optional[Dict[str, FunctionSummary]], alloc_set: Set[str], realloc_set: Set[str], freed: Set[str], allocated: Set[str], null_writes: Set[str], maybe_null_writes: Set[str], realloc_inputs: Set[str]):
+    """Applies summary effects for a single FuncCall node."""
+    callee = _format_pycparser_expr(call_node.name)
+    args = list(getattr(call_node.args, "exprs", []) or []) if call_node.args else []
+
+    # Check builtin or custom summary
+    summary = summaries.get(callee) if summaries else None
+
+    # Handle parameter deallocation (freed arguments)
+    if summary and summary.freed_params:
+        for p_idx in summary.freed_params:
+            if p_idx < len(args):
+                arg_unwrapped = _unwrap_cast(args[p_idx])
+                if arg_unwrapped is not None and type(arg_unwrapped).__name__ == "ID":
+                    freed.add(str(arg_unwrapped.name))
+
+    # Handle allocation / return effects
+    if target_var:
+        if callee in alloc_set or (summary and summary.returns_allocation):
+            allocated.add(target_var)
+            if callee in realloc_set:
+                if args:
+                    arg1 = _unwrap_cast(args[0])
+                    if type(arg1).__name__ == "ID":
+                        realloc_inputs.add(str(arg1.name))
+        elif summary:
+            if summary.return_nullness == Nullness.NULL:
+                null_writes.add(target_var)
+            elif summary.return_nullness == Nullness.MAYBE_NULL:
+                maybe_null_writes.add(target_var)
+        elif callee not in alloc_set:
+            # Unknown callee returning a pointer: conservative handling (could return NULL or MAYBE_NULL if assigned)
+            pass
+
+
+def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str]]:
+    """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs for an executable AST node."""
     kind = type(ast_node).__name__
     reads: Set[str] = set()
     writes: Set[str] = set()
     null_writes: Set[str] = set()
+    maybe_null_writes: Set[str] = set()
     freed: Set[str] = _freed_vars(ast_node, dealloc_funcs=dealloc_funcs)
     allocated: Set[str] = set()
     derefs = _deref_vars(ast_node)
@@ -712,6 +762,31 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc"}
     realloc_set = {"realloc"}
 
+    # Process call summaries for function calls in expressions
+    if summaries:
+        # Check all FuncCall nodes within ast_node
+        def visit_calls(n, curr_target_var=None):
+            if n is None:
+                return
+            n_kind = type(n).__name__
+            if n_kind == "FuncCall":
+                _process_call_effects(n, curr_target_var, summaries, alloc_set, realloc_set, freed, allocated, null_writes, maybe_null_writes, realloc_inputs)
+                # Recurse into children without binding return effects of nested calls to curr_target_var
+                for _, child in n.children():
+                    visit_calls(child, curr_target_var=None)
+            else:
+                for _, child in n.children():
+                    visit_calls(child, curr_target_var=curr_target_var)
+
+        if kind == "Decl" and ast_node.name and ast_node.init:
+            visit_calls(ast_node.init, curr_target_var=str(ast_node.name))
+        elif kind == "Assignment":
+            lhs_target = list(_assignment_target(ast_node.lvalue))
+            t_var = lhs_target[0] if lhs_target else None
+            visit_calls(ast_node.rvalue, curr_target_var=t_var)
+        elif kind == "FuncCall":
+            visit_calls(ast_node, curr_target_var=None)
+
     if kind == "Decl":
         if ast_node.init is not None:
             reads = _ids(ast_node.init)
@@ -719,7 +794,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
             if _is_nullish(ast_node.init):
                 null_writes.update(writes)
             for call_name in _call_names(ast_node.init):
-                if call_name in alloc_set:
+                if call_name in alloc_set or (summaries and summaries.get(call_name) and summaries[call_name].returns_allocation):
                     if ast_node.name:
                         allocated.add(str(ast_node.name))
                     if call_name in realloc_set:
@@ -741,7 +816,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
         if _is_nullish(ast_node.rvalue):
             null_writes.update(writes)
         for call_name in _call_names(ast_node.rvalue):
-            if call_name in alloc_set:
+            if call_name in alloc_set or (summaries and summaries.get(call_name) and summaries[call_name].returns_allocation):
                 allocated.update(writes)
                 if call_name in realloc_set:
                     args = _call_args(ast_node.rvalue, call_name)
@@ -763,7 +838,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     elif kind == "Return":
         reads = _ids(ast_node.expr) if ast_node.expr is not None else set()
     elif kind in {"Label", "Goto"}:
-        return kind, set(), set(), set(), set(), set(), set(), set(), {}, set()
+        return kind, set(), set(), set(), set(), set(), set(), set(), set(), {}, set()
     elif kind in {"UnaryOp", "BinaryOp", "Cast", "ExprList", "ArrayRef", "StructRef"}:
         reads = _ids(ast_node)
     else:
@@ -776,10 +851,10 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     asserted: Set[str] = set()
     if kind == "FuncCall" and _format_pycparser_expr(ast_node.name) in {"assert", "ASSERT", "assert_param"}:
         asserted = _ids(ast_node.args) if ast_node.args is not None else set()
-    return kind, reads, writes, null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs
+    return kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs
 
 
-def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> StructuredCFG:
+def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> StructuredCFG:
     """Build a structured CFG rooted at a pycparser FuncDef body."""
     from pycparser import c_ast
 
@@ -788,9 +863,13 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     pending_gotos: List[Tuple[int, str]] = []
 
     def make_event(stmt) -> int:
-        kind, reads, writes, null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
+        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, summaries=summaries)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
-        return cfg.new_node(node_kind, stmt, expr_str=_format_pycparser_expr(stmt), reads=reads, writes=writes, null_writes=null_writes,
+        if kind == "Return":
+            expr_str = _format_pycparser_expr(stmt.expr) if getattr(stmt, "expr", None) is not None else ""
+        else:
+            expr_str = _format_pycparser_expr(stmt)
+        return cfg.new_node(node_kind, stmt, expr_str=expr_str, reads=reads, writes=writes, null_writes=null_writes, maybe_null_writes=maybe_null_writes,
                             freed=freed, allocated=allocated, derefs=derefs, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs)
 
     def build_compound(items, next_entry, break_target, continue_target):
@@ -938,3 +1017,123 @@ def find_function_def(ast, name: str):
         if type(ext).__name__ == "FuncDef" and getattr(ext.decl, "name", None) == name:
             return ext
     return None
+
+
+def _get_builtin_summaries(alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Dict[str, FunctionSummary]:
+    alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc", "strdup", "strndup", "valloc", "pvalloc", "memalign"}
+    dealloc_set = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
+
+    builtins: Dict[str, FunctionSummary] = {}
+    for f in dealloc_set:
+        builtins[f] = FunctionSummary(freed_params={0}, return_nullness=Nullness.UNKNOWN, returns_allocation=False)
+    for f in alloc_set:
+        builtins[f] = FunctionSummary(freed_params=set(), return_nullness=Nullness.MAYBE_NULL, returns_allocation=True)
+    return builtins
+
+
+def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Dict[str, FunctionSummary]:
+    """
+    Computes intra-file interprocedural function summaries for all functions defined in ast_ctx.
+    Performs fixed-point iteration to propagate parameter deallocations and return values across callers/callees.
+    """
+    summaries: Dict[str, FunctionSummary] = _get_builtin_summaries(alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
+
+    if not hasattr(ast_ctx, "functions") or not ast_ctx.functions:
+        return summaries
+
+    # Map function name to CFunction
+    fn_map = {fn.name: fn for fn in ast_ctx.functions if getattr(fn, "name", None)}
+
+    # Initialize summaries for all user-defined functions
+    for name in fn_map:
+        if name not in summaries:
+            summaries[name] = FunctionSummary()
+
+    # Fixed-point iteration
+    changed = True
+    max_iters = len(fn_map) * 3 + 10
+    iters = 0
+
+    while changed and iters < max_iters:
+        changed = False
+        iters += 1
+
+        for name, fn in fn_map.items():
+            old_summary = summaries[name]
+            param_names = [p.name for p in fn.parameters if p.name]
+
+            # Build CFG using current summaries
+            cfg = None
+            if getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None:
+                funcdef = find_function_def(ast_ctx.pycparser_ast, name)
+                if funcdef is not None:
+                    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, summaries=summaries)
+
+            freed_params: Set[int] = set()
+            return_nullness_set: Set[Nullness] = set()
+            returns_alloc: bool = False
+
+            if cfg is not None:
+                initial_initialized = set(p.name for p in fn.parameters if p.name) | set(getattr(ast_ctx, "global_variables", {}).keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
+                cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
+
+                # Check parameter deallocation
+                for i, p_name in enumerate(param_names):
+                    for node in cfg.nodes.values():
+                        if p_name in node.freed:
+                            freed_params.add(i)
+                            break
+
+                # Inspect return statements
+                for node in cfg.nodes.values():
+                    if node.kind == "return":
+                        ret_expr = node.expr_str.strip()
+                        ret_ast = getattr(node, "_ast_node", None)
+                        expr_ast = getattr(ret_ast, "expr", None) if ret_ast is not None else None
+
+                        ret_nullness = Nullness.UNKNOWN
+                        if ret_expr in param_names:
+                            ret_nullness = cfg.query_nullness(ret_expr, node.node_id)
+                        elif ret_expr in fn.variables:
+                            ret_nullness = cfg.query_nullness(ret_expr, node.node_id)
+                            if cfg.query_allocation(ret_expr, node.node_id) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED):
+                                returns_alloc = True
+                                if ret_nullness == Nullness.UNKNOWN:
+                                    ret_nullness = Nullness.MAYBE_NULL
+                        elif expr_ast is not None and type(expr_ast).__name__ == "FuncCall":
+                            callee = _format_pycparser_expr(expr_ast.name)
+                            callee_summary = summaries.get(callee)
+                            if callee_summary:
+                                ret_nullness = callee_summary.return_nullness
+                                if callee_summary.returns_allocation:
+                                    returns_alloc = True
+                        elif expr_ast is not None and _is_nullish(expr_ast):
+                            ret_nullness = Nullness.NULL
+                        elif ret_expr in {"NULL", "nullptr", "0", "0x0", "(void*)0", "(void *)0"}:
+                            ret_nullness = Nullness.NULL
+
+                        return_nullness_set.add(ret_nullness)
+
+            # Combine return nullness facts across return branches
+            if not return_nullness_set:
+                final_ret_nullness = Nullness.UNKNOWN
+            else:
+                final_ret_nullness = None
+                for rn in return_nullness_set:
+                    if final_ret_nullness is None:
+                        final_ret_nullness = rn
+                    else:
+                        final_ret_nullness = meet_nullness(final_ret_nullness, rn)
+
+            new_summary = FunctionSummary(
+                freed_params=freed_params,
+                return_nullness=final_ret_nullness if final_ret_nullness is not None else Nullness.UNKNOWN,
+                returns_allocation=returns_alloc,
+                is_unknown=False,
+            )
+
+            if new_summary != old_summary:
+                summaries[name] = new_summary
+                changed = True
+
+    return summaries

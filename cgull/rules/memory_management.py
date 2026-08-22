@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext, CFunction
-from ..cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation
+from ..cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
 
 
 def _brace_depths(body_lines: List[str]) -> List[int]:
@@ -38,13 +38,16 @@ def _ast_cfg_for_function(
     fn: CFunction,
     alloc_funcs: Optional[Set[str]] = None,
     dealloc_funcs: Optional[Set[str]] = None,
+    summaries: Optional[Dict[str, FunctionSummary]] = None,
 ):
     if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
         return None
     funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
     if funcdef is None:
         return None
-    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
+    if summaries is None:
+        summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
+    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, summaries=summaries)
     initial_initialized = set(p.name for p in fn.parameters if p.name) | set(ast_ctx.global_variables.keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
     cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
     return cfg
@@ -180,8 +183,9 @@ class UncheckedDynamicAllocationsRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         alloc_pattern = "|".join(re.escape(f) for f in sorted(self.alloc_funcs, key=len, reverse=True))
+        summaries = analyze_function_summaries(ast_ctx, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs)
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
                 for node in cfg.nodes.values():
                     if not node.allocated:
@@ -256,9 +260,10 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        summaries = analyze_function_summaries(ast_ctx)
         for fn in ast_ctx.functions:
             ptr_params = [p for p in fn.parameters if p.is_pointer and p.name]
-            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, summaries=summaries)
 
             if cfg is not None:
                 reported_nodes = set()
@@ -419,8 +424,9 @@ class UninitializedPointersRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        summaries = analyze_function_summaries(ast_ctx)
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, summaries=summaries)
             if cfg is not None:
                 uninit_ptrs = [v_name for v_name, var in fn.variables.items() if var.is_pointer and not var.has_initializer]
                 if not uninit_ptrs:
@@ -500,8 +506,9 @@ class DoubleFreeRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
+        summaries = analyze_function_summaries(ast_ctx, dealloc_funcs=self.dealloc_funcs)
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
                 for node in cfg.nodes.values():
                     for freed_ptr in node.freed:
@@ -582,8 +589,9 @@ class UseAfterFreeRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
+        summaries = analyze_function_summaries(ast_ctx, dealloc_funcs=self.dealloc_funcs)
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
                 reported_uafs = set()
                 for node in cfg.nodes.values():
@@ -654,8 +662,9 @@ class UninitializedMemoryUseRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        summaries = analyze_function_summaries(ast_ctx)
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, summaries=summaries)
             if cfg is not None:
                 uninit_vars = [v_name for v_name, var in fn.variables.items() if not var.has_initializer and not var.is_volatile]
                 if not uninit_vars:
@@ -1156,9 +1165,10 @@ class MemoryLeakRule(BaseRule):
         issues = []
         alloc_pattern = "|".join(re.escape(f) for f in sorted(self.alloc_funcs, key=len, reverse=True))
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
+        summaries = analyze_function_summaries(ast_ctx, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs)
 
         for fn in ast_ctx.functions:
-            cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs)
+            cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
                 reported_allocs = set()
                 for node in cfg.nodes.values():
