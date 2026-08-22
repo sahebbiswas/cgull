@@ -1261,16 +1261,37 @@ class ReturnStackVariableRule(BaseRule):
                 return
             if isinstance(node, c_ast.UnaryOp):
                 if node.op == '&':
-                    base = root_lvalue(node.expr)
-                    if isinstance(base, c_ast.ID) and base.name in automatic_names:
-                        found.add(base.name)
-                    else:
-                        visit(node.expr, True)
+                    operand = node.expr
+                    is_safe = False
+                    needs_array = False
+                    
+                    curr = operand
+                    while isinstance(curr, (c_ast.ArrayRef, c_ast.StructRef)):
+                        if isinstance(curr, c_ast.StructRef):
+                            if curr.type == '->':
+                                is_safe = True
+                                break
+                        elif isinstance(curr, c_ast.ArrayRef):
+                            needs_array = True
+                        curr = curr.name
+                    
+                    if not is_safe and isinstance(curr, c_ast.ID):
+                        if needs_array:
+                            if curr.name in array_names:
+                                found.add(curr.name)
+                        else:
+                            if curr.name in automatic_names:
+                                found.add(curr.name)
+                    elif not is_safe:
+                        visit(operand, True)
                     return
                 visit(node.expr, address_context)
                 return
             if isinstance(node, c_ast.Cast):
                 visit(node.expr, address_context)
+                return
+            if isinstance(node, c_ast.FuncCall):
+                visit(node.name, False)
                 return
             if isinstance(node, c_ast.ArrayRef):
                 # Array-to-pointer decay only applies when the array itself is the
@@ -1300,18 +1321,29 @@ class ReturnStackVariableRule(BaseRule):
             if funcdef is None or funcdef.body is None:
                 continue
 
-            # Function parameters have automatic storage unless they are adjusted
-            # by the implementation; returning their address is therefore unsafe.
-            automatic_names: Set[str] = {p.name for p in fn.parameters if p.name}
-            array_names: Set[str] = set()
-
             class ReturnVisitor(c_ast.NodeVisitor):
                 def __init__(self, outer: "ReturnStackVariableRule"):
                     self.outer = outer
-                    self.scope_stack: List[Dict[str, bool]] = [
-                        {p.name: False for p in fn.parameters if p.name}
+                    self.scope_stack = [
+                        {p.name: {'is_static': False, 'is_array': False} for p in fn.parameters if p.name}
                     ]
                     self.returns: List[Tuple[c_ast.Return, Set[str]]] = []
+
+                def _get_active_names(self):
+                    active_automatic = set()
+                    active_arrays = set()
+                    for scope in self.scope_stack:
+                        for name, info in scope.items():
+                            if info['is_static']:
+                                active_automatic.discard(name)
+                                active_arrays.discard(name)
+                            else:
+                                active_automatic.add(name)
+                                if info['is_array']:
+                                    active_arrays.add(name)
+                                else:
+                                    active_arrays.discard(name)
+                    return active_automatic, active_arrays
 
                 def visit_Compound(self, node):
                     self.scope_stack.append({})
@@ -1322,19 +1354,17 @@ class ReturnStackVariableRule(BaseRule):
                 def visit_Decl(self, node):
                     if node.name and type(node.type).__name__ != "FuncDecl":
                         is_static = "static" in (node.storage or [])
-                        self.scope_stack[-1][node.name] = is_static
-                        if not is_static:
-                            automatic_names.add(node.name)
-                            if isinstance(node.type, c_ast.ArrayDecl):
-                                array_names.add(node.name)
+                        is_array = isinstance(node.type, c_ast.ArrayDecl)
+                        self.scope_stack[-1][node.name] = {'is_static': is_static, 'is_array': is_array}
                     # Initializers can contain nested expressions, but declarations
                     # themselves cannot contain return statements in standard C.
                     if node.init is not None:
                         self.visit(node.init)
 
                 def visit_Return(self, node):
+                    active_automatic, active_arrays = self._get_active_names()
                     names = self.outer._returned_local_names(
-                        node.expr, automatic_names, array_names
+                        node.expr, active_automatic, active_arrays
                     )
                     if names:
                         self.returns.append((node, names))

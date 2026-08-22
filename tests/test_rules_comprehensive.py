@@ -1028,3 +1028,33 @@ class TestReturnStackVariable(unittest.TestCase):
         code = "int f(void) { int x = 1; return x; }"
         issues = scan_with_rule("CGULL-038", code)
         self.assertEqual(len(issues), 0)
+
+    def test_clean_function_call_arg(self):
+        code = "char *f(void) { char buf[16]; return strdup(buf); }"
+        issues = scan_with_rule("CGULL-038", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_struct_pointer_field(self):
+        code = "int *f(struct S *p) { return &p->x; }"
+        issues = scan_with_rule("CGULL-038", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_detects_struct_local_field(self):
+        code = "int *f(void) { struct S s; return &s.x; }"
+        issues = scan_with_rule("CGULL-038", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_array_pointer_element(self):
+        code = "int *f(int *p) { return &p[0]; }"
+        issues = scan_with_rule("CGULL-038", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_detects_local_array_element(self):
+        code = "int *f(void) { int a[2]; return &a[0]; }"
+        issues = scan_with_rule("CGULL-038", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_shadowed_static(self):
+        code = "int *f() { static int x; { int x = 0; } return &x; }"
+        issues = scan_with_rule("CGULL-038", code)
+        self.assertEqual(len(issues), 0)
