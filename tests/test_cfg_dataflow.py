@@ -623,5 +623,112 @@ class TestAliasLifetimeTracking(unittest.TestCase):
         self.assertIn("was freed at line 11", issues_uaf[0].message)
 
 
+class TestInterproceduralCFGSummaries(unittest.TestCase):
+
+    def test_interprocedural_release_uaf(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UseAfterFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void free(void *);
+
+        void release(int *p) {
+            free(p);
+        }
+
+        void f(int *p) {
+            release(p);
+            *p = 1;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 1)
+        self.assertIn("p", issues_uaf[0].message)
+
+    def test_interprocedural_get_buffer_null_deref(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import MissingNullCheckOnFunctionParametersRule, UncheckedDynamicAllocationsRule
+
+        code = """
+        typedef unsigned long size_t;
+
+        int *get_buffer(void) {
+            return 0;
+        }
+
+        void f(void) {
+            int *p = get_buffer();
+            *p = 1;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_null = MissingNullCheckOnFunctionParametersRule()
+        issues_null = rule_null.scan_ast("test.c", ast_ctx)
+        self.assertGreaterEqual(len(issues_null), 1)
+        self.assertIn("p", issues_null[0].message)
+
+    def test_interprocedural_transitive_wrapper(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UseAfterFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void free(void *);
+
+        void raw_free(int *ptr) {
+            free(ptr);
+        }
+
+        void wrapper_release(int *p) {
+            raw_free(p);
+        }
+
+        void f(int *p) {
+            wrapper_release(p);
+            *p = 42;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 1)
+        self.assertIn("p", issues_uaf[0].message)
+
+    def test_interprocedural_unknown_callee_conservative(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UseAfterFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void free(void *);
+        void external_log(int *p);
+
+        void f(int *p) {
+            external_log(p);
+            *p = 1;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        # Unknown callee external_log is conservative: NOT assumed to free p unless proven or built-in
+        self.assertEqual(len(issues_uaf), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
