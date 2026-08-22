@@ -10,6 +10,7 @@ from .banned_functions import (
     UnsafeIntegerConversionsRule,
     UncheckedSnprintfReturnRule,
     CommandInjectionRule,
+    StrncpyNullTerminationRule,
 )
 from .memory_management import (
     UncheckedDynamicAllocationsRule,
@@ -77,6 +78,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     ReallocOverwriteRule,
     MemoryLeakRule,
     ToctouFileAccessRule,
+    StrncpyNullTerminationRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     NakedControlFlowStatementsRule,
