@@ -32,3 +32,21 @@ int test_fp_scalar_param(int val) {
     val = val + 1;
     return val;
 }
+
+/* True Negative: Local pointer assigned valid buffer before dereference */
+void test_tn_assigned_valid_buffer(void) {
+    char *data;
+    char buffer[100] = "hello";
+    data = buffer;
+    data[0] = 'H';
+}
+
+/* True Negative: Correct non-null check before dereference */
+void test_tn_correct_not_null_check(void) {
+    int *intPointer = NULL;
+    int val = 10;
+    intPointer = &val;
+    if (intPointer != NULL) {
+        *intPointer = 42;
+    }
+}

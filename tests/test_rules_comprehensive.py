@@ -221,6 +221,28 @@ class TestMissingNullCheckOnParameters(unittest.TestCase):
         issues = scan_with_rule("CGULL-004", code)
         self.assertEqual(len(issues), 0)
 
+    def test_detects_direct_null_assignment_deref(self):
+        code = "void f(void) {\n    char *data;\n    data = NULL;\n    data[0] = 'A';\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("known to be NULL", issues[0].message)
+
+    def test_detects_inverted_null_check_deref(self):
+        code = "void f(void) {\n    int *intPointer = NULL;\n    if (intPointer == NULL) {\n        *intPointer = 42;\n    }\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("known to be NULL", issues[0].message)
+
+    def test_clean_direct_null_reassigned_buffer(self):
+        code = "void f(void) {\n    char *data;\n    char buf[100] = \"hello\";\n    data = buf;\n    data[0] = 'H';\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_inverted_not_null_check(self):
+        code = "void f(void) {\n    int *intPointer = NULL;\n    int val = 5;\n    intPointer = &val;\n    if (intPointer != NULL) {\n        *intPointer = 42;\n    }\n}"
+        issues = scan_with_rule("CGULL-004", code)
+        self.assertEqual(len(issues), 0)
+
 
 class TestWeakCryptoPrimitives(unittest.TestCase):
     def test_detects_md5_sha1_des_rc4_ecb(self):
