@@ -197,6 +197,19 @@ class StructuredCFG:
             block.alloc_out = {}
 
         entry_block_id = self.node_to_block.get(self.entry) if self.entry else min(self.blocks.keys())
+
+        reachable_blocks: Set[int] = set()
+        if entry_block_id in self.blocks:
+            queue = [entry_block_id]
+            while queue:
+                b_id = queue.pop(0)
+                if b_id in reachable_blocks:
+                    continue
+                reachable_blocks.add(b_id)
+                for succ in self.blocks[b_id].successors:
+                    if succ not in reachable_blocks:
+                        queue.append(succ)
+
         entry_block = self.blocks.get(entry_block_id)
 
         if entry_block:
@@ -205,10 +218,12 @@ class StructuredCFG:
                 entry_block.init_in[v] = Initialization.INITIALIZED if v in init_initialized else Initialization.UNINITIALIZED
                 entry_block.alloc_in[v] = Allocation.NOT_ALLOCATED
 
-        worklist = list(self.blocks.keys())
+        worklist = [entry_block_id] if entry_block_id in reachable_blocks else []
 
         while worklist:
             b_id = worklist.pop(0)
+            if b_id not in reachable_blocks:
+                continue
             block = self.blocks[b_id]
 
             curr_null = dict(block.nullness_in)
@@ -243,6 +258,8 @@ class StructuredCFG:
             block.alloc_out = curr_alloc
 
             for succ_id in block.successors:
+                if succ_id not in reachable_blocks:
+                    continue
                 succ_block = self.blocks[succ_id]
                 edge_fact = block.edge_facts.get(succ_id, (set(), set()))
                 add_nonnull, remove_nonnull = edge_fact
@@ -573,6 +590,8 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
         reads = _ids(ast_node.args) if ast_node.args is not None else set()
     elif kind == "Return":
         reads = _ids(ast_node.expr) if ast_node.expr is not None else set()
+    elif kind in {"Label", "Goto"}:
+        return kind, set(), set(), set(), set(), set(), set(), set()
     elif kind in {"UnaryOp", "BinaryOp", "Cast", "ExprList", "ArrayRef", "StructRef"}:
         reads = _ids(ast_node)
     else:
@@ -593,6 +612,8 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     from pycparser import c_ast
 
     cfg = StructuredCFG()
+    labels_map: Dict[str, int] = {}
+    pending_gotos: List[Tuple[int, str]] = []
 
     def make_event(stmt) -> int:
         kind, reads, writes, null_writes, freed, allocated, derefs, asserted = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
@@ -713,13 +734,29 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
             cfg.connect(node, continue_target)
             return node
 
-        # Label/goto and other less-common constructs retain the conservative
-        # source-order behavior within the surrounding structured block.
+        if kind == "Label":
+            label_node = cfg.new_node("label", stmt, expr_str=stmt.name)
+            labels_map[stmt.name] = label_node
+            inner_entry = build_stmt(stmt.stmt, next_entry, break_target, continue_target)
+            cfg.connect(label_node, inner_entry)
+            return label_node
+
+        if kind == "Goto":
+            goto_node = cfg.new_node("goto", stmt, expr_str=f"goto {stmt.name}")
+            pending_gotos.append((goto_node, stmt.name))
+            return goto_node
+
+        # Other less-common constructs retain the conservative source-order behavior.
         node = make_event(stmt)
         cfg.connect(node, next_entry)
         return node
 
     cfg.entry = build_stmt(funcdef.body, None, None, None)
+
+    for goto_node, label_name in pending_gotos:
+        if label_name in labels_map:
+            cfg.connect(goto_node, labels_map[label_name])
+
     cfg.build_basic_blocks()
     return cfg
 

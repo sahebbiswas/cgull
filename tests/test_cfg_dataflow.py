@@ -125,5 +125,182 @@ class TestCFGBasicBlocksAndDataflow(unittest.TestCase):
         self.assertEqual(facts['ptr'].nullness, Nullness.NON_NULL)
 
 
+class TestCFGGotoAndLabeledControlFlow(unittest.TestCase):
+
+    def test_goto_forward_null_check_and_bypass(self):
+        code = """
+        void f() {
+            char *p = malloc(16);
+            if (p == NULL)
+                goto out;
+            *p = 'a';
+        out:
+            free(p);
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        # Labels are represented as CFG targets
+        label_nodes = [n for n in cfg.nodes.values() if n.kind == "label" and n.expr_str == "out"]
+        self.assertEqual(len(label_nodes), 1)
+        label_node = label_nodes[0]
+
+        # goto label creates an edge to the corresponding label
+        goto_nodes = [n for n in cfg.nodes.values() if n.kind == "goto" and "out" in n.expr_str]
+        self.assertEqual(len(goto_nodes), 1)
+        goto_node = goto_nodes[0]
+        self.assertIn(label_node.node_id, goto_node.successors)
+
+        # Forward gotos bypass intervening statements correctly (*p = 'a')
+        use_nodes = [n for n in cfg.nodes.values() if "*p = 'a'" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        use_node_id = use_nodes[0].node_id
+
+        # At *p = 'a', p is known to be NON_NULL because the NULL path jumped to out
+        p_null = cfg.query_nullness('p', use_node_id)
+        self.assertEqual(p_null, Nullness.NON_NULL)
+
+    def test_goto_backward_creates_cycle(self):
+        code = """
+        void f() {
+            char *p;
+        again:
+            p = malloc(16);
+            if (p == NULL)
+                goto again;
+            *p = 'b';
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        label_nodes = [n for n in cfg.nodes.values() if n.kind == "label" and n.expr_str == "again"]
+        self.assertEqual(len(label_nodes), 1)
+        label_node = label_nodes[0]
+
+        goto_nodes = [n for n in cfg.nodes.values() if n.kind == "goto" and "again" in n.expr_str]
+        self.assertEqual(len(goto_nodes), 1)
+        goto_node = goto_nodes[0]
+        self.assertIn(label_node.node_id, goto_node.successors)
+
+        # Verify reachability/cycle: goto again -> again label -> malloc -> if_cond -> goto again
+        use_nodes = [n for n in cfg.nodes.values() if "*p = 'b'" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        use_node_id = use_nodes[0].node_id
+        self.assertEqual(cfg.query_nullness('p', use_node_id), Nullness.NON_NULL)
+
+    def test_uaf_and_allocation_propagation_across_goto_paths(self):
+        code = """
+        void f(char *p, int flag) {
+            if (flag)
+                goto skip_free;
+            free(p);
+        skip_free:
+            *p = 'c';
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        use_nodes = [n for n in cfg.nodes.values() if "*p = 'c'" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        use_node_id = use_nodes[0].node_id
+
+        # On flag path, p is NOT freed; on !flag path, p IS freed -> meet result is MAYBE_FREED
+        p_alloc = cfg.query_allocation('p', use_node_id)
+        self.assertEqual(p_alloc, Allocation.MAYBE_FREED)
+
+    def test_initialization_propagation_across_goto_paths(self):
+        code = """
+        void f(int cond) {
+            int x;
+            if (cond)
+                goto init_path;
+            goto out;
+        init_path:
+            x = 42;
+        out:
+            use(x);
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        use_nodes = [n for n in cfg.nodes.values() if "use(x)" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        use_node_id = use_nodes[0].node_id
+
+        # One path initializes x, the other skips initialization -> MAYBE_INITIALIZED
+        x_init = cfg.query_initialization('x', use_node_id)
+        self.assertEqual(x_init, Initialization.MAYBE_INITIALIZED)
+
+    def test_rules_ast_scan_with_goto_cleanup_pattern(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import (
+            UncheckedDynamicAllocationsRule,
+            MissingNullCheckOnFunctionParametersRule,
+            UseAfterFreeRule,
+            DoubleFreeRule,
+            UninitializedMemoryUseRule
+        )
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void free(void *);
+
+        int process(int *param) {
+            if (param == NULL)
+                goto err;
+            *param = 100; // Safe: checked by goto above
+
+            char *buf = (char *)malloc(32);
+            if (buf == NULL)
+                goto err;
+            buf[0] = 'X'; // Safe: checked by goto above
+
+            free(buf);
+            goto out;
+
+        err:
+            return -1;
+        out:
+            return 0;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+
+        rule_alloc = UncheckedDynamicAllocationsRule()
+        issues_alloc = rule_alloc.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_alloc), 0, "No unchecked dynamic allocation should be reported")
+
+        rule_param = MissingNullCheckOnFunctionParametersRule()
+        issues_param = rule_param.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_param), 0, "No missing null check on param should be reported")
+
+    def test_unreachable_statements_after_goto_do_not_degrade_facts(self):
+        code = """
+        void f() {
+            int x = 42;
+            char *p = malloc(16);
+            goto out;
+            x = 0;
+            free(p);
+        out:
+            use(x);
+            use(p);
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        use_x_nodes = [n for n in cfg.nodes.values() if "use(x)" in n.expr_str]
+        self.assertEqual(len(use_x_nodes), 1)
+        x_init = cfg.query_initialization('x', use_x_nodes[0].node_id)
+        self.assertEqual(x_init, Initialization.INITIALIZED)
+
+        use_p_nodes = [n for n in cfg.nodes.values() if "use(p)" in n.expr_str]
+        self.assertEqual(len(use_p_nodes), 1)
+        p_alloc = cfg.query_allocation('p', use_p_nodes[0].node_id)
+        self.assertEqual(p_alloc, Allocation.ALLOCATED)
+
+
 if __name__ == "__main__":
     unittest.main()
