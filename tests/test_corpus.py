@@ -82,6 +82,10 @@ class TestSecurityRuleBehavioralCorpus(unittest.TestCase):
         success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-035", verbose=False)
         self.assertTrue(success, f"CGULL-035 Corpus Failed:\n{report}")
 
+    def test_rule_cgull_036_memory_leak(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-036", verbose=False)
+        self.assertTrue(success, f"CGULL-036 Corpus Failed:\n{report}")
+
 
 if __name__ == "__main__":
     unittest.main()
