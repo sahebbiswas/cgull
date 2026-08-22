@@ -103,6 +103,10 @@ def _find_unsafe_param_deref(cfg: StructuredCFG, param: str):
 
 def _find_uaf_uses(cfg: StructuredCFG, freed_node_id: int, ptr_name: str):
     """Yield (node, accessed_var) for reachable nodes where any pointer aliasing freed_node_id's freed object is accessed after free."""
+    freed_locs = cfg.get_loc_map_at_node(freed_node_id).get(ptr_name, set())
+    if not freed_locs:
+        freed_locs = {f"var_{ptr_name}"}
+
     work = list(cfg.nodes[freed_node_id].successors)
     visited = set()
     while work:
@@ -112,12 +116,15 @@ def _find_uaf_uses(cfg: StructuredCFG, freed_node_id: int, ptr_name: str):
         visited.add(nid)
         node = cfg.nodes[nid]
 
+        node_loc_map = cfg.get_loc_map_at_node(nid)
         accessed_vars = node.derefs | (node.reads - node.writes)
         for var in sorted(accessed_vars):
-            alloc_state = cfg.query_allocation(var, nid)
-            if alloc_state in (Allocation.FREED, Allocation.MAYBE_FREED):
-                if not node.kind.endswith('_cond'):
-                    yield node, var
+            var_locs = node_loc_map.get(var, {f"var_{var}"})
+            if freed_locs & var_locs:
+                alloc_state = cfg.query_allocation(var, nid)
+                if alloc_state in (Allocation.FREED, Allocation.MAYBE_FREED):
+                    if not node.kind.endswith('_cond'):
+                        yield node, var
 
         for succ in node.successors:
             if succ not in visited:
