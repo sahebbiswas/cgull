@@ -281,7 +281,17 @@ class StructuredCFG:
                             if val_call and len(val_call[1]) >= 2:
                                 size_is_zero = _is_nullish(val_call[1][1])
 
-                        self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero)
+                        valid_blocks = {block.block_id}
+                        v_queue = [block.block_id]
+                        while v_queue:
+                            curr_v = v_queue.pop(0)
+                            for succ_b_id in self.blocks[curr_v].successors:
+                                succ_b = self.blocks.get(succ_b_id)
+                                if succ_b and len(succ_b.predecessors) == 1 and succ_b_id not in valid_blocks:
+                                    valid_blocks.add(succ_b_id)
+                                    v_queue.append(succ_b_id)
+
+                        self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero, valid_blocks)
 
                 for ptr in node.realloc_inputs:
                     locs = curr_loc_map.get(ptr, set())
@@ -402,7 +412,16 @@ class StructuredCFG:
 
                 # Loc State
                 edge_loc_state = dict(curr_loc_state)
-                for new_loc_id, (target_var, input_ptr, input_locs, pre_states, size_is_zero) in self.realloc_records.items():
+                for new_loc_id, rec in self.realloc_records.items():
+                    if len(rec) == 6:
+                        target_var, input_ptr, input_locs, pre_states, size_is_zero, valid_blocks = rec
+                    else:
+                        target_var, input_ptr, input_locs, pre_states, size_is_zero = rec
+                        valid_blocks = None
+
+                    if valid_blocks is not None and block.block_id not in valid_blocks:
+                        continue
+
                     if new_loc_id in curr_loc_map.get(target_var, set()):
                         if curr_null.get(target_var, Nullness.UNKNOWN) in (Nullness.MAYBE_NULL, Nullness.UNKNOWN):
                             t_null = edge_null.get(target_var, Nullness.UNKNOWN)
@@ -500,8 +519,17 @@ class StructuredCFG:
                             val_call = _find_value_producing_call(getattr(ast_node, "init", None) or getattr(ast_node, "rvalue", None))
                             if val_call and len(val_call[1]) >= 2:
                                 size_is_zero = _is_nullish(val_call[1][1])
+                        valid_blocks = {block.block_id}
+                        v_queue = [block.block_id]
+                        while v_queue:
+                            curr_v = v_queue.pop(0)
+                            for succ_b_id in self.blocks[curr_v].successors:
+                                succ_b = self.blocks.get(succ_b_id)
+                                if succ_b and len(succ_b.predecessors) == 1 and succ_b_id not in valid_blocks:
+                                    valid_blocks.add(succ_b_id)
+                                    v_queue.append(succ_b_id)
                         if hasattr(self, "realloc_records"):
-                            self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero)
+                            self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero, valid_blocks)
 
                 for ptr in node.realloc_inputs:
                     locs = curr_loc_map.get(ptr, set())
