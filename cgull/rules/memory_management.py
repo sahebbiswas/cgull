@@ -1051,6 +1051,8 @@ def _find_memory_leak_exits(
         # 1. Deallocation check
         if node.freed & aliases:
             continue
+        if any(cfg.query_allocation(a, curr_id) == Allocation.FREED for a in aliases):
+            continue
 
         # 2. Exit call check (program exit)
         if node.kind == "funccall":
@@ -1074,7 +1076,7 @@ def _find_memory_leak_exits(
         if node.kind == "return":
             if node.reads & aliases:
                 continue
-            is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL for a in aliases)
+            is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL or cfg.query_allocation(a, curr_id) == Allocation.NOT_ALLOCATED for a in aliases)
             if not is_null:
                 if curr_id not in reported_node_ids:
                     reported_node_ids.add(curr_id)
@@ -1085,11 +1087,11 @@ def _find_memory_leak_exits(
         if curr_id == alloc_node_id:
             overwritten = []
         else:
-            overwritten = [w for w in node.writes if w in aliases]
+            overwritten = [w for w in node.writes if w in aliases and not (node.reads & aliases)]
         if overwritten:
             remaining_aliases = aliases - set(overwritten)
             if not remaining_aliases:
-                is_null = any(cfg.query_nullness(w, curr_id) == Nullness.NULL for w in overwritten)
+                is_null = any(cfg.query_nullness(w, curr_id) == Nullness.NULL or cfg.query_allocation(w, curr_id) == Allocation.NOT_ALLOCATED for w in overwritten)
                 if not is_null:
                     if curr_id not in reported_node_ids:
                         reported_node_ids.add(curr_id)
@@ -1100,7 +1102,7 @@ def _find_memory_leak_exits(
 
         # 6. End of CFG check
         if not node.successors:
-            is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL for a in aliases)
+            is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL or cfg.query_allocation(a, curr_id) == Allocation.NOT_ALLOCATED for a in aliases)
             if not is_null:
                 if curr_id not in reported_node_ids:
                     reported_node_ids.add(curr_id)

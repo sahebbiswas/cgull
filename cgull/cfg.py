@@ -88,6 +88,7 @@ class CFGEvent:
     asserted: Set[str] = field(default_factory=set)
     alias_writes: Dict[str, str] = field(default_factory=dict)
     realloc_inputs: Set[str] = field(default_factory=set)
+    realloc_bindings: Dict[str, str] = field(default_factory=dict)
     successors: List[int] = field(default_factory=list)
 
 
@@ -209,6 +210,8 @@ class StructuredCFG:
         init_nonnull = set(initial_nonnull) if initial_nonnull else set()
         init_initialized = set(initial_initialized) if initial_initialized else set()
 
+        self.realloc_records: Dict[str, Tuple[str, str, Set[str], Dict[str, Allocation]]] = {}
+
         for block in self.blocks.values():
             block.nullness_in = {}
             block.nullness_out = {}
@@ -260,6 +263,18 @@ class StructuredCFG:
             curr_loc_map = {v: set(locs) for v, locs in block.loc_map_in.items()}
 
             for node in block.nodes:
+                if getattr(node, "realloc_bindings", None):
+                    for target_var, input_ptr in node.realloc_bindings.items():
+                        input_locs = set(curr_loc_map.get(input_ptr, set()))
+                        if not input_locs:
+                            input_locs = {f"var_{input_ptr}"}
+                        pre_states = {loc: curr_loc_state.get(loc, Allocation.NOT_ALLOCATED) for loc in input_locs}
+                        base_loc_id = f"alloc_{node.node_id}_{target_var}"
+                        new_loc_id = base_loc_id
+                        if curr_loc_state.get(base_loc_id) in (Allocation.FREED, Allocation.MAYBE_FREED) or any(other != target_var and base_loc_id in curr_loc_map.get(other, set()) for other in all_vars):
+                            new_loc_id = f"alloc_{node.node_id}_{target_var}_fresh"
+                        self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states)
+
                 for ptr in node.realloc_inputs:
                     locs = curr_loc_map.get(ptr, set())
                     for loc in locs:
@@ -378,9 +393,23 @@ class StructuredCFG:
                         changed = True
 
                 # Loc State
-                all_loc_ids = set(curr_loc_state.keys()).union(succ_block.loc_state_in.keys())
+                edge_loc_state = dict(curr_loc_state)
+                for new_loc_id, (target_var, input_ptr, input_locs, pre_states) in self.realloc_records.items():
+                    if new_loc_id in curr_loc_map.get(target_var, set()):
+                        t_null = edge_null.get(target_var, Nullness.UNKNOWN)
+                        if t_null == Nullness.NON_NULL:
+                            for loc in input_locs:
+                                if pre_states.get(loc) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED, Allocation.MAYBE_FREED):
+                                    edge_loc_state[loc] = Allocation.FREED
+                            edge_loc_state[new_loc_id] = Allocation.ALLOCATED
+                        elif t_null == Nullness.NULL:
+                            for loc in input_locs:
+                                edge_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
+                            edge_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
+
+                all_loc_ids = set(edge_loc_state.keys()).union(succ_block.loc_state_in.keys())
                 for loc in all_loc_ids:
-                    e_loc_st = curr_loc_state.get(loc, Allocation.NOT_ALLOCATED)
+                    e_loc_st = edge_loc_state.get(loc, Allocation.NOT_ALLOCATED)
                     if loc not in succ_block.loc_state_in:
                         new_loc_st = e_loc_st
                     else:
@@ -419,6 +448,20 @@ class StructuredCFG:
             curr_loc_map = {v: set(locs) for v, locs in block.loc_map_in.items()}
 
             for node in block.nodes:
+                if hasattr(self, "realloc_records"):
+                    for new_loc_id, (target_var, input_ptr, input_locs, pre_states) in self.realloc_records.items():
+                        if new_loc_id in curr_loc_map.get(target_var, set()):
+                            t_null = curr_null.get(target_var, Nullness.UNKNOWN)
+                            if t_null == Nullness.NON_NULL:
+                                for loc in input_locs:
+                                    if pre_states.get(loc) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED, Allocation.MAYBE_FREED):
+                                        curr_loc_state[loc] = Allocation.FREED
+                                curr_loc_state[new_loc_id] = Allocation.ALLOCATED
+                            elif t_null == Nullness.NULL:
+                                for loc in input_locs:
+                                    curr_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
+                                curr_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
+
                 curr_node_alloc: Dict[str, Allocation] = {}
                 for v in all_vars:
                     locs = curr_loc_map.get(v, set())
@@ -442,6 +485,19 @@ class StructuredCFG:
                 self.node_loc_maps[node.node_id] = {
                     v: set(locs) for v, locs in curr_loc_map.items()
                 }
+
+                if getattr(node, "realloc_bindings", None):
+                    for target_var, input_ptr in node.realloc_bindings.items():
+                        input_locs = set(curr_loc_map.get(input_ptr, set()))
+                        if not input_locs:
+                            input_locs = {f"var_{input_ptr}"}
+                        pre_states = {loc: curr_loc_state.get(loc, Allocation.NOT_ALLOCATED) for loc in input_locs}
+                        base_loc_id = f"alloc_{node.node_id}_{target_var}"
+                        new_loc_id = base_loc_id
+                        if curr_loc_state.get(base_loc_id) in (Allocation.FREED, Allocation.MAYBE_FREED) or any(other != target_var and base_loc_id in curr_loc_map.get(other, set()) for other in all_vars):
+                            new_loc_id = f"alloc_{node.node_id}_{target_var}_fresh"
+                        if hasattr(self, "realloc_records"):
+                            self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states)
 
                 for ptr in node.realloc_inputs:
                     locs = curr_loc_map.get(ptr, set())
@@ -710,7 +766,7 @@ def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
     return set(), set()
 
 
-def _process_call_effects(call_node, target_var: Optional[str], summaries: Optional[Dict[str, FunctionSummary]], alloc_set: Set[str], realloc_set: Set[str], freed: Set[str], allocated: Set[str], null_writes: Set[str], maybe_null_writes: Set[str], realloc_inputs: Set[str]):
+def _process_call_effects(call_node, target_var: Optional[str], summaries: Optional[Dict[str, FunctionSummary]], alloc_set: Set[str], realloc_set: Set[str], freed: Set[str], allocated: Set[str], null_writes: Set[str], maybe_null_writes: Set[str], realloc_inputs: Set[str], realloc_bindings: Dict[str, str]):
     """Applies summary effects for a single FuncCall node."""
     callee = _format_pycparser_expr(call_node.name)
     args = list(getattr(call_node.args, "exprs", []) or []) if call_node.args else []
@@ -734,7 +790,9 @@ def _process_call_effects(call_node, target_var: Optional[str], summaries: Optio
                 if args:
                     arg1 = _unwrap_cast(args[0])
                     if type(arg1).__name__ == "ID":
-                        realloc_inputs.add(str(arg1.name))
+                        input_ptr = str(arg1.name)
+                        realloc_inputs.add(input_ptr)
+                        realloc_bindings[target_var] = input_ptr
         elif summary:
             if summary.return_nullness == Nullness.NULL:
                 null_writes.add(target_var)
@@ -780,8 +838,8 @@ def _replace_ast_node(tree, target, replacement):
     return tree_copy
 
 
-def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str]]:
-    """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs for an executable AST node."""
+def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str], Dict[str, str]]:
+    """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings for an executable AST node."""
     kind = type(ast_node).__name__
     reads: Set[str] = set()
     writes: Set[str] = set()
@@ -792,6 +850,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     derefs = _deref_vars(ast_node)
     alias_writes: Dict[str, str] = {}
     realloc_inputs: Set[str] = set()
+    realloc_bindings: Dict[str, str] = {}
     expr = _format_pycparser_expr(ast_node)
 
     alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc"}
@@ -805,7 +864,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
                 return
             n_kind = type(n).__name__
             if n_kind == "FuncCall":
-                _process_call_effects(n, curr_target_var, summaries, alloc_set, realloc_set, freed, allocated, null_writes, maybe_null_writes, realloc_inputs)
+                _process_call_effects(n, curr_target_var, summaries, alloc_set, realloc_set, freed, allocated, null_writes, maybe_null_writes, realloc_inputs, realloc_bindings)
                 # Recurse into children without binding return effects of nested calls to curr_target_var
                 for _, child in n.children():
                     visit_calls(child, curr_target_var=None)
@@ -837,7 +896,10 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
                         if args:
                             arg1 = _unwrap_cast(args[0])
                             if type(arg1).__name__ == "ID":
-                                realloc_inputs.add(str(arg1.name))
+                                input_ptr = str(arg1.name)
+                                realloc_inputs.add(input_ptr)
+                                if ast_node.name:
+                                    realloc_bindings[str(ast_node.name)] = input_ptr
                     break
             if not allocated and ast_node.name and not _is_nullish(ast_node.init):
                 rhs_unwrapped = _unwrap_cast(ast_node.init)
@@ -858,7 +920,10 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
                     if args:
                         arg1 = _unwrap_cast(args[0])
                         if type(arg1).__name__ == "ID":
-                            realloc_inputs.add(str(arg1.name))
+                            input_ptr = str(arg1.name)
+                            realloc_inputs.add(input_ptr)
+                            for w in writes:
+                                realloc_bindings[w] = input_ptr
                 break
         if not allocated and writes and getattr(ast_node, "op", "=") == "=" and not _is_nullish(ast_node.rvalue):
             lhs_unwrapped = _unwrap_cast(ast_node.lvalue)
@@ -873,7 +938,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     elif kind == "Return":
         reads = _ids(ast_node.expr) if ast_node.expr is not None else set()
     elif kind in {"Label", "Goto"}:
-        return kind, set(), set(), set(), set(), set(), set(), set(), set(), {}, set()
+        return kind, set(), set(), set(), set(), set(), set(), set(), set(), {}, set(), {}
     elif kind in {"UnaryOp", "BinaryOp", "Cast", "ExprList", "ArrayRef", "StructRef"}:
         reads = _ids(ast_node)
     else:
@@ -886,7 +951,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     asserted: Set[str] = set()
     if kind == "FuncCall" and _format_pycparser_expr(ast_node.name) in {"assert", "ASSERT", "assert_param"}:
         asserted = _ids(ast_node.args) if ast_node.args is not None else set()
-    return kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs
+    return kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings
 
 
 def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> StructuredCFG:
@@ -898,14 +963,14 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     pending_gotos: List[Tuple[int, str]] = []
 
     def make_event(stmt) -> int:
-        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, summaries=summaries)
+        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, summaries=summaries)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
         if kind == "Return":
             expr_str = _format_pycparser_expr(stmt.expr) if getattr(stmt, "expr", None) is not None else ""
         else:
             expr_str = _format_pycparser_expr(stmt)
         return cfg.new_node(node_kind, stmt, expr_str=expr_str, reads=reads, writes=writes, null_writes=null_writes, maybe_null_writes=maybe_null_writes,
-                            freed=freed, allocated=allocated, derefs=derefs, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs)
+                            freed=freed, allocated=allocated, derefs=derefs, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs, realloc_bindings=realloc_bindings)
 
     def build_compound(items, next_entry, break_target, continue_target):
         current = next_entry
