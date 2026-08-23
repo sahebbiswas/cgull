@@ -419,7 +419,6 @@ class TestExpressionControlFlow(unittest.TestCase):
         from cgull.rules.memory_management import MissingNullCheckOnFunctionParametersRule, UseAfterFreeRule, UncheckedDynamicAllocationsRule
 
         code = """
-        typedef unsigned long size_t;
         void *malloc(size_t);
         void free(void *);
 
