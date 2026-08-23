@@ -460,6 +460,65 @@ class TestRulesCommand(unittest.TestCase):
         self.assertIn("CGULL-025", out)
 
 
+class TestFlagsCommand(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.c_file = os.path.join(self.temp_dir, "config.c")
+        with open(self.c_file, "w") as f:
+            f.write(
+                "#ifdef FEATURE_X\n"
+                "void x(void) {}\n"
+                "#endif\n"
+                "#if OPT_LEVEL > 2\n"
+                "void opt(void) {}\n"
+                "#endif\n"
+            )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _run(self, argv):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = main(argv)
+        return code, stdout.getvalue()
+
+    def test_flags_subcommand_text(self):
+        code, out = self._run(["flags", self.c_file])
+        self.assertEqual(code, 0)
+        self.assertIn("FEATURE_X", out)
+        self.assertIn("OPT_LEVEL", out)
+        self.assertIn("Discovered Preprocessor Flags for", out)
+
+    def test_flags_subcommand_json(self):
+        code, out = self._run(["flags", self.c_file, "-f", "json"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(out)
+        self.assertEqual(parsed["presence_flags"], ["FEATURE_X"])
+        self.assertEqual(parsed["value_flags"], ["OPT_LEVEL"])
+        self.assertEqual(parsed["all_flags"], ["FEATURE_X", "OPT_LEVEL"])
+
+    def test_scan_list_flags_option(self):
+        code, out = self._run(["scan", "--list-flags", self.c_file, "-f", "json"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(out)
+        self.assertEqual(parsed["presence_flags"], ["FEATURE_X"])
+        self.assertEqual(parsed["value_flags"], ["OPT_LEVEL"])
+
+    def test_flags_missing_target_returns_error(self):
+        code, out = self._run(["flags", "/nonexistent/file.c"])
+        self.assertEqual(code, 1)
+
+    def test_flags_output_to_file(self):
+        out_file = os.path.join(self.temp_dir, "flags.json")
+        code, _ = self._run(["flags", self.c_file, "-o", out_file, "-f", "json"])
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(out_file))
+        with open(out_file) as f:
+            parsed = json.load(f)
+        self.assertEqual(parsed["presence_flags"], ["FEATURE_X"])
+
+
 class TestInitIgnoreCommand(unittest.TestCase):
     def test_creates_cgullignore_file_in_cwd(self):
         temp_dir = tempfile.mkdtemp()
