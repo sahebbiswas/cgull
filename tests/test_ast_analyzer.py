@@ -645,6 +645,54 @@ class TestPreprocessorConditionalResolution(unittest.TestCase):
         self.assertIn("int x = 100;", res)
         self.assertNotIn("int y = 200;", res)
 
+    def test_operator_precedence(self):
+        from cgull.ast_analyzer import eval_preprocessor_expr
+        # !defined(X) == 0 -> (!0) == 0 -> 1 == 0 -> 0 (False)
+        self.assertFalse(eval_preprocessor_expr("!defined(X) == 0"))
+        # A & B == 0 (with A=2, B=0) -> 2 & (0 == 0) -> 2 & 1 -> 0 (False)
+        self.assertFalse(eval_preprocessor_expr("A & B == 0", {"A": 2, "B": 0}))
+        # (A & B) == 0 (with A=2, B=0) -> (2 & 0) == 0 -> 0 == 0 -> 1 (True)
+        self.assertTrue(eval_preprocessor_expr("(A & B) == 0", {"A": 2, "B": 0}))
+
+    def test_macro_value_evaluation(self):
+        from cgull.ast_analyzer import resolve_preprocessor_conditionals
+        src1 = (
+            "#define FOO 0\n"
+            "#if FOO\n"
+            "int x = 1;\n"
+            "#else\n"
+            "int x = 2;\n"
+            "#endif\n"
+        )
+        res1 = resolve_preprocessor_conditionals(src1)
+        self.assertNotIn("int x = 1;", res1)
+        self.assertIn("int x = 2;", res1)
+
+        src2 = (
+            "#define FOO 3\n"
+            "#if FOO > 2\n"
+            "int x = 1;\n"
+            "#else\n"
+            "int x = 2;\n"
+            "#endif\n"
+        )
+        res2 = resolve_preprocessor_conditionals(src2)
+        self.assertIn("int x = 1;", res2)
+        self.assertNotIn("int x = 2;", res2)
+
+    def test_integer_suffixes(self):
+        from cgull.ast_analyzer import eval_preprocessor_expr
+        self.assertTrue(eval_preprocessor_expr("__STDC_VERSION__ >= 201112L", {"__STDC_VERSION__": 201112}))
+        self.assertTrue(eval_preprocessor_expr("1U"))
+        self.assertFalse(eval_preprocessor_expr("0UL"))
+        self.assertTrue(eval_preprocessor_expr("0x10U == 16"))
+
+    def test_dos_protection_large_shift(self):
+        from cgull.ast_analyzer import eval_preprocessor_expr
+        # Should execute instantly without DoS / OOM
+        res = eval_preprocessor_expr("1 << 100000000")
+        self.assertIsInstance(res, bool)
+
 
 @unittest.skipUnless(_pycparser_available(), "pycparser not installed")
 class TestPcppFallback(unittest.TestCase):
