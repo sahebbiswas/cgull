@@ -174,6 +174,12 @@ class BannedFunctionsRule(BaseRule):
                 fn_start_idx = i
                 break
 
+        first_fn_start_idx = len(source_lines)
+        for i, line in enumerate(source_lines):
+            if func_header_re.match(line):
+                first_fn_start_idx = i
+                break
+
         def _find_macro_val(macro_name: str) -> Optional[int]:
             def_m = re.search(rf'#\s*define\s+{re.escape(macro_name)}\s+(\d+|0x[0-9a-fA-F]+)\b', full_code)
             if def_m:
@@ -240,14 +246,14 @@ class BannedFunctionsRule(BaseRule):
                     if alias_target and alias_target != var_name and alias_target not in ('NULL', 'nullptr'):
                         size = _lookup_array_size_in_lines(alias_target, fn_start_idx, line_number)
                         if size is None:
-                            size = _lookup_array_size_in_lines(alias_target, 0, fn_start_idx)
+                            size = _lookup_array_size_in_lines(alias_target, 0, first_fn_start_idx)
                         if size is not None:
                             res_size = max(0, size - offset)
                             self._dest_size_cache[cache_key] = res_size
                             return res_size
 
         # 3. Fallback: check global array declaration (before any function starts)
-        size = _lookup_array_size_in_lines(var_name, 0, fn_start_idx)
+        size = _lookup_array_size_in_lines(var_name, 0, first_fn_start_idx)
         self._dest_size_cache[cache_key] = size
         return size
 
@@ -281,22 +287,12 @@ class BannedFunctionsRule(BaseRule):
         assign_pat = re.compile(
             rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(var_name)}\s*(?:\[[^\]]*\])?\s*=(?!=)\s*(.+?)(?:;|$)'
         )
-        strcpy_pat = re.compile(
-            rf'\bstrcpy\s*\(\s*{re.escape(var_name)}\s*,\s*(.+?)\s*\)'
-        )
 
         for idx in range(min(line_number - 1, len(source_lines) - 1), fn_start_idx - 1, -1):
             line = source_lines[idx]
             m_assign = assign_pat.search(line)
             if m_assign:
                 rhs = m_assign.group(1).strip()
-                lit_len = self._get_string_literal_length(rhs)
-                if lit_len is not None:
-                    return lit_len
-
-            m_strcpy = strcpy_pat.search(line)
-            if m_strcpy:
-                rhs = m_strcpy.group(1).strip()
                 lit_len = self._get_string_literal_length(rhs)
                 if lit_len is not None:
                     return lit_len
