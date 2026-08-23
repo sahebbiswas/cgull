@@ -4,7 +4,7 @@ Data models for C-GULL Static Analyzer.
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Union
 import time
 from . import __version__
 
@@ -47,6 +47,74 @@ class Confidence(str, Enum):
     FULL = "FULL"
     FALLBACK = "FALLBACK"
     LIMITED = "LIMITED"
+
+
+@dataclass(eq=False)
+class ConfigProfile:
+    """
+    Internal flag-map schema representing a single build/scan configuration profile.
+
+    Attributes:
+        name: Name of the configuration profile (e.g., "debug").
+        flags: Flag map mapping macro names to values or None.
+            None represents a presence toggle (#ifdef / bare #define),
+            while str/int/etc. represent value macros (#define RETRY_COUNT 5).
+    """
+    name: str
+    flags: Dict[str, Optional[Union[str, int]]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.flags is None:
+            self.flags = {}
+        else:
+            self.flags = dict(self.flags)
+
+    @property
+    def label(self) -> str:
+        """
+        Returns the reachable_under label representation of the configuration.
+        e.g., "debug" -> "+debug", "+release" -> "+release", "" -> "".
+        """
+        if not self.name:
+            return ""
+        if self.name.startswith("+"):
+            return self.name
+        return f"+{self.name}"
+
+    @property
+    def reachable_under(self) -> str:
+        """
+        Alias for label (the reachable_under label).
+        """
+        return self.label
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, ConfigProfile):
+            return NotImplemented
+        return frozenset(self.flags.items()) == frozenset(other.flags.items())
+
+    def __hash__(self) -> int:
+        return hash(frozenset(self.flags.items()))
+
+    def __str__(self) -> str:
+        return self.label
+
+    def __repr__(self) -> str:
+        return f"ConfigProfile(name={self.name!r}, flags={self.flags!r})"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "flags": dict(self.flags),
+            "label": self.label,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ConfigProfile":
+        return cls(
+            name=data.get("name", ""),
+            flags=data.get("flags", {}),
+        )
 
 
 @dataclass
