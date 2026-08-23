@@ -22,7 +22,7 @@ regex-only extraction exactly as before.
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Set, Tuple, Union
+from typing import List, Dict, Any, Optional, Set, Tuple, Union, Mapping
 
 from .models import ParserStatus, ParseTier, ConfigProfile
 from .utils import strip_comments_keep_lines
@@ -356,7 +356,12 @@ def _tokenize_c_prep_expr(expr_str: str, macros: Dict[str, int]) -> Optional[Lis
             elif raw_text == 'false':
                 tokens.append(('NUMBER', 0))
             elif raw_text in macros:
-                tokens.append(('NUMBER', int(macros[raw_text])))
+                val = macros[raw_text]
+                try:
+                    num_val = int(val) if val is not None else 1
+                except (TypeError, ValueError):
+                    num_val = 1
+                tokens.append(('NUMBER', num_val))
             else:
                 tokens.append(('NUMBER', 0))
         else:
@@ -479,6 +484,44 @@ def _eval_c_prep_tokens(tokens: List[Tuple[str, Any]]) -> int:
         return 0
 
 
+def _normalize_macro_dict(defined_syms: Optional[Any]) -> Dict[str, int]:
+    """
+    Normalizes defined_syms into a Dict[str, int] suitable for preprocessor expression evaluation.
+    Handles sets/lists/tuples (mapping symbols to 1) and dicts/Mapping (converting values
+    including None for presence toggles, bools, ints, and string integers to int).
+    """
+    if not defined_syms:
+        return {}
+
+    if isinstance(defined_syms, (set, list, tuple, frozenset)):
+        return {str(s): 1 for s in defined_syms}
+
+    if isinstance(defined_syms, (dict, Mapping)):
+        macros: Dict[str, int] = {}
+        for k, v in defined_syms.items():
+            key = str(k)
+            if v is None:
+                macros[key] = 1
+            elif isinstance(v, bool):
+                macros[key] = 1 if v else 0
+            elif isinstance(v, int):
+                macros[key] = v
+            elif isinstance(v, str):
+                v_clean = re.sub(r'[uUlL]+$', '', v.strip())
+                try:
+                    macros[key] = int(v_clean, 0)
+                except ValueError:
+                    macros[key] = 1 if v_clean else 0
+            else:
+                try:
+                    macros[key] = int(v)
+                except (TypeError, ValueError):
+                    macros[key] = 1
+        return macros
+
+    return {}
+
+
 def eval_preprocessor_expr(expr_str: str, defined_syms: Optional[Any] = None) -> bool:
     """
     Evaluates a C preprocessor condition expression (for #if / #elif) under
@@ -489,13 +532,7 @@ def eval_preprocessor_expr(expr_str: str, defined_syms: Optional[Any] = None) ->
     if not expr_str or not expr_str.strip():
         return False
 
-    if isinstance(defined_syms, (set, list, tuple, dict)):
-        if isinstance(defined_syms, dict):
-            macros = dict(defined_syms)
-        else:
-            macros = {s: 1 for s in defined_syms}
-    else:
-        macros = {}
+    macros = _normalize_macro_dict(defined_syms)
 
     tokens = _tokenize_c_prep_expr(expr_str, macros)
     if tokens is None or len(tokens) == 0:
@@ -514,13 +551,7 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
     Replaces directive lines and non-taken branch bodies with blank lines ("") to maintain
     exact line alignment and total line count for AST mapping.
     """
-    if isinstance(defined_syms, (set, list, tuple, dict)):
-        if isinstance(defined_syms, dict):
-            macros: Dict[str, int] = dict(defined_syms)
-        else:
-            macros = {s: 1 for s in defined_syms}
-    else:
-        macros = {}
+    macros: Dict[str, int] = _normalize_macro_dict(defined_syms)
 
     lines = code.splitlines()
     output_lines: List[str] = []

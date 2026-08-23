@@ -3,13 +3,13 @@ Unit tests for config-space variant generation (baseline + one-at-a-time single-
 """
 
 import unittest
-from typing import Mapping
-import pytest
 
 from cgull.ast_analyzer import (
     ConditionalFlagCollector,
     CollectedFlags,
     generate_config_profiles,
+    eval_preprocessor_expr,
+    resolve_preprocessor_conditionals,
 )
 from cgull.models import ConfigProfile
 from cgull.utils import strip_comments_keep_lines
@@ -167,6 +167,47 @@ class TestConfigSpaceVariants(unittest.TestCase):
     def test_invalid_input_type(self):
         with self.assertRaises(TypeError):
             generate_config_profiles(12345)
+
+    def test_eval_preprocessor_expr_with_config_profile_flags(self):
+        """
+        Tests that passing ConfigProfile.flags (with None for presence flags)
+        into eval_preprocessor_expr does not raise TypeError and evaluates presence checks correctly.
+        """
+        cp = ConfigProfile(name="test_profile", flags={"ENABLE_FEATURE": None, "VAL_MACRO": "5", "BOOL_MACRO": True})
+
+        self.assertTrue(eval_preprocessor_expr("ENABLE_FEATURE", cp.flags))
+        self.assertTrue(eval_preprocessor_expr("defined(ENABLE_FEATURE)", cp.flags))
+        self.assertTrue(eval_preprocessor_expr("VAL_MACRO == 5", cp.flags))
+        self.assertTrue(eval_preprocessor_expr("BOOL_MACRO", cp.flags))
+        self.assertFalse(eval_preprocessor_expr("UNDEFINED_FEATURE", cp.flags))
+
+    def test_resolve_preprocessor_conditionals_with_config_profile_flags(self):
+        """
+        Tests that resolve_preprocessor_conditionals correctly handles ConfigProfile.flags
+        for #if and #ifdef directives without raising TypeError.
+        """
+        code = """
+        #ifdef ENABLE_FEATURE
+        int active_feature = 1;
+        #else
+        int active_feature = 0;
+        #endif
+
+        #if ENABLE_FEATURE
+        int active_if = 1;
+        #endif
+
+        #if UNDEFINED_FEATURE
+        int inactive = 1;
+        #endif
+        """
+        cp = ConfigProfile(name="active_spec", flags={"ENABLE_FEATURE": None})
+        resolved = resolve_preprocessor_conditionals(code, cp.flags)
+
+        self.assertIn("int active_feature = 1;", resolved)
+        self.assertNotIn("int active_feature = 0;", resolved)
+        self.assertIn("int active_if = 1;", resolved)
+        self.assertNotIn("int inactive = 1;", resolved)
 
 
 if __name__ == "__main__":
