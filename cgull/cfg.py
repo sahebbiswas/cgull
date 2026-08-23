@@ -139,7 +139,7 @@ class StructuredCFG:
             if len(preds[nid]) != 1:
                 leaders.add(nid)
             for succ in node.successors:
-                if len(node.successors) > 1:
+                if len(node.successors) > 1 or node.kind.endswith("_cond"):
                     leaders.add(succ)
 
         self.blocks = {}
@@ -404,19 +404,20 @@ class StructuredCFG:
                 edge_loc_state = dict(curr_loc_state)
                 for new_loc_id, (target_var, input_ptr, input_locs, pre_states, size_is_zero) in self.realloc_records.items():
                     if new_loc_id in curr_loc_map.get(target_var, set()):
-                        t_null = edge_null.get(target_var, Nullness.UNKNOWN)
-                        if t_null == Nullness.NON_NULL:
-                            for loc in input_locs:
-                                if pre_states.get(loc) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED, Allocation.MAYBE_FREED):
-                                    edge_loc_state[loc] = Allocation.FREED
-                            edge_loc_state[new_loc_id] = Allocation.ALLOCATED
-                        elif t_null == Nullness.NULL:
-                            for loc in input_locs:
-                                if size_is_zero:
-                                    edge_loc_state[loc] = Allocation.MAYBE_FREED
-                                else:
-                                    edge_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
-                            edge_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
+                        if curr_null.get(target_var, Nullness.UNKNOWN) in (Nullness.MAYBE_NULL, Nullness.UNKNOWN):
+                            t_null = edge_null.get(target_var, Nullness.UNKNOWN)
+                            if t_null == Nullness.NON_NULL:
+                                for loc in input_locs:
+                                    if pre_states.get(loc) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED, Allocation.MAYBE_FREED):
+                                        edge_loc_state[loc] = Allocation.FREED
+                                edge_loc_state[new_loc_id] = Allocation.ALLOCATED
+                            elif t_null == Nullness.NULL:
+                                for loc in input_locs:
+                                    if size_is_zero:
+                                        edge_loc_state[loc] = Allocation.MAYBE_FREED
+                                    else:
+                                        edge_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
+                                edge_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
 
                 all_loc_ids = set(edge_loc_state.keys()).union(succ_block.loc_state_in.keys())
                 for loc in all_loc_ids:
@@ -459,23 +460,6 @@ class StructuredCFG:
             curr_loc_map = {v: set(locs) for v, locs in block.loc_map_in.items()}
 
             for node in block.nodes:
-                if hasattr(self, "realloc_records"):
-                    for new_loc_id, (target_var, input_ptr, input_locs, pre_states, size_is_zero) in self.realloc_records.items():
-                        if new_loc_id in curr_loc_map.get(target_var, set()):
-                            t_null = curr_null.get(target_var, Nullness.UNKNOWN)
-                            if t_null == Nullness.NON_NULL:
-                                for loc in input_locs:
-                                    if pre_states.get(loc) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED, Allocation.MAYBE_FREED):
-                                        curr_loc_state[loc] = Allocation.FREED
-                                curr_loc_state[new_loc_id] = Allocation.ALLOCATED
-                            elif t_null == Nullness.NULL:
-                                for loc in input_locs:
-                                    if size_is_zero:
-                                        curr_loc_state[loc] = Allocation.MAYBE_FREED
-                                    else:
-                                        curr_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
-                                curr_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
-
                 curr_node_alloc: Dict[str, Allocation] = {}
                 for v in all_vars:
                     locs = curr_loc_map.get(v, set())
