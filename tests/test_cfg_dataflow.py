@@ -928,6 +928,54 @@ class TestReallocSemantics(unittest.TestCase):
         node = call_nodes[0]
         self.assertEqual(getattr(node, "realloc_bindings", {}), {})
 
+    def test_multi_realloc_rhs_comma_expression_binds_value_producing_call(self):
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void f() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *r = (int *)malloc(10 * sizeof(int));
+            if (!r) return;
+            int *q = (realloc(p, 20 * sizeof(int)), realloc(r, 30 * sizeof(int)));
+            if (q != NULL) {
+                q[0] = 1;
+            } else {
+                r[0] = 2;
+            }
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        # Find the assignment node for q
+        q_nodes = [n for n in cfg.nodes.values() if "realloc(r," in n.expr_str]
+        self.assertEqual(len(q_nodes), 1)
+        q_node = q_nodes[0]
+
+        # Verify realloc_inputs contains both p and r
+        self.assertEqual(q_node.realloc_inputs, {"p", "r"})
+
+        # Verify realloc_bindings binds q strictly to r (value-producing call)
+        self.assertEqual(q_node.realloc_bindings, {"q": "r"})
+
+        # On success branch (q[0] = 1), q is NON_NULL and ALLOCATED, r is FREED, p is MAYBE_FREED
+        s_nodes = [n for n in cfg.nodes.values() if "q[0] = 1" in n.expr_str]
+        self.assertEqual(len(s_nodes), 1)
+        s_nid = s_nodes[0].node_id
+        self.assertEqual(cfg.query_allocation('q', s_nid), Allocation.ALLOCATED)
+        self.assertEqual(cfg.query_allocation('r', s_nid), Allocation.FREED)
+        self.assertEqual(cfg.query_allocation('p', s_nid), Allocation.MAYBE_FREED)
+
+        # On failure branch (r[0] = 2), q is NULL, r is ALLOCATED, p is MAYBE_FREED
+        f_nodes = [n for n in cfg.nodes.values() if "r[0] = 2" in n.expr_str]
+        self.assertEqual(len(f_nodes), 1)
+        f_nid = f_nodes[0].node_id
+        self.assertEqual(cfg.query_allocation('r', f_nid), Allocation.ALLOCATED)
+        self.assertEqual(cfg.query_allocation('p', f_nid), Allocation.MAYBE_FREED)
+
     def test_realloc_double_free_and_uaf_detected_after_realloc_success(self):
         from cgull.ast_analyzer import CASTParser
         from cgull.rules.memory_management import DoubleFreeRule, UseAfterFreeRule
