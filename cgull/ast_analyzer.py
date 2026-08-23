@@ -846,13 +846,96 @@ class CASTParser:
         import re
 
         class _SilentPreprocessor(pcpp.Preprocessor):
-            """Suppresses errors and passes through unresolvable #includes."""
+            """Suppresses errors, passes through unresolvable #includes, and syncs #line directives on drift."""
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.line_directive = '#line'
+
             def on_error(self, file, line, msg):
                 pass
 
             def on_include_not_found(self, is_malformed, is_system_include,
                                      curdir, includepath):
                 raise pcpp.OutputDirective(pcpp.Action.IgnoreAndPassThrough)
+
+            def write(self, oh=None):
+                """Custom write loop based on pcpp.Preprocessor.write (pcpp v1.30) that forces
+
+                emitting a #line directive whenever lineno drifts (e.g. multi-line macro calls).
+                """
+                if oh is None:
+                    import sys
+                    oh = sys.stdout
+                lastlineno = 0
+                lastsource = None
+                done = False
+                blanklines = 0
+                while not done:
+                    emitlinedirective = False
+                    toks = []
+                    all_ws = True
+                    while not done:
+                        tok = self.token()
+                        if not tok:
+                            done = True
+                            break
+                        toks.append(tok)
+                        if tok.value and tok.value[0] == '\n':
+                            break
+                        if tok.type not in self.t_WS:
+                            all_ws = False
+                    if not toks:
+                        break
+                    if all_ws:
+                        if len(toks) > 1:
+                            tok = toks[-1]
+                            toks = [tok]
+                        blanklines += toks[0].value.count('\n')
+                        continue
+                    for n in range(len(toks) - 1, -1, -1):
+                        if self.t_LINECONT is not None and toks[n].type == self.t_LINECONT:
+                            if n > 0 and n < len(toks) - 2 and toks[n - 1].type in self.t_WS and toks[n + 1].type in self.t_WS:
+                                if self.t_LINECONT is None or toks[n - 1].type != self.t_LINECONT:
+                                    toks[n - 1].value = toks[n - 1].value[0]
+                                    del toks[n:n + 2]
+                            else:
+                                del toks[n]
+                    emitlinedirective = (blanklines > 6) and self.line_directive is not None
+                    if hasattr(toks[0], 'source'):
+                        if lastsource is None:
+                            if toks[0].source is not None:
+                                emitlinedirective = True
+                            lastsource = toks[0].source
+                        elif lastsource != toks[0].source:
+                            emitlinedirective = True
+                            lastsource = toks[0].source
+                    first_ws = None
+                    for n in range(len(toks) - 1, -1, -1):
+                        tok = toks[n]
+                        if first_ws is None:
+                            if (self.t_SPACE is not None and tok.type == self.t_SPACE) or len(tok.value) == 0:
+                                first_ws = n
+                        else:
+                            if (self.t_SPACE is None or tok.type != self.t_SPACE) and len(tok.value) > 0:
+                                m = n + 1
+                                while m != first_ws:
+                                    del toks[m]
+                                    first_ws -= 1
+                                first_ws = None
+                                if self.compress > 0:
+                                    if toks[m].value and toks[m].value[0] == ' ':
+                                        toks[m].value = ' '
+                    if toks[0].lineno != lastlineno + 1:
+                        emitlinedirective = True
+                    lastlineno = toks[0].lineno
+                    if emitlinedirective and self.line_directive is not None:
+                        oh.write(self.line_directive + ' ' + str(lastlineno) + ('' if lastsource is None else (' "' + lastsource + '"')) + '\n')
+                    for tok in toks:
+                        if tok.type == self.t_COMMENT1:
+                            lastlineno += tok.value.count('\n')
+                    blanklines = 0
+                    for tok in toks:
+                        oh.write(tok.value)
 
         try:
             preprocessor = _SilentPreprocessor()

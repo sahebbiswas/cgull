@@ -504,6 +504,35 @@ class TestPcppPreprocessing(unittest.TestCase):
         self.assertEqual(len(ctx.functions), 1)
         self.assertEqual(ctx.functions[0].name, "f")
 
+    def test_multiline_macro_call_does_not_cause_line_drift(self):
+        """Multi-line function-like macro calls must not shift reported line numbers of subsequent code."""
+        src = (
+            "#define LOG(fmt, ...) printf(fmt, __VA_ARGS__)\n"  # line 1
+            "\n"                                                # line 2
+            "void test(void) {\n"                               # line 3
+            "    int x = 1;\n"                                  # line 4
+            "    LOG(\n"                                        # line 5
+            "        \"%d %d %d\",\n"                             # line 6
+            "        1,\n"                                      # line 7
+            "        2,\n"                                      # line 8
+            "        3\n"                                       # line 9
+            "    );\n"                                          # line 10
+            "    int *p = malloc(10);\n"                        # line 11
+            "}\n"                                               # line 12
+        )
+        ctx = self.parser.parse(src)
+        self.assertTrue(ctx.has_pycparser)
+        self.assertEqual(ctx.parse_tier, "pcpp+pycparser")
+        fn = ctx.functions[0]
+        self.assertEqual(fn.name, "test")
+        self.assertEqual(fn.start_line, 3)
+        self.assertEqual(fn.end_line, 12)
+        self.assertIn("p", fn.variables)
+        self.assertEqual(fn.variables["p"].declaration_line, 11)
+        malloc_calls = [call for call in fn.calls if call[0] == "malloc"]
+        self.assertEqual(len(malloc_calls), 1)
+        self.assertEqual(malloc_calls[0][1], 11)
+
 
 @unittest.skipUnless(_pycparser_available(), "pycparser not installed")
 class TestPcppFallback(unittest.TestCase):
