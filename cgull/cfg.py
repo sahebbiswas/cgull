@@ -745,6 +745,41 @@ def _process_call_effects(call_node, target_var: Optional[str], summaries: Optio
             pass
 
 
+def _find_ternary_op(node):
+    if node is None:
+        return None
+    kind = type(node).__name__
+    if kind == "TernaryOp":
+        return node
+    for _, child in node.children():
+        res = _find_ternary_op(child)
+        if res is not None:
+            return res
+    return None
+
+
+def _replace_ast_node(tree, target, replacement):
+    from pycparser import c_ast
+    if tree is target:
+        return replacement
+    if tree is None:
+        return None
+    import copy
+    tree_copy = copy.copy(tree)
+    slots = set()
+    for cls in type(tree_copy).__mro__:
+        for slot in getattr(cls, '__slots__', ()):
+            slots.add(slot)
+    for attr in slots:
+        val = getattr(tree_copy, attr, None)
+        if isinstance(val, list):
+            new_list = [_replace_ast_node(item, target, replacement) if isinstance(item, c_ast.Node) else item for item in val]
+            setattr(tree_copy, attr, new_list)
+        elif isinstance(val, c_ast.Node):
+            setattr(tree_copy, attr, _replace_ast_node(val, target, replacement))
+    return tree_copy
+
+
 def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str]]:
     """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs for an executable AST node."""
     kind = type(ast_node).__name__
@@ -885,6 +920,26 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
         if stmt is None:
             return next_entry
         kind = type(stmt).__name__
+
+        # Handle expression-level control flow: TernaryOp (?:)
+        if kind == "If":
+            ternary = _find_ternary_op(stmt.cond)
+            if ternary is not None:
+                coord = getattr(stmt, 'coord', None)
+                cond_t = _replace_ast_node(stmt.cond, ternary, ternary.iftrue)
+                cond_f = _replace_ast_node(stmt.cond, ternary, ternary.iffalse)
+                if_t = c_ast.If(cond=cond_t, iftrue=stmt.iftrue, iffalse=stmt.iffalse, coord=coord)
+                if_f = c_ast.If(cond=cond_f, iftrue=stmt.iftrue, iffalse=stmt.iffalse, coord=coord)
+                outer_if = c_ast.If(cond=ternary.cond, iftrue=if_t, iffalse=if_f, coord=coord)
+                return build_stmt(outer_if, next_entry, break_target, continue_target)
+        elif kind not in {"Compound", "While", "DoWhile", "For", "Switch", "Label", "Goto", "Break", "Continue"}:
+            ternary = _find_ternary_op(stmt)
+            if ternary is not None:
+                coord = getattr(stmt, 'coord', None)
+                stmt_t = _replace_ast_node(stmt, ternary, ternary.iftrue)
+                stmt_f = _replace_ast_node(stmt, ternary, ternary.iffalse)
+                if_stmt = c_ast.If(cond=ternary.cond, iftrue=stmt_t, iffalse=stmt_f, coord=coord)
+                return build_stmt(if_stmt, next_entry, break_target, continue_target)
 
         if kind == "Compound":
             return build_compound(stmt.block_items, next_entry, break_target, continue_target)

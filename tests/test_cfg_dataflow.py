@@ -372,6 +372,89 @@ class TestCFGGotoAndLabeledControlFlow(unittest.TestCase):
         self.assertEqual(p_alloc, Allocation.ALLOCATED)
 
 
+class TestExpressionControlFlow(unittest.TestCase):
+
+    def test_ternary_expression_path_sensitive_nullness(self):
+        code = """
+        void f(int *p) {
+            int val = p ? *p : -1;
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+        deref_nodes = [n for n in cfg.nodes.values() if "*p" in n.expr_str]
+        self.assertEqual(len(deref_nodes), 1)
+        deref_node_id = deref_nodes[0].node_id
+        self.assertEqual(cfg.query_nullness('p', deref_node_id), Nullness.NON_NULL)
+
+    def test_short_circuit_and_expression_path_sensitive_nullness(self):
+        code = """
+        void f(int *p) {
+            if (p != NULL && *p == 1) {
+                use(*p);
+            }
+            return;
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+        use_nodes = [n for n in cfg.nodes.values() if "use(*p)" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        self.assertEqual(cfg.query_nullness('p', use_nodes[0].node_id), Nullness.NON_NULL)
+
+    def test_short_circuit_or_guard_clause(self):
+        code = """
+        void f(int *p) {
+            if (p == NULL || *p == 0) {
+                return;
+            }
+            use(*p);
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+        use_nodes = [n for n in cfg.nodes.values() if "use(*p)" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        self.assertEqual(cfg.query_nullness('p', use_nodes[0].node_id), Nullness.NON_NULL)
+
+    def test_juliet_style_ternary_free_and_alloc(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import MissingNullCheckOnFunctionParametersRule, UseAfterFreeRule, UncheckedDynamicAllocationsRule
+
+        code = """
+        void *malloc(size_t);
+        void free(void *);
+
+        void juliet_cwe476_ternary_good(int *p) {
+            int x = p ? *p : 0;
+        }
+
+        void juliet_cwe415_ternary_good(char *p, int flag) {
+            if (p == (char *)0) return;
+            flag ? free(p) : (void)0;
+        }
+
+        void juliet_cwe252_ternary_alloc_good(int flag) {
+            char *buf = (char *)malloc(10);
+            if (buf == (void *)0) return;
+            buf[0] = 'x';
+            free(buf);
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_null = MissingNullCheckOnFunctionParametersRule()
+        issues_null = rule_null.scan_ast("juliet_test.c", ast_ctx)
+        self.assertEqual(len(issues_null), 0, "Ternary pointer check should prevent missing NULL check finding")
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("juliet_test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 0, "Ternary free should not trigger false positive UAF on un-freed branch")
+
+        rule_alloc = UncheckedDynamicAllocationsRule()
+        issues_alloc = rule_alloc.scan_ast("juliet_test.c", ast_ctx)
+        self.assertEqual(len(issues_alloc), 0, "Ternary allocation checked for NULL should not be flagged as unchecked")
+
+
 class TestAliasLifetimeTracking(unittest.TestCase):
 
     def test_uaf_and_double_free_through_direct_alias(self):

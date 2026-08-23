@@ -797,7 +797,8 @@ class CASTParser:
             for line in clean_code.splitlines()
         )
         stripped_code = _strip_attributes_and_specifiers(no_directives)
-        prepared = _PYCPARSER_PRELUDE + stripped_code
+        filtered_prelude = self._filter_prelude(_PYCPARSER_PRELUDE, stripped_code)
+        prepared = filtered_prelude + stripped_code
 
         try:
             parser = c_parser.CParser()
@@ -805,6 +806,21 @@ class CASTParser:
             return pycparser_ast, True, ParseTier.DIRECTIVE_STRIPPED.value
         except Exception:
             return None, False, ParseTier.REGEX_FALLBACK.value
+
+    def _filter_prelude(self, prelude_text: str, code_text: str) -> str:
+        """Filters out typedefs from the prelude that are explicitly re-declared in code_text."""
+        filtered = []
+        for line in prelude_text.splitlines(keepends=True):
+            line_s = line.strip()
+            if line_s.startswith('typedef '):
+                parts = line_s.rstrip(';\n').split()
+                if len(parts) >= 3:
+                    name = parts[-1]
+                    if re.search(r'\btypedef\s+[^;]*\b' + re.escape(name) + r'\b\s*;', code_text):
+                        filtered.append('\n' if line.endswith('\n') else '')
+                        continue
+            filtered.append(line)
+        return ''.join(filtered)
 
     def _try_pcpp_preprocess(self, clean_code: str) -> "Optional[str]":
         """
@@ -843,7 +859,8 @@ class CASTParser:
             # Feed the typedef prelude + source as a single unit so that
             # macros defined in the source are expanded while the prelude
             # typedefs are preserved for pycparser.
-            combined = _PYCPARSER_PRELUDE + clean_code
+            filtered_prelude = self._filter_prelude(_PYCPARSER_PRELUDE, clean_code)
+            combined = filtered_prelude + clean_code
             preprocessor.parse(combined, '<input>')
             out = io.StringIO()
             preprocessor.write(out)
