@@ -859,7 +859,10 @@ class CASTParser:
                 raise pcpp.OutputDirective(pcpp.Action.IgnoreAndPassThrough)
 
             def write(self, oh=None):
-                """Custom write loop that forces emitting a #line directive whenever lineno drifts."""
+                """Custom write loop based on pcpp.Preprocessor.write (pcpp v1.30) that forces
+
+                emitting a #line directive whenever lineno drifts (e.g. multi-line macro calls).
+                """
                 if oh is None:
                     import sys
                     oh = sys.stdout
@@ -890,9 +893,9 @@ class CASTParser:
                         blanklines += toks[0].value.count('\n')
                         continue
                     for n in range(len(toks) - 1, -1, -1):
-                        if toks[n].type in self.t_LINECONT:
+                        if self.t_LINECONT is not None and toks[n].type == self.t_LINECONT:
                             if n > 0 and n < len(toks) - 2 and toks[n - 1].type in self.t_WS and toks[n + 1].type in self.t_WS:
-                                if toks[n - 1].type not in self.t_LINECONT:
+                                if self.t_LINECONT is None or toks[n - 1].type != self.t_LINECONT:
                                     toks[n - 1].value = toks[n - 1].value[0]
                                     del toks[n:n + 2]
                             else:
@@ -910,10 +913,10 @@ class CASTParser:
                     for n in range(len(toks) - 1, -1, -1):
                         tok = toks[n]
                         if first_ws is None:
-                            if tok.type in self.t_SPACE or len(tok.value) == 0:
+                            if (self.t_SPACE is not None and tok.type == self.t_SPACE) or len(tok.value) == 0:
                                 first_ws = n
                         else:
-                            if tok.type not in self.t_SPACE and len(tok.value) > 0:
+                            if (self.t_SPACE is None or tok.type != self.t_SPACE) and len(tok.value) > 0:
                                 m = n + 1
                                 while m != first_ws:
                                     del toks[m]
