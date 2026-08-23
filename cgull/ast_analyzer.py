@@ -96,6 +96,371 @@ _STATEMENT_KEYWORDS = {
 _PREPROCESSOR_LINE_RE = re.compile(r'^[ \t]*#')
 
 
+@dataclass
+class _CondFrame:
+    has_taken: bool
+    is_taken: bool
+    parent_active: bool
+
+
+_C_PREP_TOKEN_RE = re.compile(
+    r'(?P<WHITESPACE>[ \t\r\n]+)|'
+    r'(?P<NUMBER>(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*)|'
+    r'(?P<IDENT>[a-zA-Z_]\w*)|'
+    r'(?P<LOGICAL_OR>\|\|)|'
+    r'(?P<LOGICAL_AND>&&)|'
+    r'(?P<EQUAL>==)|'
+    r'(?P<NOT_EQUAL>!=)|'
+    r'(?P<LESS_EQUAL><=)|'
+    r'(?P<GREATER_EQUAL>>=)|'
+    r'(?P<LSHIFT><<)|'
+    r'(?P<RSHIFT>>>)|'
+    r'(?P<LPAREN>\()|'
+    r'(?P<RPAREN>\))|'
+    r'(?P<LOGICAL_NOT>!)|'
+    r'(?P<BITWISE_NOT>~)|'
+    r'(?P<ADD>\+)|'
+    r'(?P<SUB>-)|'
+    r'(?P<MUL>\*)|'
+    r'(?P<DIV>/)|'
+    r'(?P<MOD>%)|'
+    r'(?P<LESS><)|'
+    r'(?P<GREATER>>)|'
+    r'(?P<BITWISE_AND>&)|'
+    r'(?P<BITWISE_XOR>\^)|'
+    r'(?P<BITWISE_OR>\|)'
+)
+
+
+def _tokenize_c_prep_expr(expr_str: str, macros: Dict[str, int]) -> Optional[List[Tuple[str, Any]]]:
+    s = expr_str.strip()
+
+    # Pre-resolve defined(SYM) and defined SYM
+    def replace_defined(m):
+        sym = m.group(1) or m.group(2)
+        return " 1 " if sym in macros else " 0 "
+
+    s = re.sub(
+        r'\bdefined\s*\(\s*([a-zA-Z_]\w*)\s*\)|\bdefined\s+([a-zA-Z_]\w*)',
+        replace_defined,
+        s
+    )
+
+    tokens: List[Tuple[str, Any]] = []
+    pos = 0
+    n = len(s)
+
+    while pos < n:
+        m = _C_PREP_TOKEN_RE.match(s, pos)
+        if not m:
+            return None  # Unrecognized character
+        pos = m.end()
+
+        kind = m.lastgroup
+        if kind == 'WHITESPACE':
+            continue
+
+        raw_text = m.group(kind)
+
+        if kind == 'NUMBER':
+            num_clean = re.sub(r'[uUlL]+$', '', raw_text)
+            try:
+                val = int(num_clean, 0)
+                tokens.append(('NUMBER', val))
+            except ValueError:
+                return None
+        elif kind == 'IDENT':
+            if raw_text == 'true':
+                tokens.append(('NUMBER', 1))
+            elif raw_text == 'false':
+                tokens.append(('NUMBER', 0))
+            elif raw_text in macros:
+                tokens.append(('NUMBER', int(macros[raw_text])))
+            else:
+                tokens.append(('NUMBER', 0))
+        else:
+            tokens.append((kind, None))
+
+    if len(tokens) > 500:
+        return None  # DoS guard
+
+    return tokens
+
+
+_INFIX_BP = {
+    'LOGICAL_OR':    (1, 2),
+    'LOGICAL_AND':   (3, 4),
+    'BITWISE_OR':    (5, 6),
+    'BITWISE_XOR':   (7, 8),
+    'BITWISE_AND':   (9, 10),
+    'EQUAL':         (11, 12),
+    'NOT_EQUAL':     (11, 12),
+    'LESS':          (13, 14),
+    'LESS_EQUAL':    (13, 14),
+    'GREATER':       (13, 14),
+    'GREATER_EQUAL': (13, 14),
+    'LSHIFT':        (15, 16),
+    'RSHIFT':        (15, 16),
+    'ADD':           (17, 18),
+    'SUB':           (17, 18),
+    'MUL':           (19, 20),
+    'DIV':           (19, 20),
+    'MOD':           (19, 20),
+}
+
+
+def _eval_c_prep_tokens(tokens: List[Tuple[str, Any]]) -> int:
+    pos = 0
+    n = len(tokens)
+
+    def parse_expr(min_bp: int = 0) -> int:
+        nonlocal pos
+        if pos >= n:
+            return 0
+
+        tok_type, tok_val = tokens[pos]
+        pos += 1
+
+        if tok_type == 'NUMBER':
+            left = tok_val
+        elif tok_type == 'LPAREN':
+            left = parse_expr(0)
+            if pos < n and tokens[pos][0] == 'RPAREN':
+                pos += 1
+        elif tok_type == 'LOGICAL_NOT':
+            right = parse_expr(21)
+            left = 1 if (right == 0) else 0
+        elif tok_type == 'BITWISE_NOT':
+            right = parse_expr(21)
+            left = ~right
+        elif tok_type == 'ADD':
+            left = parse_expr(21)
+        elif tok_type == 'SUB':
+            left = -parse_expr(21)
+        else:
+            return 0
+
+        while pos < n:
+            op_type = tokens[pos][0]
+            if op_type not in _INFIX_BP:
+                break
+            lbp, rbp = _INFIX_BP[op_type]
+            if lbp < min_bp:
+                break
+            pos += 1  # consume op
+
+            right = parse_expr(rbp)
+
+            if op_type == 'LOGICAL_OR':
+                left = 1 if (left != 0 or right != 0) else 0
+            elif op_type == 'LOGICAL_AND':
+                left = 1 if (left != 0 and right != 0) else 0
+            elif op_type == 'BITWISE_OR':
+                left = left | right
+            elif op_type == 'BITWISE_XOR':
+                left = left ^ right
+            elif op_type == 'BITWISE_AND':
+                left = left & right
+            elif op_type == 'EQUAL':
+                left = 1 if (left == right) else 0
+            elif op_type == 'NOT_EQUAL':
+                left = 1 if (left != right) else 0
+            elif op_type == 'LESS':
+                left = 1 if (left < right) else 0
+            elif op_type == 'LESS_EQUAL':
+                left = 1 if (left <= right) else 0
+            elif op_type == 'GREATER':
+                left = 1 if (left > right) else 0
+            elif op_type == 'GREATER_EQUAL':
+                left = 1 if (left >= right) else 0
+            elif op_type == 'LSHIFT':
+                shift_amt = max(0, min(63, right))
+                left = left << shift_amt
+            elif op_type == 'RSHIFT':
+                shift_amt = max(0, min(63, right))
+                left = left >> shift_amt
+            elif op_type == 'ADD':
+                left = left + right
+            elif op_type == 'SUB':
+                left = left - right
+            elif op_type == 'MUL':
+                left = left * right
+            elif op_type == 'DIV':
+                left = left // right if right != 0 else 0
+            elif op_type == 'MOD':
+                left = left % right if right != 0 else 0
+
+        return left
+
+    try:
+        return parse_expr(0)
+    except Exception:
+        return 0
+
+
+def eval_preprocessor_expr(expr_str: str, defined_syms: Optional[Any] = None) -> bool:
+    """
+    Evaluates a C preprocessor condition expression (for #if / #elif) under
+    the assumption of `defined_syms` / `macros`. Any undefined identifier evaluates to 0 (false).
+    Supports C operator precedence, numeric macro expansion, integer suffixes (U, L, UL, etc.),
+    and contains DoS protections against extreme shifts or division by zero.
+    """
+    if not expr_str or not expr_str.strip():
+        return False
+
+    if isinstance(defined_syms, (set, list, tuple, dict)):
+        if isinstance(defined_syms, dict):
+            macros = dict(defined_syms)
+        else:
+            macros = {s: 1 for s in defined_syms}
+    else:
+        macros = {}
+
+    tokens = _tokenize_c_prep_expr(expr_str, macros)
+    if tokens is None or len(tokens) == 0:
+        return False
+
+    val = _eval_c_prep_tokens(tokens)
+    return bool(val != 0)
+
+
+def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = None) -> str:
+    """
+    Performs a line-by-line single-pass resolution of C preprocessor directives and
+    conditionals (#if, #ifdef, #ifndef, #elif, #else, #endif), evaluating branch
+    conditions against `macros` (or `defined_syms`).
+
+    Replaces directive lines and non-taken branch bodies with blank lines ("") to maintain
+    exact line alignment and total line count for AST mapping.
+    """
+    if isinstance(defined_syms, (set, list, tuple, dict)):
+        if isinstance(defined_syms, dict):
+            macros: Dict[str, int] = dict(defined_syms)
+        else:
+            macros = {s: 1 for s in defined_syms}
+    else:
+        macros = {}
+
+    lines = code.splitlines()
+    output_lines: List[str] = []
+
+    cond_stack: List[_CondFrame] = []
+
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        line_lstrip = line.lstrip()
+
+        # Check if this line starts a preprocessor directive
+        if line_lstrip.startswith('#'):
+            directive_parts = []
+            directive_line_indices = []
+
+            curr_i = i
+            while curr_i < n:
+                curr_line = lines[curr_i]
+                directive_line_indices.append(curr_i)
+                curr_rstrip = curr_line.rstrip()
+                if curr_rstrip.endswith('\\'):
+                    directive_parts.append(curr_rstrip[:-1])
+                    curr_i += 1
+                else:
+                    directive_parts.append(curr_rstrip)
+                    break
+
+            full_directive_str = " ".join(directive_parts).strip()
+            i = curr_i + 1
+
+            dir_body = full_directive_str.lstrip('#').strip()
+
+            m_ifdef = re.match(r'^ifdef\s+([a-zA-Z_]\w*)', dir_body)
+            m_ifndef = re.match(r'^ifndef\s+([a-zA-Z_]\w*)', dir_body)
+            m_if = re.match(r'^if\b\s*(.*)', dir_body)
+            m_elif = re.match(r'^elif\b\s*(.*)', dir_body)
+            m_else = re.match(r'^else\b', dir_body)
+            m_endif = re.match(r'^endif\b', dir_body)
+            m_define = re.match(r'^define\s+([a-zA-Z_]\w*)(?:\s+(.*))?$', dir_body)
+            m_undef = re.match(r'^undef\s+([a-zA-Z_]\w*)', dir_body)
+
+            parent_act = True if not cond_stack else (cond_stack[-1].parent_active and cond_stack[-1].is_taken)
+
+            if m_ifdef:
+                sym_name = m_ifdef.group(1)
+                val = eval_preprocessor_expr(f"defined({sym_name})", macros) if parent_act else False
+                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+            elif m_ifndef:
+                sym_name = m_ifndef.group(1)
+                val = eval_preprocessor_expr(f"!defined({sym_name})", macros) if parent_act else False
+                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+            elif m_if:
+                expr_str = m_if.group(1)
+                val = eval_preprocessor_expr(expr_str, macros) if parent_act else False
+                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+            elif m_elif:
+                expr_str = m_elif.group(1)
+                if cond_stack:
+                    top = cond_stack[-1]
+                    if top.has_taken:
+                        top.is_taken = False
+                    else:
+                        val = eval_preprocessor_expr(expr_str, macros) if top.parent_active else False
+                        top.is_taken = val
+                        if val:
+                            top.has_taken = True
+            elif m_else:
+                if cond_stack:
+                    top = cond_stack[-1]
+                    if top.has_taken:
+                        top.is_taken = False
+                    else:
+                        top.is_taken = top.parent_active
+                        top.has_taken = True
+            elif m_endif:
+                if cond_stack:
+                    cond_stack.pop()
+            elif m_define and parent_act:
+                m_name = m_define.group(1)
+                m_val_raw = (m_define.group(2) or "").strip()
+                if not m_val_raw or m_val_raw.startswith('//') or m_val_raw.startswith('/*'):
+                    macros[m_name] = 1
+                else:
+                    val_clean = re.sub(r'/\*.*?\*/|//.*', '', m_val_raw).strip()
+                    m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
+                    if m_num:
+                        try:
+                            macros[m_name] = int(m_num.group(1), 0)
+                        except ValueError:
+                            macros[m_name] = 1
+                    else:
+                        if eval_preprocessor_expr(val_clean, macros):
+                            tokens = _tokenize_c_prep_expr(val_clean, macros)
+                            if tokens:
+                                macros[m_name] = _eval_c_prep_tokens(tokens)
+                            else:
+                                macros[m_name] = 1
+                        else:
+                            macros[m_name] = 1
+            elif m_undef and parent_act:
+                macros.pop(m_undef.group(1), None)
+
+            # All lines belonging to this directive become "" (blank)
+            for _ in directive_line_indices:
+                output_lines.append("")
+
+        else:
+            # Ordinary code line
+            current_active = True if not cond_stack else (cond_stack[-1].parent_active and cond_stack[-1].is_taken)
+            if current_active:
+                output_lines.append(line)
+            else:
+                output_lines.append("")
+            i += 1
+
+    return "\n".join(output_lines)
+
+
 def _strip_attributes_and_specifiers(code: str) -> str:
     """
     Strips GNU/Clang __attribute__((...)) and MSVC __declspec(...) constructs
@@ -791,12 +1156,9 @@ class CASTParser:
             except Exception:
                 pass  # Fall through to tier 2
 
-        # Tier 2: Strip directives + typedef prelude (original approach)
-        no_directives = "\n".join(
-            "" if _PREPROCESSOR_LINE_RE.match(line) else line
-            for line in clean_code.splitlines()
-        )
-        stripped_code = _strip_attributes_and_specifiers(no_directives)
+        # Tier 2: Conditional resolution + Directive stripping + typedef prelude
+        resolved_code = resolve_preprocessor_conditionals(clean_code)
+        stripped_code = _strip_attributes_and_specifiers(resolved_code)
         filtered_prelude = self._filter_prelude(_PYCPARSER_PRELUDE, stripped_code)
         prepared = filtered_prelude + stripped_code
 
