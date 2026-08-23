@@ -19,12 +19,141 @@ happen on complex real headers/macros), we transparently fall back to the
 regex-only extraction exactly as before.
 """
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, Tuple
 
 from .models import ParserStatus, ParseTier
 from .utils import strip_comments_keep_lines
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CollectedFlags:
+    """
+    Represents preprocessor macros tested in conditional directives.
+
+    Attributes:
+        presence_flags: Set of macro names tested via simple presence checks (#ifdef, #ifndef, defined(X)).
+        value_flags: Set of macro names tested via value comparisons (#if X > 2, #elif X == 1).
+    """
+    presence_flags: Set[str] = field(default_factory=set)
+    value_flags: Set[str] = field(default_factory=set)
+
+    @property
+    def all_flags(self) -> Set[str]:
+        return self.presence_flags | self.value_flags
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "presence_flags": sorted(self.presence_flags),
+            "value_flags": sorted(self.value_flags),
+            "all_flags": sorted(self.all_flags),
+        }
+
+
+class ConditionalFlagCollector:
+    """
+    Walks clean C source code (comment-stripped view) to discover preprocessor flags
+    tested across #if, #ifdef, #ifndef, #elif, and defined(...) forms.
+    """
+
+    _DEFINED_RE = re.compile(r'\bdefined\s*\(\s*([a-zA-Z_]\w*)\s*\)|\bdefined\s+([a-zA-Z_]\w*)')
+    _HAS_FEATURE_RE = re.compile(r'\b__(?:has_include|has_builtin|has_feature|has_extension|has_attribute|has_cpp_attribute)\b\s*\([^)]*\)')
+    _IDENT_RE = re.compile(r'\b[a-zA-Z_]\w*\b')
+    _VALUE_OP_RE = re.compile(r'==|!=|<=|>=|<|>|\+|\-|\*|/|%|<<|>>|\^|~|&(?!&)|\|(?!\|)')
+    _BUILTINS = {
+        'true', 'false', 'defined',
+        '__has_include', '__has_builtin', '__has_feature',
+        '__has_extension', '__has_attribute', '__has_cpp_attribute'
+    }
+
+    @classmethod
+    def collect(cls, clean_code: str) -> CollectedFlags:
+        presence_raw: Set[str] = set()
+        value_raw: Set[str] = set()
+
+        lines = clean_code.splitlines()
+        i = 0
+        n = len(lines)
+
+        while i < n:
+            line = lines[i]
+            line_lstrip = line.lstrip()
+
+            if line_lstrip.startswith('#'):
+                directive_parts = []
+                curr_i = i
+                while curr_i < n:
+                    curr_line = lines[curr_i]
+                    curr_rstrip = curr_line.rstrip()
+                    if curr_rstrip.endswith('\\'):
+                        directive_parts.append(curr_rstrip[:-1])
+                        curr_i += 1
+                    else:
+                        directive_parts.append(curr_rstrip)
+                        break
+
+                full_directive_str = " ".join(directive_parts).strip()
+                i = curr_i + 1
+
+                dir_body = full_directive_str.lstrip('#').strip()
+
+                m_ifdef = re.match(r'^ifdef\s+([a-zA-Z_]\w*)', dir_body)
+                m_ifndef = re.match(r'^ifndef\s+([a-zA-Z_]\w*)', dir_body)
+                m_if_elif = re.match(r'^(?:if|elif)\b\s*(.*)', dir_body)
+
+                if m_ifdef:
+                    presence_raw.add(m_ifdef.group(1))
+                elif m_ifndef:
+                    presence_raw.add(m_ifndef.group(1))
+                elif m_if_elif:
+                    expr = m_if_elif.group(1).strip()
+
+                    # Strip string and character literals
+                    expr = re.sub(r'"([^"\\]|\\.)*"|\'([^\'\\]|\\.)*\'', ' ', expr)
+
+                    # Replace feature-test macros like __has_include("...") or __has_include(<...>)
+                    expr = cls._HAS_FEATURE_RE.sub(" 1 ", expr)
+
+                    # Extract defined(X) or defined X presence checks
+                    for m_def in cls._DEFINED_RE.finditer(expr):
+                        sym = m_def.group(1) or m_def.group(2)
+                        if sym and sym not in cls._BUILTINS:
+                            presence_raw.add(sym)
+
+                    # Replace defined(...) expressions with placeholder constant ' 1 '
+                    expr_no_defined = cls._DEFINED_RE.sub(" 1 ", expr)
+
+                    # Split expression into clauses around logical operators (&&, ||)
+                    clauses = re.split(r'&&|\|\|', expr_no_defined)
+                    for clause in clauses:
+                        has_value_op = bool(cls._VALUE_OP_RE.search(clause))
+                        for m_ident in cls._IDENT_RE.finditer(clause):
+                            ident = m_ident.group(0)
+                            if ident not in cls._BUILTINS:
+                                if has_value_op:
+                                    value_raw.add(ident)
+                                else:
+                                    presence_raw.add(ident)
+            else:
+                i += 1
+
+        value_flags = set(value_raw)
+        presence_flags = set(presence_raw) - value_flags
+
+        if value_flags:
+            logger.info(
+                "Discovered value-comparison preprocessor macro(s) (out of scope for boolean flag toggling): %s",
+                ", ".join(sorted(value_flags))
+            )
+
+        return CollectedFlags(
+            presence_flags=presence_flags,
+            value_flags=value_flags,
+        )
 
 STANDARD_UNSIGNED_TYPES = {
     "size_t", "size_type", "uint8_t", "uint16_t", "uint32_t", "uint64_t",

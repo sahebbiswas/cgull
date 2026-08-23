@@ -33,6 +33,8 @@ Examples:
   cgull scan src/ -j 0            # parallelize across all CPU cores
   cgull scan src/ --update-baseline baseline.json     # snapshot current findings
   cgull scan src/ --baseline baseline.json --fail-on medium  # only fail on NEW issues (medium or higher)
+  cgull scan src/ --list-flags                       # list preprocessor conditional flags
+  cgull flags src/                                   # discover preprocessor flags in target
   cgull rules
   cgull init-ignore
 
@@ -64,6 +66,16 @@ Suppressing findings inline:
     scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count. Negative values are invalid.")
     scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
+    scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
+
+    # FLAGS subcommand
+    flags_parser = subparsers.add_parser("flags", help="Discover and enumerate tested preprocessor flags in target C source files")
+    flags_parser.add_argument("target", nargs="?", default=".", help="Target file or directory to inspect (default: current directory)")
+    flags_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
+    flags_parser.add_argument("-o", "--output", help="Path to write output (defaults to stdout)")
+    flags_parser.add_argument("-f", "--format", choices=["text", "json"], default="text", help="Output format (default: text)")
+    flags_parser.add_argument("--ignore-file", help="Path to .cgullignore file")
+    flags_parser.add_argument("--ignore-pattern", action="append", default=[], help="Pattern to ignore")
 
     # RULES subcommand
     rules_parser = subparsers.add_parser("rules", help="List all security audit rules supported by C-GULL")
@@ -75,7 +87,120 @@ Suppressing findings inline:
     return parser
 
 
+def handle_flags(args) -> int:
+    target = getattr(args, "target", ".")
+    if not os.path.exists(target):
+        print(f"Error: Target path '{target}' does not exist.", file=sys.stderr)
+        return 1
+
+    from .utils import strip_comments_keep_lines
+    from .ast_analyzer import ConditionalFlagCollector, CollectedFlags
+
+    ignore_file = getattr(args, "ignore_file", None)
+    ignore_patterns = list(getattr(args, "ignore_pattern", []) or [])
+    config_path = getattr(args, "config", None)
+    config = load_config(config_path=config_path, target_path=target)
+    if config.error:
+        print(f"Error: {config.error}", file=sys.stderr)
+        return 1
+    for warning in config.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+    resolved_excludes = config.get_resolved_exclude_paths(target)
+    if resolved_excludes:
+        ignore_patterns.extend(resolved_excludes)
+
+    base_dir = target if os.path.isdir(target) else (os.path.dirname(target) or ".")
+    filter_obj = CGullIgnoreFilter(base_dir=base_dir, custom_patterns=ignore_patterns)
+    if ignore_file and os.path.exists(ignore_file):
+        filter_obj.load_from_file(ignore_file)
+
+    files_to_inspect: List[str] = []
+    if os.path.isfile(target):
+        if not filter_obj.should_ignore(target):
+            files_to_inspect.append(target)
+    else:
+        for root, dirs, files in os.walk(target):
+            dirs[:] = [d for d in dirs if not filter_obj.should_prune_dir(os.path.join(root, d))]
+            for file in files:
+                if file.endswith((".c", ".h", ".i")):
+                    full_path = os.path.join(root, file)
+                    if not filter_obj.should_ignore(full_path):
+                        files_to_inspect.append(full_path)
+
+    all_presence: Set[str] = set()
+    all_value: Set[str] = set()
+
+    for fpath in files_to_inspect:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            _, clean_code = strip_comments_keep_lines(content)
+            res = ConditionalFlagCollector.collect(clean_code)
+            all_presence.update(res.presence_flags)
+            all_value.update(res.value_flags)
+        except Exception as e:
+            print(f"Warning: Failed to collect flags from {fpath}: {e}", file=sys.stderr)
+
+    all_presence -= all_value
+    collected = CollectedFlags(presence_flags=all_presence, value_flags=all_value)
+
+    fmt = (getattr(args, "format", None) or "text").lower()
+    out_path = getattr(args, "output", None)
+
+    if fmt == "json":
+        import json
+        data = {
+            "target_path": target,
+            "presence_flags": sorted(collected.presence_flags),
+            "value_flags": sorted(collected.value_flags),
+            "all_flags": sorted(collected.all_flags),
+        }
+        output_str = json.dumps(data, indent=2)
+    else:
+        lines = [
+            "=" * 80,
+            f" 🚩 Discovered Preprocessor Flags for: {target}",
+            "=" * 80,
+            " Presence Flags (Boolean Toggles):",
+        ]
+        if collected.presence_flags:
+            for flag in sorted(collected.presence_flags):
+                lines.append(f"   - {flag}")
+        else:
+            lines.append("   (None)")
+
+        lines.append("")
+        lines.append(" Value-Comparison Flags (Out of scope for boolean toggling; logged separately):")
+        if collected.value_flags:
+            for flag in sorted(collected.value_flags):
+                lines.append(f"   - {flag}")
+        else:
+            lines.append("   (None)")
+
+        lines.append("")
+        lines.append(f" Total Flags Discovered: {len(collected.all_flags)} ({len(collected.presence_flags)} presence, {len(collected.value_flags)} value-comparison)")
+        lines.append("=" * 80)
+        output_str = "\n".join(lines)
+
+    if out_path:
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(output_str + "\n")
+            print(f"✅ Preprocessor flags output saved to: {out_path}")
+        except Exception as e:
+            print(f"Error writing flags output to {out_path}: {e}", file=sys.stderr)
+            return 1
+    else:
+        print(output_str)
+
+    return 0
+
+
 def handle_scan(args) -> int:
+    if getattr(args, "list_flags", False):
+        return handle_flags(args)
+
     target = args.target
     if not os.path.exists(target):
         print(f"Error: Target path '{target}' does not exist.", file=sys.stderr)
@@ -314,13 +439,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Default to 'scan .' if no args provided or path given without subcommand
         if not argv:
             argv = ["scan", "."]
-        elif argv[0] not in ("scan", "rules", "init-ignore", "--help", "-h", "--version", "-v"):
+        elif argv[0] not in ("scan", "rules", "flags", "init-ignore", "--help", "-h", "--version", "-v"):
             argv = ["scan"] + argv
 
         args = parser.parse_args(argv)
 
         if args.command == "rules":
             return handle_rules(args)
+        elif args.command == "flags":
+            return handle_flags(args)
         elif args.command == "init-ignore":
             return handle_init_ignore()
         elif args.command == "scan":
