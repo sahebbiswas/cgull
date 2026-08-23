@@ -88,6 +88,37 @@ class TestBannedFunctions(unittest.TestCase):
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].impact, Severity.HIGH)
 
+    def test_strcpy_aliased_pointer_and_scoped_literal_variable_downgraded_to_low(self):
+        code = """
+        void goodG2B(void) {
+            char * data;
+            char dataGoodBuffer[100];
+            char * source;
+            data = dataGoodBuffer;
+            source = "fixedstringtest";
+            strcpy(data, source);
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.LOW)
+        self.assertIn("provably shorter than destination buffer size", issues[0].message)
+
+    def test_strcpy_aliased_pointer_and_scoped_literal_variable_overflow_flagged_high(self):
+        code = """
+        void bad(void) {
+            char * data;
+            char dataBadBuffer[10];
+            char * source;
+            data = dataBadBuffer;
+            source = "12345678901";
+            strcpy(data, source);
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
     def test_detects_mktemp(self):
         code = "void f(char *template) {\n    mktemp(template);\n}"
         issues = scan_with_rule("CGULL-001", code)
