@@ -197,6 +197,52 @@ class TestFormatString(unittest.TestCase):
         issues = scan_with_rule("CGULL-002", code)
         self.assertEqual(len(issues), 0)
 
+    def test_detects_sprintf_vsnprintf_vfprintf(self):
+        code = """
+        void bad(char *dest, char *data, va_list args) {
+            sprintf(dest, data);
+            snprintf(dest, 100, data);
+            vfprintf(stderr, data, args);
+            vsnprintf(dest, 100, data, args);
+            vsprintf(dest, data, args);
+            dprintf(1, data);
+            vdprintf(1, data, args);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 7)
+
+    def test_clean_snprintf_vsnprintf_literals(self):
+        code = """
+        void good(char *dest, char *data, va_list args) {
+            sprintf(dest, "%s", data);
+            snprintf(dest, 100, "%s", data);
+            vfprintf(stderr, "%s", args);
+            vsnprintf(dest, 100, "%s", args);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_nested_commas_in_earlier_args(self):
+        code = """
+        void test_nested(char *buf, char *user_input) {
+            snprintf(buf, MIN(100, 200), user_input);
+            fprintf(get_stream(1, 2), user_input);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 2)
+
+    def test_prototypes_and_macros_ignored(self):
+        code = """
+        #define dprintf(...) log_debug(__VA_ARGS__)
+        int vsnprintf(char *str, size_t size, const char *format, va_list ap);
+        extern int dprintf(int fd, const char *format, ...);
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
 
 class TestUncheckedDynamicAllocations(unittest.TestCase):
     def test_detects_unchecked_malloc(self):
