@@ -88,6 +88,66 @@ class TestBannedFunctions(unittest.TestCase):
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].impact, Severity.HIGH)
 
+    def test_strcpy_alias_does_not_inherit_array_from_earlier_function(self):
+        code = """
+        void f1(void) {
+            char buf[100];
+            use(buf);
+        }
+        void f2(char *destBig) {
+            char *p;
+            p = buf;
+            strcpy(p, "1234");
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
+    def test_strcpy_source_length_not_inferred_from_intermediate_strcpy(self):
+        code = """
+        void f(char *destBig) {
+            char src[4];
+            strcpy(src, "123456");
+            strcpy(destBig, src);
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 2)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+        self.assertEqual(issues[1].impact, Severity.HIGH)
+
+    def test_strcpy_aliased_pointer_and_scoped_literal_variable_downgraded_to_low(self):
+        code = """
+        void goodG2B(void) {
+            char * data;
+            char dataGoodBuffer[100];
+            char * source;
+            data = dataGoodBuffer;
+            source = "fixedstringtest";
+            strcpy(data, source);
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.LOW)
+        self.assertIn("provably shorter than destination buffer size", issues[0].message)
+
+    def test_strcpy_aliased_pointer_and_scoped_literal_variable_overflow_flagged_high(self):
+        code = """
+        void bad(void) {
+            char * data;
+            char dataBadBuffer[10];
+            char * source;
+            data = dataBadBuffer;
+            source = "12345678901";
+            strcpy(data, source);
+        }
+        """
+        issues = scan_with_rule("CGULL-001", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].impact, Severity.HIGH)
+
     def test_detects_mktemp(self):
         code = "void f(char *template) {\n    mktemp(template);\n}"
         issues = scan_with_rule("CGULL-001", code)

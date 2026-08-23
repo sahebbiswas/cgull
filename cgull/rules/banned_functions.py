@@ -174,6 +174,12 @@ class BannedFunctionsRule(BaseRule):
                 fn_start_idx = i
                 break
 
+        first_fn_start_idx = len(source_lines)
+        for i, line in enumerate(source_lines):
+            if func_header_re.match(line):
+                first_fn_start_idx = i
+                break
+
         def _find_macro_val(macro_name: str) -> Optional[int]:
             def_m = re.search(rf'#\s*define\s+{re.escape(macro_name)}\s+(\d+|0x[0-9a-fA-F]+)\b', full_code)
             if def_m:
@@ -204,27 +210,94 @@ class BannedFunctionsRule(BaseRule):
             self._dest_size_cache[cache_key] = size
             return size
 
-        # 2. Check in-scope pointer alias assignment from simple array variable (e.g. data = dataBuffer;)
-        assign_patterns = [
-            rf'^\s*(?:(?:char|int8_t|uint8_t|int|unsigned\s+char|signed\s+char)\s*\*+\s*)?{re.escape(var_name)}\s*=\s*([a-zA-Z_]\w*)\s*;',
-        ]
+        # 2. Check in-scope pointer alias assignment from array or aliased pointer (e.g. data = dataBuffer; data = &dataBuffer[0];)
+        alias_assign_pattern = re.compile(
+            rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(var_name)}\s*=(?!=)\s*(.+?)(?:;|$)'
+        )
         for idx in range(line_number - 1, fn_start_idx - 1, -1):
             if idx < len(source_lines):
                 line = source_lines[idx]
-                for pat in assign_patterns:
-                    m_assign = re.search(pat, line)
-                    if m_assign:
-                        rhs_var = m_assign.group(1)
-                        if rhs_var != var_name:
-                            size = _lookup_array_size_in_lines(rhs_var, fn_start_idx, line_number)
-                            if size is not None:
-                                self._dest_size_cache[cache_key] = size
-                                return size
+                m_assign = alias_assign_pattern.search(line)
+                if m_assign:
+                    rhs = m_assign.group(1).strip()
+                    rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
+
+                    alias_target = None
+                    offset = 0
+
+                    m_idx = re.match(r'^&\s*([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\]$', rhs_clean)
+                    m_add1 = re.match(r'^([a-zA-Z_]\w*)\s*\+\s*(\d+)$', rhs_clean)
+                    m_add2 = re.match(r'^(\d+)\s*\+\s*([a-zA-Z_]\w*)$', rhs_clean)
+                    m_simple = re.match(r'^(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?$', rhs_clean)
+
+                    if m_idx:
+                        alias_target = m_idx.group(1)
+                        offset = int(m_idx.group(2))
+                    elif m_add1:
+                        alias_target = m_add1.group(1)
+                        offset = int(m_add1.group(2))
+                    elif m_add2:
+                        alias_target = m_add2.group(2)
+                        offset = int(m_add2.group(1))
+                    elif m_simple:
+                        alias_target = m_simple.group(1)
+                        offset = 0
+
+                    if alias_target and alias_target != var_name and alias_target not in ('NULL', 'nullptr'):
+                        size = _lookup_array_size_in_lines(alias_target, fn_start_idx, line_number)
+                        if size is None:
+                            size = _lookup_array_size_in_lines(alias_target, 0, first_fn_start_idx)
+                        if size is not None:
+                            res_size = max(0, size - offset)
+                            self._dest_size_cache[cache_key] = res_size
+                            return res_size
 
         # 3. Fallback: check global array declaration (before any function starts)
-        size = _lookup_array_size_in_lines(var_name, 0, fn_start_idx)
+        size = _lookup_array_size_in_lines(var_name, 0, first_fn_start_idx)
         self._dest_size_cache[cache_key] = size
         return size
+
+    def _resolve_src_literal_length(self, src_expr: str, line_number: int, source_lines: List[str], full_code: str) -> Optional[int]:
+        """
+        Resolves the C string literal byte length of src_expr.
+        Handles direct string literals, or variables initialized or assigned
+        with C string literals within the current function scope.
+        """
+        direct_len = self._get_string_literal_length(src_expr)
+        if direct_len is not None:
+            return direct_len
+
+        src_clean = src_expr.strip()
+        src_clean = re.sub(r'^\s*\(\s*(?:const\s+)?(?:char|int8_t|uint8_t|void|unsigned\s+char|signed\s+char)\s*\*+\s*\)\s*', '', src_clean).strip()
+        if not re.match(r'^[a-zA-Z_]\w*$', src_clean):
+            return None
+
+        var_name = src_clean
+
+        func_header_re = re.compile(
+            r'^[ \t]*(?:(?:static|inline|extern|const|unsigned|signed|struct\s+\w+|\w+)\s+)+(\*?\s*[\w_]+)\s*\([^)]*\)\s*\{?'
+        )
+        fn_start_idx = 0
+        for i in range(min(line_number - 1, len(source_lines) - 1), -1, -1):
+            line = source_lines[i]
+            if func_header_re.match(line):
+                fn_start_idx = i
+                break
+
+        assign_pat = re.compile(
+            rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(var_name)}\s*(?:\[[^\]]*\])?\s*=(?!=)\s*(.+?)(?:;|$)'
+        )
+
+        for idx in range(min(line_number - 1, len(source_lines) - 1), fn_start_idx - 1, -1):
+            line = source_lines[idx]
+            m_assign = assign_pat.search(line)
+            if m_assign:
+                rhs = m_assign.group(1).strip()
+                lit_len = self._get_string_literal_length(rhs)
+                if lit_len is not None:
+                    return lit_len
+
+        return None
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
@@ -263,7 +336,7 @@ class BannedFunctionsRule(BaseRule):
                     args = self._extract_call_args(line_content, m.end() - 1)
                     if args:
                         dest_arg, src_arg = args
-                        src_len = self._get_string_literal_length(src_arg)
+                        src_len = self._resolve_src_literal_length(src_arg, line_number, source_lines, full_code)
                         if src_len is not None:
                             dest_size = self._resolve_dest_buffer_size(dest_arg, line_number, source_lines, full_code, file_path)
                             required_bytes = src_len + 1
