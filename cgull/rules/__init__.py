@@ -31,6 +31,7 @@ from .crypto_and_safety import (
     NoInsecureRandRule,
     SinglePointOfFailureControlFlowRule,
     InsecureDataStorageRule,
+    ImproperChrootJailRule,
     WeakCryptoPrimitivesRule,
     ToctouFileAccessRule,
 )
@@ -88,6 +89,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     BitwiseOperationsOnSignedIntegersRule,
     SinglePointOfFailureControlFlowRule,
     InsecureDataStorageRule,
+    ImproperChrootJailRule,
     SignedUnsignedComparisonRule,
     # Low Impact
     MissingDefaultCaseInSwitchStatementsRule,

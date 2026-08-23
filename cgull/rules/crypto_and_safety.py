@@ -1171,3 +1171,75 @@ class InsecureDataStorageRule(BaseRule):
                 fix_type=FixType.MANUAL_REVIEW,
             ))
         return issues
+
+
+
+class ImproperChrootJailRule(BaseRule):
+    rule_id = "CGULL-039"
+    name = "Improper chroot() Jail"
+    impact = Severity.HIGH
+    category = RuleCategory.CRYPTO
+    description = "Detect calls to chroot() that are not immediately followed by chdir() to restrict the working directory. A missing chdir(\"/\") allows attackers to escape the chroot jail using relative paths."
+    implementation_method = "AST traversal to find chroot() and ensure chdir() is called within the same function"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-243"
+    remediation_suggestion = "Always call chdir(\"/\") or another directory inside the jail immediately after chroot() to restrict the working directory."
+    sample_vulnerable_code = "chroot(\"/var/jail\");\n// FLAW: Missing chdir()"
+    sample_remediated_code = "chroot(\"/var/jail\");\nchdir(\"/\");"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        for fn in ast_ctx.functions:
+            chroot_nodes = [node for node in fn.cfg_nodes if node.expr_str and "chroot(" in node.expr_str.replace(" ", "")]
+            chdir_nodes = [node for node in fn.cfg_nodes if node.expr_str and "chdir(" in node.expr_str.replace(" ", "")]
+
+            if chroot_nodes:
+                for chroot_node in chroot_nodes:
+                    has_subsequent_chdir = False
+                    for chdir_node in chdir_nodes:
+                        if chdir_node.line_number is not None and chroot_node.line_number is not None and chdir_node.line_number >= chroot_node.line_number:
+                            has_subsequent_chdir = True
+                            break
+                    if not has_subsequent_chdir:
+                        if any(i.line_number == chroot_node.line_number for i in issues):
+                            continue
+
+                        line_idx = (chroot_node.line_number - 1) if (chroot_node.line_number and chroot_node.line_number > 0) else 0
+                        snippet = ast_ctx.source_lines[line_idx].strip() if line_idx < len(ast_ctx.source_lines) else chroot_node.expr_str
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=chroot_node.line_number,
+                            code_snippet=snippet,
+                            message="chroot() called without a subsequent chdir(). This allows attackers to escape the chroot jail using relative paths (CWE-243).",
+                            column_number=1,
+                            engine="AST",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=snippet.strip(";") + ";\nchdir(\"/\");"
+                        ))
+
+        return issues
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        # fallback regex check
+        if re.search(r'\bchroot\s*\(', line_content):
+            has_chdir = False
+            for i in range(line_number, min(line_number + 10, len(source_lines) + 1)):
+                if re.search(r'\bchdir\s*\(', source_lines[i - 1]):
+                    has_chdir = True
+                    break
+            if not has_chdir:
+                m = re.search(r'\bchroot\s*\(', line_content)
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_number,
+                    code_snippet=line_content.strip(),
+                    message="chroot() called without a subsequent chdir(). This allows attackers to escape the chroot jail using relative paths (CWE-243).",
+                    column_number=m.start() + 1 if m else 1,
+                    engine="Regex",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=line_content.strip().strip(";") + ";\nchdir(\"/\");"
+                ))
+        return issues
