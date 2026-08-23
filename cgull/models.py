@@ -4,7 +4,8 @@ Data models for C-GULL Static Analyzer.
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import List, Dict, Any, Optional, Set, Union
+import types
+from typing import List, Dict, Any, Optional, Set, Union, Mapping
 import time
 from . import __version__
 
@@ -49,7 +50,7 @@ class Confidence(str, Enum):
     LIMITED = "LIMITED"
 
 
-@dataclass(eq=False)
+@dataclass(frozen=True, eq=False)
 class ConfigProfile:
     """
     Internal flag-map schema representing a single build/scan configuration profile.
@@ -61,13 +62,14 @@ class ConfigProfile:
             while str/int/etc. represent value macros (#define RETRY_COUNT 5).
     """
     name: str
-    flags: Dict[str, Optional[Union[str, int]]] = field(default_factory=dict)
+    flags: Mapping[str, Optional[Union[str, int]]] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.flags is None:
-            self.flags = {}
+            f_dict = {}
         else:
-            self.flags = dict(self.flags)
+            f_dict = dict(self.flags)
+        object.__setattr__(self, "flags", types.MappingProxyType(f_dict))
 
     @property
     def presence_flags(self) -> Set[str]:

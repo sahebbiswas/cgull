@@ -294,6 +294,16 @@ class TestConfigProfile(unittest.TestCase):
         original_flags["FLAG2"] = "modified"
         self.assertNotIn("FLAG2", cp.flags)
 
+    def test_immutability_enforced(self):
+        cp = ConfigProfile("immutable", {"FLAG1": None, "COUNT": 10})
+        with self.assertRaises(Exception):
+            cp.name = "new_name"
+        with self.assertRaises(Exception):
+            cp.flags = {}
+
+        with self.assertRaises(TypeError):
+            cp.flags["FLAG2"] = "new"  # type: ignore
+
 
 if __name__ == "__main__":
     unittest.main()
