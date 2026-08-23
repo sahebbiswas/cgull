@@ -928,6 +928,125 @@ class TestReallocSemantics(unittest.TestCase):
         node = call_nodes[0]
         self.assertEqual(getattr(node, "realloc_bindings", {}), {})
 
+    def test_realloc_double_free_and_uaf_detected_after_realloc_success(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import DoubleFreeRule, UseAfterFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void test_df(int cond) {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)realloc(p, 20 * sizeof(int));
+            if (q) {
+                free(q);
+                free(q);
+            }
+        }
+
+        void test_uaf(int cond) {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)realloc(p, 20 * sizeof(int));
+            if (q) {
+                free(q);
+                q[0] = 1;
+            }
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_df), 1)
+        self.assertIn("q", issues_df[0].message)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 1)
+        self.assertIn("q", issues_uaf[0].message)
+
+    def test_realloc_double_free_and_uaf_detected_after_realloc_failure(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import DoubleFreeRule, UseAfterFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void test_df_fail() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)realloc(p, 20 * sizeof(int));
+            if (q == (void *)0) {
+                free(p);
+                free(p);
+            }
+        }
+
+        void test_uaf_fail() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)realloc(p, 20 * sizeof(int));
+            if (q == (void *)0) {
+                free(p);
+                p[0] = 1;
+            }
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_df), 1)
+        self.assertIn("p", issues_df[0].message)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 1)
+        self.assertIn("p", issues_uaf[0].message)
+
+    def test_realloc_no_replay_after_join_double_free(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import DoubleFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void test_join_df() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)realloc(p, 20 * sizeof(int));
+            if (q) {
+                free(q);
+            }
+            if (q) {
+                free(q);
+            }
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_df), 1)
+        self.assertIn("q", issues_df[0].message)
+
 
 class TestInterproceduralCFGSummaries(unittest.TestCase):
 

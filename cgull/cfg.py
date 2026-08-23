@@ -139,7 +139,7 @@ class StructuredCFG:
             if len(preds[nid]) != 1:
                 leaders.add(nid)
             for succ in node.successors:
-                if len(node.successors) > 1:
+                if len(node.successors) > 1 or node.kind.endswith("_cond"):
                     leaders.add(succ)
 
         self.blocks = {}
@@ -281,7 +281,17 @@ class StructuredCFG:
                             if val_call and len(val_call[1]) >= 2:
                                 size_is_zero = _is_nullish(val_call[1][1])
 
-                        self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero)
+                        valid_blocks = {block.block_id}
+                        v_queue = [block.block_id]
+                        while v_queue:
+                            curr_v = v_queue.pop(0)
+                            for succ_b_id in self.blocks[curr_v].successors:
+                                succ_b = self.blocks.get(succ_b_id)
+                                if succ_b and len(succ_b.predecessors) == 1 and succ_b_id not in valid_blocks:
+                                    valid_blocks.add(succ_b_id)
+                                    v_queue.append(succ_b_id)
+
+                        self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero, valid_blocks)
 
                 for ptr in node.realloc_inputs:
                     locs = curr_loc_map.get(ptr, set())
@@ -402,21 +412,31 @@ class StructuredCFG:
 
                 # Loc State
                 edge_loc_state = dict(curr_loc_state)
-                for new_loc_id, (target_var, input_ptr, input_locs, pre_states, size_is_zero) in self.realloc_records.items():
+                for new_loc_id, rec in self.realloc_records.items():
+                    if len(rec) == 6:
+                        target_var, input_ptr, input_locs, pre_states, size_is_zero, valid_blocks = rec
+                    else:
+                        target_var, input_ptr, input_locs, pre_states, size_is_zero = rec
+                        valid_blocks = None
+
+                    if valid_blocks is not None and block.block_id not in valid_blocks:
+                        continue
+
                     if new_loc_id in curr_loc_map.get(target_var, set()):
-                        t_null = edge_null.get(target_var, Nullness.UNKNOWN)
-                        if t_null == Nullness.NON_NULL:
-                            for loc in input_locs:
-                                if pre_states.get(loc) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED, Allocation.MAYBE_FREED):
-                                    edge_loc_state[loc] = Allocation.FREED
-                            edge_loc_state[new_loc_id] = Allocation.ALLOCATED
-                        elif t_null == Nullness.NULL:
-                            for loc in input_locs:
-                                if size_is_zero:
-                                    edge_loc_state[loc] = Allocation.MAYBE_FREED
-                                else:
-                                    edge_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
-                            edge_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
+                        if curr_null.get(target_var, Nullness.UNKNOWN) in (Nullness.MAYBE_NULL, Nullness.UNKNOWN):
+                            t_null = edge_null.get(target_var, Nullness.UNKNOWN)
+                            if t_null == Nullness.NON_NULL:
+                                for loc in input_locs:
+                                    if pre_states.get(loc) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED, Allocation.MAYBE_FREED):
+                                        edge_loc_state[loc] = Allocation.FREED
+                                edge_loc_state[new_loc_id] = Allocation.ALLOCATED
+                            elif t_null == Nullness.NULL:
+                                for loc in input_locs:
+                                    if size_is_zero:
+                                        edge_loc_state[loc] = Allocation.MAYBE_FREED
+                                    else:
+                                        edge_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
+                                edge_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
 
                 all_loc_ids = set(edge_loc_state.keys()).union(succ_block.loc_state_in.keys())
                 for loc in all_loc_ids:
@@ -459,23 +479,6 @@ class StructuredCFG:
             curr_loc_map = {v: set(locs) for v, locs in block.loc_map_in.items()}
 
             for node in block.nodes:
-                if hasattr(self, "realloc_records"):
-                    for new_loc_id, (target_var, input_ptr, input_locs, pre_states, size_is_zero) in self.realloc_records.items():
-                        if new_loc_id in curr_loc_map.get(target_var, set()):
-                            t_null = curr_null.get(target_var, Nullness.UNKNOWN)
-                            if t_null == Nullness.NON_NULL:
-                                for loc in input_locs:
-                                    if pre_states.get(loc) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED, Allocation.MAYBE_FREED):
-                                        curr_loc_state[loc] = Allocation.FREED
-                                curr_loc_state[new_loc_id] = Allocation.ALLOCATED
-                            elif t_null == Nullness.NULL:
-                                for loc in input_locs:
-                                    if size_is_zero:
-                                        curr_loc_state[loc] = Allocation.MAYBE_FREED
-                                    else:
-                                        curr_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
-                                curr_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
-
                 curr_node_alloc: Dict[str, Allocation] = {}
                 for v in all_vars:
                     locs = curr_loc_map.get(v, set())
@@ -516,8 +519,17 @@ class StructuredCFG:
                             val_call = _find_value_producing_call(getattr(ast_node, "init", None) or getattr(ast_node, "rvalue", None))
                             if val_call and len(val_call[1]) >= 2:
                                 size_is_zero = _is_nullish(val_call[1][1])
+                        valid_blocks = {block.block_id}
+                        v_queue = [block.block_id]
+                        while v_queue:
+                            curr_v = v_queue.pop(0)
+                            for succ_b_id in self.blocks[curr_v].successors:
+                                succ_b = self.blocks.get(succ_b_id)
+                                if succ_b and len(succ_b.predecessors) == 1 and succ_b_id not in valid_blocks:
+                                    valid_blocks.add(succ_b_id)
+                                    v_queue.append(succ_b_id)
                         if hasattr(self, "realloc_records"):
-                            self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero)
+                            self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero, valid_blocks)
 
                 for ptr in node.realloc_inputs:
                     locs = curr_loc_map.get(ptr, set())
