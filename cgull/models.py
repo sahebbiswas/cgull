@@ -4,7 +4,8 @@ Data models for C-GULL Static Analyzer.
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import List, Dict, Any, Optional, Set
+import types
+from typing import List, Dict, Any, Optional, Set, Union, Mapping
 import time
 from . import __version__
 
@@ -47,6 +48,100 @@ class Confidence(str, Enum):
     FULL = "FULL"
     FALLBACK = "FALLBACK"
     LIMITED = "LIMITED"
+
+
+@dataclass(frozen=True, eq=False)
+class ConfigProfile:
+    """
+    Internal flag-map schema representing a single build/scan configuration profile.
+
+    Attributes:
+        name: Name of the configuration profile (e.g., "debug").
+        flags: Flag map mapping macro names to values or None.
+            None represents a presence toggle (#ifdef / bare #define),
+            while str/int/etc. represent value macros (#define RETRY_COUNT 5).
+    """
+    name: str
+    flags: Mapping[str, Optional[Union[str, int]]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.flags is None:
+            f_dict = {}
+        else:
+            f_dict = dict(self.flags)
+        object.__setattr__(self, "flags", types.MappingProxyType(f_dict))
+
+    @property
+    def presence_flags(self) -> Set[str]:
+        """
+        Returns set of macro names configured as presence toggles (value is None, #ifdef style).
+        """
+        return {k for k, v in self.flags.items() if v is None}
+
+    @property
+    def value_flags(self) -> Dict[str, Union[str, int]]:
+        """
+        Returns dict of macro names to values for value macros (value is not None, e.g. #define RETRY 5).
+        """
+        return {k: v for k, v in self.flags.items() if v is not None}
+
+    @property
+    def label(self) -> str:
+        """
+        Returns the reachable_under label representation of the configuration.
+        e.g., "debug" -> "+debug", "+release" -> "+release", "" -> "".
+        """
+        if not self.name:
+            return ""
+        if self.name.startswith("+"):
+            return self.name
+        return f"+{self.name}"
+
+    @property
+    def reachable_under(self) -> str:
+        """
+        Alias for label (the reachable_under label).
+        """
+        return self.label
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, ConfigProfile):
+            return NotImplemented
+        return self.name == other.name and frozenset(self.flags.items()) == frozenset(other.flags.items())
+
+    def __hash__(self) -> int:
+        return hash((self.name, frozenset(self.flags.items())))
+
+    def __str__(self) -> str:
+        return self.label
+
+    def __repr__(self) -> str:
+        return f"ConfigProfile(name={self.name!r}, flags={self.flags!r})"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "flags": dict(self.flags),
+            "presence_flags": sorted(self.presence_flags),
+            "value_flags": dict(self.value_flags),
+            "label": self.label,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ConfigProfile":
+        if "flags" in data:
+            flags = dict(data["flags"])
+        else:
+            flags = {}
+            for k in data.get("presence_flags", []):
+                flags[k] = None
+            for k, v in data.get("value_flags", {}).items():
+                flags[k] = v
+
+        return cls(
+            name=data.get("name", ""),
+            flags=flags,
+        )
 
 
 @dataclass

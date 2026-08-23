@@ -4,7 +4,7 @@ Tests for cgull.models: dataclass serialization and enum behavior.
 
 import unittest
 
-from cgull.models import Issue, ScanResult, FileScanSummary, ScanError, Severity, AnalysisEngine, FixType, ParserStatus, ParseTier, Confidence
+from cgull.models import Issue, ScanResult, FileScanSummary, ScanError, Severity, AnalysisEngine, FixType, ParserStatus, ParseTier, Confidence, ConfigProfile
 
 
 class TestSeverityEnum(unittest.TestCase):
@@ -199,6 +199,109 @@ class TestParserStatusAndConfidenceEnums(unittest.TestCase):
 
         res3 = ScanResult("a", 1, 10, 0, 0, 0, 0, 0.1, "now", analysis_status_counts={ParserStatus.PYCPARSER_SUCCESS.value: 1, ParserStatus.REGEX.value: 1})
         self.assertEqual(res3.get_overall_parser_status(), "hybrid")
+
+
+class TestConfigProfile(unittest.TestCase):
+    def test_construction_and_flags_types(self):
+        cp = ConfigProfile("debug", {"DEBUG": None, "RETRY_COUNT": 5, "VERSION": "1.0"})
+        self.assertEqual(cp.name, "debug")
+        self.assertEqual(cp.flags, {"DEBUG": None, "RETRY_COUNT": 5, "VERSION": "1.0"})
+        self.assertEqual(cp.presence_flags, {"DEBUG"})
+        self.assertEqual(cp.value_flags, {"RETRY_COUNT": 5, "VERSION": "1.0"})
+
+    def test_default_flags_is_empty_dict(self):
+        cp = ConfigProfile("default")
+        self.assertEqual(cp.name, "default")
+        self.assertEqual(cp.flags, {})
+
+    def test_label_and_reachable_under_rendering(self):
+        cp1 = ConfigProfile("debug")
+        self.assertEqual(cp1.label, "+debug")
+        self.assertEqual(cp1.reachable_under, "+debug")
+        self.assertEqual(str(cp1), "+debug")
+
+        cp2 = ConfigProfile("+release")
+        self.assertEqual(cp2.label, "+release")
+        self.assertEqual(cp2.reachable_under, "+release")
+
+        cp3 = ConfigProfile("")
+        self.assertEqual(cp3.label, "")
+        self.assertEqual(cp3.reachable_under, "")
+
+    def test_equality_and_hashing_same_flags(self):
+        cp_header = ConfigProfile("debug", {"ENABLE_LOGGING": None, "MAX_WORKERS": 4})
+        cp_json = ConfigProfile("debug", {"MAX_WORKERS": 4, "ENABLE_LOGGING": None})
+        self.assertEqual(cp_header, cp_json)
+        self.assertEqual(hash(cp_header), hash(cp_json))
+
+        # Profiles with different names evaluate as unequal even if flags match
+        cp_diff_name1 = ConfigProfile("header_debug", {"FOO": None})
+        cp_diff_name2 = ConfigProfile("json_debug", {"FOO": None})
+        self.assertNotEqual(cp_diff_name1, cp_diff_name2)
+
+    def test_deduplication_in_set_and_dict(self):
+        cp_header = ConfigProfile("debug", {"ENABLE_LOGGING": None, "MAX_WORKERS": 4})
+        cp_json = ConfigProfile("debug", {"MAX_WORKERS": 4, "ENABLE_LOGGING": None})
+        cp_other = ConfigProfile("prod", {"ENABLE_LOGGING": None, "MAX_WORKERS": 4})
+
+        profile_set = {cp_header, cp_json, cp_other}
+        self.assertEqual(len(profile_set), 2)  # cp_header and cp_json deduplicate into 1; cp_other is distinct
+
+        profile_dict = {cp_header: "header_val"}
+        profile_dict[cp_json] = "json_val"
+        self.assertEqual(len(profile_dict), 1)
+        self.assertEqual(profile_dict[cp_header], "json_val")
+
+    def test_inequality_different_flags(self):
+        cp1 = ConfigProfile("debug", {"FOO": None})
+        cp2 = ConfigProfile("debug", {"FOO": None, "BAR": 1})
+        self.assertNotEqual(cp1, cp2)
+        self.assertFalse(cp1 == "not_a_config_profile")
+
+    def test_serialization_and_deserialization(self):
+        cp = ConfigProfile("release", {"OPTIMIZE": 3, "NDEBUG": None})
+        d = cp.to_dict()
+        self.assertEqual(d, {
+            "name": "release",
+            "flags": {"OPTIMIZE": 3, "NDEBUG": None},
+            "presence_flags": ["NDEBUG"],
+            "value_flags": {"OPTIMIZE": 3},
+            "label": "+release",
+        })
+
+        cp_restored = ConfigProfile.from_dict(d)
+        self.assertEqual(cp, cp_restored)
+        self.assertEqual(cp_restored.name, "release")
+        self.assertEqual(cp_restored.label, "+release")
+        self.assertEqual(cp_restored.flags, {"OPTIMIZE": 3, "NDEBUG": None})
+
+    def test_deserialization_from_presence_and_value_flags(self):
+        d = {
+            "name": "debug",
+            "presence_flags": ["DEBUG", "LOGGING"],
+            "value_flags": {"RETRY_COUNT": 3},
+        }
+        cp = ConfigProfile.from_dict(d)
+        self.assertEqual(cp.name, "debug")
+        self.assertEqual(cp.flags, {"DEBUG": None, "LOGGING": None, "RETRY_COUNT": 3})
+        self.assertEqual(cp.presence_flags, {"DEBUG", "LOGGING"})
+        self.assertEqual(cp.value_flags, {"RETRY_COUNT": 3})
+
+    def test_flags_mutation_isolation(self):
+        original_flags = {"FLAG1": None, "COUNT": 10}
+        cp = ConfigProfile("isolated", original_flags)
+        original_flags["FLAG2"] = "modified"
+        self.assertNotIn("FLAG2", cp.flags)
+
+    def test_immutability_enforced(self):
+        cp = ConfigProfile("immutable", {"FLAG1": None, "COUNT": 10})
+        with self.assertRaises(Exception):
+            cp.name = "new_name"
+        with self.assertRaises(Exception):
+            cp.flags = {}
+
+        with self.assertRaises(TypeError):
+            cp.flags["FLAG2"] = "new"  # type: ignore
 
 
 if __name__ == "__main__":
