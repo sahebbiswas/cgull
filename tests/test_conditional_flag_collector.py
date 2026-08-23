@@ -38,6 +38,45 @@ def test_compound_defined_expressions():
     assert flags.value_flags == set()
 
 
+def test_bare_and_negated_if_toggles():
+    code = """
+    #if FOO
+    int x = 1;
+    #endif
+
+    #if !BAR
+    int y = 2;
+    #endif
+
+    #if BAZ && !QUX
+    int z = 3;
+    #endif
+    """
+    _, clean = strip_comments_keep_lines(code)
+    flags = ConditionalFlagCollector.collect(clean)
+    assert flags.presence_flags == {"FOO", "BAR", "BAZ", "QUX"}
+    assert flags.value_flags == set()
+
+
+def test_has_include_and_feature_test_macros():
+    code = """
+    #if __has_include("foo.h") || __has_include(<sys/bar.h>)
+    int h = 1;
+    #endif
+
+    #if __has_builtin(__builtin_trap) && FEATURE_FLAG
+    int f = 2;
+    #endif
+    """
+    _, clean = strip_comments_keep_lines(code)
+    flags = ConditionalFlagCollector.collect(clean)
+    assert "foo" not in flags.all_flags
+    assert "bar" not in flags.all_flags
+    assert "sys" not in flags.all_flags
+    assert flags.presence_flags == {"FEATURE_FLAG"}
+    assert flags.value_flags == set()
+
+
 def test_value_comparison_expressions():
     code = """
     #if VERBOSE_LEVEL > 2

@@ -100,6 +100,12 @@ def handle_flags(args) -> int:
     ignore_patterns = list(getattr(args, "ignore_pattern", []) or [])
     config_path = getattr(args, "config", None)
     config = load_config(config_path=config_path, target_path=target)
+    if config.error:
+        print(f"Error: {config.error}", file=sys.stderr)
+        return 1
+    for warning in config.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
     resolved_excludes = config.get_resolved_exclude_paths(target)
     if resolved_excludes:
         ignore_patterns.extend(resolved_excludes)

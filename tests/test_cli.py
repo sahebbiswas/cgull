@@ -509,6 +509,13 @@ class TestFlagsCommand(unittest.TestCase):
         code, out = self._run(["flags", "/nonexistent/file.c"])
         self.assertEqual(code, 1)
 
+    def test_flags_invalid_config_returns_error(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code, out = self._run(["flags", self.c_file, "-c", "/nonexistent/config.toml"])
+        self.assertEqual(code, 1)
+        self.assertIn("Error:", stderr.getvalue())
+
     def test_flags_output_to_file(self):
         out_file = os.path.join(self.temp_dir, "flags.json")
         code, _ = self._run(["flags", self.c_file, "-o", out_file, "-f", "json"])

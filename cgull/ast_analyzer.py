@@ -61,8 +61,14 @@ class ConditionalFlagCollector:
     """
 
     _DEFINED_RE = re.compile(r'\bdefined\s*\(\s*([a-zA-Z_]\w*)\s*\)|\bdefined\s+([a-zA-Z_]\w*)')
+    _HAS_FEATURE_RE = re.compile(r'\b__(?:has_include|has_builtin|has_feature|has_extension|has_attribute|has_cpp_attribute)\b\s*\([^)]*\)')
     _IDENT_RE = re.compile(r'\b[a-zA-Z_]\w*\b')
-    _BUILTINS = {'true', 'false', 'defined'}
+    _VALUE_OP_RE = re.compile(r'==|!=|<=|>=|<|>|\+|\-|\*|/|%|<<|>>|\^|~|&(?!&)|\|(?!\|)')
+    _BUILTINS = {
+        'true', 'false', 'defined',
+        '__has_include', '__has_builtin', '__has_feature',
+        '__has_extension', '__has_attribute', '__has_cpp_attribute'
+    }
 
     @classmethod
     def collect(cls, clean_code: str) -> CollectedFlags:
@@ -106,20 +112,32 @@ class ConditionalFlagCollector:
                 elif m_if_elif:
                     expr = m_if_elif.group(1).strip()
 
+                    # Strip string and character literals
+                    expr = re.sub(r'"([^"\\]|\\.)*"|\'([^\'\\]|\\.)*\'', ' ', expr)
+
+                    # Replace feature-test macros like __has_include("...") or __has_include(<...>)
+                    expr = cls._HAS_FEATURE_RE.sub(" 1 ", expr)
+
                     # Extract defined(X) or defined X presence checks
                     for m_def in cls._DEFINED_RE.finditer(expr):
                         sym = m_def.group(1) or m_def.group(2)
-                        if sym:
+                        if sym and sym not in cls._BUILTINS:
                             presence_raw.add(sym)
 
                     # Replace defined(...) expressions with placeholder constant ' 1 '
                     expr_no_defined = cls._DEFINED_RE.sub(" 1 ", expr)
 
-                    # Extract remaining identifiers as value comparisons
-                    for m_ident in cls._IDENT_RE.finditer(expr_no_defined):
-                        ident = m_ident.group(0)
-                        if ident not in cls._BUILTINS:
-                            value_raw.add(ident)
+                    # Split expression into clauses around logical operators (&&, ||)
+                    clauses = re.split(r'&&|\|\|', expr_no_defined)
+                    for clause in clauses:
+                        has_value_op = bool(cls._VALUE_OP_RE.search(clause))
+                        for m_ident in cls._IDENT_RE.finditer(clause):
+                            ident = m_ident.group(0)
+                            if ident not in cls._BUILTINS:
+                                if has_value_op:
+                                    value_raw.add(ident)
+                                else:
+                                    presence_raw.add(ident)
             else:
                 i += 1
 
