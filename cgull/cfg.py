@@ -680,6 +680,17 @@ def _call_args(node, callee: str):
     return []
 
 
+def _all_calls_args(node, callee: str) -> List[list]:
+    results = []
+    if node is None:
+        return results
+    if type(node).__name__ == "FuncCall" and _format_pycparser_expr(node.name) == callee:
+        results.append(list(getattr(node.args, "exprs", []) or []))
+    for _, child in node.children():
+        results.extend(_all_calls_args(child, callee))
+    return results
+
+
 def _freed_vars(node, dealloc_funcs: Optional[Set[str]] = None) -> Set[str]:
     freed: Set[str] = set()
     funcs = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
@@ -946,11 +957,11 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
                     if ast_node.name:
                         allocated.add(str(ast_node.name))
                     if call_name in realloc_set:
-                        args = _call_args(ast_node.init, call_name)
-                        if args:
-                            arg1 = _unwrap_cast(args[0])
-                            if type(arg1).__name__ == "ID":
-                                realloc_inputs.add(str(arg1.name))
+                        for args in _all_calls_args(ast_node.init, call_name):
+                            if args:
+                                arg1 = _unwrap_cast(args[0])
+                                if type(arg1).__name__ == "ID":
+                                    realloc_inputs.add(str(arg1.name))
                     break
             if not allocated and ast_node.name and not _is_nullish(ast_node.init):
                 rhs_unwrapped = _unwrap_cast(ast_node.init)
@@ -979,11 +990,11 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
             if call_name in alloc_set or (summaries and summaries.get(call_name) and summaries[call_name].returns_allocation):
                 allocated.update(writes)
                 if call_name in realloc_set:
-                    args = _call_args(ast_node.rvalue, call_name)
-                    if args:
-                        arg1 = _unwrap_cast(args[0])
-                        if type(arg1).__name__ == "ID":
-                            realloc_inputs.add(str(arg1.name))
+                    for args in _all_calls_args(ast_node.rvalue, call_name):
+                        if args:
+                            arg1 = _unwrap_cast(args[0])
+                            if type(arg1).__name__ == "ID":
+                                realloc_inputs.add(str(arg1.name))
                 break
         if not allocated and writes and getattr(ast_node, "op", "=") == "=" and not _is_nullish(ast_node.rvalue):
             lhs_unwrapped = _unwrap_cast(ast_node.lvalue)
