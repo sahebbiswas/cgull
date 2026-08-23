@@ -22,9 +22,9 @@ regex-only extraction exactly as before.
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, Optional, Set, Tuple, Union, Mapping
 
-from .models import ParserStatus, ParseTier
+from .models import ParserStatus, ParseTier, ConfigProfile
 from .utils import strip_comments_keep_lines
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,14 @@ class CollectedFlags:
             "value_flags": sorted(self.value_flags),
             "all_flags": sorted(self.all_flags),
         }
+
+    def generate_config_profiles(self, baseline_name: str = "baseline") -> List[ConfigProfile]:
+        """
+        Generates (1) baseline config ("nothing extra defined") and (2) single-flag-flipped
+        variants (one per presence-tested flag in presence_flags).
+        Interaction effects between flags are explicitly out of scope (covered by pairwise/exhaustive).
+        """
+        return generate_config_profiles(self, baseline_name=baseline_name)
 
 
 class ConditionalFlagCollector:
@@ -154,6 +162,50 @@ class ConditionalFlagCollector:
             presence_flags=presence_flags,
             value_flags=value_flags,
         )
+
+    @classmethod
+    def generate_variant_configs(cls, clean_code: str, baseline_name: str = "baseline") -> List[ConfigProfile]:
+        """
+        Discovers preprocessor flags in clean C source code and generates
+        baseline and single-flag-flipped variant ConfigProfile objects.
+        """
+        collected = cls.collect(clean_code)
+        return collected.generate_config_profiles(baseline_name=baseline_name)
+
+
+def generate_config_profiles(
+    flags: Union[CollectedFlags, Set[str], List[str], Tuple[str, ...]],
+    baseline_name: str = "baseline"
+) -> List[ConfigProfile]:
+    """
+    Generates (1) baseline config ("nothing extra defined") and (2) single-flag-flipped
+    variants (one per presence-tested flag in presence_flags).
+
+    Note:
+        This generation is O(N) rather than O(2^N). Interaction effects between flags
+        (e.g., bugs only reachable when both flag A and flag B are set simultaneously)
+        are explicitly out of scope for single-flag variant generation and covered by
+        pairwise or exhaustive configuration scanning.
+
+    Args:
+        flags: A CollectedFlags object or a set/list/tuple of presence flag names.
+        baseline_name: Profile name for the baseline configuration (default: "baseline").
+
+    Returns:
+        List of ConfigProfile objects, starting with the baseline config followed
+        by single-flag-flipped variants sorted alphabetically by flag name.
+    """
+    if isinstance(flags, CollectedFlags):
+        presence_set = flags.presence_flags
+    elif isinstance(flags, (set, list, tuple)):
+        presence_set = set(flags)
+    else:
+        raise TypeError(f"Expected CollectedFlags, set, list, or tuple, got {type(flags).__name__}")
+
+    profiles: List[ConfigProfile] = [ConfigProfile(name=baseline_name, flags={})]
+    for flag in sorted(presence_set):
+        profiles.append(ConfigProfile(name=flag, flags={flag: None}))
+    return profiles
 
 STANDARD_UNSIGNED_TYPES = {
     "size_t", "size_type", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
@@ -304,7 +356,12 @@ def _tokenize_c_prep_expr(expr_str: str, macros: Dict[str, int]) -> Optional[Lis
             elif raw_text == 'false':
                 tokens.append(('NUMBER', 0))
             elif raw_text in macros:
-                tokens.append(('NUMBER', int(macros[raw_text])))
+                val = macros[raw_text]
+                try:
+                    num_val = int(val) if val is not None else 1
+                except (TypeError, ValueError):
+                    num_val = 1
+                tokens.append(('NUMBER', num_val))
             else:
                 tokens.append(('NUMBER', 0))
         else:
@@ -427,6 +484,44 @@ def _eval_c_prep_tokens(tokens: List[Tuple[str, Any]]) -> int:
         return 0
 
 
+def _normalize_macro_dict(defined_syms: Optional[Any]) -> Dict[str, int]:
+    """
+    Normalizes defined_syms into a Dict[str, int] suitable for preprocessor expression evaluation.
+    Handles sets/lists/tuples (mapping symbols to 1) and dicts/Mapping (converting values
+    including None for presence toggles, bools, ints, and string integers to int).
+    """
+    if not defined_syms:
+        return {}
+
+    if isinstance(defined_syms, (set, list, tuple, frozenset)):
+        return {str(s): 1 for s in defined_syms}
+
+    if isinstance(defined_syms, (dict, Mapping)):
+        macros: Dict[str, int] = {}
+        for k, v in defined_syms.items():
+            key = str(k)
+            if v is None:
+                macros[key] = 1
+            elif isinstance(v, bool):
+                macros[key] = 1 if v else 0
+            elif isinstance(v, int):
+                macros[key] = v
+            elif isinstance(v, str):
+                v_clean = re.sub(r'[uUlL]+$', '', v.strip())
+                try:
+                    macros[key] = int(v_clean, 0)
+                except ValueError:
+                    macros[key] = 1 if v_clean else 0
+            else:
+                try:
+                    macros[key] = int(v)
+                except (TypeError, ValueError):
+                    macros[key] = 1
+        return macros
+
+    return {}
+
+
 def eval_preprocessor_expr(expr_str: str, defined_syms: Optional[Any] = None) -> bool:
     """
     Evaluates a C preprocessor condition expression (for #if / #elif) under
@@ -437,13 +532,7 @@ def eval_preprocessor_expr(expr_str: str, defined_syms: Optional[Any] = None) ->
     if not expr_str or not expr_str.strip():
         return False
 
-    if isinstance(defined_syms, (set, list, tuple, dict)):
-        if isinstance(defined_syms, dict):
-            macros = dict(defined_syms)
-        else:
-            macros = {s: 1 for s in defined_syms}
-    else:
-        macros = {}
+    macros = _normalize_macro_dict(defined_syms)
 
     tokens = _tokenize_c_prep_expr(expr_str, macros)
     if tokens is None or len(tokens) == 0:
@@ -462,13 +551,7 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
     Replaces directive lines and non-taken branch bodies with blank lines ("") to maintain
     exact line alignment and total line count for AST mapping.
     """
-    if isinstance(defined_syms, (set, list, tuple, dict)):
-        if isinstance(defined_syms, dict):
-            macros: Dict[str, int] = dict(defined_syms)
-        else:
-            macros = {s: 1 for s in defined_syms}
-    else:
-        macros = {}
+    macros: Dict[str, int] = _normalize_macro_dict(defined_syms)
 
     lines = code.splitlines()
     output_lines: List[str] = []
