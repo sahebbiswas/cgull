@@ -210,7 +210,7 @@ class StructuredCFG:
         init_nonnull = set(initial_nonnull) if initial_nonnull else set()
         init_initialized = set(initial_initialized) if initial_initialized else set()
 
-        self.realloc_records: Dict[str, Tuple[str, str, Set[str], Dict[str, Allocation]]] = {}
+        self.realloc_records: Dict[str, Tuple[str, str, Set[str], Dict[str, Allocation], bool]] = {}
 
         for block in self.blocks.values():
             block.nullness_in = {}
@@ -273,7 +273,15 @@ class StructuredCFG:
                         new_loc_id = base_loc_id
                         if curr_loc_state.get(base_loc_id) in (Allocation.FREED, Allocation.MAYBE_FREED) or any(other != target_var and base_loc_id in curr_loc_map.get(other, set()) for other in all_vars):
                             new_loc_id = f"alloc_{node.node_id}_{target_var}_fresh"
-                        self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states)
+
+                        size_is_zero = False
+                        ast_node = getattr(node, "_ast_node", None)
+                        if ast_node is not None:
+                            val_call = _find_value_producing_call(getattr(ast_node, "init", None) or getattr(ast_node, "rvalue", None))
+                            if val_call and len(val_call[1]) >= 2:
+                                size_is_zero = _is_nullish(val_call[1][1])
+
+                        self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero)
 
                 for ptr in node.realloc_inputs:
                     locs = curr_loc_map.get(ptr, set())
@@ -394,7 +402,7 @@ class StructuredCFG:
 
                 # Loc State
                 edge_loc_state = dict(curr_loc_state)
-                for new_loc_id, (target_var, input_ptr, input_locs, pre_states) in self.realloc_records.items():
+                for new_loc_id, (target_var, input_ptr, input_locs, pre_states, size_is_zero) in self.realloc_records.items():
                     if new_loc_id in curr_loc_map.get(target_var, set()):
                         t_null = edge_null.get(target_var, Nullness.UNKNOWN)
                         if t_null == Nullness.NON_NULL:
@@ -404,7 +412,10 @@ class StructuredCFG:
                             edge_loc_state[new_loc_id] = Allocation.ALLOCATED
                         elif t_null == Nullness.NULL:
                             for loc in input_locs:
-                                edge_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
+                                if size_is_zero:
+                                    edge_loc_state[loc] = Allocation.MAYBE_FREED
+                                else:
+                                    edge_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
                             edge_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
 
                 all_loc_ids = set(edge_loc_state.keys()).union(succ_block.loc_state_in.keys())
@@ -449,7 +460,7 @@ class StructuredCFG:
 
             for node in block.nodes:
                 if hasattr(self, "realloc_records"):
-                    for new_loc_id, (target_var, input_ptr, input_locs, pre_states) in self.realloc_records.items():
+                    for new_loc_id, (target_var, input_ptr, input_locs, pre_states, size_is_zero) in self.realloc_records.items():
                         if new_loc_id in curr_loc_map.get(target_var, set()):
                             t_null = curr_null.get(target_var, Nullness.UNKNOWN)
                             if t_null == Nullness.NON_NULL:
@@ -459,7 +470,10 @@ class StructuredCFG:
                                 curr_loc_state[new_loc_id] = Allocation.ALLOCATED
                             elif t_null == Nullness.NULL:
                                 for loc in input_locs:
-                                    curr_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
+                                    if size_is_zero:
+                                        curr_loc_state[loc] = Allocation.MAYBE_FREED
+                                    else:
+                                        curr_loc_state[loc] = pre_states.get(loc, Allocation.NOT_ALLOCATED)
                                 curr_loc_state[new_loc_id] = Allocation.NOT_ALLOCATED
 
                 curr_node_alloc: Dict[str, Allocation] = {}
@@ -496,8 +510,14 @@ class StructuredCFG:
                         new_loc_id = base_loc_id
                         if curr_loc_state.get(base_loc_id) in (Allocation.FREED, Allocation.MAYBE_FREED) or any(other != target_var and base_loc_id in curr_loc_map.get(other, set()) for other in all_vars):
                             new_loc_id = f"alloc_{node.node_id}_{target_var}_fresh"
+                        size_is_zero = False
+                        ast_node = getattr(node, "_ast_node", None)
+                        if ast_node is not None:
+                            val_call = _find_value_producing_call(getattr(ast_node, "init", None) or getattr(ast_node, "rvalue", None))
+                            if val_call and len(val_call[1]) >= 2:
+                                size_is_zero = _is_nullish(val_call[1][1])
                         if hasattr(self, "realloc_records"):
-                            self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states)
+                            self.realloc_records[new_loc_id] = (target_var, input_ptr, input_locs, pre_states, size_is_zero)
 
                 for ptr in node.realloc_inputs:
                     locs = curr_loc_map.get(ptr, set())
@@ -650,7 +670,7 @@ def _call_args(node, callee: str):
 
 def _freed_vars(node, dealloc_funcs: Optional[Set[str]] = None) -> Set[str]:
     freed: Set[str] = set()
-    funcs = (dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}) | {"realloc"}
+    funcs = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
     for callee in funcs:
         for arg in _call_args_all(node, callee):
             arg_unwrapped = _unwrap_cast(arg)
@@ -766,7 +786,7 @@ def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
     return set(), set()
 
 
-def _process_call_effects(call_node, target_var: Optional[str], summaries: Optional[Dict[str, FunctionSummary]], alloc_set: Set[str], realloc_set: Set[str], freed: Set[str], allocated: Set[str], null_writes: Set[str], maybe_null_writes: Set[str], realloc_inputs: Set[str], realloc_bindings: Dict[str, str]):
+def _process_call_effects(call_node, target_var: Optional[str], summaries: Optional[Dict[str, FunctionSummary]], alloc_set: Set[str], realloc_set: Set[str], freed: Set[str], allocated: Set[str], null_writes: Set[str], maybe_null_writes: Set[str], realloc_inputs: Set[str], realloc_bindings: Dict[str, str], is_value_producing: bool = False):
     """Applies summary effects for a single FuncCall node."""
     callee = _format_pycparser_expr(call_node.name)
     args = list(getattr(call_node.args, "exprs", []) or []) if call_node.args else []
@@ -792,7 +812,8 @@ def _process_call_effects(call_node, target_var: Optional[str], summaries: Optio
                     if type(arg1).__name__ == "ID":
                         input_ptr = str(arg1.name)
                         realloc_inputs.add(input_ptr)
-                        realloc_bindings[target_var] = input_ptr
+                        if is_value_producing:
+                            realloc_bindings[target_var] = input_ptr
         elif summary:
             if summary.return_nullness == Nullness.NULL:
                 null_writes.add(target_var)
@@ -838,7 +859,16 @@ def _replace_ast_node(tree, target, replacement):
     return tree_copy
 
 
-def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str], Dict[str, str]]:
+def _find_value_producing_call(node) -> Optional[Tuple[str, list]]:
+    unwrapped = _unwrap_cast(node)
+    if unwrapped is not None and type(unwrapped).__name__ == "FuncCall":
+        callee = _format_pycparser_expr(unwrapped.name)
+        args = list(getattr(unwrapped.args, "exprs", []) or []) if unwrapped.args else []
+        return callee, args
+    return None
+
+
+def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str], Dict[str, str]]:
     """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings for an executable AST node."""
     kind = type(ast_node).__name__
     reads: Set[str] = set()
@@ -854,32 +884,32 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     expr = _format_pycparser_expr(ast_node)
 
     alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc"}
-    realloc_set = {"realloc"}
+    realloc_set = realloc_funcs if realloc_funcs is not None else {"realloc"}
 
     # Process call summaries for function calls in expressions
     if summaries:
-        # Check all FuncCall nodes within ast_node
-        def visit_calls(n, curr_target_var=None):
+        def visit_calls(n, curr_target_var=None, is_value_producing=False):
             if n is None:
                 return
             n_kind = type(n).__name__
             if n_kind == "FuncCall":
-                _process_call_effects(n, curr_target_var, summaries, alloc_set, realloc_set, freed, allocated, null_writes, maybe_null_writes, realloc_inputs, realloc_bindings)
-                # Recurse into children without binding return effects of nested calls to curr_target_var
+                _process_call_effects(n, curr_target_var, summaries, alloc_set, realloc_set, freed, allocated, null_writes, maybe_null_writes, realloc_inputs, realloc_bindings, is_value_producing=is_value_producing)
                 for _, child in n.children():
-                    visit_calls(child, curr_target_var=None)
+                    visit_calls(child, curr_target_var=None, is_value_producing=False)
             else:
+                unwrapped = _unwrap_cast(n)
                 for _, child in n.children():
-                    visit_calls(child, curr_target_var=curr_target_var)
+                    child_is_vp = is_value_producing and (child is unwrapped)
+                    visit_calls(child, curr_target_var=curr_target_var, is_value_producing=child_is_vp)
 
         if kind == "Decl" and ast_node.name and ast_node.init:
-            visit_calls(ast_node.init, curr_target_var=str(ast_node.name))
+            visit_calls(ast_node.init, curr_target_var=str(ast_node.name), is_value_producing=True)
         elif kind == "Assignment":
             lhs_target = list(_assignment_target(ast_node.lvalue))
             t_var = lhs_target[0] if lhs_target else None
-            visit_calls(ast_node.rvalue, curr_target_var=t_var)
+            visit_calls(ast_node.rvalue, curr_target_var=t_var, is_value_producing=True)
         elif kind == "FuncCall":
-            visit_calls(ast_node, curr_target_var=None)
+            visit_calls(ast_node, curr_target_var=None, is_value_producing=False)
 
     if kind == "Decl":
         if ast_node.init is not None:
@@ -887,6 +917,18 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
             writes = {str(ast_node.name)} if ast_node.name else set()
             if _is_nullish(ast_node.init):
                 null_writes.update(writes)
+
+            val_call = _find_value_producing_call(ast_node.init)
+            if val_call is not None:
+                callee_fn, c_args = val_call
+                if callee_fn in realloc_set and c_args:
+                    arg1 = _unwrap_cast(c_args[0])
+                    if type(arg1).__name__ == "ID":
+                        input_ptr = str(arg1.name)
+                        realloc_inputs.add(input_ptr)
+                        if ast_node.name:
+                            realloc_bindings[str(ast_node.name)] = input_ptr
+
             for call_name in _call_names(ast_node.init):
                 if call_name in alloc_set or (summaries and summaries.get(call_name) and summaries[call_name].returns_allocation):
                     if ast_node.name:
@@ -896,10 +938,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
                         if args:
                             arg1 = _unwrap_cast(args[0])
                             if type(arg1).__name__ == "ID":
-                                input_ptr = str(arg1.name)
-                                realloc_inputs.add(input_ptr)
-                                if ast_node.name:
-                                    realloc_bindings[str(ast_node.name)] = input_ptr
+                                realloc_inputs.add(str(arg1.name))
                     break
             if not allocated and ast_node.name and not _is_nullish(ast_node.init):
                 rhs_unwrapped = _unwrap_cast(ast_node.init)
@@ -912,6 +951,18 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
         writes = _assignment_target(ast_node.lvalue)
         if _is_nullish(ast_node.rvalue):
             null_writes.update(writes)
+
+        val_call = _find_value_producing_call(ast_node.rvalue)
+        if val_call is not None:
+            callee_fn, c_args = val_call
+            if callee_fn in realloc_set and c_args:
+                arg1 = _unwrap_cast(c_args[0])
+                if type(arg1).__name__ == "ID":
+                    input_ptr = str(arg1.name)
+                    realloc_inputs.add(input_ptr)
+                    for w in writes:
+                        realloc_bindings[w] = input_ptr
+
         for call_name in _call_names(ast_node.rvalue):
             if call_name in alloc_set or (summaries and summaries.get(call_name) and summaries[call_name].returns_allocation):
                 allocated.update(writes)
@@ -920,10 +971,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
                     if args:
                         arg1 = _unwrap_cast(args[0])
                         if type(arg1).__name__ == "ID":
-                            input_ptr = str(arg1.name)
-                            realloc_inputs.add(input_ptr)
-                            for w in writes:
-                                realloc_bindings[w] = input_ptr
+                            realloc_inputs.add(str(arg1.name))
                 break
         if not allocated and writes and getattr(ast_node, "op", "=") == "=" and not _is_nullish(ast_node.rvalue):
             lhs_unwrapped = _unwrap_cast(ast_node.lvalue)
@@ -954,7 +1002,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     return kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings
 
 
-def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> StructuredCFG:
+def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> StructuredCFG:
     """Build a structured CFG rooted at a pycparser FuncDef body."""
     from pycparser import c_ast
 
@@ -963,7 +1011,7 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     pending_gotos: List[Tuple[int, str]] = []
 
     def make_event(stmt) -> int:
-        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, summaries=summaries)
+        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
         if kind == "Return":
             expr_str = _format_pycparser_expr(stmt.expr) if getattr(stmt, "expr", None) is not None else ""
@@ -1139,9 +1187,11 @@ def find_function_def(ast, name: str):
     return None
 
 
-def _get_builtin_summaries(alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Dict[str, FunctionSummary]:
+def _get_builtin_summaries(alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None) -> Dict[str, FunctionSummary]:
     alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc", "strdup", "strndup", "valloc", "pvalloc", "memalign"}
     dealloc_set = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
+    if realloc_funcs:
+        alloc_set.update(realloc_funcs)
 
     builtins: Dict[str, FunctionSummary] = {}
     for f in dealloc_set:
@@ -1151,12 +1201,12 @@ def _get_builtin_summaries(alloc_funcs: Optional[Set[str]] = None, dealloc_funcs
     return builtins
 
 
-def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None) -> Dict[str, FunctionSummary]:
+def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None) -> Dict[str, FunctionSummary]:
     """
     Computes intra-file interprocedural function summaries for all functions defined in ast_ctx.
     Performs fixed-point iteration to propagate parameter deallocations and return values across callers/callees.
     """
-    summaries: Dict[str, FunctionSummary] = _get_builtin_summaries(alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
+    summaries: Dict[str, FunctionSummary] = _get_builtin_summaries(alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs)
 
     if not hasattr(ast_ctx, "functions") or not ast_ctx.functions:
         return summaries
@@ -1187,7 +1237,7 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
             if getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None:
                 funcdef = find_function_def(ast_ctx.pycparser_ast, name)
                 if funcdef is not None:
-                    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, summaries=summaries)
+                    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries)
 
             freed_params: Set[int] = set()
             return_nullness_set: Set[Nullness] = set()

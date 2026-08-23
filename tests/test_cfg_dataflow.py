@@ -881,6 +881,53 @@ class TestReallocSemantics(unittest.TestCase):
         issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
         self.assertEqual(len(issues_uaf), 0, "Accessing original buffer on realloc failure branch should not trigger CGULL-022 (UAF)")
 
+    def test_size_zero_realloc_failure_marks_maybe_freed(self):
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void f() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)realloc(p, 0);
+            if (q == NULL) {
+                p[0] = 1;
+            }
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        use_nodes = [n for n in cfg.nodes.values() if "p[0] = 1" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        u_nid = use_nodes[0].node_id
+        # When size is 0 and realloc returns NULL, C standard allows realloc to free p and return NULL
+        # So allocation state of p on NULL branch is MAYBE_FREED
+        self.assertEqual(cfg.query_allocation('p', u_nid), Allocation.MAYBE_FREED)
+
+    def test_non_value_producing_realloc_in_call_arg_does_not_bind_outer_target(self):
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void process(void *);
+
+        void f() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)malloc(10 * sizeof(int));
+            if (!q) return;
+            process(realloc(p, 20 * sizeof(int)));
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+        # realloc(p, ...) is inside process(...) call, so realloc_bindings should not bind process's target
+        call_nodes = [n for n in cfg.nodes.values() if "process" in n.expr_str]
+        self.assertEqual(len(call_nodes), 1)
+        node = call_nodes[0]
+        self.assertEqual(getattr(node, "realloc_bindings", {}), {})
+
 
 class TestInterproceduralCFGSummaries(unittest.TestCase):
 
