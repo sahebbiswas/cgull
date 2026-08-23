@@ -197,6 +197,33 @@ class TestFormatString(unittest.TestCase):
         issues = scan_with_rule("CGULL-002", code)
         self.assertEqual(len(issues), 0)
 
+    def test_detects_sprintf_vsnprintf_vfprintf(self):
+        code = """
+        void bad(char *dest, char *data, va_list args) {
+            sprintf(dest, data);
+            snprintf(dest, 100, data);
+            vfprintf(stderr, data, args);
+            vsnprintf(dest, 100, data, args);
+            vsprintf(dest, data, args);
+            dprintf(1, data);
+            vdprintf(1, data, args);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 7)
+
+    def test_clean_snprintf_vsnprintf_literals(self):
+        code = """
+        void good(char *dest, char *data, va_list args) {
+            sprintf(dest, "%s", data);
+            snprintf(dest, 100, "%s", data);
+            vfprintf(stderr, "%s", args);
+            vsnprintf(dest, 100, "%s", args);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
 
 class TestUncheckedDynamicAllocations(unittest.TestCase):
     def test_detects_unchecked_malloc(self):

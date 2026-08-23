@@ -321,17 +321,32 @@ class FormatStringRule(BaseRule):
     sample_remediated_code = "char user_input[256];\nprintf(\"%s\", user_input);\nsyslog(LOG_ERR, \"%s\", user_input);"
     analysis_engine = AnalysisEngine.HYBRID
 
-    PRINT_FUNCS = ["printf", "fprintf", "sprintf", "snprintf", "syslog", "vprintf", "vfprintf"]
+    PRINT_FUNCS = [
+        "printf", "vprintf",
+        "fprintf", "vfprintf", "sprintf", "vsprintf", "syslog", "dprintf", "vdprintf",
+        "snprintf", "vsnprintf",
+    ]
+
+    @staticmethod
+    def _is_literal_format(arg: str) -> bool:
+        s = arg.strip()
+        return (
+            s.startswith('"') or
+            s.startswith('L"') or
+            s.startswith('u8"') or
+            s.startswith('u"') or
+            s.startswith('U"')
+        )
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         match_target = masked_line_content or line_content
-        # printf(var) or printf(var, ...) where first arg is not "..."
+
+        # Position 1: printf(var) or vprintf(var, ...)
         for fn in ["printf", "vprintf"]:
-            m = re.search(rf'\b{fn}\s*\(\s*([^",\s][^,\)]*)\s*\)', match_target)
-            if m:
+            for m in re.finditer(rf'\b{fn}\s*\(\s*([^",\s][^,\)]*)', match_target):
                 arg = line_content[m.start(1):m.end(1)].strip()
-                if not arg.startswith('"') and not arg.startswith('L"'):
+                if not self._is_literal_format(arg):
                     issues.append(self.create_issue(
                         file_path=file_path,
                         line_number=line_number,
@@ -339,16 +354,15 @@ class FormatStringRule(BaseRule):
                         message=f"Non-literal format string passed to {fn}({arg}). An attacker can inject %x, %n, or %s to leak or overwrite memory.",
                         column_number=m.start() + 1,
                         engine="Regex",
-                        fix_type=FixType.SAFE_FIX,
-                        auto_fix_replacement=f'{fn}("%s", {arg})'
+                        fix_type=FixType.SAFE_FIX if fn == "printf" else FixType.SUGGESTED_FIX,
+                        auto_fix_replacement=f'{fn}("%s", {arg})' if fn == "printf" else None,
                     ))
 
-        # fprintf(stream, var) or syslog(priority, var)
-        for fn in ["fprintf", "syslog", "dprintf"]:
-            m = re.search(rf'\b{fn}\s*\(\s*[^,]+,\s*([^",\s][^,\)]*)\s*\)', match_target)
-            if m:
+        # Position 2: fprintf(stream, var), vfprintf(stream, var, ap), sprintf(buf, var), vsprintf(buf, var, ap), syslog(priority, var), dprintf(fd, var), vdprintf(fd, var, ap)
+        for fn in ["fprintf", "vfprintf", "sprintf", "vsprintf", "syslog", "dprintf", "vdprintf"]:
+            for m in re.finditer(rf'\b{fn}\s*\(\s*[^,]+,\s*([^",\s][^,\)]*)', match_target):
                 arg = line_content[m.start(1):m.end(1)].strip()
-                if not arg.startswith('"') and not arg.startswith('L"'):
+                if not self._is_literal_format(arg):
                     issues.append(self.create_issue(
                         file_path=file_path,
                         line_number=line_number,
@@ -357,6 +371,21 @@ class FormatStringRule(BaseRule):
                         column_number=m.start() + 1,
                         engine="Regex",
                     ))
+
+        # Position 3: snprintf(buf, size, var), vsnprintf(buf, size, var, ap)
+        for fn in ["snprintf", "vsnprintf"]:
+            for m in re.finditer(rf'\b{fn}\s*\(\s*[^,]+,\s*[^,]+,\s*([^",\s][^,\)]*)', match_target):
+                arg = line_content[m.start(1):m.end(1)].strip()
+                if not self._is_literal_format(arg):
+                    issues.append(self.create_issue(
+                        file_path=file_path,
+                        line_number=line_number,
+                        code_snippet=line_content,
+                        message=f"Non-literal format string passed to {fn}(..., {arg}). Format string vulnerability allows arbitrary read/write.",
+                        column_number=m.start() + 1,
+                        engine="Regex",
+                    ))
+
         return issues
 
 
