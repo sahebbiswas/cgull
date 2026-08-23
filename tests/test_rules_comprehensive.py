@@ -224,6 +224,25 @@ class TestFormatString(unittest.TestCase):
         issues = scan_with_rule("CGULL-002", code)
         self.assertEqual(len(issues), 0)
 
+    def test_nested_commas_in_earlier_args(self):
+        code = """
+        void test_nested(char *buf, char *user_input) {
+            snprintf(buf, MIN(100, 200), user_input);
+            fprintf(get_stream(1, 2), user_input);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 2)
+
+    def test_prototypes_and_macros_ignored(self):
+        code = """
+        #define dprintf(...) log_debug(__VA_ARGS__)
+        int vsnprintf(char *str, size_t size, const char *format, va_list ap);
+        extern int dprintf(int fd, const char *format, ...);
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
 
 class TestUncheckedDynamicAllocations(unittest.TestCase):
     def test_detects_unchecked_malloc(self):

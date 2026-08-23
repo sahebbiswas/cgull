@@ -321,11 +321,20 @@ class FormatStringRule(BaseRule):
     sample_remediated_code = "char user_input[256];\nprintf(\"%s\", user_input);\nsyslog(LOG_ERR, \"%s\", user_input);"
     analysis_engine = AnalysisEngine.HYBRID
 
-    PRINT_FUNCS = [
-        "printf", "vprintf",
-        "fprintf", "vfprintf", "sprintf", "vsprintf", "syslog", "dprintf", "vdprintf",
-        "snprintf", "vsnprintf",
-    ]
+    PRINT_FUNC_ARG_INDEX = {
+        "printf": 0,
+        "vprintf": 0,
+        "fprintf": 1,
+        "vfprintf": 1,
+        "sprintf": 1,
+        "vsprintf": 1,
+        "syslog": 1,
+        "dprintf": 1,
+        "vdprintf": 1,
+        "snprintf": 2,
+        "vsnprintf": 2,
+    }
+    PRINT_FUNCS = list(PRINT_FUNC_ARG_INDEX.keys())
 
     @staticmethod
     def _is_literal_format(arg: str) -> bool:
@@ -338,53 +347,105 @@ class FormatStringRule(BaseRule):
             s.startswith('U"')
         )
 
+    @staticmethod
+    def _split_call_args(line_content: str, start_paren_offset: int) -> List[str]:
+        paren_depth = 1
+        bracket_depth = 0
+        brace_depth = 0
+        in_quote = False
+        quote_char = None
+        escape = False
+        args = []
+        cur_arg = []
+
+        i = start_paren_offset + 1
+        n = len(line_content)
+        while i < n:
+            c = line_content[i]
+            if escape:
+                cur_arg.append(c)
+                escape = False
+            elif c == '\\':
+                cur_arg.append(c)
+                escape = True
+            elif in_quote:
+                cur_arg.append(c)
+                if c == quote_char:
+                    in_quote = False
+            elif c in ('"', "'"):
+                in_quote = True
+                quote_char = c
+                cur_arg.append(c)
+            elif c == '(':
+                paren_depth += 1
+                cur_arg.append(c)
+            elif c == ')':
+                paren_depth -= 1
+                if paren_depth == 0:
+                    args.append("".join(cur_arg).strip())
+                    cur_arg = []
+                    break
+                cur_arg.append(c)
+            elif c == '[':
+                bracket_depth += 1
+                cur_arg.append(c)
+            elif c == ']':
+                if bracket_depth > 0:
+                    bracket_depth -= 1
+                cur_arg.append(c)
+            elif c == '{':
+                brace_depth += 1
+                cur_arg.append(c)
+            elif c == '}':
+                if brace_depth > 0:
+                    brace_depth -= 1
+                cur_arg.append(c)
+            elif c == ',' and paren_depth == 1 and bracket_depth == 0 and brace_depth == 0:
+                args.append("".join(cur_arg).strip())
+                cur_arg = []
+            else:
+                cur_arg.append(c)
+            i += 1
+
+        if cur_arg and paren_depth == 0:
+            args.append("".join(cur_arg).strip())
+        return args
+
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
+        if line_content.lstrip().startswith('#'):
+            return issues
+
         match_target = masked_line_content or line_content
 
-        # Position 1: printf(var) or vprintf(var, ...)
-        for fn in ["printf", "vprintf"]:
-            for m in re.finditer(rf'\b{fn}\s*\(\s*([^",\s][^,\)]*)', match_target):
-                arg = line_content[m.start(1):m.end(1)].strip()
-                if not self._is_literal_format(arg):
-                    issues.append(self.create_issue(
-                        file_path=file_path,
-                        line_number=line_number,
-                        code_snippet=line_content,
-                        message=f"Non-literal format string passed to {fn}({arg}). An attacker can inject %x, %n, or %s to leak or overwrite memory.",
-                        column_number=m.start() + 1,
-                        engine="Regex",
-                        fix_type=FixType.SAFE_FIX if fn == "printf" else FixType.SUGGESTED_FIX,
-                        auto_fix_replacement=f'{fn}("%s", {arg})' if fn == "printf" else None,
-                    ))
+        for fn, target_idx in self.PRINT_FUNC_ARG_INDEX.items():
+            pattern = rf'\b{re.escape(fn)}\s*\('
+            for m in re.finditer(pattern, match_target):
+                # Skip function declarations / prototypes / definition headers
+                decl_pattern = rf'^\s*(?!(?:return|if|while|for|switch|else)\b)(?:(?:extern|static|inline|const|volatile|unsigned|signed|short|long|char|int|void|double|float|struct\s+\w+|union\s+\w+|enum\s+\w+|\w+)\s*|\*\s*)+\b{re.escape(fn)}\s*\([^;{{}}]*\)[^;{{}}]*\s*(?:;|\{{)?\s*$'
+                if re.match(decl_pattern, line_content.strip()):
+                    continue
 
-        # Position 2: fprintf(stream, var), vfprintf(stream, var, ap), sprintf(buf, var), vsprintf(buf, var, ap), syslog(priority, var), dprintf(fd, var), vdprintf(fd, var, ap)
-        for fn in ["fprintf", "vfprintf", "sprintf", "vsprintf", "syslog", "dprintf", "vdprintf"]:
-            for m in re.finditer(rf'\b{fn}\s*\(\s*[^,]+,\s*([^",\s][^,\)]*)', match_target):
-                arg = line_content[m.start(1):m.end(1)].strip()
-                if not self._is_literal_format(arg):
-                    issues.append(self.create_issue(
-                        file_path=file_path,
-                        line_number=line_number,
-                        code_snippet=line_content,
-                        message=f"Non-literal format string passed to {fn}(..., {arg}). Format string vulnerability allows arbitrary read/write.",
-                        column_number=m.start() + 1,
-                        engine="Regex",
-                    ))
-
-        # Position 3: snprintf(buf, size, var), vsnprintf(buf, size, var, ap)
-        for fn in ["snprintf", "vsnprintf"]:
-            for m in re.finditer(rf'\b{fn}\s*\(\s*[^,]+,\s*[^,]+,\s*([^",\s][^,\)]*)', match_target):
-                arg = line_content[m.start(1):m.end(1)].strip()
-                if not self._is_literal_format(arg):
-                    issues.append(self.create_issue(
-                        file_path=file_path,
-                        line_number=line_number,
-                        code_snippet=line_content,
-                        message=f"Non-literal format string passed to {fn}(..., {arg}). Format string vulnerability allows arbitrary read/write.",
-                        column_number=m.start() + 1,
-                        engine="Regex",
-                    ))
+                paren_pos = m.end() - 1
+                args = self._split_call_args(line_content, paren_pos)
+                if len(args) > target_idx:
+                    arg = args[target_idx]
+                    if not self._is_literal_format(arg):
+                        msg = (
+                            f"Non-literal format string passed to {fn}({arg}). An attacker can inject %x, %n, or %s to leak or overwrite memory."
+                            if target_idx == 0 else
+                            f"Non-literal format string passed to {fn}(..., {arg}). Format string vulnerability allows arbitrary read/write."
+                        )
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_number,
+                            code_snippet=line_content,
+                            message=msg,
+                            column_number=m.start() + 1,
+                            engine="Regex",
+                            fix_type=FixType.SAFE_FIX if fn == "printf" else FixType.SUGGESTED_FIX,
+                            auto_fix_replacement=f'{fn}("%s", {arg})' if fn == "printf" else None,
+                        ))
 
         return issues
 
