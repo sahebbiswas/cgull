@@ -758,19 +758,6 @@ def _find_ternary_op(node):
     return None
 
 
-def _find_short_circuit_op(node):
-    if node is None:
-        return None
-    kind = type(node).__name__
-    if kind == "BinaryOp" and getattr(node, "op", None) in ("&&", "||"):
-        return node
-    for _, child in node.children():
-        res = _find_short_circuit_op(child)
-        if res is not None:
-            return res
-    return None
-
-
 def _replace_ast_node(tree, target, replacement):
     from pycparser import c_ast
     if tree is target:
@@ -779,7 +766,11 @@ def _replace_ast_node(tree, target, replacement):
         return None
     import copy
     tree_copy = copy.copy(tree)
-    for attr in getattr(tree_copy, '__slots__', []):
+    slots = set()
+    for cls in type(tree_copy).__mro__:
+        for slot in getattr(cls, '__slots__', ()):
+            slots.add(slot)
+    for attr in slots:
         val = getattr(tree_copy, attr, None)
         if isinstance(val, list):
             new_list = [_replace_ast_node(item, target, replacement) if isinstance(item, c_ast.Node) else item for item in val]
@@ -930,19 +921,8 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
             return next_entry
         kind = type(stmt).__name__
 
-        # Handle expression-level control flow: TernaryOp (?:) and short-circuit operators (&&, ||)
+        # Handle expression-level control flow: TernaryOp (?:)
         if kind == "If":
-            sc = _find_short_circuit_op(stmt.cond)
-            if sc is not None:
-                coord = getattr(stmt, 'coord', None)
-                if sc.op == "&&":
-                    inner_if = c_ast.If(cond=sc.right, iftrue=stmt.iftrue, iffalse=stmt.iffalse, coord=coord)
-                    outer_if = c_ast.If(cond=sc.left, iftrue=inner_if, iffalse=stmt.iffalse, coord=coord)
-                    return build_stmt(outer_if, next_entry, break_target, continue_target)
-                else:  # "||"
-                    inner_if = c_ast.If(cond=sc.right, iftrue=stmt.iftrue, iffalse=stmt.iffalse, coord=coord)
-                    outer_if = c_ast.If(cond=sc.left, iftrue=stmt.iftrue, iffalse=inner_if, coord=coord)
-                    return build_stmt(outer_if, next_entry, break_target, continue_target)
             ternary = _find_ternary_op(stmt.cond)
             if ternary is not None:
                 coord = getattr(stmt, 'coord', None)
@@ -953,14 +933,6 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
                 outer_if = c_ast.If(cond=ternary.cond, iftrue=if_t, iffalse=if_f, coord=coord)
                 return build_stmt(outer_if, next_entry, break_target, continue_target)
         elif kind not in {"Compound", "While", "DoWhile", "For", "Switch", "Label", "Goto", "Break", "Continue"}:
-            sc = _find_short_circuit_op(stmt)
-            if sc is not None:
-                if sc.op == "&&":
-                    ternary_node = c_ast.TernaryOp(cond=sc.left, iftrue=sc.right, iffalse=c_ast.Constant('int', '0'))
-                else:
-                    ternary_node = c_ast.TernaryOp(cond=sc.left, iftrue=c_ast.Constant('int', '1'), iffalse=sc.right)
-                stmt_conv = _replace_ast_node(stmt, sc, ternary_node)
-                return build_stmt(stmt_conv, next_entry, break_target, continue_target)
             ternary = _find_ternary_op(stmt)
             if ternary is not None:
                 coord = getattr(stmt, 'coord', None)
