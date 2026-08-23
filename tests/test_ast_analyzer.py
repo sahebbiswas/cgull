@@ -534,6 +534,118 @@ class TestPcppPreprocessing(unittest.TestCase):
         self.assertEqual(malloc_calls[0][1], 11)
 
 
+class TestPreprocessorConditionalResolution(unittest.TestCase):
+    """Direct tests for eval_preprocessor_expr and resolve_preprocessor_conditionals."""
+
+    def test_eval_preprocessor_expr(self):
+        from cgull.ast_analyzer import eval_preprocessor_expr
+        self.assertFalse(eval_preprocessor_expr("defined(FOO)"))
+        self.assertTrue(eval_preprocessor_expr("!defined(FOO)"))
+        self.assertTrue(eval_preprocessor_expr("defined(FOO)", {"FOO"}))
+        self.assertFalse(eval_preprocessor_expr("!defined(FOO)", {"FOO"}))
+        self.assertTrue(eval_preprocessor_expr("1"))
+        self.assertFalse(eval_preprocessor_expr("0"))
+        self.assertTrue(eval_preprocessor_expr("!defined(A) && !defined(B)"))
+        self.assertFalse(eval_preprocessor_expr("defined(A) || defined(B)"))
+        self.assertFalse(eval_preprocessor_expr("UNDEFINED_SYM > 2"))
+
+    def test_resolve_ifdef_else_strips_untaken_branch(self):
+        from cgull.ast_analyzer import resolve_preprocessor_conditionals
+        src = (
+            "#ifdef _WIN32\n"
+            "int foo(void) { return 1; }\n"
+            "#else\n"
+            "int foo(void) { return 2; }\n"
+            "#endif"
+        )
+        res = resolve_preprocessor_conditionals(src)
+        self.assertEqual(res.count('\n'), src.count('\n'))
+        self.assertNotIn("return 1", res)
+        self.assertIn("return 2", res)
+
+    def test_resolve_ifndef_preserves_taken_branch(self):
+        from cgull.ast_analyzer import resolve_preprocessor_conditionals
+        src = (
+            "#ifndef UNSET_MACRO\n"
+            "int active_fn(void) { return 10; }\n"
+            "#else\n"
+            "int inactive_fn(void) { return 20; }\n"
+            "#endif"
+        )
+        res = resolve_preprocessor_conditionals(src)
+        self.assertEqual(res.count('\n'), src.count('\n'))
+        self.assertIn("active_fn", res)
+        self.assertNotIn("inactive_fn", res)
+
+    def test_resolve_elif_chain(self):
+        from cgull.ast_analyzer import resolve_preprocessor_conditionals
+        src = (
+            "#if defined(OPT_A)\n"
+            "int val = 1;\n"
+            "#elif defined(OPT_B)\n"
+            "int val = 2;\n"
+            "#elif !defined(OPT_C)\n"
+            "int val = 3;\n"
+            "#else\n"
+            "int val = 4;\n"
+            "#endif\n"
+        )
+        res = resolve_preprocessor_conditionals(src)
+        self.assertNotIn("val = 1;", res)
+        self.assertNotIn("val = 2;", res)
+        self.assertIn("val = 3;", res)
+        self.assertNotIn("val = 4;", res)
+
+    def test_resolve_nested_conditionals(self):
+        from cgull.ast_analyzer import resolve_preprocessor_conditionals
+        src = (
+            "#ifndef UNSET\n"
+            "  #ifdef NESTED_UNSET\n"
+            "    int a = 1;\n"
+            "  #else\n"
+            "    int b = 2;\n"
+            "  #endif\n"
+            "#else\n"
+            "  int c = 3;\n"
+            "#endif\n"
+        )
+        res = resolve_preprocessor_conditionals(src)
+        self.assertNotIn("int a = 1;", res)
+        self.assertIn("int b = 2;", res)
+        self.assertNotIn("int c = 3;", res)
+
+    def test_resolve_multiline_directives(self):
+        from cgull.ast_analyzer import resolve_preprocessor_conditionals
+        src = (
+            "#if defined(FOO) \\\n"
+            "    || defined(BAR)\n"
+            "int x = 1;\n"
+            "#else\n"
+            "int x = 2;\n"
+            "#endif"
+        )
+        res = resolve_preprocessor_conditionals(src)
+        self.assertEqual(res.count('\n'), src.count('\n'))
+        self.assertNotIn("int x = 1;", res)
+        self.assertIn("int x = 2;", res)
+
+    def test_resolve_in_file_define_and_undef(self):
+        from cgull.ast_analyzer import resolve_preprocessor_conditionals
+        src = (
+            "#define IN_FILE_DEF\n"
+            "#ifdef IN_FILE_DEF\n"
+            "int x = 100;\n"
+            "#endif\n"
+            "#undef IN_FILE_DEF\n"
+            "#ifdef IN_FILE_DEF\n"
+            "int y = 200;\n"
+            "#endif\n"
+        )
+        res = resolve_preprocessor_conditionals(src)
+        self.assertIn("int x = 100;", res)
+        self.assertNotIn("int y = 200;", res)
+
+
 @unittest.skipUnless(_pycparser_available(), "pycparser not installed")
 class TestPcppFallback(unittest.TestCase):
     """Tests that the directive-stripping tier works when pcpp is absent."""
@@ -547,6 +659,35 @@ class TestPcppFallback(unittest.TestCase):
             ctx = parser.parse(src)
             self.assertTrue(ctx.has_pycparser)
             self.assertEqual(ctx.functions[0].name, "add")
+
+    def test_tier2_duplicate_symbol_ifdef_else_parses_successfully(self):
+        """
+        Regression test: duplicate function definitions in #ifdef/#else branches
+        must resolve in Tier 2 so pycparser parses the taken branch without errors.
+        """
+        from unittest.mock import patch
+        src = (
+            "#ifdef _WIN32\n"
+            "int target_func(char *dest, const char *src) {\n"
+            "    return 1;\n"
+            "}\n"
+            "#else\n"
+            "int target_func(char *dest, const char *src) {\n"
+            "    strcpy(dest, src);\n"
+            "    return 0;\n"
+            "}\n"
+            "#endif\n"
+        )
+        parser = CASTParser()
+        with patch.object(CASTParser, "_try_pcpp_preprocess", return_value=None):
+            ctx = parser.parse(src)
+            self.assertTrue(ctx.has_pycparser)
+            self.assertEqual(ctx.parse_tier, "directive-stripped")
+            self.assertEqual(len(ctx.functions), 1)
+            fn = ctx.functions[0]
+            self.assertEqual(fn.name, "target_func")
+            self.assertEqual(len(fn.calls), 1)
+            self.assertEqual(fn.calls[0][0], "strcpy")
 
 
 class TestParseTiers(unittest.TestCase):

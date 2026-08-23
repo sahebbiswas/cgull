@@ -96,6 +96,191 @@ _STATEMENT_KEYWORDS = {
 _PREPROCESSOR_LINE_RE = re.compile(r'^[ \t]*#')
 
 
+@dataclass
+class _CondFrame:
+    has_taken: bool
+    is_taken: bool
+    parent_active: bool
+
+
+def eval_preprocessor_expr(expr_str: str, defined_syms: Optional[Set[str]] = None) -> bool:
+    """
+    Evaluates a C preprocessor condition expression (for #if / #elif) under
+    the assumption of `defined_syms`. Any undefined identifier evaluates to 0 (false).
+    """
+    if not expr_str or not expr_str.strip():
+        return False
+
+    syms = defined_syms or set()
+    s = expr_str.strip()
+
+    # Handle defined(SYM) or defined SYM
+    def replace_defined(m):
+        sym = m.group(1) or m.group(2)
+        return "1" if sym in syms else "0"
+
+    s = re.sub(
+        r'\bdefined\s*\(\s*([a-zA-Z_]\w*)\s*\)|\bdefined\s+([a-zA-Z_]\w*)',
+        replace_defined,
+        s
+    )
+
+    # Protect multi-char comparison/logical operators
+    s = s.replace("!=", " __NE__ ")
+    s = s.replace("==", " __EQ__ ")
+    s = s.replace("<=", " __LE__ ")
+    s = s.replace(">=", " __GE__ ")
+    s = s.replace("&&", " and ")
+    s = s.replace("||", " or ")
+
+    # Replace unary ! (not followed by =) with ' not '
+    s = re.sub(r'!(?!=)', ' not ', s)
+
+    reserved_words = {"and", "or", "not", "__NE__", "__EQ__", "__LE__", "__GE__", "true", "false"}
+
+    def replace_ident(m):
+        word = m.group(0)
+        if word in reserved_words:
+            if word == "true":
+                return "1"
+            elif word == "false":
+                return "0"
+            return word
+        if word.isdigit():
+            return word
+        if word in syms:
+            return "1"
+        return "0"
+
+    s = re.sub(r'\b[a-zA-Z_]\w*\b', replace_ident, s)
+
+    # Restore comparison operators
+    s = s.replace(" __NE__ ", " != ")
+    s = s.replace(" __EQ__ ", " == ")
+    s = s.replace(" __LE__ ", " <= ")
+    s = s.replace(" __GE__ ", " >= ")
+
+    try:
+        val = eval(s, {"__builtins__": {}}, {})
+        return bool(val)
+    except Exception:
+        return False
+
+
+def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Set[str]] = None) -> str:
+    """
+    Performs a line-by-line single-pass resolution of C preprocessor directives and
+    conditionals (#if, #ifdef, #ifndef, #elif, #else, #endif), evaluating branch
+    conditions against `defined_syms` (defaulting to empty set, "assume nothing extra is defined").
+
+    Replaces directive lines and non-taken branch bodies with blank lines ("") to maintain
+    exact line alignment and total line count for AST mapping.
+    """
+    syms = set(defined_syms) if defined_syms is not None else set()
+    lines = code.splitlines()
+    output_lines: List[str] = []
+
+    cond_stack: List[_CondFrame] = []
+
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        line_lstrip = line.lstrip()
+
+        # Check if this line starts a preprocessor directive
+        if line_lstrip.startswith('#'):
+            # Collect multiline directive (ending with \)
+            directive_parts = []
+            directive_line_indices = []
+
+            curr_i = i
+            while curr_i < n:
+                curr_line = lines[curr_i]
+                directive_line_indices.append(curr_i)
+                curr_rstrip = curr_line.rstrip()
+                if curr_rstrip.endswith('\\'):
+                    directive_parts.append(curr_rstrip[:-1])
+                    curr_i += 1
+                else:
+                    directive_parts.append(curr_rstrip)
+                    break
+
+            full_directive_str = " ".join(directive_parts).strip()
+            # Advance main line index i to the end of the directive
+            i = curr_i + 1
+
+            # Determine directive type
+            dir_body = full_directive_str.lstrip('#').strip()
+
+            # Parse directive
+            m_ifdef = re.match(r'^ifdef\s+([a-zA-Z_]\w*)', dir_body)
+            m_ifndef = re.match(r'^ifndef\s+([a-zA-Z_]\w*)', dir_body)
+            m_if = re.match(r'^if\b\s*(.*)', dir_body)
+            m_elif = re.match(r'^elif\b\s*(.*)', dir_body)
+            m_else = re.match(r'^else\b', dir_body)
+            m_endif = re.match(r'^endif\b', dir_body)
+            m_define = re.match(r'^define\s+([a-zA-Z_]\w*)', dir_body)
+            m_undef = re.match(r'^undef\s+([a-zA-Z_]\w*)', dir_body)
+
+            parent_act = True if not cond_stack else (cond_stack[-1].parent_active and cond_stack[-1].is_taken)
+
+            if m_ifdef:
+                sym_name = m_ifdef.group(1)
+                val = eval_preprocessor_expr(f"defined({sym_name})", syms) if parent_act else False
+                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+            elif m_ifndef:
+                sym_name = m_ifndef.group(1)
+                val = eval_preprocessor_expr(f"!defined({sym_name})", syms) if parent_act else False
+                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+            elif m_if:
+                expr_str = m_if.group(1)
+                val = eval_preprocessor_expr(expr_str, syms) if parent_act else False
+                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+            elif m_elif:
+                expr_str = m_elif.group(1)
+                if cond_stack:
+                    top = cond_stack[-1]
+                    if top.has_taken:
+                        top.is_taken = False
+                    else:
+                        val = eval_preprocessor_expr(expr_str, syms) if top.parent_active else False
+                        top.is_taken = val
+                        if val:
+                            top.has_taken = True
+            elif m_else:
+                if cond_stack:
+                    top = cond_stack[-1]
+                    if top.has_taken:
+                        top.is_taken = False
+                    else:
+                        top.is_taken = top.parent_active
+                        top.has_taken = True
+            elif m_endif:
+                if cond_stack:
+                    cond_stack.pop()
+            elif m_define and parent_act:
+                syms.add(m_define.group(1))
+            elif m_undef and parent_act:
+                syms.discard(m_undef.group(1))
+
+            # All lines belonging to this directive become "" (blank)
+            for _ in directive_line_indices:
+                output_lines.append("")
+
+        else:
+            # Ordinary code line
+            current_active = True if not cond_stack else (cond_stack[-1].parent_active and cond_stack[-1].is_taken)
+            if current_active:
+                output_lines.append(line)
+            else:
+                output_lines.append("")
+            i += 1
+
+    return "\n".join(output_lines)
+
+
 def _strip_attributes_and_specifiers(code: str) -> str:
     """
     Strips GNU/Clang __attribute__((...)) and MSVC __declspec(...) constructs
@@ -791,12 +976,9 @@ class CASTParser:
             except Exception:
                 pass  # Fall through to tier 2
 
-        # Tier 2: Strip directives + typedef prelude (original approach)
-        no_directives = "\n".join(
-            "" if _PREPROCESSOR_LINE_RE.match(line) else line
-            for line in clean_code.splitlines()
-        )
-        stripped_code = _strip_attributes_and_specifiers(no_directives)
+        # Tier 2: Conditional resolution + Directive stripping + typedef prelude
+        resolved_code = resolve_preprocessor_conditionals(clean_code)
+        stripped_code = _strip_attributes_and_specifiers(resolved_code)
         filtered_prelude = self._filter_prelude(_PYCPARSER_PRELUDE, stripped_code)
         prepared = filtered_prelude + stripped_code
 
