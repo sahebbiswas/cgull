@@ -206,6 +206,8 @@ class TestConfigProfile(unittest.TestCase):
         cp = ConfigProfile("debug", {"DEBUG": None, "RETRY_COUNT": 5, "VERSION": "1.0"})
         self.assertEqual(cp.name, "debug")
         self.assertEqual(cp.flags, {"DEBUG": None, "RETRY_COUNT": 5, "VERSION": "1.0"})
+        self.assertEqual(cp.presence_flags, {"DEBUG"})
+        self.assertEqual(cp.value_flags, {"RETRY_COUNT": 5, "VERSION": "1.0"})
 
     def test_default_flags_is_empty_dict(self):
         cp = ConfigProfile("default")
@@ -260,13 +262,31 @@ class TestConfigProfile(unittest.TestCase):
     def test_serialization_and_deserialization(self):
         cp = ConfigProfile("release", {"OPTIMIZE": 3, "NDEBUG": None})
         d = cp.to_dict()
-        self.assertEqual(d, {"name": "release", "flags": {"OPTIMIZE": 3, "NDEBUG": None}, "label": "+release"})
+        self.assertEqual(d, {
+            "name": "release",
+            "flags": {"OPTIMIZE": 3, "NDEBUG": None},
+            "presence_flags": ["NDEBUG"],
+            "value_flags": {"OPTIMIZE": 3},
+            "label": "+release",
+        })
 
         cp_restored = ConfigProfile.from_dict(d)
         self.assertEqual(cp, cp_restored)
         self.assertEqual(cp_restored.name, "release")
         self.assertEqual(cp_restored.label, "+release")
         self.assertEqual(cp_restored.flags, {"OPTIMIZE": 3, "NDEBUG": None})
+
+    def test_deserialization_from_presence_and_value_flags(self):
+        d = {
+            "name": "debug",
+            "presence_flags": ["DEBUG", "LOGGING"],
+            "value_flags": {"RETRY_COUNT": 3},
+        }
+        cp = ConfigProfile.from_dict(d)
+        self.assertEqual(cp.name, "debug")
+        self.assertEqual(cp.flags, {"DEBUG": None, "LOGGING": None, "RETRY_COUNT": 3})
+        self.assertEqual(cp.presence_flags, {"DEBUG", "LOGGING"})
+        self.assertEqual(cp.value_flags, {"RETRY_COUNT": 3})
 
     def test_flags_mutation_isolation(self):
         original_flags = {"FLAG1": None, "COUNT": 10}

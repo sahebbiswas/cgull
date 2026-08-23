@@ -70,6 +70,20 @@ class ConfigProfile:
             self.flags = dict(self.flags)
 
     @property
+    def presence_flags(self) -> Set[str]:
+        """
+        Returns set of macro names configured as presence toggles (value is None, #ifdef style).
+        """
+        return {k for k, v in self.flags.items() if v is None}
+
+    @property
+    def value_flags(self) -> Dict[str, Union[str, int]]:
+        """
+        Returns dict of macro names to values for value macros (value is not None, e.g. #define RETRY 5).
+        """
+        return {k: v for k, v in self.flags.items() if v is not None}
+
+    @property
     def label(self) -> str:
         """
         Returns the reachable_under label representation of the configuration.
@@ -106,14 +120,25 @@ class ConfigProfile:
         return {
             "name": self.name,
             "flags": dict(self.flags),
+            "presence_flags": sorted(self.presence_flags),
+            "value_flags": dict(self.value_flags),
             "label": self.label,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ConfigProfile":
+        if "flags" in data:
+            flags = dict(data["flags"])
+        else:
+            flags = {}
+            for k in data.get("presence_flags", []):
+                flags[k] = None
+            for k, v in data.get("value_flags", {}).items():
+                flags[k] = v
+
         return cls(
             name=data.get("name", ""),
-            flags=data.get("flags", {}),
+            flags=flags,
         )
 
 
