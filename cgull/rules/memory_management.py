@@ -38,6 +38,7 @@ def _ast_cfg_for_function(
     fn: CFunction,
     alloc_funcs: Optional[Set[str]] = None,
     dealloc_funcs: Optional[Set[str]] = None,
+    realloc_funcs: Optional[Set[str]] = None,
     summaries: Optional[Dict[str, FunctionSummary]] = None,
 ):
     if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
@@ -46,8 +47,8 @@ def _ast_cfg_for_function(
     if funcdef is None:
         return None
     if summaries is None:
-        summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs)
-    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, summaries=summaries)
+        summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs)
+    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries)
     initial_initialized = set(p.name for p in fn.parameters if p.name) | set(ast_ctx.global_variables.keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
     cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
     return cfg
@@ -595,7 +596,8 @@ class UseAfterFreeRule(BaseRule):
             if cfg is not None:
                 reported_uafs = set()
                 for node in cfg.nodes.values():
-                    for freed_ptr in node.freed:
+                    freed_ptrs = node.freed | node.realloc_inputs
+                    for freed_ptr in freed_ptrs:
                         for use_node, accessed_var in _find_uaf_uses(cfg, node.node_id, freed_ptr):
                             key = (use_node.line_number, accessed_var)
                             if key in reported_uafs:
@@ -1051,6 +1053,8 @@ def _find_memory_leak_exits(
         # 1. Deallocation check
         if node.freed & aliases:
             continue
+        if any(cfg.query_allocation(a, curr_id) == Allocation.FREED for a in aliases):
+            continue
 
         # 2. Exit call check (program exit)
         if node.kind == "funccall":
@@ -1061,20 +1065,26 @@ def _find_memory_leak_exits(
         # 3. Ownership transfer check
         if node.kind in ("assignment", "decl"):
             if node.reads & aliases:
-                if node.writes:
+                is_direct_alias = False
+                if node.expr_str:
+                    m_alias = re.match(r'^\s*([a-zA-Z_]\w*)\s*=\s*(?:\([^)]+\)\s*)?([a-zA-Z_]\w*)\s*;?$', node.expr_str)
+                    if m_alias and m_alias.group(2) in aliases:
+                        is_direct_alias = True
+                    elif node.alias_writes:
+                        for lhs_v, rhs_v in node.alias_writes.items():
+                            if rhs_v in aliases:
+                                is_direct_alias = True
+                                break
+                if is_direct_alias and node.writes:
                     written_var = next(iter(node.writes))
                     if written_var in fn.variables:
                         aliases = aliases | {written_var}
-                    else:
-                        continue
-                else:
-                    continue
 
         # 4. Return statement check
         if node.kind == "return":
             if node.reads & aliases:
                 continue
-            is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL for a in aliases)
+            is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL or cfg.query_allocation(a, curr_id) == Allocation.NOT_ALLOCATED for a in aliases)
             if not is_null:
                 if curr_id not in reported_node_ids:
                     reported_node_ids.add(curr_id)
@@ -1085,11 +1095,11 @@ def _find_memory_leak_exits(
         if curr_id == alloc_node_id:
             overwritten = []
         else:
-            overwritten = [w for w in node.writes if w in aliases]
+            overwritten = [w for w in node.writes if w in aliases and not (node.reads & aliases)]
         if overwritten:
             remaining_aliases = aliases - set(overwritten)
             if not remaining_aliases:
-                is_null = any(cfg.query_nullness(w, curr_id) == Nullness.NULL for w in overwritten)
+                is_null = any(cfg.query_nullness(w, curr_id) == Nullness.NULL or cfg.query_allocation(w, curr_id) == Allocation.NOT_ALLOCATED for w in overwritten)
                 if not is_null:
                     if curr_id not in reported_node_ids:
                         reported_node_ids.add(curr_id)
@@ -1100,7 +1110,7 @@ def _find_memory_leak_exits(
 
         # 6. End of CFG check
         if not node.successors:
-            is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL for a in aliases)
+            is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL or cfg.query_allocation(a, curr_id) == Allocation.NOT_ALLOCATED for a in aliases)
             if not is_null:
                 if curr_id not in reported_node_ids:
                     reported_node_ids.add(curr_id)

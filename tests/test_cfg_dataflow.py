@@ -11,6 +11,7 @@ def _parse_and_build_cfg(code_str, func_name="f"):
     prelude = """
     typedef unsigned long size_t;
     void *malloc(size_t);
+    void *realloc(void *, size_t);
     void free(void *);
     """
     parser = c_parser.CParser()
@@ -704,6 +705,228 @@ class TestAliasLifetimeTracking(unittest.TestCase):
         self.assertIn("q", issues_uaf[0].message)
         # Check that the reported free line corresponds to free(q) (line 11), not free(p) (line 10)
         self.assertIn("was freed at line 11", issues_uaf[0].message)
+
+
+class TestReallocSemantics(unittest.TestCase):
+
+    def test_distinct_realloc_success_and_failure_branches(self):
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void f() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)realloc(p, 20 * sizeof(int));
+            if (q != NULL) {
+                q[0] = 1;
+            } else {
+                p[0] = 2;
+                free(p);
+            }
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        # On success branch (q[0] = 1), q is NON_NULL and ALLOCATED, p's original location is FREED
+        success_nodes = [n for n in cfg.nodes.values() if "q[0] = 1" in n.expr_str]
+        self.assertEqual(len(success_nodes), 1)
+        s_nid = success_nodes[0].node_id
+        self.assertEqual(cfg.query_nullness('q', s_nid), Nullness.NON_NULL)
+        self.assertEqual(cfg.query_allocation('q', s_nid), Allocation.ALLOCATED)
+        self.assertEqual(cfg.query_allocation('p', s_nid), Allocation.FREED)
+
+        # On failure branch (p[0] = 2), q is NULL and NOT_ALLOCATED, p's original location is ALLOCATED
+        fail_nodes = [n for n in cfg.nodes.values() if "p[0] = 2" in n.expr_str]
+        self.assertEqual(len(fail_nodes), 1)
+        f_nid = fail_nodes[0].node_id
+        self.assertEqual(cfg.query_nullness('q', f_nid), Nullness.NULL)
+        self.assertEqual(cfg.query_allocation('q', f_nid), Allocation.NOT_ALLOCATED)
+        self.assertEqual(cfg.query_allocation('p', f_nid), Allocation.ALLOCATED)
+
+    def test_self_realloc_failure_sets_p_null_and_preserves_memory(self):
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void f() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            p = (int *)realloc(p, 20 * sizeof(int));
+            if (p == NULL) {
+                free(p);
+            } else {
+                p[0] = 1;
+                free(p);
+            }
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        # On failure branch (free(p)), p is NULL and NOT_ALLOCATED
+        fail_nodes = [n for n in cfg.nodes.values() if "free(p)" in n.expr_str and "if (p == NULL)" in cfg.nodes[n.node_id - 1].expr_str if n.node_id in cfg.nodes]
+        fail_nodes = [n for n in cfg.nodes.values() if n.kind == "free" and cfg.query_nullness('p', n.node_id) == Nullness.NULL]
+        self.assertGreaterEqual(len(fail_nodes), 1)
+        f_nid = fail_nodes[0].node_id
+        self.assertEqual(cfg.query_nullness('p', f_nid), Nullness.NULL)
+        self.assertEqual(cfg.query_allocation('p', f_nid), Allocation.NOT_ALLOCATED)
+
+        # On success branch (p[0] = 1), p is NON_NULL and ALLOCATED
+        success_nodes = [n for n in cfg.nodes.values() if "p[0] = 1" in n.expr_str]
+        self.assertEqual(len(success_nodes), 1)
+        s_nid = success_nodes[0].node_id
+        self.assertEqual(cfg.query_nullness('p', s_nid), Nullness.NON_NULL)
+        self.assertEqual(cfg.query_allocation('p', s_nid), Allocation.ALLOCATED)
+
+    def test_realloc_null_input_acts_like_malloc(self):
+        code = """
+        void f() {
+            int *p = NULL;
+            int *q = (int *)realloc(p, 10 * sizeof(int));
+            if (q != NULL) {
+                q[0] = 5;
+                free(q);
+            }
+            return;
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        use_nodes = [n for n in cfg.nodes.values() if "q[0] = 5" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        u_nid = use_nodes[0].node_id
+        self.assertEqual(cfg.query_nullness('q', u_nid), Nullness.NON_NULL)
+        self.assertEqual(cfg.query_allocation('q', u_nid), Allocation.ALLOCATED)
+
+    def test_safe_temporary_reassignment_idiom(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UseAfterFreeRule, DoubleFreeRule, MemoryLeakRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void test_safe_idiom() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *tmp = (int *)realloc(p, 20 * sizeof(int));
+            if (!tmp) {
+                p[0] = 99;
+                free(p);
+                return;
+            }
+            p = tmp;
+            p[0] = 100;
+            free(p);
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 0, "Safe realloc idiom should not trigger Use-After-Free")
+
+        rule_df = DoubleFreeRule()
+        issues_df = rule_df.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_df), 0, "Safe realloc idiom should not trigger Double-Free")
+
+        rule_leak = MemoryLeakRule()
+        issues_leak = rule_leak.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_leak), 0, "Safe realloc idiom with free in both exit paths should not leak memory")
+
+    def test_rules_consistency_cgull003_and_cgull022_around_realloc(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UncheckedDynamicAllocationsRule, UseAfterFreeRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void test_consistency() {
+            char *buf = (char *)malloc(16);
+            if (!buf) return;
+
+            char *new_buf = (char *)realloc(buf, 32);
+            if (new_buf == NULL) {
+                // Failure branch: accessing original buf is safe (not UAF)
+                buf[0] = 'a';
+                free(buf);
+                return;
+            }
+
+            // Success branch: accessing new_buf is checked and safe
+            new_buf[0] = 'b';
+            free(new_buf);
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule_alloc = UncheckedDynamicAllocationsRule()
+        issues_alloc = rule_alloc.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_alloc), 0, "Checked realloc should not trigger CGULL-003")
+
+        rule_uaf = UseAfterFreeRule()
+        issues_uaf = rule_uaf.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues_uaf), 0, "Accessing original buffer on realloc failure branch should not trigger CGULL-022 (UAF)")
+
+    def test_size_zero_realloc_failure_marks_maybe_freed(self):
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void free(void *);
+
+        void f() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)realloc(p, 0);
+            if (q == NULL) {
+                p[0] = 1;
+            }
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+
+        use_nodes = [n for n in cfg.nodes.values() if "p[0] = 1" in n.expr_str]
+        self.assertEqual(len(use_nodes), 1)
+        u_nid = use_nodes[0].node_id
+        # When size is 0 and realloc returns NULL, C standard allows realloc to free p and return NULL
+        # So allocation state of p on NULL branch is MAYBE_FREED
+        self.assertEqual(cfg.query_allocation('p', u_nid), Allocation.MAYBE_FREED)
+
+    def test_non_value_producing_realloc_in_call_arg_does_not_bind_outer_target(self):
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void *realloc(void *, size_t);
+        void process(void *);
+
+        void f() {
+            int *p = (int *)malloc(10 * sizeof(int));
+            if (!p) return;
+            int *q = (int *)malloc(10 * sizeof(int));
+            if (!q) return;
+            process(realloc(p, 20 * sizeof(int)));
+        }
+        """
+        cfg = _parse_and_build_cfg(code)
+        # realloc(p, ...) is inside process(...) call, so realloc_bindings should not bind process's target
+        call_nodes = [n for n in cfg.nodes.values() if "process" in n.expr_str]
+        self.assertEqual(len(call_nodes), 1)
+        node = call_nodes[0]
+        self.assertEqual(getattr(node, "realloc_bindings", {}), {})
 
 
 class TestInterproceduralCFGSummaries(unittest.TestCase):
