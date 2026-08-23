@@ -859,7 +859,8 @@ class CASTParser:
             # Feed the typedef prelude + source as a single unit so that
             # macros defined in the source are expanded while the prelude
             # typedefs are preserved for pycparser.
-            combined = _PYCPARSER_PRELUDE + clean_code
+            filtered_prelude = self._filter_prelude(_PYCPARSER_PRELUDE, clean_code)
+            combined = filtered_prelude + clean_code
             preprocessor.parse(combined, '<input>')
             out = io.StringIO()
             preprocessor.write(out)
