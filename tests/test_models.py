@@ -234,11 +234,10 @@ class TestConfigProfile(unittest.TestCase):
         self.assertEqual(cp_header, cp_json)
         self.assertEqual(hash(cp_header), hash(cp_json))
 
-        # Two profiles with different names/sources but identical effective flags
+        # Profiles with different names evaluate as unequal even if flags match
         cp_diff_name1 = ConfigProfile("header_debug", {"FOO": None})
         cp_diff_name2 = ConfigProfile("json_debug", {"FOO": None})
-        self.assertEqual(cp_diff_name1, cp_diff_name2)
-        self.assertEqual(hash(cp_diff_name1), hash(cp_diff_name2))
+        self.assertNotEqual(cp_diff_name1, cp_diff_name2)
 
     def test_deduplication_in_set_and_dict(self):
         cp_header = ConfigProfile("debug", {"ENABLE_LOGGING": None, "MAX_WORKERS": 4})
@@ -246,7 +245,7 @@ class TestConfigProfile(unittest.TestCase):
         cp_other = ConfigProfile("prod", {"ENABLE_LOGGING": None, "MAX_WORKERS": 4})
 
         profile_set = {cp_header, cp_json, cp_other}
-        self.assertEqual(len(profile_set), 1)
+        self.assertEqual(len(profile_set), 2)  # cp_header and cp_json deduplicate into 1; cp_other is distinct
 
         profile_dict = {cp_header: "header_val"}
         profile_dict[cp_json] = "json_val"

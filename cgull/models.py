@@ -107,10 +107,10 @@ class ConfigProfile:
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, ConfigProfile):
             return NotImplemented
-        return frozenset(self.flags.items()) == frozenset(other.flags.items())
+        return self.name == other.name and frozenset(self.flags.items()) == frozenset(other.flags.items())
 
     def __hash__(self) -> int:
-        return hash(frozenset(self.flags.items()))
+        return hash((self.name, frozenset(self.flags.items())))
 
     def __str__(self) -> str:
         return self.label
