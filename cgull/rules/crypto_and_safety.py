@@ -1172,8 +1172,6 @@ class InsecureDataStorageRule(BaseRule):
             ))
         return issues
 
-
-
 class ImproperChrootJailRule(BaseRule):
     rule_id = "CGULL-039"
     name = "Improper chroot() Jail"
@@ -1191,47 +1189,68 @@ class ImproperChrootJailRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
+        clean_lines = ast_ctx.clean_source.splitlines() if ast_ctx.clean_source else ast_ctx.source_lines
         for fn in ast_ctx.functions:
-            chroot_nodes = [node for node in fn.cfg_nodes if node.expr_str and "chroot(" in node.expr_str.replace(" ", "")]
-            chdir_nodes = [node for node in fn.cfg_nodes if node.expr_str and "chdir(" in node.expr_str.replace(" ", "")]
-
-            if chroot_nodes:
-                for chroot_node in chroot_nodes:
+            for i, call in enumerate(fn.calls):
+                callee, line_no, args = call[0], call[1], call[2]
+                if callee == "chroot":
                     has_subsequent_chdir = False
-                    for chdir_node in chdir_nodes:
-                        if chdir_node.line_number is not None and chroot_node.line_number is not None and chdir_node.line_number >= chroot_node.line_number:
+                    for j in range(i + 1, len(fn.calls)):
+                        if fn.calls[j][0] == "chdir":
                             has_subsequent_chdir = True
                             break
                     if not has_subsequent_chdir:
-                        if any(i.line_number == chroot_node.line_number for i in issues):
+                        if any(iss.line_number == line_no for iss in issues):
                             continue
 
-                        line_idx = (chroot_node.line_number - 1) if (chroot_node.line_number and chroot_node.line_number > 0) else 0
-                        snippet = ast_ctx.source_lines[line_idx].strip() if line_idx < len(ast_ctx.source_lines) else chroot_node.expr_str
+                        line_idx = (line_no - 1) if (line_no and line_no > 0) else 0
+                        clean_snippet = clean_lines[line_idx].strip() if line_idx < len(clean_lines) else f"chroot({args});"
+                        snippet = ast_ctx.source_lines[line_idx].strip() if line_idx < len(ast_ctx.source_lines) else f"chroot({args});"
                         issues.append(self.create_issue(
                             file_path=file_path,
-                            line_number=chroot_node.line_number,
+                            line_number=line_no,
                             code_snippet=snippet,
                             message="chroot() called without a subsequent chdir(). This allows attackers to escape the chroot jail using relative paths (CWE-243).",
                             column_number=1,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=snippet.strip(";") + ";\nchdir(\"/\");"
+                            suggested_fix_replacement=clean_snippet.strip(";") + ";\nchdir(\"/\");"
                         ))
 
         return issues
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
+        match_target = masked_line_content or line_content
         # fallback regex check
-        if re.search(r'\bchroot\s*\(', line_content):
+        if re.search(r'\bchroot\s*\(', match_target):
             has_chdir = False
-            for i in range(line_number, min(line_number + 10, len(source_lines) + 1)):
-                if re.search(r'\bchdir\s*\(', source_lines[i - 1]):
-                    has_chdir = True
+            brace_depth = 0
+
+            # Start tracking brace depth from the current line
+            for i in range(line_number, len(source_lines) + 1):
+                # Use masked content for lookahead to avoid string literals
+                line = source_lines[i - 1]
+                # A simplistic mask for lookahead
+                masked_lookahead = re.sub(r'\"(\\.|[^\"])*\"', '""', line)
+                masked_lookahead = re.sub(r"\'(\\.|[^\'])*\'", "''", masked_lookahead)
+
+                # Check for chdir
+                if re.search(r'\bchdir\s*\(', masked_lookahead):
+                    if brace_depth >= 0:
+                        has_chdir = True
+                        break
+
+                # Track braces
+                brace_depth += masked_lookahead.count('{')
+                brace_depth -= masked_lookahead.count('}')
+
+                # If we exit the block, stop scanning
+                if brace_depth < 0:
                     break
+
             if not has_chdir:
-                m = re.search(r'\bchroot\s*\(', line_content)
+                m = re.search(r'\bchroot\s*\(', match_target)
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,

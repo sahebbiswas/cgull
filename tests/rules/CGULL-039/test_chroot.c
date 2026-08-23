@@ -15,3 +15,19 @@ void safe_jail2(void) {
         chdir("/");
     }
 }
+
+void string_literal_safe(void) {
+    printf("use chroot()");
+}
+
+void chdir_outside_block(void) {
+    {
+        chroot("/var/jail"); // expect: CGULL-039
+    }
+    chdir("/");
+}
+
+void comment_safe(void) {
+    chroot("/var/jail"); // just a comment
+    chdir("/");
+}
