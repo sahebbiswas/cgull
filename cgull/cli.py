@@ -244,11 +244,12 @@ def handle_scan(args) -> int:
     seed_flags = {}
     config_seeds = getattr(args, "config_seed", None)
     if config_seeds:
-        from .ast_analyzer import parse_config_seed
+        from .ast_analyzer import parse_config_seeds
         for seed_path in config_seeds:
             try:
-                profile = parse_config_seed(seed_path)
-                seed_flags.update(dict(profile.flags))
+                profiles = parse_config_seeds(seed_path)
+                for profile in profiles:
+                    seed_flags.update(dict(profile.flags))
             except Exception as e:
                 print(f"Error parsing config seed file '{seed_path}': {e}", file=sys.stderr)
                 return 1

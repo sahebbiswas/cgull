@@ -269,6 +269,112 @@ def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> Con
     return ConfigProfile(name=config_name, flags=flags)
 
 
+def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
+    """
+    Parses configuration seed header files from a file or directory into a list of ConfigProfiles.
+
+    If path_or_dir is a file, parses and returns a single-item list containing its ConfigProfile.
+    If path_or_dir is a directory:
+        - Discovers all .h and .hpp files directly in that directory.
+        - If an optional .cgullconfigs manifest file exists in the directory, parses it to filter
+          and order the headers.
+        - Parses each selected header using parse_config_seed.
+    """
+    import os
+    import fnmatch
+    from pathlib import Path
+
+    p = Path(path_or_dir)
+    if not p.exists():
+        raise FileNotFoundError(f"Config seed path '{path_or_dir}' does not exist.")
+
+    if p.is_file():
+        return [parse_config_seed(str(p))]
+
+    if not p.is_dir():
+        raise ValueError(f"Config seed path '{path_or_dir}' is neither a file nor a directory.")
+
+    dir_path = p
+    manifest_path = dir_path / ".cgullconfigs"
+
+    direct_headers = [
+        f.name for f in dir_path.iterdir()
+        if f.is_file() and f.suffix.lower() in ('.h', '.hpp')
+    ]
+    direct_headers_sorted = sorted(direct_headers)
+
+    selected_filenames: List[str] = []
+
+    def _matches_pattern(filename: str, pattern: str) -> bool:
+        clean_pat = pattern.lstrip("./")
+        if filename == clean_pat or os.path.basename(clean_pat) == filename:
+            return True
+        if fnmatch.fnmatch(filename, clean_pat) or fnmatch.fnmatch(filename, os.path.basename(clean_pat)):
+            return True
+        return False
+
+    base_dir_resolved = dir_path.resolve()
+
+    if manifest_path.is_file():
+        with open(manifest_path, "r", encoding="utf-8", errors="replace") as mf:
+            raw_lines = [line.strip() for line in mf]
+            lines = [line for line in raw_lines if line and not line.startswith("#")]
+
+        inclusions = [line for line in lines if not line.startswith("!")]
+        exclusions = [line[1:].strip() for line in lines if line.startswith("!")]
+
+        if inclusions:
+            for inc in inclusions:
+                clean_inc = inc.lstrip("./")
+                if ".." in inc or "/" in clean_inc or "\\" in clean_inc:
+                    raise ValueError(f"Invalid manifest entry '{inc}': path separators and path traversal are not allowed.")
+
+                if not Path(clean_inc).suffix.lower() in ('.h', '.hpp'):
+                    raise ValueError(f"Invalid manifest entry '{inc}': file must have a .h or .hpp extension.")
+
+                candidate = (dir_path / clean_inc).resolve()
+                try:
+                    is_rel = candidate.is_relative_to(base_dir_resolved)
+                except AttributeError:
+                    is_rel = (os.path.commonpath([str(base_dir_resolved), str(candidate)]) == str(base_dir_resolved))
+
+                if not is_rel:
+                    raise ValueError(f"Invalid manifest entry '{inc}': resolves outside seed directory.")
+
+                matched = [h for h in direct_headers_sorted if _matches_pattern(h, inc)]
+                if not matched and candidate.is_file():
+                    matched.append(clean_inc)
+
+                for m_file in matched:
+                    if m_file not in selected_filenames:
+                        selected_filenames.append(m_file)
+        else:
+            selected_filenames = list(direct_headers_sorted)
+
+        if exclusions:
+            filtered = []
+            for fname in selected_filenames:
+                excluded = False
+                for exc in exclusions:
+                    if _matches_pattern(fname, exc):
+                        excluded = True
+                        break
+                if not excluded:
+                    filtered.append(fname)
+            selected_filenames = filtered
+
+    else:
+        selected_filenames = direct_headers_sorted
+
+    profiles: List[ConfigProfile] = []
+    for fname in selected_filenames:
+        header_file = dir_path / fname
+        if header_file.is_file():
+            profiles.append(parse_config_seed(str(header_file)))
+
+    return profiles
+
+
 def generate_config_profiles(
     flags: Union[CollectedFlags, Set[str], List[str], Tuple[str, ...]],
     baseline_name: str = "baseline"
