@@ -189,9 +189,10 @@ def test_include_resolver_edge_cases(tmp_path):
     resolver.load_from_file(str(tmp_path / "does_not_exist"))
 
     # load_from_text
-    resolver.load_from_text("# comment\n   \nrel_inc\n/abs_inc", base_dir=str(tmp_path))
+    abs_inc_dir = str((tmp_path / "abs_inc").resolve())
+    resolver.load_from_text(f"# comment\n   \nrel_inc\n{abs_inc_dir}", base_dir=str(tmp_path))
     assert str((tmp_path / "rel_inc").resolve()) in resolver.include_roots
-    assert os.path.abspath("/abs_inc") in resolver.include_roots
+    assert abs_inc_dir in resolver.include_roots
 
     # empty header resolve
     assert resolver.resolve("", str(tmp_path)) is None
@@ -200,8 +201,9 @@ def test_include_resolver_edge_cases(tmp_path):
     # absolute path header resolve
     hdr = tmp_path / "abs.h"
     hdr.write_text("// abs\n")
+    non_existent_abs = str((tmp_path / "non_existent_abs.h").resolve())
     assert resolver.resolve(str(hdr.resolve()), str(tmp_path)) == str(hdr.resolve())
-    assert resolver.resolve("/non_existent_abs.h", str(tmp_path)) is None
+    assert resolver.resolve(non_existent_abs, str(tmp_path)) is None
 
     # source_dir passed as a file path
     src_file = tmp_path / "src" / "foo.c"
