@@ -5,7 +5,8 @@ import logging
 
 import os
 
-from cgull import parse_config_seed, parse_config_seeds, ConfigProfile
+import json
+from cgull import parse_config_seed, parse_config_seeds, parse_json_config_seed, ConfigProfile
 from cgull.cli import build_parser
 
 
@@ -210,6 +211,107 @@ class TestConfigSeedIngestion(unittest.TestCase):
             with self.assertRaises(ValueError) as cm:
                 parse_config_seeds(temp_dir)
             self.assertIn(".h or .hpp", str(cm.exception))
+
+    def test_json_config_seed_parsing(self):
+        """
+        Tests that a JSON seed file containing multiple named profiles parses
+        directly into a list of ConfigProfiles with structured flags.
+        """
+        json_data = {
+            "debug": {
+                "DEBUG_LOGS": True,
+                "MAX_ATTEMPTS": 5,
+                "FEATURE_X": True
+            },
+            "release": {
+                "DEBUG_LOGS": False,
+                "OPTIMIZATION_LEVEL": "O3",
+                "FEATURE_X": True
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tf:
+            json.dump(json_data, tf)
+            temp_path = tf.name
+
+        try:
+            profiles = parse_config_seeds(temp_path)
+            self.assertEqual(len(profiles), 2)
+            self.assertEqual(profiles[0].name, "debug")
+            self.assertEqual(profiles[0].flags["DEBUG_LOGS"], None)
+            self.assertEqual(profiles[0].flags["MAX_ATTEMPTS"], 5)
+            self.assertEqual(profiles[0].flags["FEATURE_X"], None)
+
+            self.assertEqual(profiles[1].name, "release")
+            self.assertEqual(profiles[1].flags["DEBUG_LOGS"], False)
+            self.assertEqual(profiles[1].flags["OPTIMIZATION_LEVEL"], "O3")
+            self.assertEqual(profiles[1].flags["FEATURE_X"], None)
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
+    def test_json_seed_cross_check_equality_with_header_seeds(self):
+        """
+        Measurable outcome test:
+        Fixture JSON with 2 profiles produces 2 ConfigProfiles equal (per the schema issue's
+        equality rules) to what the equivalent pair of hand-written header seeds produces.
+        """
+        header_debug_content = """// cgull-config-name: profile_debug
+#define FEATURE_SSL
+#define FEATURE_ZLIB
+#define MAX_BUFFER_SIZE 1024
+"""
+        header_release_content = """// cgull-config-name: profile_release
+#define FEATURE_SSL
+#undef FEATURE_ZLIB
+#define MAX_BUFFER_SIZE 2048
+"""
+        json_seed_data = {
+            "profile_debug": {
+                "FEATURE_SSL": True,
+                "FEATURE_ZLIB": True,
+                "MAX_BUFFER_SIZE": 1024
+            },
+            "profile_release": {
+                "FEATURE_SSL": True,
+                "FEATURE_ZLIB": False,
+                "MAX_BUFFER_SIZE": 2048
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            h_debug = Path(temp_dir) / "profile_debug.h"
+            h_release = Path(temp_dir) / "profile_release.h"
+            json_seed = Path(temp_dir) / "profiles.json"
+
+            h_debug.write_text(header_debug_content, encoding="utf-8")
+            h_release.write_text(header_release_content, encoding="utf-8")
+            json_seed.write_text(json.dumps(json_seed_data), encoding="utf-8")
+
+            # Parse headers directly
+            header_profile_debug = parse_config_seed(str(h_debug))
+            header_profile_release = parse_config_seed(str(h_release))
+
+            # Parse JSON seed
+            json_profiles = parse_json_config_seed(str(json_seed))
+
+            self.assertEqual(len(json_profiles), 2)
+            # Cross-check equality using ConfigProfile.__eq__
+            self.assertEqual(json_profiles[0], header_profile_debug)
+            self.assertEqual(json_profiles[1], header_profile_release)
+
+    def test_json_config_seed_invalid_structure(self):
+        """
+        Tests that invalid JSON structures (e.g. non-dict top-level or non-dict profiles) raise ValueError.
+        """
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tf:
+            tf.write("[1, 2, 3]")
+            temp_path = tf.name
+
+        try:
+            with self.assertRaises(ValueError) as cm:
+                parse_json_config_seed(temp_path)
+            self.assertIn("top-level JSON must be an object", str(cm.exception))
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
