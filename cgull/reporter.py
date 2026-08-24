@@ -23,6 +23,16 @@ def _escape_markdown_cell(text: str) -> str:
 _sanitize_terminal_text = sanitize_terminal_text
 
 
+def _get_condition_tag(issue: Any) -> str:
+    r_under = getattr(issue, "reachable_under", None)
+    if not r_under or r_under == ["unconditional"]:
+        return ""
+    tags = [t for t in r_under if t and t != "unconditional"]
+    if not tags:
+        return ""
+    return f"[{', '.join(tags)}]"
+
+
 class ReportGenerator:
     """
     Formats ScanResult into various standard security reporting formats.
@@ -74,6 +84,8 @@ class ReportGenerator:
                 "fixType": issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type),
                 "autoFix": issue.auto_fix_replacement,
                 "suggestedFix": issue.suggested_fix_replacement,
+                "reachableUnder": list(issue.reachable_under),
+                "reachable_under": list(issue.reachable_under),
             }
             if issue.confidence:
                 props["confidence"] = issue.confidence.value if hasattr(issue.confidence, "value") else str(issue.confidence)
@@ -212,8 +224,10 @@ class ReportGenerator:
             for idx, issue in enumerate(result.issues, 1):
                 badge = "🔴 HIGH" if issue.impact == Severity.HIGH else ("🟡 MEDIUM" if issue.impact == Severity.MEDIUM else "🔵 LOW")
                 fix_type_label = issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type)
+                cond_tag = _get_condition_tag(issue)
+                cond_prefix = f"{cond_tag} " if cond_tag else ""
                 lines.extend([
-                    f"### #{idx} [{badge}] {issue.rule_name} (`{issue.rule_id}`)",
+                    f"### #{idx} [{badge}] {cond_prefix}{issue.rule_name} (`{issue.rule_id}`)",
                     f"- **Location**: `{issue.file_path}:{issue.line_number}`",
                     f"- **CWE**: `{issue.cwe_id}`",
                     f"- **Engine**: `{issue.engine}`",
@@ -304,7 +318,9 @@ class ReportGenerator:
         for issue in result.issues:
             sev_tag = f"[{issue.impact.value.upper()}]"
             fix_type_label = issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type)
-            lines.append(f" {sev_tag:<8} {issue.file_path}:{issue.line_number} -> {issue.rule_name} ({issue.rule_id})")
+            cond_tag = _get_condition_tag(issue)
+            cond_prefix = f"{cond_tag} " if cond_tag else ""
+            lines.append(f" {sev_tag:<8} {issue.file_path}:{issue.line_number} -> {cond_prefix}{issue.rule_name} ({issue.rule_id})")
             lines.append(f"          Detail: {issue.message}")
             if issue.code_snippet:
                 lines.append(f"          Code  : {issue.code_snippet}")
