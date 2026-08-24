@@ -60,6 +60,7 @@ class CGullScanner:
                     severity_filter=severity_filter if severity_filter is not None else self.config.severity_filter,
                     enable_inline_suppressions=self.config.enable_inline_suppressions,
                     suppression_config=self.config.suppression_config,
+                    config_profiles=self.config.config_profiles,
                 )
         else:
             self.config = ScanConfig.create(
@@ -72,7 +73,7 @@ class CGullScanner:
         self.ignore_filter = ignore_filter
         self.severity_filter = self.config.severity_filter
         self.engine_mode = self.config.engine_mode
-        self.ast_parser = CASTParser()
+        self.ast_parser = CASTParser(config_profiles=self.config.config_profiles)
 
     def _get_active_config(self) -> ScanConfig:
         return ScanConfig.create(
@@ -81,6 +82,7 @@ class CGullScanner:
             severity_filter=self.severity_filter,
             enable_inline_suppressions=self.config.enable_inline_suppressions,
             suppression_config=self.config.suppression_config,
+            config_profiles=self.config.config_profiles,
         )
 
     def scan_path(
@@ -454,7 +456,7 @@ def _scan_file_content(
         enable_suppressions = True
 
     t0 = time.time()
-    ast_parser = ast_parser or CASTParser()
+    ast_parser = ast_parser or CASTParser(config_profiles=config.config_profiles if config else None)
     raw_lines = content.splitlines()
     loc = len(raw_lines)
     issues: List[Issue] = []
@@ -488,7 +490,11 @@ def _scan_file_content(
         # both the regex pass and the AST pass -- no need to strip/parse the
         # file twice, and no need to parse at all in pure REGEX mode.
         if engine_mode == AnalysisEngine.REGEX:
-            clean_lines, clean_code = CASTParser.strip_only(content)
+            defined_syms = {}
+            if config.config_profiles:
+                for profile in config.config_profiles:
+                    defined_syms.update(profile.flags)
+            clean_lines, clean_code = CASTParser.strip_only(content, defined_syms)
             ast_ctx = None
             parser_status = ParserStatus.REGEX.value
             parse_tier = ParseTier.REGEX_FALLBACK.value

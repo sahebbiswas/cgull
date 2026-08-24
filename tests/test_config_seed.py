@@ -1,9 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
-import logging
 
-from cgull import parse_config_seed, ConfigProfile
+from cgull import parse_config_seed
+from cgull.ast_analyzer import eval_preprocessor_expr
+from cgull.engine import CGullScanner
+from cgull.models import AnalysisEngine, ScanConfig
 from cgull.cli import build_parser
 
 
@@ -23,7 +25,7 @@ class TestConfigSeedIngestion(unittest.TestCase):
         try:
             profile = parse_config_seed(temp_path)
             self.assertIn("PAREN_VAL", profile.flags)
-            self.assertEqual(profile.flags["PAREN_VAL"], "(1 + 2)")
+            self.assertEqual(profile.flags["PAREN_VAL"], 3)
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
@@ -129,6 +131,67 @@ class TestConfigSeedIngestion(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["scan", "--config-seed", "seed1.h", "--config-seed", "seed2.h", "src/"])
         self.assertEqual(args.config_seed, ["seed1.h", "seed2.h"])
+
+    def test_undef_eval_false(self):
+        """
+        Verifies that eval_preprocessor_expr("defined(FLAG)", {"FLAG": False}) returns False.
+        """
+        self.assertFalse(eval_preprocessor_expr("defined(FLAG)", {"FLAG": False}))
+
+    def test_constant_expressions_evaluated(self):
+        """
+        Tests that constant expressions are evaluated.
+        #define FOO (0) -> 0
+        #define BAR (1 + 2) -> 3
+        """
+        seed_content = """
+#define FOO (0)
+#define BAR (1 + 2)
+"""
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".h", delete=False) as tf:
+            tf.write(seed_content)
+            temp_path = tf.name
+
+        try:
+            profile = parse_config_seed(temp_path)
+            self.assertEqual(profile.flags["FOO"], 0)
+            self.assertEqual(profile.flags["BAR"], 3)
+            self.assertFalse(eval_preprocessor_expr("FOO", profile.flags))
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
+    def test_end_to_end_config_seed_reachability(self):
+        """
+        End-to-end test verifying that config-seed flips reachability during scanning.
+        """
+        c_code = """
+#ifdef REACHABLE
+void vuln() {
+    char buf[10];
+    strcpy(buf, "this is a very long string that will overflow the buffer");
+}
+#endif
+"""
+        seed_content = """
+#define REACHABLE
+"""
+        with tempfile.TemporaryDirectory() as td:
+            c_file = Path(td) / "test.c"
+            c_file.write_text(c_code)
+            
+            seed_file = Path(td) / "seed.h"
+            seed_file.write_text(seed_content)
+            
+            # Run scan without seed
+            scanner = CGullScanner(engine_mode=AnalysisEngine.REGEX)
+            res = scanner.scan_path(str(td))
+            self.assertEqual(res.total_issues_count, 0)
+            
+            # Run scan with seed
+            profile = parse_config_seed(str(seed_file))
+            scanner2 = CGullScanner(config=ScanConfig.create(engine_mode=AnalysisEngine.REGEX, config_profiles=[profile]))
+            res2 = scanner2.scan_path(str(td))
+            self.assertGreater(res2.total_issues_count, 0)
 
 
 if __name__ == "__main__":
