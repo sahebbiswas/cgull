@@ -1132,14 +1132,20 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
                 sym_name = m_ifdef.group(1)
                 val = eval_preprocessor_expr(f"defined({sym_name})", macros) if parent_act else False
                 cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+                for _ in directive_line_indices:
+                    output_lines.append("")
             elif m_ifndef:
                 sym_name = m_ifndef.group(1)
                 val = eval_preprocessor_expr(f"!defined({sym_name})", macros) if parent_act else False
                 cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+                for _ in directive_line_indices:
+                    output_lines.append("")
             elif m_if:
                 expr_str = m_if.group(1)
                 val = eval_preprocessor_expr(expr_str, macros) if parent_act else False
                 cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+                for _ in directive_line_indices:
+                    output_lines.append("")
             elif m_elif:
                 expr_str = m_elif.group(1)
                 if cond_stack:
@@ -1151,6 +1157,8 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
                         top.is_taken = val
                         if val:
                             top.has_taken = True
+                for _ in directive_line_indices:
+                    output_lines.append("")
             elif m_else:
                 if cond_stack:
                     top = cond_stack[-1]
@@ -1159,37 +1167,56 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
                     else:
                         top.is_taken = top.parent_active
                         top.has_taken = True
+                for _ in directive_line_indices:
+                    output_lines.append("")
             elif m_endif:
                 if cond_stack:
                     cond_stack.pop()
-            elif m_define and parent_act:
-                m_name = m_define.group(1)
-                m_val_raw = (m_define.group(2) or "").strip()
-                if not m_val_raw or m_val_raw.startswith('//') or m_val_raw.startswith('/*'):
-                    macros[m_name] = 1
-                else:
-                    val_clean = re.sub(r'/\*.*?\*/|//.*', '', m_val_raw).strip()
-                    m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
-                    if m_num:
-                        try:
-                            macros[m_name] = int(m_num.group(1), 0)
-                        except ValueError:
-                            macros[m_name] = 1
+                for _ in directive_line_indices:
+                    output_lines.append("")
+            elif m_define:
+                if parent_act:
+                    m_name = m_define.group(1)
+                    m_val_raw = (m_define.group(2) or "").strip()
+                    if not m_val_raw or m_val_raw.startswith('//') or m_val_raw.startswith('/*'):
+                        macros[m_name] = 1
                     else:
-                        if eval_preprocessor_expr(val_clean, macros):
-                            tokens = _tokenize_c_prep_expr(val_clean, macros)
-                            if tokens:
-                                macros[m_name] = _eval_c_prep_tokens(tokens)
-                            else:
+                        val_clean = re.sub(r'/\*.*?\*/|//.*', '', m_val_raw).strip()
+                        m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
+                        if m_num:
+                            try:
+                                macros[m_name] = int(m_num.group(1), 0)
+                            except ValueError:
                                 macros[m_name] = 1
                         else:
-                            macros[m_name] = 1
-            elif m_undef and parent_act:
-                macros.pop(m_undef.group(1), None)
-
-            # All lines belonging to this directive become "" (blank)
-            for _ in directive_line_indices:
-                output_lines.append("")
+                            if eval_preprocessor_expr(val_clean, macros):
+                                tokens = _tokenize_c_prep_expr(val_clean, macros)
+                                if tokens:
+                                    macros[m_name] = _eval_c_prep_tokens(tokens)
+                                else:
+                                    macros[m_name] = 1
+                            else:
+                                macros[m_name] = 1
+                    for idx in directive_line_indices:
+                        output_lines.append(lines[idx])
+                else:
+                    for _ in directive_line_indices:
+                        output_lines.append("")
+            elif m_undef:
+                if parent_act:
+                    macros.pop(m_undef.group(1), None)
+                    for idx in directive_line_indices:
+                        output_lines.append(lines[idx])
+                else:
+                    for _ in directive_line_indices:
+                        output_lines.append("")
+            else:
+                if parent_act:
+                    for idx in directive_line_indices:
+                        output_lines.append(lines[idx])
+                else:
+                    for _ in directive_line_indices:
+                        output_lines.append("")
 
         else:
             # Ordinary code line
@@ -1200,7 +1227,10 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
                 output_lines.append("")
             i += 1
 
-    return "\n".join(output_lines)
+    res = "\n".join(output_lines)
+    if code.endswith("\n") and not res.endswith("\n"):
+        res += "\n"
+    return res
 
 
 def _strip_attributes_and_specifiers(code: str) -> str:
@@ -1768,6 +1798,9 @@ class CASTParser:
             pycparser_ast, has_pycparser = pycparser_res
             parse_tier = ParseTier.DIRECTIVE_STRIPPED.value if has_pycparser else ParseTier.REGEX_FALLBACK.value
 
+        clean_code = resolve_preprocessor_conditionals(clean_code, defined_syms=defined_syms)
+        clean_lines = clean_code.splitlines()
+
         if has_pycparser and pycparser_ast is not None:
             functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code, unsigned_typedefs)
             parser_status = ParserStatus.PYCPARSER_SUCCESS.value
@@ -1776,6 +1809,7 @@ class CASTParser:
             global_vars = self._extract_global_vars(clean_lines, functions, unsigned_typedefs)
             parser_status = ParserStatus.FALLBACK_PARSER.value
             parse_tier = ParseTier.REGEX_FALLBACK.value
+
 
         return CASTContext(
             functions=functions,

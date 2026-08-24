@@ -118,6 +118,13 @@ class ConfigProfile:
     def __repr__(self) -> str:
         return f"ConfigProfile(name={self.name!r}, flags={self.flags!r})"
 
+    def __getstate__(self) -> Dict[str, Any]:
+        return {"name": self.name, "flags": dict(self.flags)}
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        object.__setattr__(self, "name", state["name"])
+        object.__setattr__(self, "flags", types.MappingProxyType(state["flags"]))
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
@@ -293,6 +300,7 @@ class Issue:
     fix_type: FixType = FixType.MANUAL_REVIEW
     suggested_fix_replacement: Optional[str] = None
     confidence: Optional[Confidence] = None
+    reachable_under: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         conf_val = self.confidence.value if isinstance(self.confidence, Confidence) else (str(self.confidence) if self.confidence else None)
@@ -312,6 +320,7 @@ class Issue:
             "auto_fix_replacement": self.auto_fix_replacement,
             "suggested_fix_replacement": self.suggested_fix_replacement,
             "fingerprint": self.fingerprint,
+            "reachable_under": list(self.reachable_under),
         }
         if conf_val:
             d["confidence"] = conf_val

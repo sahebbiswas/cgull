@@ -34,12 +34,14 @@ class TestIssueSerialization(unittest.TestCase):
             file_path="test.c",
             line_number=5,
             message="Test message",
+            reachable_under=["+LEGACY_AUTH"],
         )
         d = issue.to_dict()
         self.assertEqual(d["rule_id"], "CGULL-001")
         self.assertEqual(d["impact"], "High")
         self.assertEqual(d["line_number"], 5)
         self.assertEqual(d["fix_type"], "manual_review")
+        self.assertEqual(d["reachable_under"], ["+LEGACY_AUTH"])
         self.assertIsNone(d["auto_fix_replacement"])
         self.assertIsNone(d["suggested_fix_replacement"])
 
@@ -302,6 +304,15 @@ class TestConfigProfile(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             cp.flags["FLAG2"] = "new"  # type: ignore
+
+    def test_pickle_serialization(self):
+        import pickle
+        cp = ConfigProfile("picklable", {"FLAG1": None, "COUNT": 10})
+        pickled = pickle.dumps(cp)
+        unpickled = pickle.loads(pickled)
+        self.assertEqual(cp, unpickled)
+        self.assertEqual(unpickled.name, "picklable")
+        self.assertEqual(unpickled.flags, {"FLAG1": None, "COUNT": 10})
 
 
 if __name__ == "__main__":
