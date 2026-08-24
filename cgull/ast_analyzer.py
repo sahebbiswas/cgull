@@ -173,6 +173,63 @@ class ConditionalFlagCollector:
         return collected.generate_config_profiles(baseline_name=baseline_name)
 
 
+def parse_json_config_seed(filepath: str) -> List[ConfigProfile]:
+    """
+    Parses a JSON configuration seed file (.json) containing multiple named profiles:
+    {"profile_name": {"MACRO": value_or_true, ...}, ...}
+    into a list of ConfigProfiles.
+    """
+    import json
+    from pathlib import Path
+
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"Config seed path '{filepath}' does not exist.")
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        data = json.load(f)
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid JSON config seed structure in '{filepath}': top-level JSON must be an object mapping profile names to flag objects."
+        )
+
+    profiles: List[ConfigProfile] = []
+    for profile_name, flag_map in data.items():
+        if not isinstance(flag_map, dict):
+            raise ValueError(
+                f"Invalid profile '{profile_name}' in '{filepath}': profile value must be an object mapping macro names to values."
+            )
+
+        flags: Dict[str, Optional[Union[str, int, bool]]] = {}
+        for k, v in flag_map.items():
+            macro_name = str(k)
+            if not re.fullmatch(r"[a-zA-Z_]\w*", macro_name):
+                raise ValueError(
+                    f"Invalid preprocessor identifier '{macro_name}' in profile '{profile_name}' in '{filepath}'."
+                )
+
+            if v is True or v is None:
+                flags[macro_name] = None
+            elif v is False:
+                flags[macro_name] = False
+            elif isinstance(v, bool):
+                pass
+            elif isinstance(v, int):
+                flags[macro_name] = v
+            elif isinstance(v, str):
+                flags[macro_name] = v
+            else:
+                raise ValueError(
+                    f"Unsupported flag value type '{type(v).__name__}' for macro '{macro_name}' in profile '{profile_name}' in '{filepath}'. "
+                    f"Flag values must be boolean, null, int, or string."
+                )
+
+        profiles.append(ConfigProfile(name=str(profile_name), flags=flags))
+
+    return profiles
+
+
 def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> ConfigProfile:
     """
     Parses a header file (.h) containing #define and #undef directives into a ConfigProfile.
@@ -185,6 +242,12 @@ def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> Con
     from pathlib import Path
 
     path = Path(filepath)
+    if path.suffix.lower() == ".json":
+        raise ValueError(
+            f"parse_config_seed() does not accept JSON seed files directly as JSON seeds can contain multiple profiles. "
+            f"Use parse_json_config_seed() or parse_config_seeds() for JSON config seed files."
+        )
+
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
 
@@ -271,9 +334,10 @@ def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> Con
 
 def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
     """
-    Parses configuration seed header files from a file or directory into a list of ConfigProfiles.
+    Parses configuration seed header files or JSON seed files from a file or directory into a list of ConfigProfiles.
 
-    If path_or_dir is a file, parses and returns a single-item list containing its ConfigProfile.
+    If path_or_dir is a JSON file (.json), parses and returns all ConfigProfiles defined in it.
+    If path_or_dir is a header file (.h/.hpp), parses and returns a single-item list containing its ConfigProfile.
     If path_or_dir is a directory:
         - Discovers all .h and .hpp files directly in that directory.
         - If an optional .cgullconfigs manifest file exists in the directory, parses it to filter
@@ -289,6 +353,8 @@ def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
         raise FileNotFoundError(f"Config seed path '{path_or_dir}' does not exist.")
 
     if p.is_file():
+        if p.suffix.lower() == ".json":
+            return parse_json_config_seed(str(p))
         return [parse_config_seed(str(p))]
 
     if not p.is_dir():
