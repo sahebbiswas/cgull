@@ -165,6 +165,8 @@ class ScanConfig:
     enable_inline_suppressions: bool = True
     suppression_config: Dict[str, Any] = field(default_factory=dict)
     defined_syms: Optional[Dict[str, Any]] = None
+    config_strategy: str = "one-at-a-time"
+    exhaustive_threshold: int = 10
 
     @classmethod
     def create(
@@ -175,6 +177,8 @@ class ScanConfig:
         enable_inline_suppressions: bool = True,
         suppression_config: Optional[Dict[str, Any]] = None,
         defined_syms: Optional[Dict[str, Any]] = None,
+        config_strategy: str = "one-at-a-time",
+        exhaustive_threshold: int = 10,
     ) -> "ScanConfig":
         if rules is None:
             from .rules import get_all_rules
@@ -193,6 +197,8 @@ class ScanConfig:
             enable_inline_suppressions=enable_inline_suppressions,
             suppression_config=suppression_config or {},
             defined_syms=defined_syms,
+            config_strategy=config_strategy,
+            exhaustive_threshold=exhaustive_threshold,
         )
 
     def get_rules(self) -> List[Any]:
@@ -220,6 +226,8 @@ class ScanConfig:
             "enable_inline_suppressions": self.enable_inline_suppressions,
             "suppression_config": self.suppression_config,
             "defined_syms": self.defined_syms,
+            "config_strategy": self.config_strategy,
+            "exhaustive_threshold": self.exhaustive_threshold,
         }
 
     @classmethod
@@ -237,6 +245,8 @@ class ScanConfig:
             enable_inline_suppressions=data.get("enable_inline_suppressions", True),
             suppression_config=data.get("suppression_config", {}),
             defined_syms=data.get("defined_syms"),
+            config_strategy=data.get("config_strategy", "one-at-a-time"),
+            exhaustive_threshold=data.get("exhaustive_threshold", 10),
         )
 
 

@@ -53,13 +53,23 @@ class CollectedFlags:
             "all_flags": sorted(self.all_flags),
         }
 
-    def generate_config_profiles(self, baseline_name: str = "baseline") -> List[ConfigProfile]:
+    def generate_config_profiles(
+        self,
+        baseline_name: str = "baseline",
+        strategy: str = "one-at-a-time",
+        exhaustive_threshold: int = 10,
+        base_flags: Optional[Dict[str, Any]] = None,
+    ) -> List[ConfigProfile]:
         """
-        Generates (1) baseline config ("nothing extra defined") and (2) single-flag-flipped
-        variants (one per presence-tested flag in presence_flags).
-        Interaction effects between flags are explicitly out of scope (covered by pairwise/exhaustive).
+        Generates ConfigProfile objects according to the requested configuration expansion strategy.
         """
-        return generate_config_profiles(self, baseline_name=baseline_name)
+        return generate_config_profiles(
+            self,
+            baseline_name=baseline_name,
+            strategy=strategy,
+            exhaustive_threshold=exhaustive_threshold,
+            base_flags=base_flags,
+        )
 
 
 class ConditionalFlagCollector:
@@ -164,13 +174,25 @@ class ConditionalFlagCollector:
         )
 
     @classmethod
-    def generate_variant_configs(cls, clean_code: str, baseline_name: str = "baseline") -> List[ConfigProfile]:
+    def generate_variant_configs(
+        cls,
+        clean_code: str,
+        baseline_name: str = "baseline",
+        strategy: str = "one-at-a-time",
+        exhaustive_threshold: int = 10,
+        base_flags: Optional[Dict[str, Any]] = None,
+    ) -> List[ConfigProfile]:
         """
-        Discovers preprocessor flags in clean C source code and generates
-        baseline and single-flag-flipped variant ConfigProfile objects.
+        Discovers preprocessor flags in clean C source code and generates ConfigProfile objects
+        according to the requested configuration expansion strategy.
         """
         collected = cls.collect(clean_code)
-        return collected.generate_config_profiles(baseline_name=baseline_name)
+        return collected.generate_config_profiles(
+            baseline_name=baseline_name,
+            strategy=strategy,
+            exhaustive_threshold=exhaustive_threshold,
+            base_flags=base_flags,
+        )
 
 
 def merge_profile_flags(profiles: List[ConfigProfile]) -> Dict[str, Optional[Union[str, int, bool]]]:
@@ -699,27 +721,133 @@ def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
     return profiles
 
 
+def _generate_pairwise_covering_array(presence_flags: List[str]) -> List[Set[str]]:
+    """
+    Generates a 2-way covering array for a list of boolean presence flags using IPOG.
+    Returns a list of sets, where each set contains the flag names defined (set to None) in that profile.
+    """
+    n = len(presence_flags)
+    if n == 0:
+        return [set()]
+    if n == 1:
+        return [set(), {presence_flags[0]}]
+    if n == 2:
+        return [
+            set(),
+            {presence_flags[0]},
+            {presence_flags[1]},
+            {presence_flags[0], presence_flags[1]},
+        ]
+
+    # Initialize T with all 4 combinations of first 2 variables
+    T: List[Dict[int, int]] = [
+        {0: 0, 1: 0},
+        {0: 0, 1: 1},
+        {0: 1, 1: 0},
+        {0: 1, 1: 1},
+    ]
+
+    for i in range(2, n):
+        # Uncovered tuples for variable i with any j < i
+        C: Set[Tuple[int, int, int]] = set()
+        for j in range(i):
+            for vj in (0, 1):
+                for vi in (0, 1):
+                    C.add((j, vj, vi))
+
+        # Phase 1: Horizontal extension of existing rows in T
+        for r in T:
+            best_vi = 0
+            best_cover_count = -1
+            best_covered_tuples: Set[Tuple[int, int, int]] = set()
+
+            for vi in (0, 1):
+                covered_now = set()
+                for j in range(i):
+                    vj = r[j]
+                    tup = (j, vj, vi)
+                    if tup in C:
+                        covered_now.add(tup)
+                if len(covered_now) > best_cover_count:
+                    best_cover_count = len(covered_now)
+                    best_vi = vi
+                    best_covered_tuples = covered_now
+
+            r[i] = best_vi
+            C.difference_update(best_covered_tuples)
+
+        # Phase 2: Vertical extension for remaining uncovered tuples in C
+        while C:
+            target_tup = sorted(C)[0]
+            j_target, vj_target, vi_target = target_tup
+
+            new_r: Dict[int, int] = {}
+            new_r[j_target] = vj_target
+            new_r[i] = vi_target
+
+            for k in range(i):
+                if k == j_target:
+                    continue
+                best_vk = 0
+                best_k_count = -1
+                for vk in (0, 1):
+                    cnt = 1 if (k, vk, vi_target) in C else 0
+                    if cnt > best_k_count:
+                        best_k_count = cnt
+                        best_vk = vk
+                new_r[k] = best_vk
+
+            covered_by_new = set()
+            for k in range(i):
+                vk = new_r[k]
+                tup = (k, vk, vi_target)
+                if tup in C:
+                    covered_by_new.add(tup)
+            C.difference_update(covered_by_new)
+            T.append(new_r)
+
+    result = []
+    for r in T:
+        active = {presence_flags[idx] for idx, val in r.items() if val == 1}
+        result.append(active)
+
+    unique_results = []
+    seen = set()
+    for active_set in result:
+        fs = frozenset(active_set)
+        if fs not in seen:
+            seen.add(fs)
+            unique_results.append(active_set)
+
+    return unique_results
+
+
 def generate_config_profiles(
     flags: Union[CollectedFlags, Set[str], List[str], Tuple[str, ...]],
-    baseline_name: str = "baseline"
+    baseline_name: str = "baseline",
+    strategy: str = "one-at-a-time",
+    exhaustive_threshold: int = 10,
+    base_flags: Optional[Dict[str, Any]] = None,
 ) -> List[ConfigProfile]:
     """
-    Generates (1) baseline config ("nothing extra defined") and (2) single-flag-flipped
-    variants (one per presence-tested flag in presence_flags).
+    Generates ConfigProfile objects according to the requested configuration expansion strategy.
 
-    Note:
-        This generation is O(N) rather than O(2^N). Interaction effects between flags
-        (e.g., bugs only reachable when both flag A and flag B are set simultaneously)
-        are explicitly out of scope for single-flag variant generation and covered by
-        pairwise or exhaustive configuration scanning.
+    Strategies:
+      - "baseline": generates a single baseline profile ("nothing extra defined").
+      - "one-at-a-time": generates (1) baseline profile and (2) single-flag-flipped variants (O(N)).
+      - "pairwise": generates a 2-way covering array over all flag pairs using IPOG algorithm.
+      - "exhaustive": generates all 2^N combinations of presence flags. Permitted only when N <= exhaustive_threshold;
+        otherwise raises ValueError suggesting pairwise.
 
     Args:
         flags: A CollectedFlags object or a set/list/tuple of presence flag names.
         baseline_name: Profile name for the baseline configuration (default: "baseline").
+        strategy: Expansion strategy ("baseline", "one-at-a-time", "pairwise", "exhaustive").
+        exhaustive_threshold: Max flag count allowed for "exhaustive" strategy (default: 10).
+        base_flags: Optional dictionary of base macro flags to include in all generated profiles.
 
     Returns:
-        List of ConfigProfile objects, starting with the baseline config followed
-        by single-flag-flipped variants sorted alphabetically by flag name.
+        List of ConfigProfile objects.
     """
     if isinstance(flags, CollectedFlags):
         presence_set = flags.presence_flags
@@ -728,10 +856,63 @@ def generate_config_profiles(
     else:
         raise TypeError(f"Expected CollectedFlags, set, list, or tuple, got {type(flags).__name__}")
 
-    profiles: List[ConfigProfile] = [ConfigProfile(name=baseline_name, flags={})]
-    for flag in sorted(presence_set):
-        profiles.append(ConfigProfile(name=flag, flags={flag: None}))
-    return profiles
+    valid_strategies = {"baseline", "one-at-a-time", "pairwise", "exhaustive"}
+    strat_clean = str(strategy).strip().lower()
+    if strat_clean not in valid_strategies:
+        raise ValueError(
+            f"Invalid config strategy '{strategy}'. Expected one of: {', '.join(sorted(valid_strategies))}."
+        )
+
+    presence_flags = sorted(presence_set)
+    base_dict = dict(base_flags) if base_flags else {}
+
+    if strat_clean == "baseline":
+        return [ConfigProfile(name=baseline_name, flags=base_dict)]
+
+    if strat_clean == "one-at-a-time":
+        profiles: List[ConfigProfile] = [ConfigProfile(name=baseline_name, flags=base_dict)]
+        for flag in presence_flags:
+            f_map = dict(base_dict)
+            f_map[flag] = None
+            profiles.append(ConfigProfile(name=flag, flags=f_map))
+        return profiles
+
+    if strat_clean == "exhaustive":
+        flag_count = len(presence_flags)
+        if flag_count > exhaustive_threshold:
+            raise ValueError(
+                f"Discovered flag count ({flag_count}) exceeds max exhaustive threshold ({exhaustive_threshold}). "
+                f"Use pairwise or one-at-a-time strategy."
+            )
+        import itertools
+        profiles = []
+        for k in range(0, flag_count + 1):
+            for combo in itertools.combinations(presence_flags, k):
+                f_map = dict(base_dict)
+                for flag in combo:
+                    f_map[flag] = None
+                if not combo:
+                    p_name = baseline_name
+                else:
+                    p_name = _format_profile_name_from_flags({f: None for f in combo})
+                profiles.append(ConfigProfile(name=p_name, flags=f_map))
+        return profiles
+
+    if strat_clean == "pairwise":
+        flag_sets = _generate_pairwise_covering_array(presence_flags)
+        profiles = []
+        for active_set in flag_sets:
+            f_map = dict(base_dict)
+            for flag in active_set:
+                f_map[flag] = None
+            if not active_set:
+                p_name = baseline_name
+            else:
+                p_name = _format_profile_name_from_flags({f: None for f in sorted(active_set)})
+            profiles.append(ConfigProfile(name=p_name, flags=f_map))
+        return profiles
+
+    return [ConfigProfile(name=baseline_name, flags=base_dict)]
 
 STANDARD_UNSIGNED_TYPES = {
     "size_t", "size_type", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
