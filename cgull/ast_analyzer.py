@@ -38,9 +38,13 @@ class CollectedFlags:
     Attributes:
         presence_flags: Set of macro names tested via simple presence checks (#ifdef, #ifndef, defined(X)).
         value_flags: Set of macro names tested via value comparisons (#if X > 2, #elif X == 1).
+        presence_locations: Dict mapping macro name to (file_path, line_number) of first presence check.
+        value_locations: Dict mapping macro name to (file_path, line_number) of first value check.
     """
     presence_flags: Set[str] = field(default_factory=set)
     value_flags: Set[str] = field(default_factory=set)
+    presence_locations: Dict[str, Tuple[str, int]] = field(default_factory=dict)
+    value_locations: Dict[str, Tuple[str, int]] = field(default_factory=dict)
 
     @property
     def all_flags(self) -> Set[str]:
@@ -89,9 +93,11 @@ class ConditionalFlagCollector:
     }
 
     @classmethod
-    def collect(cls, clean_code: str) -> CollectedFlags:
+    def collect(cls, clean_code: str, file_path: str = "") -> CollectedFlags:
         presence_raw: Set[str] = set()
         value_raw: Set[str] = set()
+        presence_locs: Dict[str, Tuple[str, int]] = {}
+        value_locs: Dict[str, Tuple[str, int]] = {}
 
         lines = clean_code.splitlines()
         i = 0
@@ -100,6 +106,7 @@ class ConditionalFlagCollector:
         while i < n:
             line = lines[i]
             line_lstrip = line.lstrip()
+            line_no = i + 1
 
             if line_lstrip.startswith('#'):
                 directive_parts = []
@@ -124,9 +131,15 @@ class ConditionalFlagCollector:
                 m_if_elif = re.match(r'^(?:if|elif)\b\s*(.*)', dir_body)
 
                 if m_ifdef:
-                    presence_raw.add(m_ifdef.group(1))
+                    sym = m_ifdef.group(1)
+                    presence_raw.add(sym)
+                    if sym not in presence_locs:
+                        presence_locs[sym] = (file_path, line_no)
                 elif m_ifndef:
-                    presence_raw.add(m_ifndef.group(1))
+                    sym = m_ifndef.group(1)
+                    presence_raw.add(sym)
+                    if sym not in presence_locs:
+                        presence_locs[sym] = (file_path, line_no)
                 elif m_if_elif:
                     expr = m_if_elif.group(1).strip()
 
@@ -141,6 +154,8 @@ class ConditionalFlagCollector:
                         sym = m_def.group(1) or m_def.group(2)
                         if sym and sym not in cls._BUILTINS:
                             presence_raw.add(sym)
+                            if sym not in presence_locs:
+                                presence_locs[sym] = (file_path, line_no)
 
                     # Replace defined(...) expressions with placeholder constant ' 1 '
                     expr_no_defined = cls._DEFINED_RE.sub(" 1 ", expr)
@@ -154,8 +169,12 @@ class ConditionalFlagCollector:
                             if ident not in cls._BUILTINS:
                                 if has_value_op:
                                     value_raw.add(ident)
+                                    if ident not in value_locs:
+                                        value_locs[ident] = (file_path, line_no)
                                 else:
                                     presence_raw.add(ident)
+                                    if ident not in presence_locs:
+                                        presence_locs[ident] = (file_path, line_no)
             else:
                 i += 1
 
@@ -171,6 +190,8 @@ class ConditionalFlagCollector:
         return CollectedFlags(
             presence_flags=presence_flags,
             value_flags=value_flags,
+            presence_locations=presence_locs,
+            value_locations=value_locs,
         )
 
     @classmethod

@@ -6,8 +6,10 @@ import logging
 import os
 
 import json
+import io
+from unittest.mock import patch
 from cgull import parse_config_seed, parse_config_seeds, parse_json_config_seed, ConfigProfile
-from cgull.cli import build_parser
+from cgull.cli import build_parser, handle_scan
 
 
 class TestConfigSeedIngestion(unittest.TestCase):
@@ -366,6 +368,179 @@ class TestConfigSeedIngestion(unittest.TestCase):
             self.assertIn("parse_config_seed() does not accept JSON seed files directly", str(cm.exception))
         finally:
             Path(temp_path).unlink(missing_ok=True)
+
+    def test_seed_source_profile_name_collision_diagnostic(self):
+        """
+        Fixture 1: Precedence when multiple --config-seed sources are given.
+        Asserts that a profile name collision across sources causes an error naming both source files
+        and exits with code 1, whereas non-colliding profiles combine additively.
+        """
+        json1_data = {
+            "shared_profile": {"FLAG_A": True},
+            "profile_one": {"FLAG_B": True}
+        }
+        json2_data = {
+            "shared_profile": {"FLAG_C": True},
+            "profile_two": {"FLAG_D": True}
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            s1_path = Path(temp_dir) / "seed1.json"
+            s2_path = Path(temp_dir) / "seed2.json"
+            c_file = Path(temp_dir) / "test.c"
+
+            s1_path.write_text(json.dumps(json1_data), encoding="utf-8")
+            s2_path.write_text(json.dumps(json2_data), encoding="utf-8")
+            c_file.write_text("int main() { return 0; }\n", encoding="utf-8")
+
+            parser = build_parser()
+            args = parser.parse_args(["scan", "--config-seed", str(s1_path), "--config-seed", str(s2_path), str(c_file)])
+
+            stderr_buf = io.StringIO()
+            with patch("sys.stderr", stderr_buf):
+                exit_code = handle_scan(args)
+
+            self.assertEqual(exit_code, 1)
+            err_msg = stderr_buf.getvalue()
+            self.assertIn("Error: Profile name collision 'shared_profile'", err_msg)
+            self.assertIn(str(s1_path), err_msg)
+            self.assertIn(str(s2_path), err_msg)
+
+    def test_seed_unused_macro_warning_diagnostic(self):
+        """
+        Fixture 2: Diagnostic for a seed defining a macro never tested anywhere in the scanned source file(s).
+        Asserts that C-GULL emits a single warning on sys.stderr per run (not erroring out) and completes scan.
+        """
+        seed_content = """
+#define UNTESTED_MACRO 100
+#define TESTED_FLAG
+"""
+        c_content = """
+#ifdef TESTED_FLAG
+int x = 1;
+#endif
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            seed_path = Path(temp_dir) / "config_seed.h"
+            c_path = Path(temp_dir) / "app.c"
+
+            seed_path.write_text(seed_content, encoding="utf-8")
+            c_path.write_text(c_content, encoding="utf-8")
+
+            parser = build_parser()
+            args = parser.parse_args(["scan", "--config-seed", str(seed_path), str(c_path)])
+
+            stderr_buf = io.StringIO()
+            with patch("sys.stderr", stderr_buf):
+                exit_code = handle_scan(args)
+
+            self.assertEqual(exit_code, 0)
+            err_msg = stderr_buf.getvalue()
+            self.assertIn("Warning: Seed macro 'UNTESTED_MACRO' is defined in configuration seed but never tested in any scanned source file.", err_msg)
+            self.assertEqual(err_msg.count("UNTESTED_MACRO"), 1)
+
+    def test_config_seed_precedence_over_compile_commands(self):
+        """
+        Tests that --config-seed flags take precedence over compile_commands.json flags,
+        and that a dropped conflicting key in config_seed removes lower-priority compile_commands values.
+        """
+        cc_data = [
+            {"command": "gcc -DCC_ONLY=1 -DOVERRIDE_ME=10 -DCONFLICT_KEY=1 test.c", "file": "test.c"}
+        ]
+        # In json_seed, CONFLICT_KEY has conflicting values in two profiles ("p1" vs "p2"),
+        # causing merge_profile_flags to drop CONFLICT_KEY. OVERRIDE_ME is set to 20.
+        json_seed_data = {
+            "p1": {
+                "OVERRIDE_ME": 20,
+                "CONFLICT_KEY": 100,
+                "SEED_ONLY": True
+            },
+            "p2": {
+                "OVERRIDE_ME": 20,
+                "CONFLICT_KEY": 200,
+                "SEED_ONLY": True
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cc_path = Path(temp_dir) / "compile_commands.json"
+            seed_path = Path(temp_dir) / "seed.json"
+            c_path = Path(temp_dir) / "test.c"
+
+            cc_path.write_text(json.dumps(cc_data), encoding="utf-8")
+            seed_path.write_text(json.dumps(json_seed_data), encoding="utf-8")
+            c_path.write_text("int main() { return 0; }\n", encoding="utf-8")
+
+            parser = build_parser()
+            args = parser.parse_args(["scan", "--compile-commands", str(cc_path), "--config-seed", str(seed_path), str(c_path)])
+
+            from cgull.models import ScanResult
+            dummy_result = ScanResult(
+                target_path=str(c_path),
+                scanned_files_count=1,
+                total_lines_of_code=10,
+                total_issues_count=0,
+                high_severity_count=0,
+                medium_severity_count=0,
+                low_severity_count=0,
+                scan_duration_seconds=0.1,
+                timestamp="2025-01-01T00:00:00Z",
+            )
+            with patch("cgull.cli.CGullScanner") as mock_scanner_cls:
+                mock_instance = mock_scanner_cls.return_value
+                mock_instance.scan_path.return_value = dummy_result
+                handle_scan(args)
+                self.assertTrue(mock_scanner_cls.called)
+                scan_config = mock_scanner_cls.call_args[1]["config"]
+                flags = scan_config.defined_syms
+
+                # CC_ONLY is preserved
+                self.assertEqual(flags.get("CC_ONLY"), 1)
+                # OVERRIDE_ME is updated to 20 from config_seed
+                self.assertEqual(flags.get("OVERRIDE_ME"), 20)
+                # SEED_ONLY is present from config_seed
+                self.assertIn("SEED_ONLY", flags)
+                self.assertIsNone(flags["SEED_ONLY"])
+                # CONFLICT_KEY dropped in higher-priority config_seed does NOT keep lower-priority compile_commands value
+                self.assertNotIn("CONFLICT_KEY", flags)
+
+    def test_seed_value_macro_mismatch_warning_diagnostic(self):
+        """
+        Fixture 3: Diagnostic for a value-macro seed (RETRY_COUNT=5) for a flag the discovery issue
+        only ever saw used in a bare #ifdef context (presence-tested, not value-compared).
+        Asserts that C-GULL warns with the specific file and line number where the mismatched usage was found.
+        """
+        seed_data = {
+            "default": {
+                "RETRY_COUNT": 5
+            }
+        }
+        c_content = """// main.c
+int start() {
+#ifdef RETRY_COUNT
+    return 1;
+#endif
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            seed_path = Path(temp_dir) / "seed.json"
+            c_path = Path(temp_dir) / "main.c"
+
+            seed_path.write_text(json.dumps(seed_data), encoding="utf-8")
+            c_path.write_text(c_content, encoding="utf-8")
+
+            parser = build_parser()
+            args = parser.parse_args(["scan", "--config-seed", str(seed_path), str(c_path)])
+
+            stderr_buf = io.StringIO()
+            with patch("sys.stderr", stderr_buf):
+                exit_code = handle_scan(args)
+
+            self.assertEqual(exit_code, 0)
+            err_msg = stderr_buf.getvalue()
+            self.assertIn("Warning: Seed value macro 'RETRY_COUNT' is configured with value '5' but was only tested as a presence flag", err_msg)
+            self.assertIn(f"in {c_path}:3", err_msg)
 
 
 if __name__ == "__main__":
