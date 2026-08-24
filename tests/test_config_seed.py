@@ -3,7 +3,9 @@ import unittest
 from pathlib import Path
 import logging
 
-from cgull import parse_config_seed, ConfigProfile
+import os
+
+from cgull import parse_config_seed, parse_config_seeds, ConfigProfile
 from cgull.cli import build_parser
 
 
@@ -132,6 +134,55 @@ class TestConfigSeedIngestion(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["scan", "--config-seed", "seed1.h", "--config-seed", "seed2.h", "src/"])
         self.assertEqual(args.config_seed, ["seed1.h", "seed2.h"])
+
+    def test_directory_config_seed_with_manifest_exclusion(self):
+        """
+        Measurable outcome test:
+        Fixture directory with 3 config headers (one intentionally excluded via .cgullconfigs manifest)
+        produces exactly 2 ConfigProfiles with correct names.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create 3 header files
+            h1 = Path(temp_dir) / "config_alpha.h"
+            h2 = Path(temp_dir) / "config_beta.h"
+            h3 = Path(temp_dir) / "config_ignored.h"
+
+            h1.write_text("#define ALPHA_MODE 1\n", encoding="utf-8")
+            h2.write_text("#define BETA_MODE 2\n", encoding="utf-8")
+            h3.write_text("#define IGNORED_MODE 3\n", encoding="utf-8")
+
+            # Create .cgullconfigs manifest excluding config_ignored.h
+            manifest = Path(temp_dir) / ".cgullconfigs"
+            manifest.write_text("!config_ignored.h\n", encoding="utf-8")
+
+            profiles = parse_config_seeds(temp_dir)
+
+            self.assertEqual(len(profiles), 2)
+            names = [p.name for p in profiles]
+            self.assertEqual(names, ["config_alpha", "config_beta"])
+            self.assertEqual(profiles[0].flags, {"ALPHA_MODE": 1})
+            self.assertEqual(profiles[1].flags, {"BETA_MODE": 2})
+
+    def test_directory_config_seed_manifest_inclusion_order(self):
+        """
+        Tests that .cgullconfigs manifest explicit inclusions dictate the ordering and selection of profiles.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            h1 = Path(temp_dir) / "config_a.h"
+            h2 = Path(temp_dir) / "config_b.h"
+            h3 = Path(temp_dir) / "non_config.h"
+
+            h1.write_text("#define A 10\n", encoding="utf-8")
+            h2.write_text("#define B 20\n", encoding="utf-8")
+            h3.write_text("#define C 30\n", encoding="utf-8")
+
+            manifest = Path(temp_dir) / ".cgullconfigs"
+            manifest.write_text("config_b.h\nconfig_a.h\n", encoding="utf-8")
+
+            profiles = parse_config_seeds(temp_dir)
+
+            self.assertEqual(len(profiles), 2)
+            self.assertEqual([p.name for p in profiles], ["config_b", "config_a"])
 
 
 if __name__ == "__main__":
