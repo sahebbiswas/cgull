@@ -225,6 +225,8 @@ class ReportGenerator:
                 badge = "🔴 HIGH" if issue.impact == Severity.HIGH else ("🟡 MEDIUM" if issue.impact == Severity.MEDIUM else "🔵 LOW")
                 fix_type_label = issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type)
                 cond_tag = _get_condition_tag(issue)
+                if cond_tag:
+                    cond_tag = _escape_markdown_cell(cond_tag)
                 cond_prefix = f"{cond_tag} " if cond_tag else ""
                 lines.extend([
                     f"### #{idx} [{badge}] {cond_prefix}{issue.rule_name} (`{issue.rule_id}`)",
@@ -319,6 +321,8 @@ class ReportGenerator:
             sev_tag = f"[{issue.impact.value.upper()}]"
             fix_type_label = issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type)
             cond_tag = _get_condition_tag(issue)
+            if cond_tag:
+                cond_tag = _sanitize_terminal_text(cond_tag)
             cond_prefix = f"{cond_tag} " if cond_tag else ""
             lines.append(f" {sev_tag:<8} {issue.file_path}:{issue.line_number} -> {cond_prefix}{issue.rule_name} ({issue.rule_id})")
             lines.append(f"          Detail: {issue.message}")

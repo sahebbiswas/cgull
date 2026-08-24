@@ -356,6 +356,25 @@ class TestReportGeneratorReachableUnder(unittest.TestCase):
         self.assertIn("[+LEGACY_AUTH]", term_str)
         self.assertNotIn("[unconditional]", term_str)
 
+    def test_reachable_under_hostile_tag_sanitization_terminal(self):
+        from cgull.models import ConfigProfile
+        hostile_profile = ConfigProfile("\x1b[31mBAD\x1b[0m\nHEADING_INJECTION", {"LEGACY_AUTH": None})
+        profiles = [ConfigProfile("baseline", {}), hostile_profile]
+        res = self.scanner.scan_text_profiles(self.source_code, profiles=profiles, file_path="auth.c")
+        term_str = ReportGenerator.to_terminal_text(res)
+        self.assertNotIn("\x1b[31m", term_str)
+        self.assertNotIn("\nHEADING", term_str)
+        self.assertIn("BAD HEADING_INJECTION", term_str)
+
+    def test_reachable_under_hostile_tag_escaping_markdown(self):
+        from cgull.models import ConfigProfile
+        hostile_profile = ConfigProfile("FOO\n### INJECTED_HEADING\n|pipe`tick", {"LEGACY_AUTH": None})
+        profiles = [ConfigProfile("baseline", {}), hostile_profile]
+        res = self.scanner.scan_text_profiles(self.source_code, profiles=profiles, file_path="auth.c")
+        md_str = ReportGenerator.to_markdown(res)
+        self.assertNotIn("\n### INJECTED_HEADING", md_str)
+        self.assertIn("\\|pipe\\`tick", md_str)
+
 
 if __name__ == "__main__":
     unittest.main()
