@@ -26,3 +26,15 @@ pip install "cgull[ast]"
 ```
 
 Check out the [README](README.md) for full documentation, CLI usage, and extension examples!
+
+## ⚡ Config-Space Scanning & Reachability Benchmark (v0.8.45)
+
+C-GULL now supports per-configuration static scanning and condition-tagged finding reachability (`reachable_under`).
+Findings produced across configuration variants (`List[ConfigProfile]`) are automatically merged by fingerprint:
+- Findings active under a subset of configurations are tagged with their specific profile labels (e.g. `["+LEGACY_AUTH"]`).
+- Findings produced under every scanned configuration are tagged as `["unconditional"]`.
+
+### ⏱️ Performance Footprint on `examples/`
+Wall-clock scan duration benchmarks on the `examples/` directory:
+- **Single-Pass Baseline Scan (1 run)**: ~0.378s
+- **Multi-Config Variant Scan (3 profiles: baseline, +DEBUG, +LEGACY_AUTH)**: ~0.967s (linear N+1 scaling with profile count)
