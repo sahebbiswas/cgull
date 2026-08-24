@@ -2087,16 +2087,19 @@ class CASTParser:
             if defined_syms:
                 if isinstance(defined_syms, (set, list, tuple, frozenset)):
                     for s in defined_syms:
-                        preprocessor.define(str(s))
+                        item = str(s).strip()
+                        if " " in item:
+                            preprocessor.define(item)
+                        else:
+                            preprocessor.define(f"{item} 1")
                 elif isinstance(defined_syms, (dict, Mapping)):
                     for k, v in defined_syms.items():
                         key = str(k)
-                        if v is None:
-                            preprocessor.define(key)
-                        elif v is False:
+                        if v is False:
                             preprocessor.undef(key)
-                        else:
-                            preprocessor.define(f"{key} {v}")
+                    norm_macros = _normalize_macro_dict(defined_syms)
+                    for k, v in norm_macros.items():
+                        preprocessor.define(f"{k} {v}")
                 else:
                     norm_macros = _normalize_macro_dict(defined_syms)
                     for k, v in norm_macros.items():

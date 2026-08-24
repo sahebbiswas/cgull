@@ -219,6 +219,53 @@ class TestConfigSpaceScan(unittest.TestCase):
         self.assertEqual(len(res.issues), 1)
         self.assertEqual(res.issues[0].reachable_under, ["+FLAG"])
 
+    def test_tier1_and_tier2_if_eval_parity_for_presence_and_non_numeric(self):
+        """
+        Tests that #if evaluation parity between Tier 1 and Tier 2 holds for:
+        1. Presence macros defined as None or in sequences (evaluating as truthy integer 1 in #if).
+        2. Non-numeric string macros (evaluating as truthy integer 1 in #if).
+        """
+        source_code = (
+            "#include <stdio.h>\n"
+            "#include <string.h>\n"
+            "void test_fn(char *buf, const char *src) {\n"
+            "    (void)src;\n"
+            "#if PRESENCE_FLAG\n"
+            "    gets(buf);\n"
+            "#endif\n"
+            "#if NON_NUMERIC_MODE\n"
+            "    strcpy(buf, src);\n"
+            "#endif\n"
+            "}\n"
+        )
+
+        profiles = [
+            ConfigProfile("baseline", {}),
+            ConfigProfile("CONFIG_PRESENCE", {"PRESENCE_FLAG": None}),
+            ConfigProfile("CONFIG_NON_NUMERIC", {"NON_NUMERIC_MODE": "DEBUG"}),
+        ]
+
+        scanner = CGullScanner(rules=[BannedFunctionsRule()])
+
+        # Tier 1
+        res1 = scanner.scan_text_profiles(source_code, profiles=profiles)
+        gets1 = next((i for i in res1.issues if "gets" in i.message), None)
+        strcpy1 = next((i for i in res1.issues if "strcpy" in i.message), None)
+        self.assertIsNotNone(gets1)
+        self.assertEqual(gets1.reachable_under, ["+CONFIG_PRESENCE"])
+        self.assertIsNotNone(strcpy1)
+        self.assertEqual(strcpy1.reachable_under, ["+CONFIG_NON_NUMERIC"])
+
+        # Tier 2
+        with patch.object(CASTParser, "_try_pcpp_preprocess", return_value=None):
+            res2 = scanner.scan_text_profiles(source_code, profiles=profiles)
+            gets2 = next((i for i in res2.issues if "gets" in i.message), None)
+            strcpy2 = next((i for i in res2.issues if "strcpy" in i.message), None)
+            self.assertIsNotNone(gets2)
+            self.assertEqual(gets2.reachable_under, ["+CONFIG_PRESENCE"])
+            self.assertIsNotNone(strcpy2)
+            self.assertEqual(strcpy2.reachable_under, ["+CONFIG_NON_NUMERIC"])
+
 
 if __name__ == "__main__":
     unittest.main()
