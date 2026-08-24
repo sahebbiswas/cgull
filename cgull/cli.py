@@ -248,7 +248,8 @@ def handle_scan(args) -> int:
     seed_flags = {}
 
     profile_sources: Dict[str, str] = {}
-    all_seed_profiles: List[ConfigProfile] = []
+    cc_seed_profiles: List[ConfigProfile] = []
+    config_seed_profiles: List[ConfigProfile] = []
 
     # Compile commands ingestion (lowest priority seed source)
     cc_arg = getattr(args, "compile_commands", None)
@@ -258,20 +259,19 @@ def handle_scan(args) -> int:
         compile_commands_path = find_compile_commands(target, config_dir=config.config_dir)
 
     if compile_commands_path:
-        from .ast_analyzer import parse_compile_commands, merge_profile_flags
+        from .ast_analyzer import parse_compile_commands
         if cc_arg and not os.path.exists(compile_commands_path):
             print(f"Error: Compile commands file '{compile_commands_path}' does not exist.", file=sys.stderr)
             return 1
         if os.path.exists(compile_commands_path):
             try:
-                cc_profiles = parse_compile_commands(compile_commands_path)
-                for p in cc_profiles:
+                parsed_cc = parse_compile_commands(compile_commands_path)
+                for p in parsed_cc:
                     if p.name in profile_sources:
                         print(f"Error: Profile name collision '{p.name}' between seed sources '{profile_sources[p.name]}' and '{compile_commands_path}'.", file=sys.stderr)
                         return 1
                     profile_sources[p.name] = compile_commands_path
-                    all_seed_profiles.append(p)
-                seed_flags.update(merge_profile_flags(cc_profiles))
+                    cc_seed_profiles.append(p)
             except Exception as e:
                 if cc_arg:
                     print(f"Error parsing compile commands file '{compile_commands_path}': {e}", file=sys.stderr)
@@ -280,7 +280,7 @@ def handle_scan(args) -> int:
     # Header / JSON Config Seeds ingestion (higher priority seed source)
     config_seeds = getattr(args, "config_seed", None)
     if config_seeds:
-        from .ast_analyzer import parse_config_seeds, merge_profile_flags
+        from .ast_analyzer import parse_config_seeds
         for seed_path in config_seeds:
             try:
                 profiles = parse_config_seeds(seed_path)
@@ -289,12 +289,27 @@ def handle_scan(args) -> int:
                         print(f"Error: Profile name collision '{p.name}' between seed sources '{profile_sources[p.name]}' and '{seed_path}'.", file=sys.stderr)
                         return 1
                     profile_sources[p.name] = seed_path
-                    all_seed_profiles.append(p)
+                    config_seed_profiles.append(p)
             except Exception as e:
                 print(f"Error parsing config seed file '{seed_path}': {e}", file=sys.stderr)
                 return 1
-        if all_seed_profiles:
-            seed_flags.update(merge_profile_flags(all_seed_profiles))
+
+    all_seed_profiles = cc_seed_profiles + config_seed_profiles
+
+    # Build seed_flags with explicit precedence: higher-priority config_seed_profiles overwrite cc_seed_profiles
+    from .ast_analyzer import merge_profile_flags
+    if cc_seed_profiles:
+        seed_flags = merge_profile_flags(cc_seed_profiles)
+    else:
+        seed_flags = {}
+
+    if config_seed_profiles:
+        cfg_flags = merge_profile_flags(config_seed_profiles)
+        cfg_keys = {k for p in config_seed_profiles for k in p.flags.keys()}
+        # Higher-priority config seed profile keys override (and remove dropped conflicts from) lower-priority cc_flags
+        for k in cfg_keys:
+            seed_flags.pop(k, None)
+        seed_flags.update(cfg_flags)
 
     config_strategy = getattr(args, "config_strategy", "one-at-a-time")
     exhaustive_threshold = getattr(args, "exhaustive_threshold", 10)
@@ -307,28 +322,6 @@ def handle_scan(args) -> int:
         config_strategy=config_strategy,
         exhaustive_threshold=exhaustive_threshold,
     )
-
-    if all_seed_profiles and not args.quiet:
-        from .engine import _validate_seed_flags_diagnostics
-        # Find files to scan for diagnostics validation
-        base_dir = target if os.path.isdir(target) else (os.path.dirname(target) or ".")
-        filter_obj = CGullIgnoreFilter(base_dir=base_dir, custom_patterns=custom_ignores)
-        if args.ignore_file and os.path.exists(args.ignore_file):
-            filter_obj.load_from_file(args.ignore_file)
-
-        diag_files: List[str] = []
-        if os.path.isfile(target):
-            if not filter_obj.should_ignore(target):
-                diag_files.append(target)
-        elif os.path.isdir(target):
-            for root, dirs, files in os.walk(target):
-                dirs[:] = [d for d in dirs if not filter_obj.should_prune_dir(os.path.join(root, d))]
-                for f in files:
-                    fp = os.path.join(root, f)
-                    ext = os.path.splitext(f)[1].lower()
-                    if ext in CGullScanner.C_EXTENSIONS and not filter_obj.should_ignore(fp):
-                        diag_files.append(fp)
-        _validate_seed_flags_diagnostics(diag_files, all_seed_profiles, quiet=args.quiet)
 
     scanner = CGullScanner(
         config=scan_config,
@@ -350,6 +343,7 @@ def handle_scan(args) -> int:
             quiet=args.quiet,
             config_strategy=config_strategy,
             exhaustive_threshold=exhaustive_threshold,
+            seed_profiles=all_seed_profiles if all_seed_profiles else None,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)

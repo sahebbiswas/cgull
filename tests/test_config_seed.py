@@ -439,6 +439,71 @@ int x = 1;
             self.assertIn("Warning: Seed macro 'UNTESTED_MACRO' is defined in configuration seed but never tested in any scanned source file.", err_msg)
             self.assertEqual(err_msg.count("UNTESTED_MACRO"), 1)
 
+    def test_config_seed_precedence_over_compile_commands(self):
+        """
+        Tests that --config-seed flags take precedence over compile_commands.json flags,
+        and that a dropped conflicting key in config_seed removes lower-priority compile_commands values.
+        """
+        cc_data = [
+            {"command": "gcc -DCC_ONLY=1 -DOVERRIDE_ME=10 -DCONFLICT_KEY=1 test.c", "file": "test.c"}
+        ]
+        # In json_seed, CONFLICT_KEY has conflicting values in two profiles ("p1" vs "p2"),
+        # causing merge_profile_flags to drop CONFLICT_KEY. OVERRIDE_ME is set to 20.
+        json_seed_data = {
+            "p1": {
+                "OVERRIDE_ME": 20,
+                "CONFLICT_KEY": 100,
+                "SEED_ONLY": True
+            },
+            "p2": {
+                "OVERRIDE_ME": 20,
+                "CONFLICT_KEY": 200,
+                "SEED_ONLY": True
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cc_path = Path(temp_dir) / "compile_commands.json"
+            seed_path = Path(temp_dir) / "seed.json"
+            c_path = Path(temp_dir) / "test.c"
+
+            cc_path.write_text(json.dumps(cc_data), encoding="utf-8")
+            seed_path.write_text(json.dumps(json_seed_data), encoding="utf-8")
+            c_path.write_text("int main() { return 0; }\n", encoding="utf-8")
+
+            parser = build_parser()
+            args = parser.parse_args(["scan", "--compile-commands", str(cc_path), "--config-seed", str(seed_path), str(c_path)])
+
+            from cgull.models import ScanResult
+            dummy_result = ScanResult(
+                target_path=str(c_path),
+                scanned_files_count=1,
+                total_lines_of_code=10,
+                total_issues_count=0,
+                high_severity_count=0,
+                medium_severity_count=0,
+                low_severity_count=0,
+                scan_duration_seconds=0.1,
+                timestamp="2025-01-01T00:00:00Z",
+            )
+            with patch("cgull.cli.CGullScanner") as mock_scanner_cls:
+                mock_instance = mock_scanner_cls.return_value
+                mock_instance.scan_path.return_value = dummy_result
+                handle_scan(args)
+                self.assertTrue(mock_scanner_cls.called)
+                scan_config = mock_scanner_cls.call_args[1]["config"]
+                flags = scan_config.defined_syms
+
+                # CC_ONLY is preserved
+                self.assertEqual(flags.get("CC_ONLY"), 1)
+                # OVERRIDE_ME is updated to 20 from config_seed
+                self.assertEqual(flags.get("OVERRIDE_ME"), 20)
+                # SEED_ONLY is present from config_seed
+                self.assertIn("SEED_ONLY", flags)
+                self.assertIsNone(flags["SEED_ONLY"])
+                # CONFLICT_KEY dropped in higher-priority config_seed does NOT keep lower-priority compile_commands value
+                self.assertNotIn("CONFLICT_KEY", flags)
+
     def test_seed_value_macro_mismatch_warning_diagnostic(self):
         """
         Fixture 3: Diagnostic for a value-macro seed (RETRY_COUNT=5) for a flag the discovery issue

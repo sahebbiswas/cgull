@@ -190,6 +190,7 @@ class CGullScanner:
         profiles: Optional[List[ConfigProfile]] = None,
         config_strategy: Optional[str] = None,
         exhaustive_threshold: Optional[int] = None,
+        seed_profiles: Optional[List[ConfigProfile]] = None,
     ) -> ScanResult:
         """
         Recursively scans a directory or single file for security vulnerabilities.
@@ -252,6 +253,9 @@ class CGullScanner:
         total_files = len(files_to_scan)
         if total_files > 0:
             resolved_jobs = min(resolved_jobs, total_files)
+
+        if seed_profiles and not quiet:
+            _validate_seed_flags_diagnostics(files_to_scan, seed_profiles, quiet=quiet)
 
         if progress_callback:
             progress_callback(0, total_files, "")
