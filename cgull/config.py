@@ -25,6 +25,7 @@ class CGullConfig:
     dealloc_funcs: List[str] = field(default_factory=list)
     banned_funcs: Dict[str, Dict[str, str]] = field(default_factory=dict)  # fn_name -> {"reason": ..., "remediation": ...}
     exclude_paths: List[str] = field(default_factory=list)
+    include_roots: List[str] = field(default_factory=list)
     default_format: Optional[str] = None
     fail_on: Optional[str] = None
     warn_on_fallback: bool = False
@@ -215,7 +216,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
             cfg.warnings.append(f"Invalid schema_version in {config_path}: expected integer")
 
     # Check top-level keys for unknown keys
-    known_top_keys = {"schema_version", "rules", "functions", "paths", "output"}
+    known_top_keys = {"schema_version", "rules", "functions", "paths", "output", "includes"}
     for key in raw_toml.keys():
         if key not in known_top_keys:
             cfg.warnings.append(f"Unknown key/section '[{key}]' in configuration file {config_path}")
@@ -287,6 +288,35 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
         exclude_list = paths_sec.get("exclude", [])
         if isinstance(exclude_list, list):
             cfg.exclude_paths = [str(x) for x in exclude_list]
+        inc_list = paths_sec.get("include_roots", [])
+        if isinstance(inc_list, list):
+            for x in inc_list:
+                str_x = str(x)
+                if str_x not in cfg.include_roots:
+                    cfg.include_roots.append(str_x)
+
+    # Section [includes]
+    includes_sec = raw_toml.get("includes", {})
+    if isinstance(includes_sec, dict):
+        inc_list = includes_sec.get("include_roots", includes_sec.get("roots", []))
+        if isinstance(inc_list, list):
+            for x in inc_list:
+                str_x = str(x)
+                if str_x not in cfg.include_roots:
+                    cfg.include_roots.append(str_x)
+
+    # Load .cgullincludes if present in config_dir or target_path directory
+    base_search_dir = cfg.config_dir or (os.path.abspath(target_path) if target_path else os.getcwd())
+    if os.path.isfile(base_search_dir):
+        base_search_dir = os.path.dirname(base_search_dir)
+
+    cgullinc_path = os.path.join(base_search_dir, ".cgullincludes")
+    if os.path.isfile(cgullinc_path):
+        from .includes import IncludeResolver
+        resolver = IncludeResolver(base_dir=base_search_dir, load_cgullincludes=True)
+        for root in resolver.include_roots:
+            if root not in cfg.include_roots:
+                cfg.include_roots.append(root)
 
     # Section [output]
     output_sec = raw_toml.get("output", {})

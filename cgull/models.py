@@ -167,6 +167,7 @@ class ScanConfig:
     defined_syms: Optional[Dict[str, Any]] = None
     config_strategy: str = "one-at-a-time"
     exhaustive_threshold: int = 10
+    include_roots: List[str] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -179,6 +180,7 @@ class ScanConfig:
         defined_syms: Optional[Dict[str, Any]] = None,
         config_strategy: str = "one-at-a-time",
         exhaustive_threshold: int = 10,
+        include_roots: Optional[List[str]] = None,
     ) -> "ScanConfig":
         if rules is None:
             from .rules import get_all_rules
@@ -199,6 +201,7 @@ class ScanConfig:
             defined_syms=defined_syms,
             config_strategy=config_strategy,
             exhaustive_threshold=exhaustive_threshold,
+            include_roots=list(include_roots) if include_roots is not None else [],
         )
 
     def get_rules(self) -> List[Any]:
@@ -228,6 +231,7 @@ class ScanConfig:
             "defined_syms": self.defined_syms,
             "config_strategy": self.config_strategy,
             "exhaustive_threshold": self.exhaustive_threshold,
+            "include_roots": list(self.include_roots),
         }
 
     @classmethod
@@ -247,6 +251,7 @@ class ScanConfig:
             defined_syms=data.get("defined_syms"),
             config_strategy=data.get("config_strategy", "one-at-a-time"),
             exhaustive_threshold=data.get("exhaustive_threshold", 10),
+            include_roots=list(data.get("include_roots", [])),
         )
 
 
