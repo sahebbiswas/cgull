@@ -36,7 +36,7 @@ def _emit_error(
     sys.stderr.flush()
 
 
-def _collect_files_presence_flags(files: List[str], quiet: bool = False) -> Set[str]:
+def _collect_files_flags(files: List[str], quiet: bool = False) -> Tuple[Set[str], Set[str], Dict[str, Tuple[str, int]], Dict[str, Tuple[str, int]]]:
     import logging
     logger = logging.getLogger(__name__)
     from .utils import strip_comments_keep_lines
@@ -44,6 +44,8 @@ def _collect_files_presence_flags(files: List[str], quiet: bool = False) -> Set[
 
     presence_raw: Set[str] = set()
     value_raw: Set[str] = set()
+    presence_locs: Dict[str, Tuple[str, int]] = {}
+    value_locs: Dict[str, Tuple[str, int]] = {}
     skipped_error_count = 0
 
     for fpath in files:
@@ -54,9 +56,15 @@ def _collect_files_presence_flags(files: List[str], quiet: bool = False) -> Set[
             with open(fpath, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
             _, clean_code = strip_comments_keep_lines(content)
-            res = ConditionalFlagCollector.collect(clean_code)
+            res = ConditionalFlagCollector.collect(clean_code, file_path=fpath)
             presence_raw.update(res.presence_flags)
             value_raw.update(res.value_flags)
+            for k, v in res.presence_locations.items():
+                if k not in presence_locs:
+                    presence_locs[k] = v
+            for k, v in res.value_locations.items():
+                if k not in value_locs:
+                    value_locs[k] = v
         except OSError as e:
             skipped_error_count += 1
             if not quiet:
@@ -71,7 +79,49 @@ def _collect_files_presence_flags(files: List[str], quiet: bool = False) -> Set[
     if skipped_error_count > 0 and not quiet:
         logger.warning("Flag collection skipped %d file(s) due to errors", skipped_error_count)
 
-    return presence_raw - value_raw
+    real_presence = presence_raw - value_raw
+    return real_presence, value_raw, presence_locs, value_locs
+
+
+def _collect_files_presence_flags(files: List[str], quiet: bool = False) -> Set[str]:
+    presence, _, _, _ = _collect_files_flags(files, quiet=quiet)
+    return presence
+
+
+def _validate_seed_flags_diagnostics(files: List[str], seed_profiles: List[ConfigProfile], quiet: bool = False) -> None:
+    if not seed_profiles or not files or quiet:
+        return
+
+    presence_flags, value_flags, presence_locs, value_locs = _collect_files_flags(files, quiet=quiet)
+    all_discovered = presence_flags | value_flags
+
+    # Collect all macros defined in seed profiles
+    seed_macros: Dict[str, Set[str]] = {}  # macro -> set of profile names
+    value_seed_macros: Dict[str, Tuple[Any, str]] = {}  # macro -> (value, profile_name)
+
+    for p in seed_profiles:
+        for m_name, val in p.flags.items():
+            if m_name not in seed_macros:
+                seed_macros[m_name] = set()
+            seed_macros[m_name].add(p.name)
+            if val is not None and not isinstance(val, bool):
+                value_seed_macros[m_name] = (val, p.name)
+
+    # Diagnostic 1: Unused macro warning (warn once per unused macro per run)
+    for m_name in sorted(seed_macros.keys()):
+        if m_name not in all_discovered:
+            sys.stderr.write(f"Warning: Seed macro '{m_name}' is defined in configuration seed but never tested in any scanned source file.\n")
+            sys.stderr.flush()
+
+    # Diagnostic 2: Value-macro seed for a flag only tested as a presence flag (#ifdef)
+    for m_name, (val, prof_name) in sorted(value_seed_macros.items()):
+        if m_name in presence_flags and m_name not in value_flags:
+            loc_str = ""
+            if m_name in presence_locs:
+                fpath, lno = presence_locs[m_name]
+                loc_str = f" in {fpath}:{lno}"
+            sys.stderr.write(f"Warning: Seed value macro '{m_name}' is configured with value '{val}' but was only tested as a presence flag{loc_str}.\n")
+            sys.stderr.flush()
 
 
 class CGullScanner:

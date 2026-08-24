@@ -247,6 +247,9 @@ def handle_scan(args) -> int:
 
     seed_flags = {}
 
+    profile_sources: Dict[str, str] = {}
+    all_seed_profiles: List[ConfigProfile] = []
+
     # Compile commands ingestion (lowest priority seed source)
     cc_arg = getattr(args, "compile_commands", None)
     compile_commands_path = cc_arg
@@ -262,6 +265,12 @@ def handle_scan(args) -> int:
         if os.path.exists(compile_commands_path):
             try:
                 cc_profiles = parse_compile_commands(compile_commands_path)
+                for p in cc_profiles:
+                    if p.name in profile_sources:
+                        print(f"Error: Profile name collision '{p.name}' between seed sources '{profile_sources[p.name]}' and '{compile_commands_path}'.", file=sys.stderr)
+                        return 1
+                    profile_sources[p.name] = compile_commands_path
+                    all_seed_profiles.append(p)
                 seed_flags.update(merge_profile_flags(cc_profiles))
             except Exception as e:
                 if cc_arg:
@@ -272,11 +281,15 @@ def handle_scan(args) -> int:
     config_seeds = getattr(args, "config_seed", None)
     if config_seeds:
         from .ast_analyzer import parse_config_seeds, merge_profile_flags
-        all_seed_profiles = []
         for seed_path in config_seeds:
             try:
                 profiles = parse_config_seeds(seed_path)
-                all_seed_profiles.extend(profiles)
+                for p in profiles:
+                    if p.name in profile_sources:
+                        print(f"Error: Profile name collision '{p.name}' between seed sources '{profile_sources[p.name]}' and '{seed_path}'.", file=sys.stderr)
+                        return 1
+                    profile_sources[p.name] = seed_path
+                    all_seed_profiles.append(p)
             except Exception as e:
                 print(f"Error parsing config seed file '{seed_path}': {e}", file=sys.stderr)
                 return 1
@@ -294,6 +307,28 @@ def handle_scan(args) -> int:
         config_strategy=config_strategy,
         exhaustive_threshold=exhaustive_threshold,
     )
+
+    if all_seed_profiles and not args.quiet:
+        from .engine import _validate_seed_flags_diagnostics
+        # Find files to scan for diagnostics validation
+        base_dir = target if os.path.isdir(target) else (os.path.dirname(target) or ".")
+        filter_obj = CGullIgnoreFilter(base_dir=base_dir, custom_patterns=custom_ignores)
+        if args.ignore_file and os.path.exists(args.ignore_file):
+            filter_obj.load_from_file(args.ignore_file)
+
+        diag_files: List[str] = []
+        if os.path.isfile(target):
+            if not filter_obj.should_ignore(target):
+                diag_files.append(target)
+        elif os.path.isdir(target):
+            for root, dirs, files in os.walk(target):
+                dirs[:] = [d for d in dirs if not filter_obj.should_prune_dir(os.path.join(root, d))]
+                for f in files:
+                    fp = os.path.join(root, f)
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext in CGullScanner.C_EXTENSIONS and not filter_obj.should_ignore(fp):
+                        diag_files.append(fp)
+        _validate_seed_flags_diagnostics(diag_files, all_seed_profiles, quiet=args.quiet)
 
     scanner = CGullScanner(
         config=scan_config,
