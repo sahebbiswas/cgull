@@ -242,6 +242,7 @@ class TestConfigStrategyCLI(unittest.TestCase):
         """
         from cgull.engine import _collect_files_presence_flags
         import io
+        from unittest.mock import patch
 
         with tempfile.TemporaryDirectory() as tmpdir:
             good_file = os.path.join(tmpdir, "good.c")
@@ -252,24 +253,25 @@ class TestConfigStrategyCLI(unittest.TestCase):
             with open(bad_file, "w") as f:
                 f.write("#ifdef BAD_FLAG\nint b;\n#endif\n")
 
-            try:
-                os.chmod(bad_file, 0o000)
-            except Exception:
-                self.skipTest("Cannot change file permissions")
+            real_open = open
 
+            def mock_open(file, *args, **kwargs):
+                if os.path.abspath(str(file)) == os.path.abspath(bad_file):
+                    raise PermissionError(f"Permission denied: {bad_file}")
+                return real_open(file, *args, **kwargs)
+
+            stderr_buf = io.StringIO()
+            old_stderr = sys.stderr
+            sys.stderr = stderr_buf
             try:
-                stderr_buf = io.StringIO()
-                old_stderr = sys.stderr
-                sys.stderr = stderr_buf
-                try:
+                with patch("builtins.open", side_effect=mock_open):
                     flags = _collect_files_presence_flags([good_file, bad_file], quiet=False)
-                finally:
-                    sys.stderr = old_stderr
-
-                self.assertIn("GOOD_FLAG", flags)
-                self.assertIn("Flag collection skipped", stderr_buf.getvalue())
             finally:
-                os.chmod(bad_file, 0o644)
+                sys.stderr = old_stderr
+
+            self.assertIn("GOOD_FLAG", flags)
+            self.assertNotIn("BAD_FLAG", flags)
+            self.assertIn("Flag collection skipped", stderr_buf.getvalue())
 
 
 if __name__ == "__main__":
