@@ -66,9 +66,22 @@ class IncorrectPointerScalingRule(BaseRule):
         from pycparser import c_ast
         from ..ast_analyzer import _format_pycparser_expr
 
-        def is_char_ptr(type_name: str) -> bool:
-            tn = type_name.lower()
-            return 'char' in tn or 'int8' in tn or 'uint8' in tn or 'void' in tn
+        def is_byte_ptr(type_name: str, name: str = "") -> bool:
+            # Check for double pointers (e.g., char **) which are scaled by sizeof(char*)
+            full_decl = f"{type_name} {name}".strip()
+            if full_decl.count('*') > 1:
+                return False
+
+            tn = type_name.strip()
+            # Match strictly byte types: char, unsigned char, signed char, int8_t, uint8_t, void
+            # Do not match wchar_t, char16_t, char32_t
+            if re.search(r'\b(?:unsigned\s+|signed\s+)?char\b', tn):
+                return True
+            if re.search(r'\b(?:u?int8_t)\b', tn):
+                return True
+            if re.search(r'\bvoid\b', tn):
+                return True
+            return False
 
         def is_pointer_type(node, fn) -> bool:
             if isinstance(node, c_ast.ID):
@@ -77,19 +90,19 @@ class IncorrectPointerScalingRule(BaseRule):
                 if fn and var_name in fn.variables:
                     var_obj = fn.variables[var_name]
                     if var_obj.is_pointer or var_obj.is_array or '*' in var_obj.type_name or '*' in var_obj.name:
-                        if not is_char_ptr(var_obj.type_name):
+                        if not is_byte_ptr(var_obj.type_name, var_obj.name):
                             return True
 
                 if var_name in ast_ctx.global_variables:
                     var_obj = ast_ctx.global_variables[var_name]
                     if var_obj.is_pointer or var_obj.is_array or '*' in var_obj.type_name or '*' in var_obj.name:
-                        if not is_char_ptr(var_obj.type_name):
+                        if not is_byte_ptr(var_obj.type_name, var_obj.name):
                             return True
 
                 if fn:
                     for param in fn.parameters:
                         if param.name == var_name and (param.is_pointer or '*' in param.type_name or '*' in param.name):
-                            if not is_char_ptr(param.type_name):
+                            if not is_byte_ptr(param.type_name, param.name):
                                 return True
 
             elif isinstance(node, c_ast.UnaryOp) and node.op == '&':
@@ -98,12 +111,8 @@ class IncorrectPointerScalingRule(BaseRule):
             elif isinstance(node, c_ast.Cast):
                 type_str = _format_pycparser_expr(node.to_type)
                 if '*' in type_str:
-                    if not is_char_ptr(type_str):
+                    if not is_byte_ptr(type_str):
                         return True
-
-            elif isinstance(node, c_ast.FuncCall):
-                if isinstance(node.name, c_ast.ID) and node.name.name in ("malloc", "calloc", "realloc"):
-                    return True
 
             return False
 

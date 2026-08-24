@@ -36,3 +36,26 @@ void pointer_scaling_safe() {
 
     free(buf);
 }
+
+void pointer_scaling_advanced() {
+    wchar_t *p;
+    p = p + (2 * sizeof(wchar_t)); // expect: CGULL-040
+
+    char **double_p;
+    double_p = double_p + sizeof(char*); // expect: CGULL-040
+
+    // malloc cast tests
+    char *char_p = (char*)malloc(10);
+    char_p = char_p + 2 * sizeof(char); // Should NOT be flagged
+
+    int *int_p = (int*)malloc(10);
+    int_p = int_p + 2 * sizeof(int); // expect: CGULL-040
+
+    // void* single level pointer should not be flagged
+    void *void_p = malloc(10);
+    void_p = void_p + 2 * sizeof(int); // Should NOT be flagged
+
+    // void** double level pointer SHOULD be flagged
+    void **void_pp = (void**)malloc(10);
+    void_pp = void_pp + 2 * sizeof(void*); // expect: CGULL-040
+}
