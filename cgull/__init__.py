@@ -20,6 +20,7 @@ from .ast_analyzer import (
     parse_json_config_seed,
     parse_compile_commands,
     find_compile_commands,
+    merge_profile_flags,
 )
 
 __all__ = [
@@ -47,4 +48,5 @@ __all__ = [
     "parse_json_config_seed",
     "parse_compile_commands",
     "find_compile_commands",
+    "merge_profile_flags",
 ]

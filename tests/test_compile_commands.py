@@ -3,7 +3,13 @@ import unittest
 from pathlib import Path
 import json
 
-from cgull import parse_compile_commands, find_compile_commands, parse_config_seeds, ConfigProfile
+from cgull import (
+    parse_compile_commands,
+    find_compile_commands,
+    parse_config_seeds,
+    ConfigProfile,
+    merge_profile_flags,
+)
 from cgull.cli import build_parser, handle_scan
 
 
@@ -138,6 +144,26 @@ class TestCompileCommandsIngestion(unittest.TestCase):
             self.assertIsNotNone(found_path)
             self.assertEqual(Path(found_path).resolve(), cc_path.resolve())
 
+    def test_auto_detection_stops_at_project_boundary(self):
+        """
+        Tests that find_compile_commands stops searching upward when reaching a project boundary (.git, .cgull.toml, pyproject.toml).
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            outer_dir = Path(temp_dir) / "outer"
+            project_dir = outer_dir / "my_project"
+            src_dir = project_dir / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+
+            # Put compile_commands.json outside the project
+            (outer_dir / "compile_commands.json").write_text("[]", encoding="utf-8")
+
+            # Place project boundary marker in project_dir
+            (project_dir / ".git").mkdir()
+
+            found_path = find_compile_commands(str(src_dir))
+            # Should NOT find outer_dir/compile_commands.json because search stopped at project_dir
+            self.assertIsNone(found_path)
+
     def test_parse_config_seeds_dispatches_compile_commands(self):
         """
         Tests that parse_config_seeds dispatches compile_commands.json files to parse_compile_commands.
@@ -160,6 +186,25 @@ class TestCompileCommandsIngestion(unittest.TestCase):
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
+    def test_non_compile_commands_json_list_raises_value_error(self):
+        """
+        Tests that non-compile-commands JSON lists (e.g. [1, 2, 3]) raise ValueError.
+        """
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tf:
+            tf.write("[1, 2, 3]")
+            temp_path = tf.name
+
+        try:
+            with self.assertRaises(ValueError) as cm:
+                parse_config_seeds(temp_path)
+            self.assertIn("Invalid JSON seed file", str(cm.exception))
+
+            with self.assertRaises(ValueError) as cm2:
+                parse_compile_commands(temp_path)
+            self.assertIn("array contains no valid compile command entries", str(cm2.exception))
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
     def test_invalid_compile_commands_structure(self):
         """
         Tests that top-level non-array structure raises ValueError.
@@ -174,6 +219,30 @@ class TestCompileCommandsIngestion(unittest.TestCase):
             self.assertIn("top-level JSON must be an array", str(cm.exception))
         finally:
             Path(temp_path).unlink(missing_ok=True)
+
+    def test_merge_profile_flags_conflicts_and_presence(self):
+        """
+        Tests merge_profile_flags() deterministic merging:
+        - Presence wins over undef
+        - Value conflicts are dropped
+        """
+        p1 = ConfigProfile(name="p1", flags={"FEATURE_A": None, "RETRY": 5, "MODE": "fast"})
+        p2 = ConfigProfile(name="p2", flags={"FEATURE_A": False, "RETRY": 10, "MODE": "fast", "EXTRA": None})
+
+        merged = merge_profile_flags([p1, p2])
+
+        # FEATURE_A: None (presence) vs False (undef) -> None wins
+        self.assertIn("FEATURE_A", merged)
+        self.assertIsNone(merged["FEATURE_A"])
+
+        # MODE: "fast" vs "fast" -> "fast"
+        self.assertEqual(merged["MODE"], "fast")
+
+        # EXTRA: only in p2 -> None
+        self.assertIsNone(merged["EXTRA"])
+
+        # RETRY: 5 vs 10 -> dropped due to conflict
+        self.assertNotIn("RETRY", merged)
 
     def test_cli_compile_commands_argument(self):
         """
