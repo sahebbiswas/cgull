@@ -173,6 +173,97 @@ class ConditionalFlagCollector:
         return collected.generate_config_profiles(baseline_name=baseline_name)
 
 
+def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> ConfigProfile:
+    """
+    Parses a header file (.h) containing #define and #undef directives into a ConfigProfile.
+
+    Config profile name defaults to the filename stem (e.g. "config_debug.h" -> "config_debug"),
+    or can be overridden via "// cgull-config-name: custom_name" on the first line or via `name_override`.
+
+    Function-like macros (#define FOO(x) ...) are skipped with a warning logged.
+    """
+    from pathlib import Path
+
+    path = Path(filepath)
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    config_name = name_override
+    first_line = content.splitlines()[0] if content.splitlines() else ""
+    m_name = re.match(r'^[ \t]*//[ \t]*cgull-config-name:[ \t]*([a-zA-Z0-9_\-]+)', first_line, re.IGNORECASE)
+    if m_name and not name_override:
+        config_name = m_name.group(1).strip()
+    if not config_name:
+        config_name = path.stem
+
+    clean_lines, clean_code = strip_comments_keep_lines(content)
+
+    flags: Dict[str, Optional[Union[str, int, bool]]] = {}
+
+    lines = clean_code.splitlines()
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        line_lstrip = line.lstrip()
+
+        if line_lstrip.startswith('#'):
+            directive_parts = []
+            curr_i = i
+            while curr_i < n:
+                curr_line = lines[curr_i]
+                curr_rstrip = curr_line.rstrip()
+                if curr_rstrip.endswith('\\'):
+                    directive_parts.append(curr_rstrip[:-1])
+                    curr_i += 1
+                else:
+                    directive_parts.append(curr_rstrip)
+                    break
+
+            full_directive_str = " ".join(directive_parts).strip()
+            i = curr_i + 1
+
+            dir_body = full_directive_str.lstrip('#').strip()
+
+            m_fn_macro = re.match(r'^define\s+([a-zA-Z_]\w*)\(', dir_body)
+            if m_fn_macro:
+                macro_name = m_fn_macro.group(1)
+                logger.warning(f"Skipping function-like macro '{macro_name}' in seed file {filepath}")
+                continue
+
+            m_define = re.match(r'^define\s+([a-zA-Z_]\w*)(?:\s+(.*))?$', dir_body)
+            m_undef = re.match(r'^undef\s+([a-zA-Z_]\w*)', dir_body)
+
+            if m_define:
+                m_name_str = m_define.group(1)
+                m_val_raw = (m_define.group(2) or "").strip()
+
+                if not m_val_raw:
+                    flags[m_name_str] = None
+                else:
+                    val_clean = re.sub(r'/\*.*?\*/|//.*', '', m_val_raw).strip()
+                    if not val_clean:
+                        flags[m_name_str] = None
+                    else:
+                        m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
+                        if m_num:
+                            try:
+                                flags[m_name_str] = int(m_num.group(1), 0)
+                            except ValueError:
+                                flags[m_name_str] = val_clean
+                        else:
+                            flags[m_name_str] = val_clean
+
+            elif m_undef:
+                m_name_str = m_undef.group(1)
+                flags[m_name_str] = False
+        else:
+            i += 1
+
+    return ConfigProfile(name=config_name, flags=flags)
+
+
 def generate_config_profiles(
     flags: Union[CollectedFlags, Set[str], List[str], Tuple[str, ...]],
     baseline_name: str = "baseline"

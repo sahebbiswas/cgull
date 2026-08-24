@@ -66,6 +66,7 @@ Suppressing findings inline:
     scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count. Negative values are invalid.")
     scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
+    scan_parser.add_argument("--config-seed", action="append", metavar="PATH", help="Path to a header (.h) configuration seed file (can be specified multiple times)")
     scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
 
     # FLAGS subcommand
