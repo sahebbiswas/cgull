@@ -2085,9 +2085,25 @@ class CASTParser:
         try:
             preprocessor = _SilentPreprocessor()
             if defined_syms:
-                norm_macros = _normalize_macro_dict(defined_syms)
-                for k, v in norm_macros.items():
-                    preprocessor.define(f"{k} {v}")
+                if isinstance(defined_syms, (set, list, tuple, frozenset)):
+                    for s in defined_syms:
+                        item = str(s).strip()
+                        if " " in item:
+                            preprocessor.define(item)
+                        else:
+                            preprocessor.define(f"{item} 1")
+                elif isinstance(defined_syms, (dict, Mapping)):
+                    for k, v in defined_syms.items():
+                        key = str(k)
+                        if v is False:
+                            preprocessor.undef(key)
+                    norm_macros = _normalize_macro_dict(defined_syms)
+                    for k, v in norm_macros.items():
+                        preprocessor.define(f"{k} {v}")
+                else:
+                    norm_macros = _normalize_macro_dict(defined_syms)
+                    for k, v in norm_macros.items():
+                        preprocessor.define(f"{k} {v}")
 
             # Feed the typedef prelude + source as a single unit so that
             # macros defined in the source are expanded while the prelude

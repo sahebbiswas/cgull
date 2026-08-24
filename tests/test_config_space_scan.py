@@ -22,7 +22,7 @@ class TestConfigSpaceScan(unittest.TestCase):
         - Single-pass baseline scan (without LEGACY_AUTH defined):
           Produces 0 strcpy findings (only gets).
         - Config-space scan with profiles [baseline, LEGACY_AUTH]:
-          Produces 2 findings:
+          Produces 2 findings under both Tier 1 (pcpp) and Tier 2 (directive-stripped fallback):
           1. strcpy with reachable_under: ["+LEGACY_AUTH"]
           2. gets with reachable_under: ["unconditional"]
         """
@@ -52,15 +52,26 @@ class TestConfigSpaceScan(unittest.TestCase):
             ConfigProfile("LEGACY_AUTH", {"LEGACY_AUTH": None}),
         ]
 
-        config_res = scanner.scan_text_profiles(source_code, profiles=profiles)
-        self.assertEqual(len(config_res.issues), 2)
+        # Tier 1 execution (pcpp enabled by default if installed)
+        config_res_tier1 = scanner.scan_text_profiles(source_code, profiles=profiles)
+        self.assertEqual(len(config_res_tier1.issues), 2)
 
-        # Find the strcpy and gets issues
-        strcpy_issue = next(i for i in config_res.issues if "strcpy" in i.message)
-        gets_issue = next(i for i in config_res.issues if "gets" in i.message)
+        strcpy_issue1 = next(i for i in config_res_tier1.issues if "strcpy" in i.message)
+        gets_issue1 = next(i for i in config_res_tier1.issues if "gets" in i.message)
 
-        self.assertEqual(strcpy_issue.reachable_under, ["+LEGACY_AUTH"])
-        self.assertEqual(gets_issue.reachable_under, ["unconditional"])
+        self.assertEqual(strcpy_issue1.reachable_under, ["+LEGACY_AUTH"])
+        self.assertEqual(gets_issue1.reachable_under, ["unconditional"])
+
+        # Tier 2 execution (simulate pcpp unavailable)
+        with patch.object(CASTParser, "_try_pcpp_preprocess", return_value=None):
+            config_res_tier2 = scanner.scan_text_profiles(source_code, profiles=profiles)
+            self.assertEqual(len(config_res_tier2.issues), 2)
+
+            strcpy_issue2 = next(i for i in config_res_tier2.issues if "strcpy" in i.message)
+            gets_issue2 = next(i for i in config_res_tier2.issues if "gets" in i.message)
+
+            self.assertEqual(strcpy_issue2.reachable_under, ["+LEGACY_AUTH"])
+            self.assertEqual(gets_issue2.reachable_under, ["unconditional"])
 
     def test_multiple_config_profiles_tagging(self):
         source_code = (
@@ -207,6 +218,53 @@ class TestConfigSpaceScan(unittest.TestCase):
         res = scanner.scan_text_profiles(source_code, profiles=profiles)
         self.assertEqual(len(res.issues), 1)
         self.assertEqual(res.issues[0].reachable_under, ["+FLAG"])
+
+    def test_tier1_and_tier2_if_eval_parity_for_presence_and_non_numeric(self):
+        """
+        Tests that #if evaluation parity between Tier 1 and Tier 2 holds for:
+        1. Presence macros defined as None or in sequences (evaluating as truthy integer 1 in #if).
+        2. Non-numeric string macros (evaluating as truthy integer 1 in #if).
+        """
+        source_code = (
+            "#include <stdio.h>\n"
+            "#include <string.h>\n"
+            "void test_fn(char *buf, const char *src) {\n"
+            "    (void)src;\n"
+            "#if PRESENCE_FLAG\n"
+            "    gets(buf);\n"
+            "#endif\n"
+            "#if NON_NUMERIC_MODE\n"
+            "    strcpy(buf, src);\n"
+            "#endif\n"
+            "}\n"
+        )
+
+        profiles = [
+            ConfigProfile("baseline", {}),
+            ConfigProfile("CONFIG_PRESENCE", {"PRESENCE_FLAG": None}),
+            ConfigProfile("CONFIG_NON_NUMERIC", {"NON_NUMERIC_MODE": "DEBUG"}),
+        ]
+
+        scanner = CGullScanner(rules=[BannedFunctionsRule()])
+
+        # Tier 1
+        res1 = scanner.scan_text_profiles(source_code, profiles=profiles)
+        gets1 = next((i for i in res1.issues if "gets" in i.message), None)
+        strcpy1 = next((i for i in res1.issues if "strcpy" in i.message), None)
+        self.assertIsNotNone(gets1)
+        self.assertEqual(gets1.reachable_under, ["+CONFIG_PRESENCE"])
+        self.assertIsNotNone(strcpy1)
+        self.assertEqual(strcpy1.reachable_under, ["+CONFIG_NON_NUMERIC"])
+
+        # Tier 2
+        with patch.object(CASTParser, "_try_pcpp_preprocess", return_value=None):
+            res2 = scanner.scan_text_profiles(source_code, profiles=profiles)
+            gets2 = next((i for i in res2.issues if "gets" in i.message), None)
+            strcpy2 = next((i for i in res2.issues if "strcpy" in i.message), None)
+            self.assertIsNotNone(gets2)
+            self.assertEqual(gets2.reachable_under, ["+CONFIG_PRESENCE"])
+            self.assertIsNotNone(strcpy2)
+            self.assertEqual(strcpy2.reachable_under, ["+CONFIG_NON_NUMERIC"])
 
 
 if __name__ == "__main__":
