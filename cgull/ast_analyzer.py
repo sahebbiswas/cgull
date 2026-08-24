@@ -173,6 +173,102 @@ class ConditionalFlagCollector:
         return collected.generate_config_profiles(baseline_name=baseline_name)
 
 
+def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> ConfigProfile:
+    """
+    Parses a header file (.h) containing #define and #undef directives into a ConfigProfile.
+
+    Config profile name defaults to the filename stem (e.g. "config_debug.h" -> "config_debug"),
+    or can be overridden via "// cgull-config-name: custom_name" on the first line or via `name_override`.
+
+    Function-like macros (#define FOO(x) ...) are skipped with a warning logged.
+    """
+    from pathlib import Path
+
+    path = Path(filepath)
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    config_name = name_override
+    first_line = content.splitlines()[0] if content.splitlines() else ""
+    m_name = re.match(r'^[ \t]*//[ \t]*cgull-config-name:[ \t]*([a-zA-Z0-9_\-]+)', first_line, re.IGNORECASE)
+    if m_name and not name_override:
+        config_name = m_name.group(1).strip()
+    if not config_name:
+        config_name = path.stem
+
+    clean_lines, clean_code = strip_comments_keep_lines(content)
+
+    flags: Dict[str, Optional[Union[str, int, bool]]] = {}
+
+    lines = clean_code.splitlines()
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        line_lstrip = line.lstrip()
+
+        if line_lstrip.startswith('#'):
+            directive_parts = []
+            curr_i = i
+            while curr_i < n:
+                curr_line = lines[curr_i]
+                curr_rstrip = curr_line.rstrip()
+                if curr_rstrip.endswith('\\'):
+                    directive_parts.append(curr_rstrip[:-1])
+                    curr_i += 1
+                else:
+                    directive_parts.append(curr_rstrip)
+                    break
+
+            full_directive_str = " ".join(directive_parts).strip()
+            i = curr_i + 1
+
+            dir_body = full_directive_str.lstrip('#').strip()
+
+            m_fn_macro = re.match(r'^define\s+([a-zA-Z_]\w*)\(', dir_body)
+            if m_fn_macro:
+                macro_name = m_fn_macro.group(1)
+                logger.warning(f"Skipping function-like macro '{macro_name}' in seed file {filepath}")
+                continue
+
+            m_define = re.match(r'^define\s+([a-zA-Z_]\w*)(?:\s+(.*))?$', dir_body)
+            m_undef = re.match(r'^undef\s+([a-zA-Z_]\w*)', dir_body)
+
+            if m_define:
+                m_name_str = m_define.group(1)
+                m_val_raw = (m_define.group(2) or "").strip()
+
+                if not m_val_raw:
+                    flags[m_name_str] = None
+                else:
+                    val_clean = re.sub(r'/\*.*?\*/|//.*', '', m_val_raw).strip()
+                    if not val_clean:
+                        flags[m_name_str] = None
+                    else:
+                        m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
+                        if m_num:
+                            try:
+                                flags[m_name_str] = int(m_num.group(1), 0)
+                            except ValueError:
+                                flags[m_name_str] = val_clean
+                        else:
+                            curr_macros = _normalize_macro_dict(flags)
+                            tokens = _tokenize_c_prep_expr(val_clean, curr_macros)
+                            if tokens:
+                                flags[m_name_str] = _eval_c_prep_tokens(tokens)
+                            else:
+                                flags[m_name_str] = val_clean
+
+            elif m_undef:
+                m_name_str = m_undef.group(1)
+                flags[m_name_str] = False
+        else:
+            i += 1
+
+    return ConfigProfile(name=config_name, flags=flags)
+
+
 def generate_config_profiles(
     flags: Union[CollectedFlags, Set[str], List[str], Tuple[str, ...]],
     baseline_name: str = "baseline"
@@ -489,6 +585,8 @@ def _normalize_macro_dict(defined_syms: Optional[Any]) -> Dict[str, int]:
     Normalizes defined_syms into a Dict[str, int] suitable for preprocessor expression evaluation.
     Handles sets/lists/tuples (mapping symbols to 1) and dicts/Mapping (converting values
     including None for presence toggles, bools, ints, and string integers to int).
+    Note: Entries whose value is explicitly False (e.g. from #undef in a seed header) are omitted
+    so defined(SYM) returns False and sym in macros evaluates to False.
     """
     if not defined_syms:
         return {}
@@ -500,7 +598,9 @@ def _normalize_macro_dict(defined_syms: Optional[Any]) -> Dict[str, int]:
         macros: Dict[str, int] = {}
         for k, v in defined_syms.items():
             key = str(k)
-            if v is None:
+            if v is False:
+                continue
+            elif v is None:
                 macros[key] = 1
             elif isinstance(v, bool):
                 macros[key] = 1 if v else 0
@@ -1224,14 +1324,14 @@ class CASTParser:
     def __init__(self):
         pass
 
-    def parse(self, source_code: str) -> CASTContext:
+    def parse(self, source_code: str, defined_syms: Optional[Any] = None) -> CASTContext:
         lines = source_code.splitlines()
         clean_lines, clean_code = strip_comments_keep_lines(source_code)
 
         unsigned_typedefs: Set[str] = set()
         self._extract_unsigned_typedefs(clean_code, unsigned_typedefs)
 
-        pycparser_res = self._try_pycparser(clean_code)
+        pycparser_res = self._try_pycparser(clean_code, defined_syms=defined_syms)
         if len(pycparser_res) == 3:
             pycparser_ast, has_pycparser, parse_tier = pycparser_res
         else:
@@ -1334,7 +1434,7 @@ class CASTParser:
         """
         return strip_comments_keep_lines(source_code)
 
-    def _try_pycparser(self, clean_code: str):
+    def _try_pycparser(self, clean_code: str, defined_syms: Optional[Any] = None):
         """
         Attempts a real pycparser parse of the (comment-stripped) source.
 
@@ -1359,7 +1459,7 @@ class CASTParser:
             return None, False, ParseTier.REGEX_FALLBACK.value
 
         # Tier 1: pcpp preprocessing (if available)
-        pcpp_result = self._try_pcpp_preprocess(clean_code)
+        pcpp_result = self._try_pcpp_preprocess(clean_code, defined_syms=defined_syms)
         if pcpp_result is not None:
             try:
                 parser = c_parser.CParser()
@@ -1369,7 +1469,7 @@ class CASTParser:
                 pass  # Fall through to tier 2
 
         # Tier 2: Conditional resolution + Directive stripping + typedef prelude
-        resolved_code = resolve_preprocessor_conditionals(clean_code)
+        resolved_code = resolve_preprocessor_conditionals(clean_code, defined_syms=defined_syms)
         stripped_code = _strip_attributes_and_specifiers(resolved_code)
         filtered_prelude = self._filter_prelude(_PYCPARSER_PRELUDE, stripped_code)
         prepared = filtered_prelude + stripped_code
@@ -1396,7 +1496,7 @@ class CASTParser:
             filtered.append(line)
         return ''.join(filtered)
 
-    def _try_pcpp_preprocess(self, clean_code: str) -> "Optional[str]":
+    def _try_pcpp_preprocess(self, clean_code: str, defined_syms: Optional[Any] = None) -> "Optional[str]":
         """
         Uses pcpp (pure-Python C preprocessor) to expand macros and
         evaluate conditional compilation directives, producing output
@@ -1513,6 +1613,11 @@ class CASTParser:
 
         try:
             preprocessor = _SilentPreprocessor()
+            if defined_syms:
+                norm_macros = _normalize_macro_dict(defined_syms)
+                for k, v in norm_macros.items():
+                    preprocessor.define(f"{k} {v}")
+
             # Feed the typedef prelude + source as a single unit so that
             # macros defined in the source are expanded while the prelude
             # typedefs are preserved for pycparser.

@@ -11,7 +11,7 @@ from .engine import CGullScanner
 from .ignore import CGullIgnoreFilter
 from .reporter import ReportGenerator
 from .config import CGullConfig, load_config
-from .ast_analyzer import ConditionalFlagCollector, CollectedFlags, generate_config_profiles
+from .ast_analyzer import ConditionalFlagCollector, CollectedFlags, generate_config_profiles, parse_config_seed
 
 __all__ = [
     "CGullScanner",
@@ -33,4 +33,5 @@ __all__ = [
     "ConditionalFlagCollector",
     "CollectedFlags",
     "generate_config_profiles",
+    "parse_config_seed",
 ]

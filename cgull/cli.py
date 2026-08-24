@@ -66,6 +66,7 @@ Suppressing findings inline:
     scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count. Negative values are invalid.")
     scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
+    scan_parser.add_argument("--config-seed", action="append", metavar="PATH", help="Path to a header (.h) configuration seed file (can be specified multiple times)")
     scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
 
     # FLAGS subcommand
@@ -240,10 +241,23 @@ def handle_scan(args) -> int:
     elif args.engine == "ast":
         eng_mode = AnalysisEngine.AST
 
+    seed_flags = {}
+    config_seeds = getattr(args, "config_seed", None)
+    if config_seeds:
+        from .ast_analyzer import parse_config_seed
+        for seed_path in config_seeds:
+            try:
+                profile = parse_config_seed(seed_path)
+                seed_flags.update(dict(profile.flags))
+            except Exception as e:
+                print(f"Error parsing config seed file '{seed_path}': {e}", file=sys.stderr)
+                return 1
+
     scanner = CGullScanner(
         rules=active_rules,
         severity_filter=sev_filter,
-        engine_mode=eng_mode
+        engine_mode=eng_mode,
+        defined_syms=seed_flags if config_seeds else None,
     )
 
     jobs = args.jobs

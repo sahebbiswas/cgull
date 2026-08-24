@@ -9,7 +9,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import List, Optional, Set, Dict, Tuple, Callable, Union
+from typing import List, Optional, Set, Dict, Tuple, Callable, Union, Any
 from pathlib import Path
 
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError
@@ -49,23 +49,26 @@ class CGullScanner:
         ignore_filter: Optional[CGullIgnoreFilter] = None,
         severity_filter: Optional[Set[Severity]] = None,
         engine_mode: AnalysisEngine = AnalysisEngine.HYBRID,
+        defined_syms: Optional[Dict[str, Any]] = None,
         config: Optional[ScanConfig] = None,
     ):
         if config is not None:
             self.config = config
-            if rules is not None or severity_filter is not None or engine_mode != AnalysisEngine.HYBRID:
+            if rules is not None or severity_filter is not None or engine_mode != AnalysisEngine.HYBRID or defined_syms is not None:
                 self.config = ScanConfig.create(
                     rules=rules if rules is not None else self.config.get_rules(),
                     engine_mode=engine_mode if engine_mode != AnalysisEngine.HYBRID else self.config.engine_mode,
                     severity_filter=severity_filter if severity_filter is not None else self.config.severity_filter,
                     enable_inline_suppressions=self.config.enable_inline_suppressions,
                     suppression_config=self.config.suppression_config,
+                    defined_syms=defined_syms if defined_syms is not None else self.config.defined_syms,
                 )
         else:
             self.config = ScanConfig.create(
                 rules=rules,
                 engine_mode=engine_mode,
                 severity_filter=severity_filter,
+                defined_syms=defined_syms,
             )
 
         self.rules = self.config.get_rules()
@@ -81,6 +84,7 @@ class CGullScanner:
             severity_filter=self.severity_filter,
             enable_inline_suppressions=self.config.enable_inline_suppressions,
             suppression_config=self.config.suppression_config,
+            defined_syms=self.config.defined_syms,
         )
 
     def scan_path(
@@ -489,12 +493,16 @@ def _scan_file_content(
         # file twice, and no need to parse at all in pure REGEX mode.
         if engine_mode == AnalysisEngine.REGEX:
             clean_lines, clean_code = CASTParser.strip_only(content)
+            if config and config.defined_syms is not None:
+                from .ast_analyzer import resolve_preprocessor_conditionals
+                clean_code = resolve_preprocessor_conditionals(clean_code, defined_syms=config.defined_syms)
+                clean_lines = clean_code.splitlines()
             ast_ctx = None
             parser_status = ParserStatus.REGEX.value
             parse_tier = ParseTier.REGEX_FALLBACK.value
             confidence_val = Confidence.LIMITED.value
         else:
-            ast_ctx = ast_parser.parse(content)
+            ast_ctx = ast_parser.parse(content, defined_syms=config.defined_syms if config else None)
             clean_lines = ast_ctx.clean_source.splitlines()
             clean_code = ast_ctx.clean_source
             parser_status = ast_ctx.parser_status
