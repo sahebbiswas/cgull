@@ -156,7 +156,7 @@ class ScanConfig:
     severity_filter: Optional[Set[Severity]] = None
     enable_inline_suppressions: bool = True
     suppression_config: Dict[str, Any] = field(default_factory=dict)
-    config_profiles: List[ConfigProfile] = field(default_factory=list)
+    defined_syms: Optional[Dict[str, Any]] = None
 
     @classmethod
     def create(
@@ -166,7 +166,7 @@ class ScanConfig:
         severity_filter: Optional[Set[Severity]] = None,
         enable_inline_suppressions: bool = True,
         suppression_config: Optional[Dict[str, Any]] = None,
-        config_profiles: Optional[List[ConfigProfile]] = None,
+        defined_syms: Optional[Dict[str, Any]] = None,
     ) -> "ScanConfig":
         if rules is None:
             from .rules import get_all_rules
@@ -184,7 +184,7 @@ class ScanConfig:
             severity_filter=severity_filter,
             enable_inline_suppressions=enable_inline_suppressions,
             suppression_config=suppression_config or {},
-            config_profiles=config_profiles or [],
+            defined_syms=defined_syms,
         )
 
     def get_rules(self) -> List[Any]:
@@ -211,6 +211,7 @@ class ScanConfig:
             "severity_filter": [s.value if isinstance(s, Severity) else str(s) for s in self.severity_filter] if self.severity_filter is not None else None,
             "enable_inline_suppressions": self.enable_inline_suppressions,
             "suppression_config": self.suppression_config,
+            "defined_syms": self.defined_syms,
         }
 
     @classmethod
@@ -227,6 +228,7 @@ class ScanConfig:
             severity_filter=severity_filter,
             enable_inline_suppressions=data.get("enable_inline_suppressions", True),
             suppression_config=data.get("suppression_config", {}),
+            defined_syms=data.get("defined_syms"),
         )
 
 

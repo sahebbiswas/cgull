@@ -241,26 +241,23 @@ def handle_scan(args) -> int:
     elif args.engine == "ast":
         eng_mode = AnalysisEngine.AST
 
-    config_profiles = []
-    if getattr(args, "config_seed", None):
+    seed_flags = {}
+    config_seeds = getattr(args, "config_seed", None)
+    if config_seeds:
         from .ast_analyzer import parse_config_seed
-        for seed_path in args.config_seed:
+        for seed_path in config_seeds:
             try:
-                config_profiles.append(parse_config_seed(seed_path))
+                profile = parse_config_seed(seed_path)
+                seed_flags.update(dict(profile.flags))
             except Exception as e:
-                print(f"Error parsing config seed '{seed_path}': {e}", file=sys.stderr)
+                print(f"Error parsing config seed file '{seed_path}': {e}", file=sys.stderr)
                 return 1
 
-    from .models import ScanConfig
-    scan_config = ScanConfig.create(
+    scanner = CGullScanner(
         rules=active_rules,
         severity_filter=sev_filter,
         engine_mode=eng_mode,
-        config_profiles=config_profiles,
-    )
-
-    scanner = CGullScanner(
-        config=scan_config
+        defined_syms=seed_flags if config_seeds else None,
     )
 
     jobs = args.jobs

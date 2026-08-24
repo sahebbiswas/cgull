@@ -253,7 +253,8 @@ def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> Con
                             except ValueError:
                                 flags[m_name_str] = val_clean
                         else:
-                            tokens = _tokenize_c_prep_expr(val_clean, _normalize_macro_dict(flags))
+                            curr_macros = _normalize_macro_dict(flags)
+                            tokens = _tokenize_c_prep_expr(val_clean, curr_macros)
                             if tokens:
                                 flags[m_name_str] = _eval_c_prep_tokens(tokens)
                             else:
@@ -584,6 +585,8 @@ def _normalize_macro_dict(defined_syms: Optional[Any]) -> Dict[str, int]:
     Normalizes defined_syms into a Dict[str, int] suitable for preprocessor expression evaluation.
     Handles sets/lists/tuples (mapping symbols to 1) and dicts/Mapping (converting values
     including None for presence toggles, bools, ints, and string integers to int).
+    Note: Entries whose value is explicitly False (e.g. from #undef in a seed header) are omitted
+    so defined(SYM) returns False and sym in macros evaluates to False.
     """
     if not defined_syms:
         return {}
@@ -595,12 +598,12 @@ def _normalize_macro_dict(defined_syms: Optional[Any]) -> Dict[str, int]:
         macros: Dict[str, int] = {}
         for k, v in defined_syms.items():
             key = str(k)
-            if v is None:
+            if v is False:
+                continue
+            elif v is None:
                 macros[key] = 1
             elif isinstance(v, bool):
-                if v is False:
-                    continue
-                macros[key] = 1
+                macros[key] = 1 if v else 0
             elif isinstance(v, int):
                 macros[key] = v
             elif isinstance(v, str):
@@ -1318,24 +1321,17 @@ class CASTParser:
     pointer dereferences, and function calls.
     """
 
-    def __init__(self, config_profiles: Optional[List[ConfigProfile]] = None):
-        self.config_profiles = config_profiles or []
+    def __init__(self):
+        pass
 
-    def parse(self, source_code: str) -> CASTContext:
+    def parse(self, source_code: str, defined_syms: Optional[Any] = None) -> CASTContext:
         lines = source_code.splitlines()
         clean_lines, clean_code = strip_comments_keep_lines(source_code)
 
         unsigned_typedefs: Set[str] = set()
         self._extract_unsigned_typedefs(clean_code, unsigned_typedefs)
 
-        defined_syms: Dict[str, Any] = {}
-        for profile in self.config_profiles:
-            defined_syms.update(profile.flags)
-
-        clean_code = resolve_preprocessor_conditionals(clean_code, defined_syms)
-        clean_lines = clean_code.splitlines()
-
-        pycparser_res = self._try_pycparser(clean_code, defined_syms)
+        pycparser_res = self._try_pycparser(clean_code, defined_syms=defined_syms)
         if len(pycparser_res) == 3:
             pycparser_ast, has_pycparser, parse_tier = pycparser_res
         else:
@@ -1430,18 +1426,15 @@ class CASTParser:
                                     target_set.add(m_sub.group(1).strip())
 
     @staticmethod
-    def strip_only(source_code: str, defined_syms: Optional[Dict[str, Any]] = None) -> Tuple[List[str], str]:
+    def strip_only(source_code: str) -> Tuple[List[str], str]:
         """
         Cheap path used by the engine in REGEX-only mode: just returns
-        comment-stripped lines/code, with preprocessor conditionals resolved if defined_syms is provided.
+        comment-stripped lines/code without the (much more expensive)
+        function/variable extraction or pycparser attempt.
         """
-        clean_lines, clean_code = strip_comments_keep_lines(source_code)
-        if defined_syms is not None:
-            clean_code = resolve_preprocessor_conditionals(clean_code, defined_syms)
-            clean_lines = clean_code.splitlines()
-        return clean_lines, clean_code
+        return strip_comments_keep_lines(source_code)
 
-    def _try_pycparser(self, clean_code: str, defined_syms: Optional[Dict[str, Any]] = None):
+    def _try_pycparser(self, clean_code: str, defined_syms: Optional[Any] = None):
         """
         Attempts a real pycparser parse of the (comment-stripped) source.
 
@@ -1466,7 +1459,7 @@ class CASTParser:
             return None, False, ParseTier.REGEX_FALLBACK.value
 
         # Tier 1: pcpp preprocessing (if available)
-        pcpp_result = self._try_pcpp_preprocess(clean_code, defined_syms)
+        pcpp_result = self._try_pcpp_preprocess(clean_code, defined_syms=defined_syms)
         if pcpp_result is not None:
             try:
                 parser = c_parser.CParser()
@@ -1476,7 +1469,7 @@ class CASTParser:
                 pass  # Fall through to tier 2
 
         # Tier 2: Conditional resolution + Directive stripping + typedef prelude
-        resolved_code = resolve_preprocessor_conditionals(clean_code, defined_syms)
+        resolved_code = resolve_preprocessor_conditionals(clean_code, defined_syms=defined_syms)
         stripped_code = _strip_attributes_and_specifiers(resolved_code)
         filtered_prelude = self._filter_prelude(_PYCPARSER_PRELUDE, stripped_code)
         prepared = filtered_prelude + stripped_code
@@ -1503,7 +1496,7 @@ class CASTParser:
             filtered.append(line)
         return ''.join(filtered)
 
-    def _try_pcpp_preprocess(self, clean_code: str, defined_syms: Optional[Dict[str, Any]] = None) -> "Optional[str]":
+    def _try_pcpp_preprocess(self, clean_code: str, defined_syms: Optional[Any] = None) -> "Optional[str]":
         """
         Uses pcpp (pure-Python C preprocessor) to expand macros and
         evaluate conditional compilation directives, producing output
@@ -1621,8 +1614,10 @@ class CASTParser:
         try:
             preprocessor = _SilentPreprocessor()
             if defined_syms:
-                for k, v in _normalize_macro_dict(defined_syms).items():
+                norm_macros = _normalize_macro_dict(defined_syms)
+                for k, v in norm_macros.items():
                     preprocessor.define(f"{k} {v}")
+
             # Feed the typedef prelude + source as a single unit so that
             # macros defined in the source are expanded while the prelude
             # typedefs are preserved for pycparser.
