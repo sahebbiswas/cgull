@@ -313,6 +313,8 @@ def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
             return True
         return False
 
+    base_dir_resolved = dir_path.resolve()
+
     if manifest_path.is_file():
         with open(manifest_path, "r", encoding="utf-8", errors="replace") as mf:
             raw_lines = [line.strip() for line in mf]
@@ -323,9 +325,24 @@ def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
 
         if inclusions:
             for inc in inclusions:
-                matched = [h for h in direct_headers_sorted if _matches_pattern(h, inc)]
                 clean_inc = inc.lstrip("./")
-                if not matched and (dir_path / clean_inc).is_file():
+                if ".." in inc or "/" in clean_inc or "\\" in clean_inc:
+                    raise ValueError(f"Invalid manifest entry '{inc}': path separators and path traversal are not allowed.")
+
+                if not Path(clean_inc).suffix.lower() in ('.h', '.hpp'):
+                    raise ValueError(f"Invalid manifest entry '{inc}': file must have a .h or .hpp extension.")
+
+                candidate = (dir_path / clean_inc).resolve()
+                try:
+                    is_rel = candidate.is_relative_to(base_dir_resolved)
+                except AttributeError:
+                    is_rel = (os.path.commonpath([str(base_dir_resolved), str(candidate)]) == str(base_dir_resolved))
+
+                if not is_rel:
+                    raise ValueError(f"Invalid manifest entry '{inc}': resolves outside seed directory.")
+
+                matched = [h for h in direct_headers_sorted if _matches_pattern(h, inc)]
+                if not matched and candidate.is_file():
                     matched.append(clean_inc)
 
                 for m_file in matched:

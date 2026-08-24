@@ -184,6 +184,33 @@ class TestConfigSeedIngestion(unittest.TestCase):
             self.assertEqual(len(profiles), 2)
             self.assertEqual([p.name for p in profiles], ["config_b", "config_a"])
 
+    def test_manifest_path_traversal_rejection(self):
+        """
+        Tests that .cgullconfigs manifest entries attempting path traversal or escaping the seed directory raise ValueError.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = Path(temp_dir) / ".cgullconfigs"
+            manifest.write_text("sub/../../x.h\n", encoding="utf-8")
+
+            with self.assertRaises(ValueError) as cm:
+                parse_config_seeds(temp_dir)
+            self.assertIn("path traversal", str(cm.exception))
+
+    def test_manifest_non_header_rejection(self):
+        """
+        Tests that .cgullconfigs manifest entries including non-header files raise ValueError.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            txt_file = Path(temp_dir) / "notes.txt"
+            txt_file.write_text("some text\n", encoding="utf-8")
+
+            manifest = Path(temp_dir) / ".cgullconfigs"
+            manifest.write_text("notes.txt\n", encoding="utf-8")
+
+            with self.assertRaises(ValueError) as cm:
+                parse_config_seeds(temp_dir)
+            self.assertIn(".h or .hpp", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
