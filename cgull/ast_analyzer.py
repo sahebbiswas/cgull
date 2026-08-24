@@ -204,14 +204,26 @@ def parse_json_config_seed(filepath: str) -> List[ConfigProfile]:
         flags: Dict[str, Optional[Union[str, int, bool]]] = {}
         for k, v in flag_map.items():
             macro_name = str(k)
+            if not re.fullmatch(r"[a-zA-Z_]\w*", macro_name):
+                raise ValueError(
+                    f"Invalid preprocessor identifier '{macro_name}' in profile '{profile_name}' in '{filepath}'."
+                )
+
             if v is True or v is None:
                 flags[macro_name] = None
             elif v is False:
                 flags[macro_name] = False
-            elif isinstance(v, (int, str)):
+            elif isinstance(v, bool):
+                pass
+            elif isinstance(v, int):
+                flags[macro_name] = v
+            elif isinstance(v, str):
                 flags[macro_name] = v
             else:
-                flags[macro_name] = str(v)
+                raise ValueError(
+                    f"Unsupported flag value type '{type(v).__name__}' for macro '{macro_name}' in profile '{profile_name}' in '{filepath}'. "
+                    f"Flag values must be boolean, null, int, or string."
+                )
 
         profiles.append(ConfigProfile(name=str(profile_name), flags=flags))
 
@@ -220,8 +232,7 @@ def parse_json_config_seed(filepath: str) -> List[ConfigProfile]:
 
 def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> ConfigProfile:
     """
-    Parses a header file (.h) containing #define and #undef directives into a ConfigProfile,
-    or a JSON config seed file if extension is .json.
+    Parses a header file (.h) containing #define and #undef directives into a ConfigProfile.
 
     Config profile name defaults to the filename stem (e.g. "config_debug.h" -> "config_debug"),
     or can be overridden via "// cgull-config-name: custom_name" on the first line or via `name_override`.
@@ -232,12 +243,10 @@ def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> Con
 
     path = Path(filepath)
     if path.suffix.lower() == ".json":
-        json_profiles = parse_json_config_seed(filepath)
-        if not json_profiles:
-            raise ValueError(f"JSON config seed '{filepath}' contains no profiles.")
-        if name_override:
-            return ConfigProfile(name=name_override, flags=json_profiles[0].flags)
-        return json_profiles[0]
+        raise ValueError(
+            f"parse_config_seed() does not accept JSON seed files directly as JSON seeds can contain multiple profiles. "
+            f"Use parse_json_config_seed() or parse_config_seeds() for JSON config seed files."
+        )
 
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()

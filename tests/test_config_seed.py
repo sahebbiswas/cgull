@@ -313,6 +313,60 @@ class TestConfigSeedIngestion(unittest.TestCase):
         finally:
             Path(temp_path).unlink(missing_ok=True)
 
+    def test_json_config_seed_invalid_macro_names(self):
+        """
+        Tests that keys in JSON seed profiles that are not valid C preprocessor identifiers raise ValueError.
+        """
+        invalid_keys = ["BAD-NAME", "123", "HAS SPACE", "a.b"]
+        for key in invalid_keys:
+            json_data = {"profile1": {key: True}}
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tf:
+                json.dump(json_data, tf)
+                temp_path = tf.name
+
+            try:
+                with self.assertRaises(ValueError) as cm:
+                    parse_json_config_seed(temp_path)
+                self.assertIn("Invalid preprocessor identifier", str(cm.exception))
+                self.assertIn(key, str(cm.exception))
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+
+    def test_json_config_seed_unsupported_value_types(self):
+        """
+        Tests that unsupported value types in JSON seed profiles (e.g. floats, lists, dicts) raise ValueError.
+        """
+        unsupported_values = [12.34, [1, 2], {"nested": "obj"}]
+        for val in unsupported_values:
+            json_data = {"profile1": {"MACRO": val}}
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tf:
+                json.dump(json_data, tf)
+                temp_path = tf.name
+
+            try:
+                with self.assertRaises(ValueError) as cm:
+                    parse_json_config_seed(temp_path)
+                self.assertIn("Unsupported flag value type", str(cm.exception))
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+
+    def test_parse_config_seed_rejects_json(self):
+        """
+        Tests that calling parse_config_seed() on a .json file raises ValueError instructing callers
+        to use parse_json_config_seed() or parse_config_seeds().
+        """
+        json_data = {"profile1": {"MACRO": True}}
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tf:
+            json.dump(json_data, tf)
+            temp_path = tf.name
+
+        try:
+            with self.assertRaises(ValueError) as cm:
+                parse_config_seed(temp_path)
+            self.assertIn("parse_config_seed() does not accept JSON seed files directly", str(cm.exception))
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()
