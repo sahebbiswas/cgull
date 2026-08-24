@@ -67,6 +67,7 @@ Suppressing findings inline:
     scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
     scan_parser.add_argument("--config-seed", action="append", metavar="PATH", help="Path to a header (.h/.hpp), directory, or JSON (.json) configuration seed file (can be specified multiple times)")
+    scan_parser.add_argument("--compile-commands", metavar="PATH", help="Path to compile_commands.json database file")
     scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
 
     # FLAGS subcommand
@@ -242,23 +243,48 @@ def handle_scan(args) -> int:
         eng_mode = AnalysisEngine.AST
 
     seed_flags = {}
+
+    # Compile commands ingestion (lowest priority seed source)
+    cc_arg = getattr(args, "compile_commands", None)
+    compile_commands_path = cc_arg
+    if not compile_commands_path and target:
+        from .ast_analyzer import find_compile_commands
+        compile_commands_path = find_compile_commands(target, config_dir=config.config_dir)
+
+    if compile_commands_path:
+        from .ast_analyzer import parse_compile_commands, merge_profile_flags
+        if cc_arg and not os.path.exists(compile_commands_path):
+            print(f"Error: Compile commands file '{compile_commands_path}' does not exist.", file=sys.stderr)
+            return 1
+        if os.path.exists(compile_commands_path):
+            try:
+                cc_profiles = parse_compile_commands(compile_commands_path)
+                seed_flags.update(merge_profile_flags(cc_profiles))
+            except Exception as e:
+                if cc_arg:
+                    print(f"Error parsing compile commands file '{compile_commands_path}': {e}", file=sys.stderr)
+                    return 1
+
+    # Header / JSON Config Seeds ingestion (higher priority seed source)
     config_seeds = getattr(args, "config_seed", None)
     if config_seeds:
-        from .ast_analyzer import parse_config_seeds
+        from .ast_analyzer import parse_config_seeds, merge_profile_flags
+        all_seed_profiles = []
         for seed_path in config_seeds:
             try:
                 profiles = parse_config_seeds(seed_path)
-                for profile in profiles:
-                    seed_flags.update(dict(profile.flags))
+                all_seed_profiles.extend(profiles)
             except Exception as e:
                 print(f"Error parsing config seed file '{seed_path}': {e}", file=sys.stderr)
                 return 1
+        if all_seed_profiles:
+            seed_flags.update(merge_profile_flags(all_seed_profiles))
 
     scanner = CGullScanner(
         rules=active_rules,
         severity_filter=sev_filter,
         engine_mode=eng_mode,
-        defined_syms=seed_flags if config_seeds else None,
+        defined_syms=seed_flags if seed_flags else None,
     )
 
     jobs = args.jobs

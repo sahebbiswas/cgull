@@ -173,6 +173,48 @@ class ConditionalFlagCollector:
         return collected.generate_config_profiles(baseline_name=baseline_name)
 
 
+def merge_profile_flags(profiles: List[ConfigProfile]) -> Dict[str, Optional[Union[str, int, bool]]]:
+    """
+    Merges macro flags across multiple ConfigProfiles in a deterministic, coverage-preserving manner.
+    - Presence macros (None): if defined in any profile, kept as defined (None).
+    - Undef (False): if undef in one profile and presence in another, presence wins (None) with a warning.
+    - Value macros: if values conflict across profiles (e.g. RETRY_COUNT=5 vs RETRY_COUNT=10),
+      the macro is dropped from the merged dict with a warning so preprocessor conditionals do not
+      assume a single conflicting value.
+    """
+    if not profiles:
+        return {}
+    if len(profiles) == 1:
+        return dict(profiles[0].flags)
+
+    merged: Dict[str, Optional[Union[str, int, bool]]] = {}
+    conflicts: Set[str] = set()
+
+    for p in profiles:
+        for k, v in p.flags.items():
+            if k in conflicts:
+                continue
+            if k not in merged:
+                merged[k] = v
+            else:
+                existing_v = merged[k]
+                if existing_v == v:
+                    continue
+                # If one is presence (None) and the other is False (undef), presence wins
+                if (existing_v is None and v is False) or (existing_v is False and v is None):
+                    merged[k] = None
+                    logger.warning(f"Macro presence conflict for '{k}' across profiles; keeping as defined (None).")
+                else:
+                    conflicts.add(k)
+                    del merged[k]
+                    logger.warning(
+                        f"Conflicting values for macro '{k}' across profiles ({existing_v} vs {v}). "
+                        f"Dropping macro '{k}' from merged seed flags."
+                    )
+
+    return merged
+
+
 def parse_json_config_seed(filepath: str) -> List[ConfigProfile]:
     """
     Parses a JSON configuration seed file (.json) containing multiple named profiles:
@@ -332,6 +374,204 @@ def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> Con
     return ConfigProfile(name=config_name, flags=flags)
 
 
+def find_compile_commands(target_path: str, config_dir: Optional[str] = None) -> Optional[str]:
+    """
+    Auto-discovers compile_commands.json by searching upward starting from target_path
+    up to project boundary markers (.git, .cgull.toml, pyproject.toml, config_dir, or drive root).
+    Returns path to compile_commands.json if found, else None.
+    """
+    import os
+    if not target_path:
+        return None
+
+    abs_target = os.path.abspath(target_path)
+    curr_dir = abs_target if os.path.isdir(abs_target) else os.path.dirname(abs_target)
+
+    stop_dirs = set()
+    if config_dir:
+        stop_dirs.add(os.path.abspath(config_dir))
+
+    while True:
+        cc_file = os.path.join(curr_dir, "compile_commands.json")
+        if os.path.isfile(cc_file):
+            return cc_file
+
+        if (
+            curr_dir in stop_dirs
+            or os.path.isdir(os.path.join(curr_dir, ".git"))
+            or os.path.isfile(os.path.join(curr_dir, ".cgull.toml"))
+            or os.path.isfile(os.path.join(curr_dir, "pyproject.toml"))
+        ):
+            break
+
+        parent = os.path.dirname(curr_dir)
+        if parent == curr_dir:
+            break
+        curr_dir = parent
+
+    return None
+
+
+def _format_profile_name_from_flags(flags: Dict[str, Optional[Union[str, int, bool]]]) -> str:
+    """
+    Formats a profile name from a dictionary of macro flags.
+    """
+    if not flags:
+        return "default"
+    parts = []
+    for k in sorted(flags.keys()):
+        v = flags[k]
+        if v is None:
+            parts.append(k)
+        elif v is False:
+            parts.append(f"-U{k}")
+        else:
+            parts.append(f"{k}={v}")
+    return ", ".join(parts)
+
+
+def _parse_macro_flag_spec(
+    spec: str,
+    is_undef: bool = False
+) -> Tuple[Optional[str], Optional[Union[str, int, bool]]]:
+    """
+    Parses a macro specification string (e.g. "FOO", "RETRY_COUNT=5", "VERSION=\"1.0.0\"").
+    Returns (macro_name, value).
+    """
+    spec = spec.strip()
+    if not spec:
+        return None, None
+
+    if is_undef:
+        macro_name = spec.split()[0]
+        if re.fullmatch(r"[a-zA-Z_]\w*", macro_name):
+            return macro_name, False
+        return None, None
+
+    if "=" in spec:
+        macro_name, raw_val = spec.split("=", 1)
+        macro_name = macro_name.strip()
+        raw_val = raw_val.strip()
+
+        if not re.fullmatch(r"[a-zA-Z_]\w*", macro_name):
+            return None, None
+
+        # Strip surrounding quotes if present
+        if (raw_val.startswith('"') and raw_val.endswith('"')) or (raw_val.startswith("'") and raw_val.endswith("'")):
+            raw_val = raw_val[1:-1]
+
+        m_num = re.match(r'^-?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', raw_val)
+        if m_num:
+            try:
+                num_clean = re.sub(r'[uUlL]+$', '', raw_val)
+                parsed_val: Union[str, int] = int(num_clean, 0)
+            except ValueError:
+                parsed_val = raw_val
+        else:
+            parsed_val = raw_val
+
+        return macro_name, parsed_val
+    else:
+        macro_name = spec.strip()
+        if re.fullmatch(r"[a-zA-Z_]\w*", macro_name):
+            return macro_name, None
+        return None, None
+
+
+def parse_compile_commands(filepath_or_data: Union[str, List[Any]]) -> List[ConfigProfile]:
+    """
+    Parses a JSON Compilation Database (compile_commands.json) file or loaded JSON list
+    into a list of ConfigProfiles.
+    Groups entries that share an identical set of -D and -U preprocessor flags into a single ConfigProfile,
+    named from the shared flags rather than any single file.
+    """
+    import json
+    import shlex
+    from pathlib import Path
+
+    if isinstance(filepath_or_data, (str, Path)):
+        filepath = str(filepath_or_data)
+        path = Path(filepath)
+        if not path.exists():
+            raise FileNotFoundError(f"Compile commands file '{filepath}' does not exist.")
+
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+    elif isinstance(filepath_or_data, list):
+        data = filepath_or_data
+        filepath = "<json_data>"
+    else:
+        raise ValueError("filepath_or_data must be a filepath string or a loaded JSON list.")
+
+    if not isinstance(data, list):
+        raise ValueError(
+            f"Invalid compile_commands.json structure in '{filepath}': top-level JSON must be an array of entry objects."
+        )
+
+    valid_entries = [
+        entry for entry in data
+        if isinstance(entry, dict) and ("command" in entry or "arguments" in entry)
+    ]
+    if not valid_entries:
+        raise ValueError(
+            f"Invalid compile_commands.json structure in '{filepath}': array contains no valid compile command entries (expected objects with 'command' or 'arguments')."
+        )
+
+    grouped_flags: Dict[frozenset, Dict[str, Optional[Union[str, int, bool]]]] = {}
+
+    for entry in valid_entries:
+        args: List[str] = []
+        if "arguments" in entry and isinstance(entry["arguments"], list):
+            args = [str(a) for a in entry["arguments"]]
+        elif "command" in entry and isinstance(entry["command"], str):
+            try:
+                args = shlex.split(entry["command"], posix=True)
+            except Exception:
+                args = entry["command"].split()
+        else:
+            continue
+
+        entry_flags: Dict[str, Optional[Union[str, int, bool]]] = {}
+        idx = 0
+        num_args = len(args)
+
+        while idx < num_args:
+            arg = args[idx]
+            if arg == "-D":
+                if idx + 1 < num_args:
+                    idx += 1
+                    macro, val = _parse_macro_flag_spec(args[idx])
+                    if macro:
+                        entry_flags[macro] = val
+            elif arg.startswith("-D"):
+                macro, val = _parse_macro_flag_spec(arg[2:])
+                if macro:
+                    entry_flags[macro] = val
+            elif arg == "-U":
+                if idx + 1 < num_args:
+                    idx += 1
+                    macro, val = _parse_macro_flag_spec(args[idx], is_undef=True)
+                    if macro:
+                        entry_flags[macro] = val
+            elif arg.startswith("-U"):
+                macro, val = _parse_macro_flag_spec(arg[2:], is_undef=True)
+                if macro:
+                    entry_flags[macro] = val
+
+            idx += 1
+
+        flag_key = frozenset(entry_flags.items())
+        if flag_key not in grouped_flags:
+            grouped_flags[flag_key] = entry_flags
+
+    profiles: List[ConfigProfile] = []
+    for entry_flags in grouped_flags.values():
+        p_name = _format_profile_name_from_flags(entry_flags)
+        profiles.append(ConfigProfile(name=p_name, flags=entry_flags))
+
+    return profiles
+
+
 def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
     """
     Parses configuration seed header files or JSON seed files from a file or directory into a list of ConfigProfiles.
@@ -346,6 +586,7 @@ def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
     """
     import os
     import fnmatch
+    import json
     from pathlib import Path
 
     p = Path(path_or_dir)
@@ -354,7 +595,24 @@ def parse_config_seeds(path_or_dir: str) -> List[ConfigProfile]:
 
     if p.is_file():
         if p.suffix.lower() == ".json":
-            return parse_json_config_seed(str(p))
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                is_cc = any(
+                    isinstance(entry, dict) and ("command" in entry or "arguments" in entry)
+                    for entry in data
+                )
+                if is_cc:
+                    return parse_compile_commands(data)
+                raise ValueError(
+                    f"Invalid JSON seed file '{path_or_dir}': top-level list must contain compilation database entries with 'command' or 'arguments'."
+                )
+            elif isinstance(data, dict):
+                return parse_json_config_seed(str(p))
+            else:
+                raise ValueError(
+                    f"Invalid JSON config seed structure in '{path_or_dir}': top-level JSON must be an object or compilation database list."
+                )
         return [parse_config_seed(str(p))]
 
     if not p.is_dir():
