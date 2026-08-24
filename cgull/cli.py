@@ -127,7 +127,8 @@ def handle_flags(args) -> int:
         for root, dirs, files in os.walk(target):
             dirs[:] = [d for d in dirs if not filter_obj.should_prune_dir(os.path.join(root, d))]
             for file in files:
-                if file.endswith((".c", ".h", ".i")):
+                ext = os.path.splitext(file)[1].lower()
+                if ext in (".c", ".h", ".i"):
                     full_path = os.path.join(root, file)
                     if not filter_obj.should_ignore(full_path):
                         files_to_inspect.append(full_path)
@@ -303,23 +304,6 @@ def handle_scan(args) -> int:
         print("Error: Invalid -j/--jobs value. Must be non-negative (0 or greater).", file=sys.stderr)
         return 1
 
-    from .engine import _collect_target_presence_flags
-    from .ast_analyzer import generate_config_profiles
-
-    presence_flags = _collect_target_presence_flags(target)
-    profiles = None
-    if presence_flags or config_strategy == "baseline":
-        try:
-            profiles = generate_config_profiles(
-                presence_flags,
-                strategy=config_strategy,
-                exhaustive_threshold=exhaustive_threshold,
-                base_flags=seed_flags if seed_flags else None,
-            )
-        except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-
     progress = ProgressIndicator(quiet=args.quiet)
     try:
         result = scanner.scan_path(
@@ -329,7 +313,8 @@ def handle_scan(args) -> int:
             jobs=jobs,
             progress_callback=progress.update,
             quiet=args.quiet,
-            profiles=profiles,
+            config_strategy=config_strategy,
+            exhaustive_threshold=exhaustive_threshold,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
