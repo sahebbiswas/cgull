@@ -36,6 +36,44 @@ def _emit_error(
     sys.stderr.flush()
 
 
+def _collect_files_presence_flags(files: List[str], quiet: bool = False) -> Set[str]:
+    import logging
+    logger = logging.getLogger(__name__)
+    from .utils import strip_comments_keep_lines
+    from .ast_analyzer import ConditionalFlagCollector
+
+    presence_raw: Set[str] = set()
+    value_raw: Set[str] = set()
+    skipped_error_count = 0
+
+    for fpath in files:
+        ext = os.path.splitext(fpath)[1].lower()
+        if ext not in CGullScanner.C_EXTENSIONS:
+            continue
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            _, clean_code = strip_comments_keep_lines(content)
+            res = ConditionalFlagCollector.collect(clean_code)
+            presence_raw.update(res.presence_flags)
+            value_raw.update(res.value_flags)
+        except OSError as e:
+            skipped_error_count += 1
+            if not quiet:
+                sys.stderr.write(f"[WARNING] Flag collection skipped '{fpath}' due to OS error: {e}\n")
+                sys.stderr.flush()
+        except Exception as e:
+            skipped_error_count += 1
+            if not quiet:
+                sys.stderr.write(f"[WARNING] Flag collection skipped '{fpath}' due to error: {e}\n")
+                sys.stderr.flush()
+
+    if skipped_error_count > 0 and not quiet:
+        logger.warning("Flag collection skipped %d file(s) due to errors", skipped_error_count)
+
+    return presence_raw - value_raw
+
+
 class CGullScanner:
     """
     Main static analyzer engine for C source code.
@@ -62,6 +100,8 @@ class CGullScanner:
                     enable_inline_suppressions=self.config.enable_inline_suppressions,
                     suppression_config=self.config.suppression_config,
                     defined_syms=defined_syms if defined_syms is not None else self.config.defined_syms,
+                    config_strategy=self.config.config_strategy,
+                    exhaustive_threshold=self.config.exhaustive_threshold,
                 )
         else:
             self.config = ScanConfig.create(
@@ -85,6 +125,8 @@ class CGullScanner:
             enable_inline_suppressions=self.config.enable_inline_suppressions,
             suppression_config=self.config.suppression_config,
             defined_syms=self.config.defined_syms,
+            config_strategy=self.config.config_strategy,
+            exhaustive_threshold=self.config.exhaustive_threshold,
         )
 
     def scan_path(
@@ -96,6 +138,8 @@ class CGullScanner:
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         quiet: bool = False,
         profiles: Optional[List[ConfigProfile]] = None,
+        config_strategy: Optional[str] = None,
+        exhaustive_threshold: Optional[int] = None,
     ) -> ScanResult:
         """
         Recursively scans a directory or single file for security vulnerabilities.
@@ -140,6 +184,20 @@ class CGullScanner:
                             ignored_paths.append(file_path)
                         else:
                             files_to_scan.append(file_path)
+
+        if profiles is None and (config_strategy is not None or getattr(self.config, "config_strategy", "one-at-a-time") != "one-at-a-time"):
+            strat = config_strategy if config_strategy is not None else getattr(self.config, "config_strategy", "one-at-a-time")
+            ex_thresh = exhaustive_threshold if exhaustive_threshold is not None else getattr(self.config, "exhaustive_threshold", 10)
+            target_presence_flags = _collect_files_presence_flags(files_to_scan, quiet=quiet)
+            if target_presence_flags or strat == "baseline":
+                from .ast_analyzer import generate_config_profiles
+                profiles = generate_config_profiles(
+                    target_presence_flags,
+                    strategy=strat,
+                    exhaustive_threshold=ex_thresh,
+                    base_flags=self.config.defined_syms,
+                )
+
 
         total_files = len(files_to_scan)
         if total_files > 0:
@@ -345,7 +403,15 @@ class CGullScanner:
             raise
         return results
 
-    def scan_text(self, source_code: str, file_path: str = "source.c", quiet: bool = False, profiles: Optional[List[ConfigProfile]] = None) -> ScanResult:
+    def scan_text(
+        self,
+        source_code: str,
+        file_path: str = "source.c",
+        quiet: bool = False,
+        profiles: Optional[List[ConfigProfile]] = None,
+        config_strategy: Optional[str] = None,
+        exhaustive_threshold: Optional[int] = None,
+    ) -> ScanResult:
         """
         Directly scans in-memory C source text.
         """
@@ -353,6 +419,35 @@ class CGullScanner:
         config = self._get_active_config()
         self.config = config
         self.rules = config.get_rules()
+
+        if profiles is None and (config_strategy is not None or getattr(self.config, "config_strategy", "one-at-a-time") != "one-at-a-time"):
+            strat = config_strategy if config_strategy is not None else getattr(self.config, "config_strategy", "one-at-a-time")
+            ex_thresh = exhaustive_threshold if exhaustive_threshold is not None else getattr(self.config, "exhaustive_threshold", 10)
+            from .utils import strip_comments_keep_lines
+            from .ast_analyzer import ConditionalFlagCollector, generate_config_profiles
+            _, clean_code = strip_comments_keep_lines(source_code)
+            res = ConditionalFlagCollector.collect(clean_code)
+            profiles = generate_config_profiles(
+                res.presence_flags,
+                strategy=strat,
+                exhaustive_threshold=ex_thresh,
+                base_flags=self.config.defined_syms,
+            )
+
+        if profiles is None and config_strategy is not None:
+            strat = config_strategy
+            ex_thresh = exhaustive_threshold if exhaustive_threshold is not None else getattr(self.config, "exhaustive_threshold", 10)
+            from .utils import strip_comments_keep_lines
+            from .ast_analyzer import ConditionalFlagCollector, generate_config_profiles
+            _, clean_code = strip_comments_keep_lines(source_code)
+            res = ConditionalFlagCollector.collect(clean_code)
+            if res.presence_flags or strat == "baseline":
+                profiles = generate_config_profiles(
+                    res.presence_flags,
+                    strategy=strat,
+                    exhaustive_threshold=ex_thresh,
+                    base_flags=self.config.defined_syms,
+                )
 
         file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(file_path, source_code, config=config, profiles=profiles, quiet=quiet)
         scan_errors = []

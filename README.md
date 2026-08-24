@@ -109,6 +109,15 @@ cgull scan src/ --severity high --engine regex
 cgull scan src/ --engine ast
 ```
 
+### Configuration Space Expansion Strategies
+```bash
+# Scan using pairwise covering array strategy over preprocessor flag pairs
+cgull scan src/ --config-strategy pairwise
+
+# Scan using bounded-exhaustive expansion
+cgull scan src/ --config-strategy exhaustive --exhaustive-threshold 8
+```
+
 ### Parallel Scanning
 ```bash
 # Scan sequentially in-process (default)

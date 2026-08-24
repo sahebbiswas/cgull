@@ -8,7 +8,7 @@ import argparse
 from typing import List, Optional
 
 from .engine import CGullScanner
-from .models import Severity, AnalysisEngine, ParseTier
+from .models import Severity, AnalysisEngine, ParseTier, ScanConfig
 from .ignore import CGullIgnoreFilter
 from .reporter import ReportGenerator
 from .rules import get_all_rules
@@ -68,6 +68,8 @@ Suppressing findings inline:
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
     scan_parser.add_argument("--config-seed", action="append", metavar="PATH", help="Path to a header (.h/.hpp), directory, or JSON (.json) configuration seed file (can be specified multiple times)")
     scan_parser.add_argument("--compile-commands", metavar="PATH", help="Path to compile_commands.json database file")
+    scan_parser.add_argument("--config-strategy", choices=["baseline", "one-at-a-time", "pairwise", "exhaustive"], default="one-at-a-time", help="Configuration space expansion strategy (default: one-at-a-time)")
+    scan_parser.add_argument("--exhaustive-threshold", type=int, default=10, help="Maximum flag threshold permitted for exhaustive strategy (default: 10)")
     scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
 
     # FLAGS subcommand
@@ -125,7 +127,8 @@ def handle_flags(args) -> int:
         for root, dirs, files in os.walk(target):
             dirs[:] = [d for d in dirs if not filter_obj.should_prune_dir(os.path.join(root, d))]
             for file in files:
-                if file.endswith((".c", ".h", ".i")):
+                ext = os.path.splitext(file)[1].lower()
+                if ext in (".c", ".h", ".i"):
                     full_path = os.path.join(root, file)
                     if not filter_obj.should_ignore(full_path):
                         files_to_inspect.append(full_path)
@@ -280,11 +283,20 @@ def handle_scan(args) -> int:
         if all_seed_profiles:
             seed_flags.update(merge_profile_flags(all_seed_profiles))
 
-    scanner = CGullScanner(
+    config_strategy = getattr(args, "config_strategy", "one-at-a-time")
+    exhaustive_threshold = getattr(args, "exhaustive_threshold", 10)
+
+    scan_config = ScanConfig.create(
         rules=active_rules,
         severity_filter=sev_filter,
         engine_mode=eng_mode,
         defined_syms=seed_flags if seed_flags else None,
+        config_strategy=config_strategy,
+        exhaustive_threshold=exhaustive_threshold,
+    )
+
+    scanner = CGullScanner(
+        config=scan_config,
     )
 
     jobs = args.jobs
@@ -301,6 +313,8 @@ def handle_scan(args) -> int:
             jobs=jobs,
             progress_callback=progress.update,
             quiet=args.quiet,
+            config_strategy=config_strategy,
+            exhaustive_threshold=exhaustive_threshold,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
