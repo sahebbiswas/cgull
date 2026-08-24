@@ -22,7 +22,7 @@ class TestConfigSpaceScan(unittest.TestCase):
         - Single-pass baseline scan (without LEGACY_AUTH defined):
           Produces 0 strcpy findings (only gets).
         - Config-space scan with profiles [baseline, LEGACY_AUTH]:
-          Produces 2 findings:
+          Produces 2 findings under both Tier 1 (pcpp) and Tier 2 (directive-stripped fallback):
           1. strcpy with reachable_under: ["+LEGACY_AUTH"]
           2. gets with reachable_under: ["unconditional"]
         """
@@ -52,15 +52,26 @@ class TestConfigSpaceScan(unittest.TestCase):
             ConfigProfile("LEGACY_AUTH", {"LEGACY_AUTH": None}),
         ]
 
-        config_res = scanner.scan_text_profiles(source_code, profiles=profiles)
-        self.assertEqual(len(config_res.issues), 2)
+        # Tier 1 execution (pcpp enabled by default if installed)
+        config_res_tier1 = scanner.scan_text_profiles(source_code, profiles=profiles)
+        self.assertEqual(len(config_res_tier1.issues), 2)
 
-        # Find the strcpy and gets issues
-        strcpy_issue = next(i for i in config_res.issues if "strcpy" in i.message)
-        gets_issue = next(i for i in config_res.issues if "gets" in i.message)
+        strcpy_issue1 = next(i for i in config_res_tier1.issues if "strcpy" in i.message)
+        gets_issue1 = next(i for i in config_res_tier1.issues if "gets" in i.message)
 
-        self.assertEqual(strcpy_issue.reachable_under, ["+LEGACY_AUTH"])
-        self.assertEqual(gets_issue.reachable_under, ["unconditional"])
+        self.assertEqual(strcpy_issue1.reachable_under, ["+LEGACY_AUTH"])
+        self.assertEqual(gets_issue1.reachable_under, ["unconditional"])
+
+        # Tier 2 execution (simulate pcpp unavailable)
+        with patch.object(CASTParser, "_try_pcpp_preprocess", return_value=None):
+            config_res_tier2 = scanner.scan_text_profiles(source_code, profiles=profiles)
+            self.assertEqual(len(config_res_tier2.issues), 2)
+
+            strcpy_issue2 = next(i for i in config_res_tier2.issues if "strcpy" in i.message)
+            gets_issue2 = next(i for i in config_res_tier2.issues if "gets" in i.message)
+
+            self.assertEqual(strcpy_issue2.reachable_under, ["+LEGACY_AUTH"])
+            self.assertEqual(gets_issue2.reachable_under, ["unconditional"])
 
     def test_multiple_config_profiles_tagging(self):
         source_code = (

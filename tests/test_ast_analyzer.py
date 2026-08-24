@@ -760,6 +760,36 @@ class TestParseTiers(unittest.TestCase):
         ctx = parser.parse("int main(void) { return 0; }")
         self.assertEqual(ctx.parse_tier, "pcpp+pycparser")
 
+    @unittest.skipUnless(_pcpp_available(), "pcpp required")
+    def test_pcpp_defined_syms_injection_types(self):
+        parser = CASTParser()
+
+        # Presence macro, value macro, and false/undef macro
+        defined_syms_dict = {
+            "FEATURE_PRESENCE": None,
+            "FEATURE_VALUE": 42,
+            "FEATURE_UNDEF": False,
+        }
+        res_dict = parser._try_pcpp_preprocess(
+            "#ifdef FEATURE_PRESENCE\nint presence_enabled;\n#endif\n"
+            "#if FEATURE_VALUE == 42\nint value_matched;\n#endif\n"
+            "#ifdef FEATURE_UNDEF\nint undef_should_not_appear;\n#endif\n",
+            defined_syms=defined_syms_dict,
+        )
+        self.assertIsNotNone(res_dict)
+        self.assertIn("int presence_enabled;", res_dict)
+        self.assertIn("int value_matched;", res_dict)
+        self.assertNotIn("int undef_should_not_appear;", res_dict)
+
+        # Sequence of presence flags
+        defined_syms_seq = ["FLAG_A", "FLAG_B"]
+        res_seq = parser._try_pcpp_preprocess(
+            "#if defined(FLAG_A) && defined(FLAG_B)\nint seq_flags_active;\n#endif\n",
+            defined_syms=defined_syms_seq,
+        )
+        self.assertIsNotNone(res_seq)
+        self.assertIn("int seq_flags_active;", res_seq)
+
 
 if __name__ == "__main__":
     unittest.main()
