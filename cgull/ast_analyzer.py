@@ -337,7 +337,7 @@ def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> Con
                 logger.warning(f"Skipping function-like macro '{macro_name}' in seed file {filepath}")
                 continue
 
-            m_define = re.match(r'^define\s+([a-zA-Z_]\w*)(?:\s+(.*))?$', dir_body)
+            m_define = re.match(r'^define\s+([a-zA-Z_]\w*)(?:\([^)]*\))?(?:\s+(.*))?$', dir_body)
             m_undef = re.match(r'^undef\s+([a-zA-Z_]\w*)', dir_body)
 
             if m_define:
@@ -1123,7 +1123,7 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
             m_elif = re.match(r'^elif\b\s*(.*)', dir_body)
             m_else = re.match(r'^else\b', dir_body)
             m_endif = re.match(r'^endif\b', dir_body)
-            m_define = re.match(r'^define\s+([a-zA-Z_]\w*)(?:\s+(.*))?$', dir_body)
+            m_define = re.match(r'^define\s+([a-zA-Z_]\w*)(?:\([^)]*\))?(?:\s+(.*))?$', dir_body)
             m_undef = re.match(r'^undef\s+([a-zA-Z_]\w*)', dir_body)
 
             parent_act = True if not cond_stack else (cond_stack[-1].parent_active and cond_stack[-1].is_taken)
@@ -1934,7 +1934,14 @@ class CASTParser:
 
         # Tier 2: Conditional resolution + Directive stripping + typedef prelude
         resolved_code = resolve_preprocessor_conditionals(clean_code, defined_syms=defined_syms)
-        stripped_code = _strip_attributes_and_specifiers(resolved_code)
+        directive_stripped_lines = [
+            "" if line.lstrip().startswith("#") else line
+            for line in resolved_code.splitlines()
+        ]
+        directive_stripped_code = "\n".join(directive_stripped_lines)
+        if resolved_code.endswith("\n") and not directive_stripped_code.endswith("\n"):
+            directive_stripped_code += "\n"
+        stripped_code = _strip_attributes_and_specifiers(directive_stripped_code)
         filtered_prelude = self._filter_prelude(_PYCPARSER_PRELUDE, stripped_code)
         prepared = filtered_prelude + stripped_code
 

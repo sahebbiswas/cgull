@@ -635,6 +635,15 @@ def _scan_file_content_profiles(
             progress_active=progress_active,
         )
 
+    # Deduplicate requested profiles preserving order
+    deduped_profiles: List[ConfigProfile] = []
+    seen_p: Set[ConfigProfile] = set()
+    for p in profiles:
+        if p not in seen_p:
+            seen_p.add(p)
+            deduped_profiles.append(p)
+    profiles = deduped_profiles
+
     if config is not None:
         base_rules = config.get_rules()
         base_engine_mode = config.engine_mode
@@ -654,9 +663,9 @@ def _scan_file_content_profiles(
 
     best_parser_status = ParserStatus.PARSE_FAILED.value
     best_parse_tier = ParseTier.REGEX_FALLBACK.value
-    best_file_status = "failed"
     best_confidence = Confidence.LIMITED.value
     first_scan_err: Optional[ScanError] = None
+    has_profile_failure = False
 
     for cp in profiles:
         variant_config = ScanConfig.create(
@@ -680,11 +689,14 @@ def _scan_file_content_profiles(
         total_duration_ms += v_dur
         loc = max(loc, v_loc)
 
-        if v_err and first_scan_err is None:
-            first_scan_err = v_err
-
-        if v_status == "success":
-            best_file_status = "success"
+        if v_status == "failed" or v_err is not None:
+            has_profile_failure = True
+            if first_scan_err is None:
+                first_scan_err = v_err or ScanError(
+                    file_path=file_path,
+                    error_type="ProfileScanError",
+                    message=f"Analysis failed under profile '{cp.name}'",
+                )
 
         if v_parser_status == ParserStatus.PYCPARSER_SUCCESS.value:
             best_parser_status = ParserStatus.PYCPARSER_SUCCESS.value
@@ -710,6 +722,7 @@ def _scan_file_content_profiles(
             else:
                 merged_issues[key][1].add(cp)
 
+    best_file_status = "failed" if has_profile_failure else "success"
     num_profiles = len(profiles)
     final_issues: List[Issue] = []
 
@@ -717,7 +730,7 @@ def _scan_file_content_profiles(
         if len(seen_profs) == num_profiles:
             iss.reachable_under = ["unconditional"]
         else:
-            iss.reachable_under = sorted({p.reachable_under for p in seen_profs if p.reachable_under})
+            iss.reachable_under = sorted({p.reachable_under for p in seen_profs})
         final_issues.append(iss)
 
     final_issues.sort(key=lambda x: (x.line_number, x.column_number, x.rule_id, x.message))

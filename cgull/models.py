@@ -89,13 +89,14 @@ class ConfigProfile:
     def label(self) -> str:
         """
         Returns the reachable_under label representation of the configuration.
-        e.g., "debug" -> "+debug", "+release" -> "+release", "" -> "".
+        e.g., "debug" -> "+debug", "+release" -> "+release", "" -> "+default".
         """
-        if not self.name:
-            return ""
-        if self.name.startswith("+"):
-            return self.name
-        return f"+{self.name}"
+        name_str = self.name.strip() if self.name else ""
+        if not name_str:
+            name_str = "default"
+        if name_str.startswith("+"):
+            return name_str
+        return f"+{name_str}"
 
     @property
     def reachable_under(self) -> str:

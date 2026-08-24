@@ -227,8 +227,8 @@ class TestConfigProfile(unittest.TestCase):
         self.assertEqual(cp2.reachable_under, "+release")
 
         cp3 = ConfigProfile("")
-        self.assertEqual(cp3.label, "")
-        self.assertEqual(cp3.reachable_under, "")
+        self.assertEqual(cp3.label, "+default")
+        self.assertEqual(cp3.reachable_under, "+default")
 
     def test_equality_and_hashing_same_flags(self):
         cp_header = ConfigProfile("debug", {"ENABLE_LOGGING": None, "MAX_WORKERS": 4})

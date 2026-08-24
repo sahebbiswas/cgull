@@ -5,8 +5,10 @@ Tests for per-config scan execution and condition-tagged findings (reachable_und
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from cgull import CGullScanner, ConfigProfile, AnalysisEngine
+from cgull.ast_analyzer import CASTParser, resolve_preprocessor_conditionals
 from cgull.rules.banned_functions import BannedFunctionsRule
 
 
@@ -147,6 +149,64 @@ class TestConfigSpaceScan(unittest.TestCase):
 
             self.assertEqual(strcpy_par.reachable_under, ["+OPT_X"])
             self.assertEqual(gets_par.reachable_under, ["unconditional"])
+
+    def test_function_like_macro_conditional_resolution(self):
+        """Tests that function-like macros #define LOG_MSG(x) ... register in resolver."""
+        source_code = (
+            "#define LOG_MSG(x) (void)(x)\n"
+            "#ifdef LOG_MSG\n"
+            "    gets(buf);\n"
+            "#endif\n"
+        )
+        resolved = resolve_preprocessor_conditionals(source_code)
+        self.assertIn("gets(buf);", resolved)
+
+    def test_tier2_pycparser_directive_stripping(self):
+        """Tests that Tier 2 strips preprocessor directives before passing to pycparser."""
+        source_code = (
+            "#define BUFFER_SIZE 64\n"
+            "#include <stdio.h>\n"
+            "void test_fn(void) {\n"
+            "    char buf[64];\n"
+            "}\n"
+        )
+        parser = CASTParser()
+        with patch.object(parser, "_try_pcpp_preprocess", return_value=None):
+            ast_ctx = parser.parse(source_code)
+            self.assertTrue(ast_ctx.has_pycparser)
+            self.assertEqual(len(ast_ctx.functions), 1)
+
+    def test_duplicate_config_profiles_deduplication(self):
+        """Duplicate ConfigProfiles in requested profiles list must be deduplicated so unconditional reachability is preserved."""
+        source_code = (
+            "#include <stdio.h>\n"
+            "void f(char *b) { (void)b; gets(b); }\n"
+        )
+        profiles = [
+            ConfigProfile("debug", {"DEBUG": None}),
+            ConfigProfile("debug", {"DEBUG": None}),
+        ]
+        scanner = CGullScanner(rules=[BannedFunctionsRule()])
+        res = scanner.scan_text_profiles(source_code, profiles=profiles)
+        self.assertEqual(len(res.issues), 1)
+        self.assertEqual(res.issues[0].reachable_under, ["unconditional"])
+
+    def test_unnamed_config_profile_labeling(self):
+        """Unnamed profile ConfigProfile('') should render as '+default'."""
+        source_code = (
+            "#include <stdio.h>\n"
+            "#ifdef FLAG\n"
+            "void f(char *b) { (void)b; gets(b); }\n"
+            "#endif\n"
+        )
+        profiles = [
+            ConfigProfile(""),
+            ConfigProfile("FLAG", {"FLAG": None}),
+        ]
+        scanner = CGullScanner(rules=[BannedFunctionsRule()])
+        res = scanner.scan_text_profiles(source_code, profiles=profiles)
+        self.assertEqual(len(res.issues), 1)
+        self.assertEqual(res.issues[0].reachable_under, ["+FLAG"])
 
 
 if __name__ == "__main__":
