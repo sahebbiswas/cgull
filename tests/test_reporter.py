@@ -303,5 +303,78 @@ class TestReportGeneratorTerminal(unittest.TestCase):
         self.assertIn("Line 1 Forged Line: [SUCCESS]", output)
 
 
+class TestReportGeneratorReachableUnder(unittest.TestCase):
+    def setUp(self):
+        from cgull.rules.banned_functions import BannedFunctionsRule
+        from cgull.models import ConfigProfile
+        self.scanner = CGullScanner(rules=[BannedFunctionsRule()], engine_mode=AnalysisEngine.HYBRID)
+        self.source_code = (
+            "#include <string.h>\n"
+            "#include <stdio.h>\n"
+            "\n"
+            "void auth_user(char *dst, const char *src) {\n"
+            "    (void)src;\n"
+            "#ifdef LEGACY_AUTH\n"
+            "    strcpy(dst, src);\n"
+            "#endif\n"
+            "    gets(dst);\n"
+            "}\n"
+        )
+        self.profiles = [
+            ConfigProfile("baseline", {}),
+            ConfigProfile("LEGACY_AUTH", {"LEGACY_AUTH": None}),
+        ]
+        self.result = self.scanner.scan_text_profiles(self.source_code, profiles=self.profiles, file_path="auth.c")
+
+    def test_reachable_under_json_format(self):
+        json_str = ReportGenerator.to_json(self.result)
+        parsed = json.loads(json_str)
+        strcpy_issue = next(i for i in parsed["issues"] if "strcpy" in i["message"])
+        gets_issue = next(i for i in parsed["issues"] if "gets" in i["message"])
+        self.assertEqual(strcpy_issue["reachable_under"], ["+LEGACY_AUTH"])
+        self.assertEqual(gets_issue["reachable_under"], ["unconditional"])
+
+    def test_reachable_under_sarif_format(self):
+        sarif_str = ReportGenerator.to_sarif(self.result)
+        parsed = json.loads(sarif_str)
+        jsonschema.validate(instance=parsed, schema=SARIF_SCHEMA)
+        results = parsed["runs"][0]["results"]
+        strcpy_res = next(r for r in results if "strcpy" in r["message"]["text"])
+        gets_res = next(r for r in results if "gets" in r["message"]["text"])
+        self.assertEqual(strcpy_res["properties"]["reachableUnder"], ["+LEGACY_AUTH"])
+        self.assertEqual(strcpy_res["properties"]["reachable_under"], ["+LEGACY_AUTH"])
+        self.assertEqual(gets_res["properties"]["reachableUnder"], ["unconditional"])
+        self.assertEqual(gets_res["properties"]["reachable_under"], ["unconditional"])
+
+    def test_reachable_under_markdown_format(self):
+        md_str = ReportGenerator.to_markdown(self.result)
+        self.assertIn("[+LEGACY_AUTH]", md_str)
+        self.assertNotIn("[unconditional]", md_str)
+
+    def test_reachable_under_terminal_format(self):
+        term_str = ReportGenerator.to_terminal_text(self.result)
+        self.assertIn("[+LEGACY_AUTH]", term_str)
+        self.assertNotIn("[unconditional]", term_str)
+
+    def test_reachable_under_hostile_tag_sanitization_terminal(self):
+        from cgull.models import ConfigProfile
+        hostile_profile = ConfigProfile("\x1b[31mBAD\x1b[0m\nHEADING_INJECTION", {"LEGACY_AUTH": None})
+        profiles = [ConfigProfile("baseline", {}), hostile_profile]
+        res = self.scanner.scan_text_profiles(self.source_code, profiles=profiles, file_path="auth.c")
+        term_str = ReportGenerator.to_terminal_text(res)
+        self.assertNotIn("\x1b[31m", term_str)
+        self.assertNotIn("\nHEADING", term_str)
+        self.assertIn("BAD HEADING_INJECTION", term_str)
+
+    def test_reachable_under_hostile_tag_escaping_markdown(self):
+        from cgull.models import ConfigProfile
+        hostile_profile = ConfigProfile("FOO\n### INJECTED_HEADING\n|pipe`tick", {"LEGACY_AUTH": None})
+        profiles = [ConfigProfile("baseline", {}), hostile_profile]
+        res = self.scanner.scan_text_profiles(self.source_code, profiles=profiles, file_path="auth.c")
+        md_str = ReportGenerator.to_markdown(res)
+        self.assertNotIn("\n### INJECTED_HEADING", md_str)
+        self.assertIn("\\|pipe\\`tick", md_str)
+
+
 if __name__ == "__main__":
     unittest.main()
