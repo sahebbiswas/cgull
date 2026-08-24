@@ -191,7 +191,7 @@ def test_include_resolver_edge_cases(tmp_path):
     # load_from_text
     resolver.load_from_text("# comment\n   \nrel_inc\n/abs_inc", base_dir=str(tmp_path))
     assert str((tmp_path / "rel_inc").resolve()) in resolver.include_roots
-    assert "/abs_inc" in resolver.include_roots
+    assert os.path.abspath("/abs_inc") in resolver.include_roots
 
     # empty header resolve
     assert resolver.resolve("", str(tmp_path)) is None
