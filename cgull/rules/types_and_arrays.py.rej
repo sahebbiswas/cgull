@@ -1,0 +1,36 @@
+--- types_and_arrays.py
++++ types_and_arrays.py
+@@ -67,23 +67,29 @@
+         from ..cfg import find_function_def, _PRELUDE_LINE_COUNT
+         from pycparser import c_ast
+         from ..ast_analyzer import _format_pycparser_expr
+
++        def is_char_ptr(type_name: str) -> bool:
++            tn = type_name.lower()
++            return 'char' in tn or 'int8' in tn or 'uint8' in tn or 'void' in tn
++
+         def is_pointer_type(node, fn) -> bool:
+             if isinstance(node, c_ast.ID):
+                 var_name = node.name
+
+                 if fn and var_name in fn.variables:
+                     var_obj = fn.variables[var_name]
+                     if var_obj.is_pointer or var_obj.is_array or '*' in var_obj.type_name or '*' in var_obj.name:
+-                        # Exclude char* since sizeof(char) is 1, so it's technically a no-op but still suspicious. Let's just catch all for now.
+-                        return True
++                        if not is_char_ptr(var_obj.type_name):
++                            return True
+
+                 if var_name in ast_ctx.global_variables:
+                     var_obj = ast_ctx.global_variables[var_name]
+                     if var_obj.is_pointer or var_obj.is_array or '*' in var_obj.type_name or '*' in var_obj.name:
+-                        return True
++                        if not is_char_ptr(var_obj.type_name):
++                            return True
+
+                 if fn:
+                     for param in fn.parameters:
+                         if param.name == var_name and (param.is_pointer or '*' in param.type_name or '*' in param.name):
+-                            return True
++                            if not is_char_ptr(param.type_name):
++                                return True

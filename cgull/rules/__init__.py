@@ -44,6 +44,7 @@ from .types_and_arrays import (
     UseOfMagicNumbersRule,
     SizeofOnPointerRule,
     SignedUnsignedComparisonRule,
+    IncorrectPointerScalingRule,
 )
 from .misra_and_style import (
     NakedControlFlowStatementsRule,
@@ -91,6 +92,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     InsecureDataStorageRule,
     ImproperChrootJailRule,
     SignedUnsignedComparisonRule,
+    IncorrectPointerScalingRule,
     # Low Impact
     MissingDefaultCaseInSwitchStatementsRule,
     UseOfGotoStatementsRule,
