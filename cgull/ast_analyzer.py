@@ -1817,22 +1817,48 @@ def parse_member_declarations(stmt: str, clean_code: str) -> List[FieldInfo]:
             return []
 
         first_tok = tokens[0]
-        m_decl_start = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', first_tok)
-        if not m_decl_start:
-            return []
 
-        decl1_start_idx = m_decl_start.start()
-        before_name = first_tok[:decl1_start_idx].rstrip()
-        type_spec = before_name.rstrip(' *').strip()
-        ptr_stars = before_name[len(type_spec):]
+        # Check for function pointer declarator in first_tok: e.g. "int (*callback)(void *, int)"
+        m_fn_first = re.search(r'^(.*?)\(\s*\*\s*([a-zA-Z_]\w*)\s*\)\s*\((.*?)\)$', first_tok)
+        if m_fn_first:
+            type_spec = m_fn_first.group(1).strip()
+            declarators = tokens
+        else:
+            m_decl_start = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', first_tok)
+            if not m_decl_start:
+                return []
 
-        decl_part1 = (ptr_stars + first_tok[decl1_start_idx:]).strip()
-        declarators = [decl_part1] + tokens[1:]
+            decl1_start_idx = m_decl_start.start()
+            before_name = first_tok[:decl1_start_idx].rstrip()
+            type_spec = before_name.rstrip(' *').strip()
+            ptr_stars = before_name[len(type_spec):]
+
+            decl_part1 = (ptr_stars + first_tok[decl1_start_idx:]).strip()
+            declarators = [decl_part1] + tokens[1:]
 
     fields: List[FieldInfo] = []
     for decl_str in declarators:
         decl_str = decl_str.strip()
         if not decl_str:
+            continue
+
+        # Check for function pointer member: e.g. "int (*callback)(void *, int)"
+        m_fn = re.search(r'^(.*?)\(\s*\*\s*([a-zA-Z_]\w*)\s*\)\s*\((.*?)\)$', decl_str)
+        if m_fn:
+            ret_t = m_fn.group(1).strip() or type_spec
+            f_name = m_fn.group(2).strip()
+            params_t = m_fn.group(3).strip()
+            fn_type_name = f"{ret_t} (*)({params_t})".strip() if params_t else f"{ret_t} (*)".strip()
+            fields.append(FieldInfo(
+                name=f_name,
+                type_name=fn_type_name,
+                is_array=False,
+                array_size=None,
+                is_pointer=True,
+                is_struct_or_union=False,
+                nested_tag=None,
+                is_union=False,
+            ))
             continue
 
         is_ptr = ('*' in decl_str) or ('*' in type_spec)
@@ -1864,9 +1890,15 @@ def parse_member_declarations(stmt: str, clean_code: str) -> List[FieldInfo]:
             m_t = re.search(r'\b(?:struct|union)\s+([a-zA-Z_]\w*)', type_spec)
             nested_tag = m_t.group(1) if m_t else None
 
+        base_t = type_spec.strip()
+        if is_ptr:
+            type_name = base_t if base_t.endswith('*') else f"{base_t} *"
+        else:
+            type_name = base_t
+
         fields.append(FieldInfo(
             name=f_name,
-            type_name=f"{type_spec} {'*' if is_ptr else ''}{f_name}".strip(),
+            type_name=type_name,
             is_array=is_array,
             array_size=array_size,
             is_pointer=is_ptr,
@@ -1881,8 +1913,8 @@ def parse_member_declarations(stmt: str, clean_code: str) -> List[FieldInfo]:
 def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -> Optional[int]:
     """
     Resolves a constant expression string (digit, hex, expression-valued macro #define,
-    or const int variable) to an integer value if compile-time constant, else returns None.
-    Recursively expands object-like macros with cycle protection.
+    const int variable, or enum constant) to an integer value if compile-time constant,
+    else returns None. Recursively expands object-like macros with cycle protection.
     """
     if not expr_str or not expr_str.strip():
         return None
@@ -1919,6 +1951,29 @@ def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -
         c_val = const_m.group(2).strip()
         macro_defs[c_name] = c_val
 
+    # Collect enum constants
+    enum_regex = re.compile(r'\benum\b[^{}]*\{([^}]+)\}')
+    for enum_m in enum_regex.finditer(clean_code):
+        enum_body = enum_m.group(1)
+        curr_val = 0
+        for item in enum_body.split(','):
+            item = item.strip()
+            if not item:
+                continue
+            if '=' in item:
+                parts = item.split('=', 1)
+                e_name = parts[0].strip()
+                e_val_str = parts[1].strip()
+                try:
+                    curr_val = int(e_val_str, 0)
+                except ValueError:
+                    curr_val = 0
+            else:
+                e_name = item.strip()
+            if e_name and e_name.isidentifier():
+                macro_defs[e_name] = str(curr_val)
+                curr_val += 1
+
     # Recursive macro replacement with cycle protection
     def expand_expr(target_str: str, visited: Set[str], depth: int = 0) -> str:
         if depth > max_depth:
@@ -1935,6 +1990,11 @@ def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -
         return re.sub(r'\b[a-zA-Z_]\w*\b', replace_ident, target_str)
 
     expanded = expand_expr(s, set())
+
+    # Ensure all identifiers in expression are resolved before evaluating
+    remaining_idents = set(re.findall(r'\b[a-zA-Z_]\w*\b', expanded)) - {"true", "false"}
+    if remaining_idents:
+        return None
 
     numeric_macros: Dict[str, int] = {}
     tokens = _tokenize_c_prep_expr(expanded, numeric_macros)

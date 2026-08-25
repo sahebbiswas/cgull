@@ -344,3 +344,54 @@ def test_struct_def_dict_methods():
     assert d["name"] == "TestStruct"
     assert "fields" in d
     assert d["fields"]["a"]["name"] == "a"
+
+
+def test_unresolved_identifiers_constant_expr():
+    code = """
+    enum { ENUM_SIZE = 42 };
+    struct S {
+        char buf1[UNKNOWN_MACRO];
+        char buf2[ENUM_SIZE];
+    };
+    """
+    assert resolve_constant_expr("UNKNOWN_MACRO", code) is None
+    assert resolve_constant_expr("ENUM_SIZE", code) == 42
+
+    parser = CASTParser()
+    defs = parser._extract_struct_defs_from_regex(code)
+    sd = defs["S"]
+    assert sd["buf1"].array_size is None
+    assert sd["buf2"].array_size == 42
+
+
+def test_function_pointer_field_fallback():
+    code = """
+    struct Handler {
+        int id;
+        int (*callback)(void *ctx, int err);
+    };
+    """
+    parser = CASTParser()
+    defs = parser._extract_struct_defs_from_regex(code)
+    sd = defs["Handler"]
+
+    assert "id" in sd
+    assert "callback" in sd
+    assert sd["callback"].is_pointer is True
+    assert sd["callback"].is_array is False
+    assert sd["callback"].type_name == "int (*)(void *ctx, int err)"
+
+
+def test_canonicalized_type_names_fallback():
+    code = """
+    struct Node {
+        int id;
+        struct Node *next;
+    };
+    """
+    parser = CASTParser()
+    defs = parser._extract_struct_defs_from_regex(code)
+    sd = defs["Node"]
+
+    assert sd["id"].type_name == "int"
+    assert sd["next"].type_name == "struct Node *"
