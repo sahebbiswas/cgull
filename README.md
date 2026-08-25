@@ -283,6 +283,7 @@ C-GULL implements the security audit rules listed below:
 | **CGULL-036** | Memory Leak | **High** | Memory | CWE-401 | Hybrid | Detects dynamically allocated memory (malloc, calloc, realloc, strdup, aligned_alloc) assigned to local pointers that is not freed or transferred before function exit paths. |
 | **CGULL-037** | Improper Null Termination (strncpy) | **High** | Strings | CWE-170 | Regex | strncpy() does not guarantee null termination if the source string is larger than or equal to the specified length. This causes out-of-bounds reads/writes. |
 | **CGULL-038** | Return Stack Variable | **High** | Memory | CWE-562 | AST | Detects return statements that expose the address of an automatic-storage local variable or function parameter after the function returns. |
+| **CGULL-041** | Unused Local Variables | **Low** | Code Quality | CWE-563 | AST | Detects local variables declared in function body or nested block scopes that are never referenced anywhere in their scope. |
 
 ---
 

@@ -391,3 +391,65 @@ class MissingAssertionsRule(BaseRule):
                     fix_type=FixType.MANUAL_REVIEW,
                 ))
         return issues
+
+
+class UnusedLocalVariablesRule(BaseRule):
+    rule_id = "CGULL-041"
+    name = "Unused Local Variables"
+    impact = Severity.LOW
+    category = RuleCategory.STYLE
+    description = "Detect local variables that are declared in function body or nested block scopes but never referenced anywhere in their scope."
+    implementation_method = "AST parsing to track local variable reads and address-of expressions across block scopes"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-563"
+    remediation_suggestion = "Remove unused local variables or cast them explicitly with (void)var; to silence compiler warnings."
+    sample_vulnerable_code = "int compute(int x) {\n    int unused_local = 42; // Declared but never read\n    return x;\n}"
+    sample_remediated_code = "int compute(int x) {\n    return x;\n}"
+    analysis_engine = AnalysisEngine.AST
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        for fn in ast_ctx.functions:
+            param_names = {p.name for p in fn.parameters if p.name}
+            for c_var in fn.variables.values():
+                v_name = c_var.name
+                if not v_name or v_name in param_names:
+                    continue
+                if v_name.startswith("__"):
+                    continue
+
+                if not c_var.read_lines and not c_var.address_taken:
+                    if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
+                        has_read_in_fallback = False
+                        body_start = getattr(fn, "body_start_line", fn.start_line + 1)
+                        decl_line_idx = c_var.declaration_line - body_start
+                        for i, line in enumerate(fn.body.splitlines()):
+                            if i == decl_line_idx:
+                                continue
+                            if re.search(rf'\b{re.escape(v_name)}\b', line):
+                                m_write = re.match(rf'^\s*{re.escape(v_name)}\s*=(?!=)\s*(.*)$', line)
+                                if m_write:
+                                    rhs = m_write.group(1)
+                                    if re.search(rf'\b{re.escape(v_name)}\b', rhs):
+                                        has_read_in_fallback = True
+                                        break
+                                else:
+                                    has_read_in_fallback = True
+                                    break
+                        if has_read_in_fallback:
+                            continue
+
+                    line_no = c_var.declaration_line
+                    snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"int {v_name};"
+                    issues.append(self.create_issue(
+                        file_path=file_path,
+                        line_number=line_no,
+                        code_snippet=snippet,
+                        message=f"Local variable '{v_name}' is declared in '{fn.name}' but never read or referenced in its scope (CWE-563).",
+                        column_number=1,
+                        engine="AST",
+                        fix_type=FixType.SAFE_FIX,
+                        auto_fix_replacement=f"(void){v_name};"
+                    ))
+        return issues

@@ -1028,6 +1028,68 @@ class TestMemoryLeak(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestUnusedLocalVariables(unittest.TestCase):
+    def test_detects_unused_local_variable(self):
+        code = "int compute(int x) {\n    int unused_local = 42;\n    return x;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("unused_local", issues[0].message)
+
+    def test_detects_unused_variables_in_nested_scopes(self):
+        code = """
+        int compute(int x) {
+            int unused_local = 42;
+            switch (x) {
+                case 1: {
+                    int unused_case_var = 7;
+                    return 1;
+                }
+                default:
+                    return 0;
+            }
+        }
+        """
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 2)
+
+    def test_clean_used_local_variable(self):
+        code = "int compute(int x) {\n    int y = 42;\n    return x + y;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_address_taken(self):
+        code = "void f(void) {\n    int x = 0;\n    int *p = &x;\n    *p = 10;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_void_cast_silenced(self):
+        code = "void f(void) {\n    int silenced = 10;\n    (void)silenced;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_function_pointer_call(self):
+        code = "void g(void);\nvoid f(void) {\n    void (*fp)(void) = g;\n    fp();\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_detects_unused_local_shadowing_global(self):
+        code = "int x;\nvoid f(void) {\n    int x;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 3)
+
+    def test_fallback_mode_write_only_variable_reported(self):
+        from cgull.ast_analyzer import CASTParser
+        code = "void f(void) {\n    int x;\n    x = 1;\n}"
+        ast_parser = CASTParser()
+        ast_ctx = ast_parser.parse(code)
+        ast_ctx.has_pycparser = False
+        rule = get_rule_by_id("CGULL-041")
+        issues = rule.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
 

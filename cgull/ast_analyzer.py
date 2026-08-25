@@ -1484,6 +1484,50 @@ class CParameter:
     line_number: int
 
 
+class ScopedVarDict(dict):
+    """
+    A custom dictionary for function variables that supports tuple keys (var_name, enclosing_block_id)
+    or string keys (var_name) for lexical block-scoping while maintaining backward-compatible
+    string key lookups (returning innermost binding) and de-duplicated string key iteration.
+    """
+    def __getitem__(self, key):
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        if isinstance(key, str):
+            for dict_key, var in reversed(list(super().items())):
+                if dict_key == key or (isinstance(dict_key, tuple) and dict_key[0] == key):
+                    return var
+        raise KeyError(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        if super().__contains__(key):
+            return True
+        if isinstance(key, str):
+            return any(
+                dict_key == key or (isinstance(dict_key, tuple) and dict_key[0] == key)
+                for dict_key in super().keys()
+            )
+        return False
+
+    def items(self):
+        seen_names = set()
+        for dict_key, var in reversed(list(super().items())):
+            name = dict_key[0] if isinstance(dict_key, tuple) else dict_key
+            if name not in seen_names:
+                seen_names.add(name)
+                yield name, var
+
+    def keys(self):
+        for name, _var in self.items():
+            yield name
+
+
 @dataclass
 class CVariable:
     name: str
@@ -1499,6 +1543,9 @@ class CVariable:
     read_lines: List[int] = field(default_factory=list)
     freed_lines: List[int] = field(default_factory=list)
     checked_null_lines: List[int] = field(default_factory=list)
+    enclosing_block_id: int = 0
+    address_taken: bool = False
+    address_taken_lines: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -1523,7 +1570,7 @@ class CFunction:
     start_line: int
     end_line: int
     body: str
-    variables: Dict[str, CVariable] = field(default_factory=dict)
+    variables: Dict[Union[str, Tuple[str, int]], CVariable] = field(default_factory=ScopedVarDict)
     has_void_param_list: bool = False
     is_empty_param_list: bool = False
     calls: List[Tuple[str, int, str]] = field(default_factory=list)  # (callee_name, line, raw_args)
@@ -1696,6 +1743,34 @@ def _extract_identifiers_from_ast(node, ignore_callees: bool = False) -> Set[str
     return names
 
 
+def _extract_read_vars_from_ast(node) -> Set[str]:
+    """
+    Recursively extracts variable identifier names that are read in an AST node,
+    properly ignoring struct/union member names in StructRef (s.field or ptr->field).
+    For FuncCall nodes, recurses into node.name (to capture function pointer variable reads
+    such as fp(), obj->fp(), or callbacks[i]()) as well as node.args.
+    """
+    names: Set[str] = set()
+    if node is None:
+        return names
+    kind = type(node).__name__
+    if kind == "ID":
+        names.add(str(node.name))
+    elif kind == "StructRef":
+        names.update(_extract_read_vars_from_ast(node.name))
+        return names
+    elif kind == "FuncCall":
+        if node.name:
+            names.update(_extract_read_vars_from_ast(node.name))
+        if node.args:
+            names.update(_extract_read_vars_from_ast(node.args))
+        return names
+
+    for _, child in node.children():
+        names.update(_extract_read_vars_from_ast(child))
+    return names
+
+
 def _get_max_ast_line(node, current_max: int, prelude_offset: int) -> int:
     """Recursively finds the maximum line coordinate in an AST node."""
     if node is None:
@@ -1719,6 +1794,17 @@ class _ASTFunctionAnalyzer:
         self.clean_lines = clean_lines
         self.custom_typedefs = custom_typedefs
         self.node_counter = 0
+        self.block_counter = 0
+        self.scope_stack: List[int] = [0]
+
+    def resolve_var(self, name: str) -> Optional[CVariable]:
+        for block_id in reversed(self.scope_stack):
+            var_key = (name, block_id)
+            if var_key in self.owning_fn.variables:
+                return self.owning_fn.variables[var_key]
+        if name in self.owning_fn.variables:
+            return self.owning_fn.variables[name]
+        return None
 
     def analyze(self, body_node) -> None:
         if body_node is None:
@@ -1730,12 +1816,20 @@ class _ASTFunctionAnalyzer:
                 self.outer = outer
                 self.current_target_var: Optional[str] = None
 
+            def visit_Compound(self, node):
+                self.outer.block_counter += 1
+                block_id = self.outer.block_counter
+                self.outer.scope_stack.append(block_id)
+                self.generic_visit(node)
+                self.outer.scope_stack.pop()
+
             def visit_Decl(self, node):
                 prev_target = self.current_target_var
                 if node.name and type(node.type).__name__ != "FuncDecl":
                     self.current_target_var = node.name
                     line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
                     tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(node.type, self.outer.custom_typedefs)
+                    current_block_id = self.outer.scope_stack[-1]
                     c_var = CVariable(
                         name=node.name,
                         type_name=tname,
@@ -1746,15 +1840,19 @@ class _ASTFunctionAnalyzer:
                         array_size_expr=arr_dim,
                         has_initializer=(node.init is not None),
                         declaration_line=line_no,
+                        enclosing_block_id=current_block_id,
                     )
+                    var_key = (node.name, current_block_id)
+                    self.outer.owning_fn.variables[var_key] = c_var
+
                     init_ids: Set[str] = set()
                     if node.init:
                         c_var.assigned_lines.append(line_no)
-                        init_ids = _extract_identifiers_from_ast(node.init)
+                        init_ids = _extract_read_vars_from_ast(node.init)
                         for v in init_ids:
-                            if v in self.outer.owning_fn.variables:
-                                self.outer.owning_fn.variables[v].read_lines.append(line_no)
-                    self.outer.owning_fn.variables[node.name] = c_var
+                            target_v = self.outer.resolve_var(v)
+                            if target_v:
+                                target_v.read_lines.append(line_no)
 
                     init_str = f" = {_format_pycparser_expr(node.init)}" if node.init else ""
                     alloc_fn_names = {"malloc", "calloc", "realloc", "aligned_alloc"}
@@ -1782,14 +1880,24 @@ class _ASTFunctionAnalyzer:
                 prev_target = self.current_target_var
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
                 lval_ids = _extract_identifiers_from_ast(node.lvalue)
-                rval_ids = _extract_identifiers_from_ast(node.rvalue)
+                rval_ids = _extract_read_vars_from_ast(node.rvalue)
                 target = list(lval_ids)[0] if lval_ids else None
-                for v in lval_ids:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].assigned_lines.append(line_no)
+                if type(node.lvalue).__name__ == "ID":
+                    target_v = self.outer.resolve_var(node.lvalue.name)
+                    if target_v:
+                        target_v.assigned_lines.append(line_no)
+                        if node.op != '=':
+                            target_v.read_lines.append(line_no)
+                else:
+                    lval_read_ids = _extract_read_vars_from_ast(node.lvalue)
+                    for v in lval_read_ids:
+                        target_v = self.outer.resolve_var(v)
+                        if target_v:
+                            target_v.read_lines.append(line_no)
                 for v in rval_ids:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.read_lines.append(line_no)
 
                 alloc_fn_names = {"malloc", "calloc", "realloc", "aligned_alloc"}
                 rval_expr_str = _format_pycparser_expr(node.rvalue)
@@ -1802,13 +1910,22 @@ class _ASTFunctionAnalyzer:
                     line_number=line_no,
                     expr_str=f"{_format_pycparser_expr(node.lvalue)} {node.op} {rval_expr_str}",
                     target_var=target,
-                    written_vars=lval_ids,
-                    read_vars=rval_ids,
+                    written_vars=lval_ids if type(node.lvalue).__name__ == "ID" else set(),
+                    read_vars=rval_ids | (lval_ids if type(node.lvalue).__name__ != "ID" else set()),
                 )
                 self.outer.owning_fn.cfg_nodes.append(cfg_n)
                 self.current_target_var = target
                 self.generic_visit(node)
                 self.current_target_var = prev_target
+
+            def visit_Cast(self, node):
+                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                read_ids = _extract_read_vars_from_ast(node.expr)
+                for v in read_ids:
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.read_lines.append(line_no)
+                self.generic_visit(node)
 
             def visit_Return(self, node):
                 prev_target = self.current_target_var
@@ -1817,8 +1934,23 @@ class _ASTFunctionAnalyzer:
                 self.current_target_var = prev_target
 
             def visit_UnaryOp(self, node):
-                self.generic_visit(node)
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                if node.op == '&':
+                    addr_ids = _extract_read_vars_from_ast(node.expr)
+                    for v in addr_ids:
+                        target_v = self.outer.resolve_var(v)
+                        if target_v:
+                            target_v.address_taken = True
+                            target_v.address_taken_lines.append(line_no)
+                elif node.op in ('++', 'p++', '--', 'p--'):
+                    read_ids = _extract_read_vars_from_ast(node.expr)
+                    for v in read_ids:
+                        target_v = self.outer.resolve_var(v)
+                        if target_v:
+                            target_v.read_lines.append(line_no)
+                            target_v.assigned_lines.append(line_no)
+
+                self.generic_visit(node)
                 if node.op == "sizeof":
                     expr_str = _format_pycparser_expr(node.expr)
                     # We do NOT include these as read_vars because unevaluated sizeof operands
@@ -1843,7 +1975,9 @@ class _ASTFunctionAnalyzer:
                 if callee not in ('if', 'for', 'while', 'switch', 'sizeof', 'typeof', '__attribute__'):
                     self.outer.owning_fn.calls.append((callee, line_no, raw_args, self.current_target_var))
 
-                arg_ids = _extract_identifiers_from_ast(node.args) if node.args else set()
+                callee_read_ids = _extract_read_vars_from_ast(node.name)
+                arg_read_ids = _extract_read_vars_from_ast(node.args) if node.args else set()
+                all_read_ids = callee_read_ids | arg_read_ids
                 freed_set: Set[str] = set()
                 null_checked_set: Set[str] = set()
 
@@ -1851,22 +1985,26 @@ class _ASTFunctionAnalyzer:
                 if callee in ("free", "cfree", "vfree", "realloc"):
                     if node.args and getattr(node.args, "exprs", None):
                         freed_p = _format_pycparser_expr(node.args.exprs[0])
-                        if freed_p in self.outer.owning_fn.variables or freed_p in param_names:
-                            if freed_p in self.outer.owning_fn.variables:
-                                self.outer.owning_fn.variables[freed_p].freed_lines.append(line_no)
+                        target_v = self.outer.resolve_var(freed_p)
+                        if target_v:
+                            target_v.freed_lines.append(line_no)
+                            freed_set.add(freed_p)
+                        elif freed_p in param_names:
                             freed_set.add(freed_p)
 
                 if callee in ("assert", "ASSERT", "assert_param"):
                     self.outer.owning_fn.has_assertions = True
                     if node.args:
-                        null_checked_set = _extract_identifiers_from_ast(node.args)
+                        null_checked_set = _extract_read_vars_from_ast(node.args)
                         for v in null_checked_set:
-                            if v in self.outer.owning_fn.variables:
-                                self.outer.owning_fn.variables[v].checked_null_lines.append(line_no)
+                            target_v = self.outer.resolve_var(v)
+                            if target_v:
+                                target_v.checked_null_lines.append(line_no)
 
-                for v in arg_ids:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+                for v in all_read_ids:
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.read_lines.append(line_no)
 
                 self.outer.node_counter += 1
                 cfg_n = CFGNode(
@@ -1875,7 +2013,7 @@ class _ASTFunctionAnalyzer:
                     line_number=line_no,
                     expr_str=f"{callee}({raw_args})",
                     target_var=callee,
-                    read_vars=arg_ids,
+                    read_vars=all_read_ids,
                     freed_vars=freed_set,
                     null_checked_vars=null_checked_set,
                 )
@@ -1884,14 +2022,16 @@ class _ASTFunctionAnalyzer:
 
             def visit_If(self, node):
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
-                cond_ids = _extract_identifiers_from_ast(node.cond)
+                cond_ids = _extract_read_vars_from_ast(node.cond)
                 null_checked_set = set(cond_ids)
                 for v in null_checked_set:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].checked_null_lines.append(line_no)
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.checked_null_lines.append(line_no)
                 for v in cond_ids:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.read_lines.append(line_no)
 
                 self.outer.node_counter += 1
                 cfg_n = CFGNode(
@@ -1907,14 +2047,16 @@ class _ASTFunctionAnalyzer:
 
             def visit_While(self, node):
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
-                cond_ids = _extract_identifiers_from_ast(node.cond)
+                cond_ids = _extract_read_vars_from_ast(node.cond)
                 null_checked_set = set(cond_ids)
                 for v in null_checked_set:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].checked_null_lines.append(line_no)
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.checked_null_lines.append(line_no)
                 for v in cond_ids:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.read_lines.append(line_no)
 
                 self.outer.node_counter += 1
                 cfg_n = CFGNode(
@@ -1930,10 +2072,11 @@ class _ASTFunctionAnalyzer:
 
             def visit_For(self, node):
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
-                cond_ids = _extract_identifiers_from_ast(node.cond) if node.cond else set()
+                cond_ids = _extract_read_vars_from_ast(node.cond) if node.cond else set()
                 for v in cond_ids:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.read_lines.append(line_no)
 
                 self.outer.node_counter += 1
                 cfg_n = CFGNode(
@@ -1953,10 +2096,11 @@ class _ASTFunctionAnalyzer:
                     if any(term in self.outer.owning_fn.name.lower() for term in ['auth', 'verify', 'check_password', 'validate_token', 'boot_secure', 'crypto', 'admin', 'login', 'permission']):
                         self.outer.owning_fn.returns_boolean = True
 
-                ret_ids = _extract_identifiers_from_ast(node.expr) if node.expr else set()
+                ret_ids = _extract_read_vars_from_ast(node.expr) if node.expr else set()
                 for v in ret_ids:
-                    if v in self.outer.owning_fn.variables:
-                        self.outer.owning_fn.variables[v].read_lines.append(line_no)
+                    target_v = self.outer.resolve_var(v)
+                    if target_v:
+                        target_v.read_lines.append(line_no)
 
                 self.outer.node_counter += 1
                 cfg_n = CFGNode(
