@@ -106,6 +106,19 @@ class BannedFunctionsRule(BaseRule):
         return None
 
     @staticmethod
+    def _is_byte_type(type_str: str) -> bool:
+        tn = type_str.strip().lower()
+        tn = re.sub(r'\[[^\]]*\]', '', tn).strip()
+        tn = re.sub(r'\*+', '', tn).strip()
+        if re.search(r'\b(?:unsigned\s+|signed\s+)?char\b', tn):
+            return True
+        if re.search(r'\b(?:u?int8_t)\b', tn):
+            return True
+        if re.search(r'\bvoid\b', tn):
+            return True
+        return False
+
+    @staticmethod
     def _get_string_literal_length(src_expr: str) -> Optional[int]:
         """
         Computes the unescaped byte length of a C string literal (or concatenated
@@ -172,19 +185,12 @@ class BannedFunctionsRule(BaseRule):
         while dest_clean.startswith('(') and dest_clean.endswith(')'):
             dest_clean = dest_clean[1:-1].strip()
 
+        is_address_of = dest_expr.strip().startswith('&')
         if dest_clean.startswith('&'):
             dest_clean = dest_clean[1:].strip()
 
-        elem_offset = 0
-        m_idx = re.match(r'^(.*?)\s*\[\s*(\d+)\s*\]$', dest_clean)
-        if m_idx:
-            dest_clean_base = m_idx.group(1).strip()
-            elem_offset = int(m_idx.group(2))
-        else:
-            dest_clean_base = dest_clean
-
         # 1. Check for struct member access chains (e.g. a->array_a, a.array_a, a->in.inner_buf, arr[0].array_a, parr[0]->array_a, b->array_a)
-        if '->' in dest_clean_base or '.' in dest_clean_base:
+        if '->' in dest_clean or '.' in dest_clean:
             if ast_ctx is None:
                 if not hasattr(self, '_ast_ctx_cache'):
                     self._ast_ctx_cache = {}
@@ -206,7 +212,7 @@ class BannedFunctionsRule(BaseRule):
                         fn = f
                         break
 
-            parts = re.split(r'->|\.', dest_clean_base)
+            parts = re.split(r'->|\.', dest_clean)
             base_expr_str = parts[0].strip()
             fields = [p.strip() for p in parts[1:] if p.strip()]
 
@@ -229,18 +235,51 @@ class BannedFunctionsRule(BaseRule):
                         curr_sdef = None
 
                 if target_field and target_field.is_array:
+                    if not self._is_byte_type(target_field.type_name):
+                        self._dest_size_cache[cache_key] = None
+                        return None
+
                     dims = getattr(target_field, 'array_dims', None) or (
                         [target_field.array_size] if target_field.array_size is not None else []
                     )
-                    last_subscript_count = fields[-1].count('[') if fields else 0
-                    if dims and last_subscript_count < len(dims):
-                        res_size = max(0, dims[last_subscript_count] - elem_offset)
-                        self._dest_size_cache[cache_key] = res_size
-                        return res_size
-                    elif target_field.array_size is not None:
-                        res_size = max(0, target_field.array_size - elem_offset)
-                        self._dest_size_cache[cache_key] = res_size
-                        return res_size
+
+                    last_field_expr = fields[-1]
+                    subscripts = re.findall(r'\[\s*([^\]]+)\s*\]', last_field_expr)
+
+                    if is_address_of and subscripts:
+                        dim_subscripts = subscripts[:-1]
+                        offset_str = subscripts[-1].strip()
+                        try:
+                            offset_val = int(offset_str)
+                        except ValueError:
+                            offset_val = 0
+                    else:
+                        dim_subscripts = subscripts
+                        offset_val = 0
+
+                    dim_idx = len(dim_subscripts)
+                    if dims and dim_idx < len(dims):
+                        selected_dim = dims[dim_idx]
+                    elif target_field.array_size is not None and dim_idx == 0:
+                        selected_dim = target_field.array_size
+                    else:
+                        selected_dim = None
+
+                    if selected_dim is None or not isinstance(selected_dim, int):
+                        self._dest_size_cache[cache_key] = None
+                        return None
+
+                    res_size = max(0, selected_dim - offset_val)
+                    self._dest_size_cache[cache_key] = res_size
+                    return res_size
+
+        elem_offset = 0
+        m_idx = re.match(r'^(.*?)\s*\[\s*(\d+)\s*\]$', dest_clean)
+        if m_idx:
+            dest_clean_base = m_idx.group(1).strip()
+            elem_offset = int(m_idx.group(2))
+        else:
+            dest_clean_base = dest_clean
 
         if not re.match(r'^[a-zA-Z_]\w*$', dest_clean_base):
             self._dest_size_cache[cache_key] = None
@@ -425,7 +464,7 @@ class BannedFunctionsRule(BaseRule):
                             dest_size = self._resolve_dest_buffer_size(dest_arg, line_number, source_lines, full_code, file_path)
                             required_bytes = src_len + 1
                             if dest_size is not None:
-                                if dest_size > required_bytes:
+                                if dest_size >= required_bytes:
                                     issue = self.create_issue(
                                         file_path=file_path,
                                         line_number=line_number,
