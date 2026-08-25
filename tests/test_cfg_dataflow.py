@@ -1203,5 +1203,79 @@ class TestInterproceduralCFGSummaries(unittest.TestCase):
         self.assertEqual(len(issues_uaf), 0)
 
 
+class TestMultilineStatementLinePrecision(unittest.TestCase):
+
+    def test_multiline_call_param_deref_line_precision(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import MissingNullCheckOnFunctionParametersRule
+
+        code = """
+        void log3(int x, int y, int z);
+
+        int process(int *p) {
+            int x = 1;
+            int y = 2;
+            log3(
+                x,
+                y,
+                *p
+            );
+            return 0;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule = MissingNullCheckOnFunctionParametersRule()
+        issues = rule.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 10)
+        self.assertEqual(issues[0].code_snippet, "*p")
+
+    def test_multiline_call_null_deref_line_precision(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import MissingNullCheckOnFunctionParametersRule
+
+        code = """
+        void log3(int x, int y, int z);
+
+        int process(void) {
+            int x = 1;
+            int y = 2;
+            int *q = 0;
+            log3(
+                x,
+                y,
+                *q
+            );
+            return 0;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule = MissingNullCheckOnFunctionParametersRule()
+        issues = rule.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 11)
+        self.assertEqual(issues[0].code_snippet, "*q")
+
+    def test_deref_detection_with_missing_coord(self):
+        from cgull.cfg import _deref_vars, _deref_vars_with_lines
+        from pycparser import c_ast
+
+        inner = c_ast.ID(name='p', coord=None)
+        deref_node = c_ast.UnaryOp(op='*', expr=inner, coord=None)
+
+        lines_dict = _deref_vars_with_lines(deref_node, default_line=42)
+        self.assertIn('p', lines_dict)
+        self.assertEqual(lines_dict['p'], 42)
+
+        vars_set = _deref_vars(deref_node, default_line=42)
+        self.assertIn('p', vars_set)
+
+
 if __name__ == "__main__":
     unittest.main()

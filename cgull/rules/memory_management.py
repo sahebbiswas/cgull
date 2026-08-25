@@ -276,13 +276,14 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     for deref_var in sorted(node.derefs):
                         null_status = cfg.query_nullness(deref_var, node.node_id)
                         if null_status == Nullness.NULL:
-                            key = (node.line_number, deref_var, "null_deref")
+                            deref_line = node.get_deref_line(deref_var)
+                            key = (deref_line, deref_var, "null_deref")
                             if key not in reported_nodes:
                                 reported_nodes.add(key)
-                                snippet = _source_snippet(ast_ctx, node.line_number, node.expr_str)
+                                snippet = _source_snippet(ast_ctx, deref_line, node.expr_str)
                                 issues.append(self.create_issue(
                                     file_path=file_path,
-                                    line_number=node.line_number,
+                                    line_number=deref_line,
                                     code_snippet=snippet,
                                     message=f"Null pointer dereference: pointer '{deref_var}' is known to be NULL when dereferenced.",
                                     column_number=1,
@@ -299,13 +300,14 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     null_status = cfg.query_nullness(param.name, unsafe.node_id)
                     if null_status == Nullness.NULL:
                         continue  # Already reported above under direct NULL dereference
-                    key = (unsafe.line_number, param.name, "param_missing_check")
+                    deref_line = unsafe.get_deref_line(param.name)
+                    key = (deref_line, param.name, "param_missing_check")
                     if key not in reported_nodes:
                         reported_nodes.add(key)
-                        snippet = _source_snippet(ast_ctx, unsafe.line_number, unsafe.expr_str)
+                        snippet = _source_snippet(ast_ctx, deref_line, unsafe.expr_str)
                         issues.append(self.create_issue(
                             file_path=file_path,
-                            line_number=unsafe.line_number,
+                            line_number=deref_line,
                             code_snippet=snippet,
                             message=f"Pointer parameter '{param.name}' in function '{fn.name}' is dereferenced without a preceding NULL check.",
                             column_number=1,

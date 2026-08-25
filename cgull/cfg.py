@@ -85,11 +85,15 @@ class CFGEvent:
     freed: Set[str] = field(default_factory=set)
     allocated: Set[str] = field(default_factory=set)
     derefs: Set[str] = field(default_factory=set)
+    deref_lines: Dict[str, int] = field(default_factory=dict)
     asserted: Set[str] = field(default_factory=set)
     alias_writes: Dict[str, str] = field(default_factory=dict)
     realloc_inputs: Set[str] = field(default_factory=set)
     realloc_bindings: Dict[str, str] = field(default_factory=dict)
     successors: List[int] = field(default_factory=list)
+
+    def get_deref_line(self, var_name: str) -> int:
+        return self.deref_lines.get(var_name, self.line_number)
 
 
 class StructuredCFG:
@@ -722,26 +726,46 @@ def _unwrap_cast(node):
     return node
 
 
-def _deref_vars(node) -> Set[str]:
-    result: Set[str] = set()
+def _deref_vars_with_lines(node, default_line: Optional[int] = None) -> Dict[str, int]:
+    result: Dict[str, int] = {}
     if node is None:
         return result
     kind = type(node).__name__
+    matched_var = None
     if kind == "UnaryOp" and getattr(node, "op", None) == "*":
         inner = _unwrap_cast(node.expr)
         if inner is not None and type(inner).__name__ == "ID":
-            result.add(str(inner.name))
+            matched_var = str(inner.name)
     elif kind == "ArrayRef":
         inner = _unwrap_cast(node.name)
         if inner is not None and type(inner).__name__ == "ID":
-            result.add(str(inner.name))
+            matched_var = str(inner.name)
     elif kind == "StructRef":
         inner = _unwrap_cast(node.name)
         if inner is not None and type(inner).__name__ == "ID":
-            result.add(str(inner.name))
+            matched_var = str(inner.name)
+
+    if matched_var:
+        coord = getattr(node, "coord", None)
+        if coord is not None:
+            line = max(1, coord.line - _PRELUDE_LINE_COUNT)
+        elif default_line is not None:
+            line = default_line
+        else:
+            line = 1
+        result[matched_var] = line
+
     for _, child in node.children():
-        result.update(_deref_vars(child))
+        child_res = _deref_vars_with_lines(child, default_line=default_line)
+        for var, line in child_res.items():
+            if var not in result:
+                result[var] = line
+
     return result
+
+
+def _deref_vars(node, default_line: Optional[int] = None) -> Set[str]:
+    return set(_deref_vars_with_lines(node, default_line=default_line).keys())
 
 
 def _assignment_target(node) -> Set[str]:
@@ -891,8 +915,8 @@ def _find_value_producing_call(node) -> Optional[Tuple[str, list]]:
     return None
 
 
-def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, str], Set[str], Dict[str, str]]:
-    """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings for an executable AST node."""
+def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, int], Set[str], Dict[str, str], Set[str], Dict[str, str]]:
+    """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, deref_lines, asserted, alias_writes, realloc_inputs, realloc_bindings for an executable AST node."""
     kind = type(ast_node).__name__
     reads: Set[str] = set()
     writes: Set[str] = set()
@@ -900,7 +924,10 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     maybe_null_writes: Set[str] = set()
     freed: Set[str] = _freed_vars(ast_node, dealloc_funcs=dealloc_funcs)
     allocated: Set[str] = set()
-    derefs = _deref_vars(ast_node)
+    stmt_coord = getattr(ast_node, "coord", None)
+    default_line = max(1, stmt_coord.line - _PRELUDE_LINE_COUNT) if stmt_coord is not None else 1
+    deref_lines = _deref_vars_with_lines(ast_node, default_line=default_line)
+    derefs = set(deref_lines.keys())
     alias_writes: Dict[str, str] = {}
     realloc_inputs: Set[str] = set()
     realloc_bindings: Dict[str, str] = {}
@@ -1009,7 +1036,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     elif kind == "Return":
         reads = _ids(ast_node.expr) if ast_node.expr is not None else set()
     elif kind in {"Label", "Goto"}:
-        return kind, set(), set(), set(), set(), set(), set(), set(), set(), {}, set(), {}
+        return kind, set(), set(), set(), set(), set(), set(), set(), {}, set(), {}, set(), {}
     elif kind in {"UnaryOp", "BinaryOp", "Cast", "ExprList", "ArrayRef", "StructRef"}:
         reads = _ids(ast_node)
     else:
@@ -1022,7 +1049,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     asserted: Set[str] = set()
     if kind == "FuncCall" and _format_pycparser_expr(ast_node.name) in {"assert", "ASSERT", "assert_param"}:
         asserted = _ids(ast_node.args) if ast_node.args is not None else set()
-    return kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings
+    return kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, deref_lines, asserted, alias_writes, realloc_inputs, realloc_bindings
 
 
 def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> StructuredCFG:
@@ -1034,14 +1061,14 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     pending_gotos: List[Tuple[int, str]] = []
 
     def make_event(stmt) -> int:
-        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, asserted, alias_writes, realloc_inputs, realloc_bindings = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries)
+        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, deref_lines, asserted, alias_writes, realloc_inputs, realloc_bindings = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
         if kind == "Return":
             expr_str = _format_pycparser_expr(stmt.expr) if getattr(stmt, "expr", None) is not None else ""
         else:
             expr_str = _format_pycparser_expr(stmt)
         return cfg.new_node(node_kind, stmt, expr_str=expr_str, reads=reads, writes=writes, null_writes=null_writes, maybe_null_writes=maybe_null_writes,
-                            freed=freed, allocated=allocated, derefs=derefs, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs, realloc_bindings=realloc_bindings)
+                            freed=freed, allocated=allocated, derefs=derefs, deref_lines=deref_lines, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs, realloc_bindings=realloc_bindings)
 
     def build_compound(items, next_entry, break_target, continue_target):
         current = next_entry
