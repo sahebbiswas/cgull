@@ -2,7 +2,7 @@
 Tests for C-GULL struct/union field-size table (F1).
 """
 
-from cgull.ast_analyzer import CASTParser, FieldInfo, StructDef
+from cgull.ast_analyzer import CASTParser, FieldInfo, StructDef, resolve_constant_expr
 
 
 def test_acceptance_criteria_struct_defs():
@@ -150,6 +150,76 @@ def test_array_dimension_constant_resolution():
 
     assert sd["buf3"].is_array is True
     assert sd["buf3"].array_size == 128
+
+
+def test_expression_valued_object_macros():
+    code = """
+    #define BASE 16
+    #define MULT (BASE * 2)
+    #define TOTAL_CAP (MULT + 8)
+
+    struct BufferTable {
+        char data[TOTAL_CAP];
+    };
+    """
+    assert resolve_constant_expr("TOTAL_CAP", code) == 40
+
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    sd = ctx.get_struct_def("BufferTable")
+    assert sd is not None
+    assert sd["data"].is_array is True
+    assert sd["data"].array_size == 40
+
+
+def test_comma_separated_fields_fallback():
+    code = """
+    struct Multi {
+        int a, b[10], *c;
+    };
+    """
+    parser = CASTParser()
+    defs = parser._extract_struct_defs_from_regex(code)
+    sd = defs["Multi"]
+
+    assert "a" in sd
+    assert "b" in sd
+    assert "c" in sd
+
+    assert sd["a"].is_array is False
+    assert sd["a"].is_pointer is False
+
+    assert sd["b"].is_array is True
+    assert sd["b"].array_size == 10
+    assert sd["b"].is_pointer is False
+
+    assert sd["c"].is_pointer is True
+    assert sd["c"].is_array is False
+
+
+def test_nested_aggregate_semicolons_fallback():
+    code = """
+    struct Outer {
+        struct Inner {
+            int x;
+            int y;
+        } in;
+        int z;
+    };
+    """
+    parser = CASTParser()
+    defs = parser._extract_struct_defs_from_regex(code)
+
+    assert "Inner" in defs
+    assert "Outer" in defs
+
+    sd_inner = defs["Inner"]
+    assert "x" in sd_inner
+    assert "y" in sd_inner
+
+    sd_outer = defs["Outer"]
+    assert "in" in sd_outer
+    assert "z" in sd_outer
 
 
 def test_flexible_array_members():

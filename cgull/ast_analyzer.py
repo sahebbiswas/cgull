@@ -1732,18 +1732,164 @@ class CASTContext:
         return None
 
 
-def resolve_constant_expr(expr_str: str, clean_code: str) -> Optional[int]:
+def split_c_statements_at_outer_depth(code_block: str) -> List[str]:
     """
-    Resolves a constant expression string (digit, hex, macro #define, or const int variable)
-    to an integer value if compile-time constant, else returns None.
-    Used for struct array field dimension resolution.
+    Splits a C code block (e.g. struct/union body) into statements on semicolons,
+    only at outer depth (brace_depth == 0, paren_depth == 0, bracket_depth == 0).
+    """
+    statements = []
+    current = []
+    brace_depth = 0
+    paren_depth = 0
+    bracket_depth = 0
+
+    for ch in code_block:
+        if ch == '{':
+            brace_depth += 1
+            current.append(ch)
+        elif ch == '}':
+            brace_depth = max(0, brace_depth - 1)
+            current.append(ch)
+        elif ch == '(':
+            paren_depth += 1
+            current.append(ch)
+        elif ch == ')':
+            paren_depth = max(0, paren_depth - 1)
+            current.append(ch)
+        elif ch == '[':
+            bracket_depth += 1
+            current.append(ch)
+        elif ch == ']':
+            bracket_depth = max(0, bracket_depth - 1)
+            current.append(ch)
+        elif ch == ';' and brace_depth == 0 and paren_depth == 0 and bracket_depth == 0:
+            stmt = ''.join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+        else:
+            current.append(ch)
+
+    stmt = ''.join(current).strip()
+    if stmt:
+        statements.append(stmt)
+
+    return statements
+
+
+def parse_member_declarations(stmt: str, clean_code: str) -> List[FieldInfo]:
+    """
+    Parses a struct/union member declaration statement (e.g. "int a, b[10], *c;")
+    extracting type specifiers and splitting declarators on top-level commas.
+    """
+    stmt = stmt.strip()
+    if not stmt or stmt.startswith('#'):
+        return []
+
+    m_body_struct = re.match(r'^((?:struct|union)\b[^{}]*\{[^{}]*\}\s*\*?)\s*(.+)$', stmt, re.DOTALL)
+    if m_body_struct:
+        type_spec = m_body_struct.group(1).strip()
+        decl_part = m_body_struct.group(2).strip()
+        declarators = [decl_part]
+    else:
+        tokens = []
+        curr = []
+        paren_d = 0
+        bracket_d = 0
+        brace_d = 0
+        for ch in stmt:
+            if ch == '(': paren_d += 1
+            elif ch == ')': paren_d = max(0, paren_d - 1)
+            elif ch == '[': bracket_d += 1
+            elif ch == ']': bracket_d = max(0, bracket_d - 1)
+            elif ch == '{': brace_d += 1
+            elif ch == '}': brace_d = max(0, brace_d - 1)
+
+            if ch == ',' and paren_d == 0 and bracket_d == 0 and brace_d == 0:
+                tokens.append(''.join(curr).strip())
+                curr = []
+            else:
+                curr.append(ch)
+        if curr:
+            tokens.append(''.join(curr).strip())
+
+        if not tokens:
+            return []
+
+        first_tok = tokens[0]
+        m_decl_start = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', first_tok)
+        if not m_decl_start:
+            return []
+
+        decl1_start_idx = m_decl_start.start()
+        before_name = first_tok[:decl1_start_idx].rstrip()
+        type_spec = before_name.rstrip(' *').strip()
+        ptr_stars = before_name[len(type_spec):]
+
+        decl_part1 = (ptr_stars + first_tok[decl1_start_idx:]).strip()
+        declarators = [decl_part1] + tokens[1:]
+
+    fields: List[FieldInfo] = []
+    for decl_str in declarators:
+        decl_str = decl_str.strip()
+        if not decl_str:
+            continue
+
+        is_ptr = ('*' in decl_str) or ('*' in type_spec)
+
+        m_arr = re.search(r'\b([a-zA-Z_]\w*)\s*\[\s*([^\]]*)\s*\]$', decl_str)
+        m_scalar = re.search(r'\b([a-zA-Z_]\w*)$', decl_str)
+
+        if m_arr:
+            f_name = m_arr.group(1)
+            dim_expr = m_arr.group(2).strip()
+            is_array = True
+            if dim_expr == "" or dim_expr == "0":
+                array_size = None
+            else:
+                array_size = resolve_constant_expr(dim_expr, clean_code)
+        elif m_scalar:
+            f_name = m_scalar.group(1)
+            is_array = False
+            array_size = None
+        else:
+            continue
+
+        is_struct_or_union = False
+        nested_tag = None
+        is_field_union = False
+        if type_spec.startswith('struct ') or type_spec.startswith('union '):
+            is_struct_or_union = True
+            is_field_union = type_spec.startswith('union ')
+            m_t = re.search(r'\b(?:struct|union)\s+([a-zA-Z_]\w*)', type_spec)
+            nested_tag = m_t.group(1) if m_t else None
+
+        fields.append(FieldInfo(
+            name=f_name,
+            type_name=f"{type_spec} {'*' if is_ptr else ''}{f_name}".strip(),
+            is_array=is_array,
+            array_size=array_size,
+            is_pointer=is_ptr,
+            is_struct_or_union=is_struct_or_union,
+            nested_tag=nested_tag,
+            is_union=is_field_union,
+        ))
+
+    return fields
+
+
+def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -> Optional[int]:
+    """
+    Resolves a constant expression string (digit, hex, expression-valued macro #define,
+    or const int variable) to an integer value if compile-time constant, else returns None.
+    Recursively expands object-like macros with cycle protection.
     """
     if not expr_str or not expr_str.strip():
         return None
 
     s = expr_str.strip()
 
-    # 1. Direct integer literal (e.g. 100, 0x64, 0144)
+    # Direct integer literal (e.g. 100, 0x64, 0144)
     m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', s)
     if m_num:
         try:
@@ -1751,48 +1897,47 @@ def resolve_constant_expr(expr_str: str, clean_code: str) -> Optional[int]:
         except ValueError:
             pass
 
-    # 2. Check for macro #define or const int in clean_code
-    macro_name = s
-    if re.match(r'^[a-zA-Z_]\w*$', macro_name):
-        def_m = re.search(rf'#\s*define\s+{re.escape(macro_name)}\s+(\d+|0x[0-9a-fA-F]+)\b', clean_code)
-        if def_m:
-            val_str = def_m.group(1)
-            try:
-                return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str, 0)
-            except ValueError:
-                pass
+    # Collect object-like macros (#define MACRO body) from clean_code
+    macro_defs: Dict[str, str] = {}
+    for line in clean_code.splitlines():
+        line_s = line.strip()
+        if line_s.startswith('#'):
+            dir_body = line_s.lstrip('#').strip()
+            m_def = re.match(r'^define\s+([a-zA-Z_]\w*)(?!\()\s+(.+)$', dir_body)
+            if m_def:
+                m_name = m_def.group(1)
+                m_val = re.sub(r'/\*.*?\*/|//.*', '', m_def.group(2)).strip()
+                if m_val:
+                    macro_defs[m_name] = m_val
 
-        const_m = re.search(
-            rf'\bconst\s+(?:int|size_t|uint\w+_t|int\w+_t|unsigned\s+int|long|short)\s+{re.escape(macro_name)}\s*=\s*(\d+|0x[0-9a-fA-F]+)\b',
-            clean_code
-        )
-        if const_m:
-            val_str = const_m.group(1)
-            try:
-                return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str, 0)
-            except ValueError:
-                pass
-
-    # 3. Evaluate expression using tokenization if it contains operators or macros
-    macros: Dict[str, int] = {}
-    for m in re.finditer(r'#\s*define\s+([a-zA-Z_]\w*)\s+(\d+|0x[0-9a-fA-F]+)\b', clean_code):
-        m_name, m_val = m.group(1), m.group(2)
-        try:
-            macros[m_name] = int(m_val, 16) if m_val.startswith(('0x', '0X')) else int(m_val, 0)
-        except ValueError:
-            pass
-
+    # Collect const int variables
     for const_m in re.finditer(
-        r'\bconst\s+(?:int|size_t|uint\w+_t|int\w+_t|unsigned\s+int|long|short)\s+([a-zA-Z_]\w*)\s*=\s*(\d+|0x[0-9a-fA-F]+)\b',
+        r'\bconst\s+(?:int|size_t|uint\w+_t|int\w+_t|unsigned\s+int|long|short)\s+([a-zA-Z_]\w*)\s*=\s*([^;]+);',
         clean_code
     ):
-        m_name, m_val = const_m.group(1), const_m.group(2)
-        try:
-            macros[m_name] = int(m_val, 16) if m_val.startswith(('0x', '0X')) else int(m_val, 0)
-        except ValueError:
-            pass
+        c_name = const_m.group(1)
+        c_val = const_m.group(2).strip()
+        macro_defs[c_name] = c_val
 
-    tokens = _tokenize_c_prep_expr(s, macros)
+    # Recursive macro replacement with cycle protection
+    def expand_expr(target_str: str, visited: Set[str], depth: int = 0) -> str:
+        if depth > max_depth:
+            return target_str
+
+        def replace_ident(m):
+            ident = m.group(0)
+            if ident in macro_defs and ident not in visited:
+                new_visited = visited | {ident}
+                body = macro_defs[ident]
+                return f"({expand_expr(body, new_visited, depth + 1)})"
+            return ident
+
+        return re.sub(r'\b[a-zA-Z_]\w*\b', replace_ident, target_str)
+
+    expanded = expand_expr(s, set())
+
+    numeric_macros: Dict[str, int] = {}
+    tokens = _tokenize_c_prep_expr(expanded, numeric_macros)
     if tokens:
         try:
             val = _eval_c_prep_tokens(tokens)
@@ -2597,6 +2742,8 @@ class CASTParser:
 
         return struct_defs
 
+
+
     def _extract_struct_defs_from_regex(self, clean_code: str) -> Dict[str, StructDef]:
         struct_defs: Dict[str, StructDef] = {}
         typedef_aliases: Dict[str, str] = {}
@@ -2687,70 +2834,11 @@ class CASTParser:
 
             fields_map: Dict[str, FieldInfo] = {}
 
-            for stmt in body.split(';'):
-                stmt = stmt.strip()
-                if not stmt or stmt.startswith('#'):
-                    continue
-
-                m_array = re.search(r'^(.*?)\b([a-zA-Z_]\w*)\s*\[\s*([^\]]*)\s*\]$', stmt)
-                m_scalar = re.search(r'^(.*?)\b([a-zA-Z_]\w*)$', stmt)
-
-                if m_array:
-                    type_part = m_array.group(1).strip()
-                    f_name = m_array.group(2).strip()
-                    dim_expr = m_array.group(3).strip()
-                    is_array = True
-                    is_ptr = '*' in type_part
-                    if dim_expr == "" or dim_expr == "0":
-                        array_size = None
-                    else:
-                        array_size = resolve_constant_expr(dim_expr, clean_code)
-
-                    is_struct_or_union = False
-                    nested_tag = None
-                    is_field_union = False
-                    if type_part.startswith('struct ') or type_part.startswith('union '):
-                        is_struct_or_union = True
-                        is_field_union = type_part.startswith('union ')
-                        m_t = re.search(r'\b(?:struct|union)\s+([a-zA-Z_]\w*)', type_part)
-                        nested_tag = m_t.group(1) if m_t else None
-
-                    fields_map[f_name] = FieldInfo(
-                        name=f_name,
-                        type_name=f"{type_part} {f_name}".strip(),
-                        is_array=is_array,
-                        array_size=array_size,
-                        is_pointer=is_ptr,
-                        is_struct_or_union=is_struct_or_union,
-                        nested_tag=nested_tag,
-                        is_union=is_field_union,
-                    )
-                elif m_scalar:
-                    type_part = m_scalar.group(1).strip()
-                    f_name = m_scalar.group(2).strip()
-                    is_array = False
-                    array_size = None
-                    is_ptr = '*' in type_part or '*' in f_name
-
-                    is_struct_or_union = False
-                    nested_tag = None
-                    is_field_union = False
-                    if type_part.startswith('struct ') or type_part.startswith('union '):
-                        is_struct_or_union = True
-                        is_field_union = type_part.startswith('union ')
-                        m_t = re.search(r'\b(?:struct|union)\s+([a-zA-Z_]\w*)', type_part)
-                        nested_tag = m_t.group(1) if m_t else None
-
-                    fields_map[f_name] = FieldInfo(
-                        name=f_name,
-                        type_name=f"{type_part} {'*' if is_ptr else ''}{f_name}".strip(),
-                        is_array=is_array,
-                        array_size=array_size,
-                        is_pointer=is_ptr,
-                        is_struct_or_union=is_struct_or_union,
-                        nested_tag=nested_tag,
-                        is_union=is_field_union,
-                    )
+            member_stmts = split_c_statements_at_outer_depth(body)
+            for stmt in member_stmts:
+                parsed_fields = parse_member_declarations(stmt, clean_code)
+                for f in parsed_fields:
+                    fields_map[f.name] = f
 
             main_name = tag or (aliases[0] if aliases else f"anon_{m.start()}")
             sd = StructDef(name=main_name, is_union=is_union, fields=fields_map)
