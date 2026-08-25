@@ -55,9 +55,9 @@ class BannedFunctionsRule(BaseRule):
                 self.banned_funcs[fn_name] = (details, f"Avoid using {fn_name}()")
 
     @staticmethod
-    def _extract_call_args(line_content: str, start_offset: int) -> Optional[Tuple[str, str]]:
+    def _extract_call_args(line_content: str, start_offset: int) -> Optional[Tuple[str, ...]]:
         """
-        Extracts top-level two arguments (dest, src) from a function call like strcpy(dest, src).
+        Extracts top-level arguments from a function call like strcpy(dest, src) or strncpy(dest, src, n).
         start_offset should be the position of '(' in line_content.
         """
         paren_depth = 1
@@ -101,8 +101,8 @@ class BannedFunctionsRule(BaseRule):
                 cur_arg.append(c)
             i += 1
 
-        if len(args) >= 2:
-            return args[0], args[1]
+        if len(args) >= 1:
+            return tuple(args)
         return None
 
     @staticmethod
@@ -145,24 +145,108 @@ class BannedFunctionsRule(BaseRule):
 
         return total_len if matched_any else None
 
-    def _resolve_dest_buffer_size(self, dest_expr: str, line_number: int, source_lines: List[str], full_code: str, file_path: str = "") -> Optional[int]:
+    def _resolve_dest_buffer_size(
+        self,
+        dest_expr: str,
+        line_number: int,
+        source_lines: List[str],
+        full_code: str,
+        file_path: str = "",
+        ast_ctx: Optional[CASTContext] = None,
+    ) -> Optional[int]:
         """
         Resolves the declared array size of dest_expr within current function scope.
-        Requires dest_expr to be a simple identifier (rejects offsets, indexing, member access).
-        Handles direct array declarations, macro array sizes, and pointer variables
-        assigned from fixed-size arrays.
+        Handles direct array declarations, macro array sizes, pointer variables
+        assigned from fixed-size arrays, and struct member access chains (V1-V7 variants).
         """
         cache_key = (file_path, line_number, dest_expr)
         if cache_key in self._dest_size_cache:
             return self._dest_size_cache[cache_key]
 
         dest_clean = dest_expr.strip()
-        dest_clean = re.sub(r'^\s*\(\s*(?:char|int8_t|uint8_t|void|unsigned\s+char|signed\s+char)\s*\*+\s*\)\s*', '', dest_clean).strip()
-        if not re.match(r'^[a-zA-Z_]\w*$', dest_clean):
+        dest_clean = re.sub(
+            r'^\s*\(\s*(?:const\s+)?(?:char|int8_t|uint8_t|void|unsigned\s+char|signed\s+char)\s*\*+\s*\)\s*',
+            '',
+            dest_clean,
+        ).strip()
+        while dest_clean.startswith('(') and dest_clean.endswith(')'):
+            dest_clean = dest_clean[1:-1].strip()
+
+        if dest_clean.startswith('&'):
+            dest_clean = dest_clean[1:].strip()
+
+        elem_offset = 0
+        m_idx = re.match(r'^(.*?)\s*\[\s*(\d+)\s*\]$', dest_clean)
+        if m_idx:
+            dest_clean_base = m_idx.group(1).strip()
+            elem_offset = int(m_idx.group(2))
+        else:
+            dest_clean_base = dest_clean
+
+        # 1. Check for struct member access chains (e.g. a->array_a, a.array_a, a->in.inner_buf, arr[0].array_a, parr[0]->array_a, b->array_a)
+        if '->' in dest_clean_base or '.' in dest_clean_base:
+            if ast_ctx is None:
+                if not hasattr(self, '_ast_ctx_cache'):
+                    self._ast_ctx_cache = {}
+                if file_path and file_path in self._ast_ctx_cache:
+                    ast_ctx = self._ast_ctx_cache[file_path]
+                elif full_code in self._ast_ctx_cache:
+                    ast_ctx = self._ast_ctx_cache[full_code]
+                else:
+                    from ..ast_analyzer import CASTParser
+                    ast_ctx = CASTParser().parse(full_code)
+                    if file_path:
+                        self._ast_ctx_cache[file_path] = ast_ctx
+                    self._ast_ctx_cache[full_code] = ast_ctx
+
+            fn = None
+            if ast_ctx and ast_ctx.functions:
+                for f in ast_ctx.functions:
+                    if f.start_line <= line_number <= f.end_line:
+                        fn = f
+                        break
+
+            parts = re.split(r'->|\.', dest_clean_base)
+            base_expr_str = parts[0].strip()
+            fields = [p.strip() for p in parts[1:] if p.strip()]
+
+            if base_expr_str and fields and ast_ctx:
+                sdef = ast_ctx.resolve_struct_def(fn, base_expr_str)
+                curr_sdef = sdef
+                target_field = None
+                for field_expr in fields:
+                    if not curr_sdef:
+                        target_field = None
+                        break
+                    f_name = re.sub(r'\[[^\]]*\]', '', field_expr).strip()
+                    target_field = curr_sdef.get(f_name)
+                    if not target_field:
+                        break
+                    if target_field.is_struct_or_union:
+                        nested_tag = target_field.nested_tag or target_field.type_name
+                        curr_sdef = ast_ctx.get_struct_def(nested_tag)
+                    else:
+                        curr_sdef = None
+
+                if target_field and target_field.is_array:
+                    dims = getattr(target_field, 'array_dims', None) or (
+                        [target_field.array_size] if target_field.array_size is not None else []
+                    )
+                    last_subscript_count = fields[-1].count('[') if fields else 0
+                    if dims and last_subscript_count < len(dims):
+                        res_size = max(0, dims[last_subscript_count] - elem_offset)
+                        self._dest_size_cache[cache_key] = res_size
+                        return res_size
+                    elif target_field.array_size is not None:
+                        res_size = max(0, target_field.array_size - elem_offset)
+                        self._dest_size_cache[cache_key] = res_size
+                        return res_size
+
+        if not re.match(r'^[a-zA-Z_]\w*$', dest_clean_base):
             self._dest_size_cache[cache_key] = None
             return None
 
-        var_name = dest_clean
+        var_name = dest_clean_base
 
         func_header_re = re.compile(
             r'^[ \t]*(?:(?:static|inline|extern|const|unsigned|signed|struct\s+\w+|\w+)\s+)+(\*?\s*[\w_]+)\s*\([^)]*\)\s*\{?'
@@ -334,26 +418,41 @@ class BannedFunctionsRule(BaseRule):
                         ))
                 elif fn_name == "strcpy":
                     args = self._extract_call_args(line_content, m.end() - 1)
-                    if args:
-                        dest_arg, src_arg = args
+                    if args and len(args) >= 2:
+                        dest_arg, src_arg = args[0], args[1]
                         src_len = self._resolve_src_literal_length(src_arg, line_number, source_lines, full_code)
                         if src_len is not None:
                             dest_size = self._resolve_dest_buffer_size(dest_arg, line_number, source_lines, full_code, file_path)
                             required_bytes = src_len + 1
-                            if dest_size is not None and dest_size > required_bytes:
-                                issue = self.create_issue(
-                                    file_path=file_path,
-                                    line_number=line_number,
-                                    code_snippet=line_content,
-                                    message=f"Insecure function call '{fn_name}': source is a literal ('{src_arg}', length {src_len}) provably shorter than destination buffer size ({dest_size}). Currently bounded, but {fn_name}() is fragile to future edits — prefer snprintf or strncpy_s.",
-                                    column_number=m.start() + 1,
-                                    engine="Regex",
-                                    fix_type=FixType.SUGGESTED_FIX,
-                                    suggested_fix_replacement=fix,
-                                )
-                                issue.impact = Severity.LOW
-                                issues.append(issue)
-                                continue
+                            if dest_size is not None:
+                                if dest_size > required_bytes:
+                                    issue = self.create_issue(
+                                        file_path=file_path,
+                                        line_number=line_number,
+                                        code_snippet=line_content,
+                                        message=f"Insecure function call '{fn_name}': source is a literal ('{src_arg}', length {src_len}) provably shorter than destination buffer size ({dest_size}). Currently bounded, but {fn_name}() is fragile to future edits — prefer snprintf or strncpy_s.",
+                                        column_number=m.start() + 1,
+                                        engine="Regex",
+                                        fix_type=FixType.SUGGESTED_FIX,
+                                        suggested_fix_replacement=fix,
+                                    )
+                                    issue.impact = Severity.LOW
+                                    issues.append(issue)
+                                    continue
+                                else:
+                                    issue = self.create_issue(
+                                        file_path=file_path,
+                                        line_number=line_number,
+                                        code_snippet=line_content,
+                                        message=f"Buffer Overflow in '{fn_name}': source literal ('{src_arg}', length {src_len} + null terminator = {required_bytes} bytes) exceeds destination buffer size ({dest_size} bytes). Provable buffer overflow vulnerability.",
+                                        column_number=m.start() + 1,
+                                        engine="Regex",
+                                        fix_type=FixType.SUGGESTED_FIX,
+                                        suggested_fix_replacement=fix,
+                                    )
+                                    issue.impact = Severity.HIGH
+                                    issues.append(issue)
+                                    continue
 
                     issues.append(self.create_issue(
                         file_path=file_path,
@@ -801,9 +900,13 @@ class StrncpyNullTerminationRule(BaseRule):
         for m in re.finditer(r'\b(strncpy)\s*\(', target):
             func_name = m.group(1)
             # Try to extract destination buffer name using the substring starting at the match
-            substr = target[m.start():]
-            m_args = re.search(r'^strncpy\s*\(\s*([a-zA-Z_]\w*(?:->\w+|\.\w+|\[[^\]]+\])?)\s*,', substr)
-            dest_buf = m_args.group(1) if m_args else "unknown"
+            call_args = BannedFunctionsRule._extract_call_args(line_content, m.end() - 1)
+            if call_args and len(call_args) >= 1:
+                dest_buf = call_args[0]
+            else:
+                substr = target[m.start():]
+                m_args = re.search(r'^strncpy\s*\(\s*([a-zA-Z_]\w*(?:->\w+|\.\w+|\[[^\]]+\])?)\s*,', substr)
+                dest_buf = m_args.group(1) if m_args else "unknown"
 
             # Check next few lines for null termination explicitly
             has_null_term = False
