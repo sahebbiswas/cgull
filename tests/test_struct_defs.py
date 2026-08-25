@@ -529,24 +529,99 @@ def test_f2_expression_resolution_fallback_mode():
     }
     """
     parser = CASTParser()
-    clean_lines, clean_code = parser.strip_only(code)
-    functions = parser._extract_functions(clean_lines, clean_code)
-    struct_defs = parser._extract_struct_defs_from_regex(clean_code)
-
-    from cgull.ast_analyzer import CASTContext
-    ctx = CASTContext(
-        functions=functions,
-        global_variables={},
-        source_lines=clean_lines,
-        raw_source=code,
-        clean_source=clean_code,
-        struct_defs=struct_defs,
-        typedef_shapes=getattr(parser, "typedef_shapes", {}),
-    )
-    fn = functions[0]
+    ctx = parser.parse(code)
+    fn = ctx.functions[0]
 
     for var_name in ("a", "b", "arr", "x", "parr", "c"):
         sd = ctx.resolve_struct_def(fn, var_name)
         assert sd is not None, f"Failed resolving '{var_name}'"
         assert sd.name == "A"
         assert sd["array_a"].array_size == 100
+
+
+def test_typedef_tag_name_collision():
+    code = """
+    struct A {
+        int x;
+        char buf[50];
+    };
+
+    struct B {
+        int y;
+        char array_a[100];
+    };
+
+    typedef struct B A;
+
+    void process(struct A *param1, A *param2) {
+    }
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    fn = ctx.functions[0]
+
+    sd1 = ctx.resolve_struct_def(fn, "param1")
+    assert sd1 is not None
+    assert sd1.name == "A"
+    assert "buf" in sd1
+    assert sd1["buf"].array_size == 50
+
+    sd2 = ctx.resolve_struct_def(fn, "param2")
+    assert sd2 is not None
+    assert sd2.name == "B"
+    assert "array_a" in sd2
+    assert sd2["array_a"].array_size == 100
+
+    assert ctx.get_struct_def("struct A") is sd1
+    assert ctx.get_struct_def("A") is sd2
+    assert f"struct A" in ctx.struct_defs
+    assert f"struct A_t" not in ctx.struct_defs
+
+
+def test_typedef_shapes_in_public_parse_context():
+    code = """
+    typedef char Buffer64_t[64];
+    typedef Buffer64_t Buffer64Alias_t;
+
+    struct Packet {
+        Buffer64Alias_t data;
+    };
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+
+    assert "Buffer64_t" in ctx.typedef_shapes
+    assert "Buffer64Alias_t" in ctx.typedef_shapes
+
+    sd = ctx.get_struct_def("Packet")
+    assert sd is not None
+    assert sd["data"].is_array is True
+    assert sd["data"].array_size == 64
+
+
+def test_type_cast_expression_resolution():
+    code = """
+    struct Header {
+        int magic;
+        char payload[256];
+    };
+    typedef struct Header Header_t;
+
+    void process(void *ptr) {
+        char c1 = ((struct Header *)ptr)->payload[0];
+        char c2 = ((Header_t *)ptr)->payload[0];
+    }
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    fn = ctx.functions[0]
+
+    sd1 = ctx.resolve_struct_def(fn, "((struct Header *)ptr)->payload")
+    assert sd1 is not None
+    assert sd1.name == "Header"
+    assert sd1["payload"].array_size == 256
+
+    sd2 = ctx.resolve_struct_def(fn, "((Header_t *)ptr)->payload")
+    assert sd2 is not None
+    assert sd2.name == "Header"
+    assert sd2["payload"].array_size == 256

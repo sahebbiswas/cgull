@@ -1776,8 +1776,18 @@ class CASTContext:
         # 5. Clean leading struct/union keyword
         tag_candidate = re.sub(r'^(?:struct|union)\s+', '', cleaned).strip()
 
-        # Try candidates in order
-        candidates = [tag_candidate, cleaned, f"struct {tag_candidate}", f"union {tag_candidate}"]
+        # Try candidates in order: if type_str explicitly specifies struct or union,
+        # prioritize tag-qualified candidates over unqualified typedef names.
+        is_explicit_struct = "struct " in type_str
+        is_explicit_union = "union " in type_str
+
+        if is_explicit_struct:
+            candidates = [f"struct {tag_candidate}", tag_candidate, cleaned, f"union {tag_candidate}"]
+        elif is_explicit_union:
+            candidates = [f"union {tag_candidate}", tag_candidate, cleaned, f"struct {tag_candidate}"]
+        else:
+            candidates = [tag_candidate, cleaned, f"struct {tag_candidate}", f"union {tag_candidate}"]
+
         for cand in candidates:
             if cand in self.struct_defs:
                 return self.struct_defs[cand]
@@ -1821,6 +1831,16 @@ class CASTContext:
             if not expr_or_var:
                 return None
             target_str = expr_or_var.strip()
+
+            # 0. Check for leading type cast in target_str, e.g. "((struct A *)p)->array_a" or "(A_t *)p"
+            m_cast = re.search(r'\(\s*\*?\s*\(\s*((?:const\s+|volatile\s+|struct\s+|union\s+)?[a-zA-Z_]\w*(?:\s*\*+)?)\s*\)', target_str)
+            if not m_cast:
+                m_cast = re.search(r'\(\s*((?:const\s+|volatile\s+|struct\s+|union\s+)?[a-zA-Z_]\w*(?:\s*\*+)?)\s*\)', target_str)
+            if m_cast:
+                cast_type = m_cast.group(1).strip()
+                resolved_cast = self._clean_and_resolve_type_string(cast_type)
+                if resolved_cast:
+                    return resolved_cast
 
             # Find matching variable, parameter, or global
             target_type_name: Optional[str] = None
@@ -2744,6 +2764,8 @@ class CASTParser:
             parse_tier = ParseTier.REGEX_FALLBACK.value
 
 
+        typedef_shapes = getattr(self, "typedef_shapes", {})
+
         return CASTContext(
             functions=functions,
             global_variables=global_vars,
@@ -2756,6 +2778,7 @@ class CASTParser:
             parse_tier=parse_tier,
             unsigned_typedefs=unsigned_typedefs,
             struct_defs=struct_defs,
+            typedef_shapes=typedef_shapes,
         )
 
     def _extract_struct_defs_from_ast(self, pycparser_ast, clean_code: str) -> Dict[str, StructDef]:
@@ -2918,22 +2941,27 @@ class CASTParser:
         self.typedef_shapes = dict(typedef_shapes)
 
         # Pass 2: Resolve typedef aliases and update field nested tags, pointers, and array shapes (with multi-level chain resolution)
+        resolved_aliases: Set[str] = set()
         changed = True
         while changed:
             changed = False
             for alias_name, target_name in list(typedef_aliases.items()):
-                if alias_name in struct_defs:
+                if alias_name in resolved_aliases:
                     continue
                 target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
-                if target_clean in struct_defs:
-                    struct_defs[alias_name] = struct_defs[target_clean]
-                    struct_defs[f"struct {alias_name}"] = struct_defs[target_clean]
-                    struct_defs[f"union {alias_name}"] = struct_defs[target_clean]
-                    changed = True
-                elif target_name in struct_defs:
-                    struct_defs[alias_name] = struct_defs[target_name]
-                    struct_defs[f"struct {alias_name}"] = struct_defs[target_name]
-                    struct_defs[f"union {alias_name}"] = struct_defs[target_name]
+                target_sd = None
+                if target_name in struct_defs:
+                    target_sd = struct_defs[target_name]
+                elif f"struct {target_clean}" in struct_defs:
+                    target_sd = struct_defs[f"struct {target_clean}"]
+                elif f"union {target_clean}" in struct_defs:
+                    target_sd = struct_defs[f"union {target_clean}"]
+                elif target_clean in struct_defs:
+                    target_sd = struct_defs[target_clean]
+
+                if target_sd is not None:
+                    struct_defs[alias_name] = target_sd
+                    resolved_aliases.add(alias_name)
                     changed = True
 
         # Post-process fields to merge typedef pointer/array shapes and resolve nested struct/union tags
@@ -3088,22 +3116,27 @@ class CASTParser:
         self.typedef_shapes = dict(typedef_shapes)
 
         # Pass 2: Resolve simple typedef aliases (with multi-level chain resolution)
+        resolved_aliases: Set[str] = set()
         changed = True
         while changed:
             changed = False
             for alias_name, target_name in list(typedef_aliases.items()):
-                if alias_name in struct_defs:
+                if alias_name in resolved_aliases:
                     continue
                 target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
-                if target_clean in struct_defs:
-                    struct_defs[alias_name] = struct_defs[target_clean]
-                    struct_defs[f"struct {alias_name}"] = struct_defs[target_clean]
-                    struct_defs[f"union {alias_name}"] = struct_defs[target_clean]
-                    changed = True
-                elif target_name in struct_defs:
-                    struct_defs[alias_name] = struct_defs[target_name]
-                    struct_defs[f"struct {alias_name}"] = struct_defs[target_name]
-                    struct_defs[f"union {alias_name}"] = struct_defs[target_name]
+                target_sd = None
+                if target_name in struct_defs:
+                    target_sd = struct_defs[target_name]
+                elif f"struct {target_clean}" in struct_defs:
+                    target_sd = struct_defs[f"struct {target_clean}"]
+                elif f"union {target_clean}" in struct_defs:
+                    target_sd = struct_defs[f"union {target_clean}"]
+                elif target_clean in struct_defs:
+                    target_sd = struct_defs[target_clean]
+
+                if target_sd is not None:
+                    struct_defs[alias_name] = target_sd
+                    resolved_aliases.add(alias_name)
                     changed = True
 
         # Post-process fields for nested structs/unions and typedef shapes
