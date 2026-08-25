@@ -284,6 +284,7 @@ C-GULL implements the security audit rules listed below:
 | **CGULL-037** | Improper Null Termination (strncpy) | **High** | Strings | CWE-170 | Regex | strncpy() does not guarantee null termination if the source string is larger than or equal to the specified length. This causes out-of-bounds reads/writes. |
 | **CGULL-038** | Return Stack Variable | **High** | Memory | CWE-562 | AST | Detects return statements that expose the address of an automatic-storage local variable or function parameter after the function returns. |
 | **CGULL-041** | Unused Local Variables | **Low** | Code Quality | CWE-563 | AST | Detects local variables declared in function body or nested block scopes that are never referenced anywhere in their scope. |
+| **CGULL-042** | Dead Stores | **Low** | Code Quality | CWE-563 | AST | Detects local variables assigned but never read afterward before reassignment or scope exit (-Wunused-but-set-variable). |
 
 ---
 

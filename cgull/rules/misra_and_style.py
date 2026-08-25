@@ -453,3 +453,139 @@ class UnusedLocalVariablesRule(BaseRule):
                         auto_fix_replacement=f"(void){v_name};"
                     ))
         return issues
+
+
+class DeadStoresRule(BaseRule):
+    rule_id = "CGULL-042"
+    name = "Dead Stores"
+    impact = Severity.LOW
+    category = RuleCategory.STYLE
+    description = "Detect local variables assigned but never read afterward before reassignment or scope exit (dead stores / -Wunused-but-set-variable)."
+    implementation_method = "AST parsing & CFG dataflow analysis to check for reads reachable after write"
+    implementation_complexity = "Medium"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-563"
+    remediation_suggestion = "Remove the dead store assignment or use the variable value before overwriting it or exiting scope."
+    sample_vulnerable_code = "int status = compute(); // Dead store\nstatus = 0;\nreturn 0;"
+    sample_remediated_code = "compute();\nint status = 0;\nreturn 0;"
+    analysis_engine = AnalysisEngine.AST
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        from ..cfg import build_cfg, find_function_def, _PRELUDE_LINE_COUNT
+
+        summaries = None
+        if hasattr(ast_ctx, "functions") and ast_ctx.functions:
+            from ..cfg import analyze_function_summaries
+            summaries = analyze_function_summaries(ast_ctx)
+
+        for fn in ast_ctx.functions:
+            param_names = {p.name for p in fn.parameters if p.name}
+            local_vars = {}
+            for c_var in fn.variables.values():
+                v_name = c_var.name
+                if not v_name or v_name in param_names or v_name.startswith("__"):
+                    continue
+                if c_var.is_volatile or c_var.address_taken:
+                    continue
+                local_vars[v_name] = c_var
+
+            if not local_vars:
+                continue
+
+            cfg = None
+            funcdef = None
+            if getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None:
+                funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+                if funcdef is not None:
+                    cfg = build_cfg(funcdef, summaries=summaries)
+
+            if cfg is not None and cfg.nodes:
+                # AST/CFG path reachability check
+                initial_initialized = set(p.name for p in fn.parameters if p.name) | set(getattr(ast_ctx, "global_variables", {}).keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
+                cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
+
+                # For each write node writing to a local_var v:
+                for node_id, node in cfg.nodes.items():
+                    for v_name in node.writes:
+                        if v_name not in local_vars:
+                            continue
+
+                        # Check reachability to a read of v_name before another write to v_name or exit
+                        visited = set()
+                        worklist = list(node.successors)
+                        read_reachable = False
+
+                        while worklist:
+                            curr_id = worklist.pop()
+                            if curr_id in visited:
+                                continue
+                            visited.add(curr_id)
+
+                            curr_node = cfg.nodes[curr_id]
+
+                            # Check if v_name is read in curr_node
+                            if v_name in curr_node.reads:
+                                read_reachable = True
+                                break
+
+                            # If curr_node writes to v_name without reading it first, this branch dies (overwritten)
+                            if v_name in curr_node.writes:
+                                continue
+
+                            for succ in curr_node.successors:
+                                if succ not in visited:
+                                    worklist.append(succ)
+
+                        if not read_reachable:
+                            c_var = local_vars[v_name]
+                            line_no = node.line_number
+                            snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{v_name} = ...;"
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=snippet,
+                                message=f"Value assigned to local variable '{v_name}' in '{fn.name}' is never read before reassignment or scope exit (dead store, CWE-563).",
+                                column_number=1,
+                                engine="AST",
+                                fix_type=FixType.SAFE_FIX if snippet.endswith(";") else FixType.MANUAL_REVIEW,
+                            ))
+            else:
+                # Fallback AST/lexical check when pycparser is not used
+                for v_name, c_var in local_vars.items():
+                    # If variable was declared but never read at all, skip if UnusedLocalVariablesRule (CGULL-041) will flag it,
+                    # UNLESS it is assigned multiple times or written but never read.
+                    if not c_var.read_lines:
+                        # If assigned_lines is non-empty, every assignment is a dead store
+                        for line_no in c_var.assigned_lines:
+                            snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{v_name} = ...;"
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=snippet,
+                                message=f"Value assigned to local variable '{v_name}' in '{fn.name}' is never read before reassignment or scope exit (dead store, CWE-563).",
+                                column_number=1,
+                                engine="AST",
+                                fix_type=FixType.SAFE_FIX if snippet.endswith(";") else FixType.MANUAL_REVIEW,
+                            ))
+                    else:
+                        # Check ordered assigned_lines and read_lines
+                        all_reads = sorted(c_var.read_lines)
+                        all_writes = sorted(c_var.assigned_lines)
+                        for i, w_line in enumerate(all_writes):
+                            next_w_line = all_writes[i + 1] if i + 1 < len(all_writes) else float('inf')
+                            # Is there a read between w_line and next_w_line?
+                            has_read = any(w_line <= r_line < next_w_line for r_line in all_reads)
+                            if not has_read:
+                                snippet = ast_ctx.source_lines[w_line - 1].strip() if 1 <= w_line <= len(ast_ctx.source_lines) else f"{v_name} = ...;"
+                                issues.append(self.create_issue(
+                                    file_path=file_path,
+                                    line_number=w_line,
+                                    code_snippet=snippet,
+                                    message=f"Value assigned to local variable '{v_name}' in '{fn.name}' is never read before reassignment or scope exit (dead store, CWE-563).",
+                                    column_number=1,
+                                    engine="AST",
+                                    fix_type=FixType.SAFE_FIX if snippet.endswith(";") else FixType.MANUAL_REVIEW,
+                                ))
+
+        return issues
