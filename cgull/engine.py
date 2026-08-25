@@ -152,6 +152,7 @@ class CGullScanner:
                     defined_syms=defined_syms if defined_syms is not None else self.config.defined_syms,
                     config_strategy=self.config.config_strategy,
                     exhaustive_threshold=self.config.exhaustive_threshold,
+                    include_roots=self.config.include_roots,
                 )
         else:
             self.config = ScanConfig.create(
@@ -177,6 +178,7 @@ class CGullScanner:
             defined_syms=self.config.defined_syms,
             config_strategy=self.config.config_strategy,
             exhaustive_threshold=self.config.exhaustive_threshold,
+            include_roots=self.config.include_roots,
         )
 
     def scan_path(
@@ -799,12 +801,14 @@ def _scan_file_content_profiles(
         base_sev_filter = config.severity_filter
         base_enable_suppressions = config.enable_inline_suppressions
         base_suppression_config = config.suppression_config
+        base_include_roots = config.include_roots
     else:
         base_rules = rules if rules is not None else get_all_rules()
         base_engine_mode = engine_mode if engine_mode is not None else AnalysisEngine.HYBRID
         base_sev_filter = None
         base_enable_suppressions = True
         base_suppression_config = {}
+        base_include_roots = []
 
     total_duration_ms = 0.0
     merged_issues: Dict[Tuple[str, int, str], Tuple[Issue, Set[ConfigProfile]]] = {}
@@ -824,6 +828,7 @@ def _scan_file_content_profiles(
             enable_inline_suppressions=base_enable_suppressions,
             suppression_config=base_suppression_config,
             defined_syms=cp.flags,
+            include_roots=base_include_roots,
         )
 
         v_issues, v_loc, v_dur, v_parser_status, v_parse_tier, v_status, v_confidence, v_err = _scan_file_content(

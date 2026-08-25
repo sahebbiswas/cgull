@@ -171,12 +171,42 @@ def test_cgullconfig_include_roots(tmp_path):
     toml_file = tmp_path / ".cgull.toml"
     toml_file.write_text(
         '[paths]\ninclude_roots = ["headers"]\n'
-        '[includes]\ninclude_roots = ["/custom/inc"]\n'
+        '[includes]\ninclude_roots = ["custom_inc"]\n'
     )
 
     cfg = load_config(config_path=str(toml_file))
-    assert "headers" in cfg.include_roots
-    assert "/custom/inc" in cfg.include_roots
+    assert str(inc_dir.resolve()) in cfg.include_roots
+    assert str((tmp_path / "custom_inc").resolve()) in cfg.include_roots
+
+
+def test_standalone_cgullincludes_discovery(tmp_path):
+    inc_dir = tmp_path / "standalone_inc"
+    inc_dir.mkdir()
+    cgullinc = tmp_path / ".cgullincludes"
+    cgullinc.write_text("standalone_inc\n")
+
+    cfg = load_config(config_path=None, target_path=str(tmp_path))
+    assert str(inc_dir.resolve()) in cfg.include_roots
+
+
+def test_scanner_config_include_roots_propagation(tmp_path):
+    from cgull.engine import CGullScanner, _scan_file_content_profiles
+    from cgull.models import ConfigProfile
+
+    inc_dir = str((tmp_path / "inc").resolve())
+    scan_cfg = ScanConfig.create(include_roots=[inc_dir])
+
+    scanner = CGullScanner(config=scan_cfg)
+    assert scanner.config.include_roots == [inc_dir]
+    assert scanner._get_active_config().include_roots == [inc_dir]
+
+    profile = ConfigProfile(name="test", flags={"FOO": None})
+    _, _, _, _, _, _, _, _ = _scan_file_content_profiles(
+        content="int main(void) { return 0; }\n",
+        file_path="main.c",
+        config=scan_cfg,
+        profiles=[profile],
+    )
 
 
 def test_include_resolver_edge_cases(tmp_path):
