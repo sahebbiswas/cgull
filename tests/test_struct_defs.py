@@ -444,3 +444,184 @@ def test_bitfield_members_fallback():
 
     assert sd["flag_b"].type_name in ("unsigned int", "unsigned")
     assert sd["status"].type_name == "int"
+
+
+def test_f2_expression_to_struct_type_resolution():
+    code = """
+    struct Inner { char inner_buf[16]; };
+    struct A {
+        int id;
+        char array_a[100];
+        struct Inner in;
+    };
+    typedef struct A A_t;
+    typedef A_t A2_t;
+    typedef A2_t A3_t;
+
+    void fun_a(struct A *a, A_t *b, struct A arr[4]) {
+        struct A x;
+        struct A (*parr)[4];
+        A3_t *c;
+    }
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    fn = ctx.functions[0]
+
+    # 1. Direct tagged pointer: struct A *a
+    sd_a = ctx.resolve_struct_def(fn, "a")
+    assert sd_a is not None
+    assert sd_a.name == "A"
+    assert sd_a["array_a"].array_size == 100
+
+    # 2. Typedef'd pointer: A_t *b
+    sd_b = ctx.resolve_struct_def(fn, "b")
+    assert sd_b is not None
+    assert sd_b.name == "A"
+    assert sd_b["array_a"].array_size == 100
+
+    # 3. Array of structs: struct A arr[4]
+    sd_arr = ctx.resolve_struct_def(fn, "arr")
+    assert sd_arr is not None
+    assert sd_arr.name == "A"
+    assert sd_arr["array_a"].array_size == 100
+
+    # 4. By-value struct parameter/local: struct A x
+    sd_x = ctx.resolve_struct_def(fn, "x")
+    assert sd_x is not None
+    assert sd_x.name == "A"
+    assert sd_x["array_a"].array_size == 100
+
+    # 5. Pointer to array of structs: struct A (*parr)[4]
+    sd_parr = ctx.resolve_struct_def(fn, "parr")
+    assert sd_parr is not None
+    assert sd_parr.name == "A"
+    assert sd_parr["array_a"].array_size == 100
+
+    # 6. Multi-level typedef: typedef A_t A2_t; typedef A2_t A3_t; A3_t *c
+    sd_c = ctx.resolve_struct_def(fn, "c")
+    assert sd_c is not None
+    assert sd_c.name == "A"
+    assert sd_c["array_a"].array_size == 100
+
+    # 7. Member access expressions
+    assert ctx.resolve_struct_def(fn, "a->array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "b->array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "arr[0].array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "(*parr)[0].array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "c->array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "x.array_a") is sd_a
+
+
+def test_f2_expression_resolution_fallback_mode():
+    code = """
+    struct A {
+        int id;
+        char array_a[100];
+    };
+    typedef struct A A_t;
+    typedef A_t A2_t;
+
+    void fun_a(struct A *a, A_t *b, struct A arr[4]) {
+        struct A x;
+        struct A (*parr)[4];
+        A2_t *c;
+    }
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    fn = ctx.functions[0]
+
+    for var_name in ("a", "b", "arr", "x", "parr", "c"):
+        sd = ctx.resolve_struct_def(fn, var_name)
+        assert sd is not None, f"Failed resolving '{var_name}'"
+        assert sd.name == "A"
+        assert sd["array_a"].array_size == 100
+
+
+def test_typedef_tag_name_collision():
+    code = """
+    struct A {
+        int x;
+        char buf[50];
+    };
+
+    struct B {
+        int y;
+        char array_a[100];
+    };
+
+    typedef struct B A;
+
+    void process(struct A *param1, A *param2) {
+    }
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    fn = ctx.functions[0]
+
+    sd1 = ctx.resolve_struct_def(fn, "param1")
+    assert sd1 is not None
+    assert sd1.name == "A"
+    assert "buf" in sd1
+    assert sd1["buf"].array_size == 50
+
+    sd2 = ctx.resolve_struct_def(fn, "param2")
+    assert sd2 is not None
+    assert sd2.name == "B"
+    assert "array_a" in sd2
+    assert sd2["array_a"].array_size == 100
+
+    assert ctx.get_struct_def("struct A") is sd1
+    assert ctx.get_struct_def("A") is sd2
+    assert f"struct A" in ctx.struct_defs
+    assert f"struct A_t" not in ctx.struct_defs
+
+
+def test_typedef_shapes_in_public_parse_context():
+    code = """
+    typedef char Buffer64_t[64];
+    typedef Buffer64_t Buffer64Alias_t;
+
+    struct Packet {
+        Buffer64Alias_t data;
+    };
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+
+    assert "Buffer64_t" in ctx.typedef_shapes
+    assert "Buffer64Alias_t" in ctx.typedef_shapes
+
+    sd = ctx.get_struct_def("Packet")
+    assert sd is not None
+    assert sd["data"].is_array is True
+    assert sd["data"].array_size == 64
+
+
+def test_type_cast_expression_resolution():
+    code = """
+    struct Header {
+        int magic;
+        char payload[256];
+    };
+    typedef struct Header Header_t;
+
+    void process(void *ptr) {
+        char c1 = ((struct Header *)ptr)->payload[0];
+        char c2 = ((Header_t *)ptr)->payload[0];
+    }
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    fn = ctx.functions[0]
+
+    sd1 = ctx.resolve_struct_def(fn, "((struct Header *)ptr)->payload")
+    assert sd1 is not None
+    assert sd1.name == "Header"
+    assert sd1["payload"].array_size == 256
+
+    sd2 = ctx.resolve_struct_def(fn, "((Header_t *)ptr)->payload")
+    assert sd2 is not None
+    assert sd2.name == "Header"
+    assert sd2["payload"].array_size == 256
