@@ -125,3 +125,61 @@ def test_variable_shadowing_rule_definition():
     assert defn.impact == Severity.LOW
     assert defn.category == RuleCategory.STYLE
     assert defn.cwe_id == "CWE-398 / MISRA C:2012 Rule 5.3"
+
+
+def test_variable_shadowing_ancestor_declared_after_nested():
+    code = """
+    void foo(void) {
+        if (1) {
+            int x = 5;
+            (void)x;
+        }
+        int x = 10;
+        (void)x;
+    }
+    """
+    issues = scan_with_rule("CGULL-043", code)
+    assert len(issues) == 0
+
+
+def test_variable_shadowing_global_declared_after_function():
+    code = """
+    void foo(int total) {
+        int count = 5;
+        (void)total;
+        (void)count;
+    }
+
+    int total = 100;
+    int count = 200;
+    """
+    issues = scan_with_rule("CGULL-043", code)
+    assert len(issues) == 0
+
+
+def test_variable_shadowing_fallback_parser_mode():
+    from cgull.ast_analyzer import CASTParser
+
+    code = """
+    void foo(int param_x) {
+        int param_x = 10;
+        if (param_x > 0) {
+            int inner_y = 1;
+            {
+                int inner_y = 2;
+                (void)inner_y;
+            }
+        }
+    }
+    """
+    ast_parser = CASTParser()
+    ast_ctx = ast_parser.parse(code)
+    ast_ctx.has_pycparser = False
+    ast_ctx.pycparser_ast = None
+
+    rule = get_rule_by_id("CGULL-043")
+    issues = rule.scan_ast("test.c", ast_ctx)
+    assert len(issues) == 2
+    rule_messages = [i.message for i in issues]
+    assert any("shadows function parameter 'param_x'" in msg for msg in rule_messages)
+    assert any("shadows variable 'inner_y' declared in an outer scope" in msg for msg in rule_messages)
