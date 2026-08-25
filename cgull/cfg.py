@@ -726,7 +726,7 @@ def _unwrap_cast(node):
     return node
 
 
-def _deref_vars_with_lines(node) -> Dict[str, int]:
+def _deref_vars_with_lines(node, default_line: Optional[int] = None) -> Dict[str, int]:
     result: Dict[str, int] = {}
     if node is None:
         return result
@@ -747,12 +747,16 @@ def _deref_vars_with_lines(node) -> Dict[str, int]:
 
     if matched_var:
         coord = getattr(node, "coord", None)
-        line = max(1, coord.line - _PRELUDE_LINE_COUNT) if coord else None
-        if line is not None:
-            result[matched_var] = line
+        if coord is not None:
+            line = max(1, coord.line - _PRELUDE_LINE_COUNT)
+        elif default_line is not None:
+            line = default_line
+        else:
+            line = 1
+        result[matched_var] = line
 
     for _, child in node.children():
-        child_res = _deref_vars_with_lines(child)
+        child_res = _deref_vars_with_lines(child, default_line=default_line)
         for var, line in child_res.items():
             if var not in result:
                 result[var] = line
@@ -760,8 +764,8 @@ def _deref_vars_with_lines(node) -> Dict[str, int]:
     return result
 
 
-def _deref_vars(node) -> Set[str]:
-    return set(_deref_vars_with_lines(node).keys())
+def _deref_vars(node, default_line: Optional[int] = None) -> Set[str]:
+    return set(_deref_vars_with_lines(node, default_line=default_line).keys())
 
 
 def _assignment_target(node) -> Set[str]:
@@ -920,7 +924,9 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     maybe_null_writes: Set[str] = set()
     freed: Set[str] = _freed_vars(ast_node, dealloc_funcs=dealloc_funcs)
     allocated: Set[str] = set()
-    deref_lines = _deref_vars_with_lines(ast_node)
+    stmt_coord = getattr(ast_node, "coord", None)
+    default_line = max(1, stmt_coord.line - _PRELUDE_LINE_COUNT) if stmt_coord is not None else 1
+    deref_lines = _deref_vars_with_lines(ast_node, default_line=default_line)
     derefs = set(deref_lines.keys())
     alias_writes: Dict[str, str] = {}
     realloc_inputs: Set[str] = set()

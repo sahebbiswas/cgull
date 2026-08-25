@@ -1262,6 +1262,20 @@ class TestMultilineStatementLinePrecision(unittest.TestCase):
         self.assertEqual(issues[0].line_number, 11)
         self.assertEqual(issues[0].code_snippet, "*q")
 
+    def test_deref_detection_with_missing_coord(self):
+        from cgull.cfg import _deref_vars, _deref_vars_with_lines
+        from pycparser import c_ast
+
+        inner = c_ast.ID(name='p', coord=None)
+        deref_node = c_ast.UnaryOp(op='*', expr=inner, coord=None)
+
+        lines_dict = _deref_vars_with_lines(deref_node, default_line=42)
+        self.assertIn('p', lines_dict)
+        self.assertEqual(lines_dict['p'], 42)
+
+        vars_set = _deref_vars(deref_node, default_line=42)
+        self.assertIn('p', vars_set)
+
 
 if __name__ == "__main__":
     unittest.main()
