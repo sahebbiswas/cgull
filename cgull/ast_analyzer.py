@@ -394,11 +394,12 @@ def parse_config_seed(filepath: str, name_override: Optional[str] = None) -> Con
                     if not val_clean:
                         flags[m_name_str] = None
                     else:
-                        m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
+                        m_num = re.match(r'^-?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
                         if m_num:
-                            try:
-                                flags[m_name_str] = int(m_num.group(1), 0)
-                            except ValueError:
+                            parsed_int = _parse_c_int_literal(val_clean)
+                            if parsed_int is not None:
+                                flags[m_name_str] = parsed_int
+                            else:
                                 flags[m_name_str] = val_clean
                         else:
                             curr_macros = _normalize_macro_dict(flags)
@@ -505,10 +506,10 @@ def _parse_macro_flag_spec(
 
         m_num = re.match(r'^-?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', raw_val)
         if m_num:
-            try:
-                num_clean = re.sub(r'[uUlL]+$', '', raw_val)
-                parsed_val: Union[str, int] = int(num_clean, 0)
-            except ValueError:
+            parsed_int = _parse_c_int_literal(raw_val)
+            if parsed_int is not None:
+                parsed_val: Union[str, int] = parsed_int
+            else:
                 parsed_val = raw_val
         else:
             parsed_val = raw_val
@@ -1012,6 +1013,40 @@ class _CondFrame:
     parent_active: bool
 
 
+def _parse_c_int_literal(literal_str: str) -> Optional[int]:
+    """
+    Parses a C integer literal string into an int.
+    Supports hexadecimal (0x/0X), binary (0b/0B), legacy octal (leading 0 followed by octal digits),
+    decimal numbers, leading signs (+/-), and C integer suffixes (U, L, UL, ULL, etc.).
+    Returns None if parsing fails.
+    """
+    if not literal_str:
+        return None
+    s = literal_str.strip()
+    sign = 1
+    if s.startswith('-'):
+        sign = -1
+        s = s[1:].strip()
+    elif s.startswith('+'):
+        s = s[1:].strip()
+
+    s = re.sub(r'[uUlL]+$', '', s)
+    if not s:
+        return None
+
+    try:
+        if s.startswith(('0x', '0X')):
+            return sign * int(s[2:], 16)
+        elif s.startswith(('0b', '0B')):
+            return sign * int(s[2:], 2)
+        elif s.startswith('0') and len(s) > 1 and s.isdigit():
+            return sign * int(s, 8)
+        else:
+            return sign * int(s, 10)
+    except ValueError:
+        return None
+
+
 _C_PREP_TOKEN_RE = re.compile(
     r'(?P<WHITESPACE>[ \t\r\n]+)|'
     r'(?P<NUMBER>(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*)|'
@@ -1072,11 +1107,10 @@ def _tokenize_c_prep_expr(expr_str: str, macros: Dict[str, int]) -> Optional[Lis
         raw_text = m.group(kind)
 
         if kind == 'NUMBER':
-            num_clean = re.sub(r'[uUlL]+$', '', raw_text)
-            try:
-                val = int(num_clean, 0)
+            val = _parse_c_int_literal(raw_text)
+            if val is not None:
                 tokens.append(('NUMBER', val))
-            except ValueError:
+            else:
                 return None
         elif kind == 'IDENT':
             if raw_text == 'true':
@@ -1239,10 +1273,11 @@ def _normalize_macro_dict(defined_syms: Optional[Any]) -> Dict[str, int]:
             elif isinstance(v, int):
                 macros[key] = v
             elif isinstance(v, str):
-                v_clean = re.sub(r'[uUlL]+$', '', v.strip())
-                try:
-                    macros[key] = int(v_clean, 0)
-                except ValueError:
+                v_clean = v.strip()
+                parsed_int = _parse_c_int_literal(v_clean)
+                if parsed_int is not None:
+                    macros[key] = parsed_int
+                else:
                     macros[key] = 1 if v_clean else 0
             else:
                 try:
@@ -1384,11 +1419,12 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
                         macros[m_name] = 1
                     else:
                         val_clean = re.sub(r'/\*.*?\*/|//.*', '', m_val_raw).strip()
-                        m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
+                        m_num = re.match(r'^-?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
                         if m_num:
-                            try:
-                                macros[m_name] = int(m_num.group(1), 0)
-                            except ValueError:
+                            parsed_int = _parse_c_int_literal(val_clean)
+                            if parsed_int is not None:
+                                macros[m_name] = parsed_int
+                            else:
                                 macros[m_name] = 1
                         else:
                             if eval_preprocessor_expr(val_clean, macros):
@@ -1824,13 +1860,21 @@ def parse_member_declarations(stmt: str, clean_code: str) -> List[FieldInfo]:
             type_spec = m_fn_first.group(1).strip()
             declarators = tokens
         else:
-            m_decl_start = re.search(r'\b([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?$', first_tok)
+            m_decl_start = re.search(r'\b([a-zA-Z_]\w*)\s*(?::\s*[^:]+)?\s*(?:\[[^\]]*\])?$', first_tok)
             if not m_decl_start:
+                return []
+
+            ident_match = m_decl_start.group(1)
+            c_type_keywords = {'int', 'char', 'short', 'long', 'float', 'double', 'signed', 'unsigned', 'struct', 'union', 'enum', 'void', 'const', 'volatile', 'bool'}
+            if ident_match in c_type_keywords and ':' in first_tok[m_decl_start.start():]:
+                # Anonymous bit-field like "unsigned int : 2"
                 return []
 
             decl1_start_idx = m_decl_start.start()
             before_name = first_tok[:decl1_start_idx].rstrip()
             type_spec = before_name.rstrip(' *').strip()
+            if not type_spec and ident_match in c_type_keywords:
+                type_spec = ident_match
             ptr_stars = before_name[len(type_spec):]
 
             decl_part1 = (ptr_stars + first_tok[decl1_start_idx:]).strip()
@@ -1861,25 +1905,33 @@ def parse_member_declarations(stmt: str, clean_code: str) -> List[FieldInfo]:
             ))
             continue
 
-        is_ptr = ('*' in decl_str) or ('*' in type_spec)
-
-        m_arr = re.search(r'\b([a-zA-Z_]\w*)\s*\[\s*([^\]]*)\s*\]$', decl_str)
-        m_scalar = re.search(r'\b([a-zA-Z_]\w*)$', decl_str)
-
-        if m_arr:
-            f_name = m_arr.group(1)
-            dim_expr = m_arr.group(2).strip()
-            is_array = True
-            if dim_expr == "" or dim_expr == "0":
-                array_size = None
-            else:
-                array_size = resolve_constant_expr(dim_expr, clean_code)
-        elif m_scalar:
-            f_name = m_scalar.group(1)
+        m_bit = re.search(r'^(.*?)\b([a-zA-Z_]\w*)\s*:\s*([^:]+)$', decl_str)
+        if m_bit:
+            f_name = m_bit.group(2)
+            ptr_part = m_bit.group(1)
+            is_ptr = ('*' in ptr_part) or ('*' in type_spec)
             is_array = False
             array_size = None
         else:
-            continue
+            is_ptr = ('*' in decl_str) or ('*' in type_spec)
+
+            m_arr = re.search(r'\b([a-zA-Z_]\w*)\s*\[\s*([^\]]*)\s*\]$', decl_str)
+            m_scalar = re.search(r'\b([a-zA-Z_]\w*)$', decl_str)
+
+            if m_arr:
+                f_name = m_arr.group(1)
+                dim_expr = m_arr.group(2).strip()
+                is_array = True
+                if dim_expr == "" or dim_expr == "0":
+                    array_size = None
+                else:
+                    array_size = resolve_constant_expr(dim_expr, clean_code)
+            elif m_scalar:
+                f_name = m_scalar.group(1)
+                is_array = False
+                array_size = None
+            else:
+                continue
 
         is_struct_or_union = False
         nested_tag = None
@@ -1922,12 +1974,11 @@ def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -
     s = expr_str.strip()
 
     # Direct integer literal (e.g. 100, 0x64, 0144)
-    m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', s)
+    m_num = re.match(r'^-?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', s)
     if m_num:
-        try:
-            return int(m_num.group(1), 0)
-        except ValueError:
-            pass
+        parsed_int = _parse_c_int_literal(s)
+        if parsed_int is not None:
+            return parsed_int
 
     # Collect object-like macros (#define MACRO body) from clean_code
     macro_defs: Dict[str, str] = {}
@@ -1964,9 +2015,10 @@ def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -
                 parts = item.split('=', 1)
                 e_name = parts[0].strip()
                 e_val_str = parts[1].strip()
-                try:
-                    curr_val = int(e_val_str, 0)
-                except ValueError:
+                parsed_e = _parse_c_int_literal(e_val_str)
+                if parsed_e is not None:
+                    curr_val = parsed_e
+                else:
                     curr_val = 0
             else:
                 e_name = item.strip()

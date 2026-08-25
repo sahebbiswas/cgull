@@ -395,3 +395,52 @@ def test_canonicalized_type_names_fallback():
 
     assert sd["id"].type_name == "int"
     assert sd["next"].type_name == "struct Node *"
+
+
+def test_octal_literal_parsing():
+    code = """
+    #define OCTAL_VAL 0144
+    #define HEX_VAL 0x64
+    #define BIN_VAL 0b1100100
+
+    struct OctalTest {
+        char buf1[OCTAL_VAL];
+        char buf2[HEX_VAL];
+        char buf3[BIN_VAL];
+    };
+    """
+    assert resolve_constant_expr("OCTAL_VAL", code) == 100
+    assert resolve_constant_expr("HEX_VAL", code) == 100
+    assert resolve_constant_expr("BIN_VAL", code) == 100
+
+    parser = CASTParser()
+    defs = parser._extract_struct_defs_from_regex(code)
+    sd = defs["OctalTest"]
+    assert sd["buf1"].array_size == 100
+    assert sd["buf2"].array_size == 100
+    assert sd["buf3"].array_size == 100
+
+
+def test_bitfield_members_fallback():
+    code = """
+    struct BitFields {
+        unsigned int flag_a : 1;
+        unsigned int flag_b : 3;
+        unsigned int : 2;
+        int status : 8;
+    };
+    """
+    parser = CASTParser()
+    defs = parser._extract_struct_defs_from_regex(code)
+    sd = defs["BitFields"]
+
+    assert "flag_a" in sd
+    assert "flag_b" in sd
+    assert "status" in sd
+
+    assert sd["flag_a"].type_name in ("unsigned int", "unsigned")
+    assert sd["flag_a"].is_pointer is False
+    assert sd["flag_a"].is_array is False
+
+    assert sd["flag_b"].type_name in ("unsigned int", "unsigned")
+    assert sd["status"].type_name == "int"
