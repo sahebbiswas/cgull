@@ -589,3 +589,129 @@ class DeadStoresRule(BaseRule):
                                 ))
 
         return issues
+
+
+class VariableShadowingRule(BaseRule):
+    rule_id = "CGULL-043"
+    name = "Variable Shadowing Across Nested Scopes"
+    impact = Severity.LOW
+    category = RuleCategory.STYLE
+    description = "Detect variable declarations in inner scopes (parameters, nested blocks, or local variables) that shadow identifiers in outer scopes (MISRA C:2012 Rule 5.3)."
+    implementation_method = "AST parsing and scope hierarchy traversal to detect inner declarations shadowing outer variables, parameters, or globals"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-398 / MISRA C:2012 Rule 5.3"
+    remediation_suggestion = "Rename the inner scope variable to a unique identifier to avoid shadowing outer variables or parameters."
+    sample_vulnerable_code = "int count = 10;\nvoid process(int count) {\n    int i;\n    for (int i = 0; i < count; i++) {}\n}"
+    sample_remediated_code = "int g_count = 10;\nvoid process(int count) {\n    int i;\n    for (int j = 0; j < count; j++) {}\n}"
+    analysis_engine = AnalysisEngine.AST
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        global_vars = getattr(ast_ctx, "global_variables", {})
+
+        for fn in ast_ctx.functions:
+            param_dict = {p.name: p for p in fn.parameters if p.name}
+
+            # 1. Check parameters shadowing global variables
+            for p_name, param in param_dict.items():
+                if p_name.startswith("__"):
+                    continue
+                if p_name in global_vars:
+                    g_var = global_vars[p_name]
+                    # Source-order check: global variable is visible only if declared before or on parameter line
+                    if g_var.declaration_line <= param.line_number:
+                        line_no = param.line_number
+                        snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{param.type_name} {p_name}"
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=snippet,
+                            message=f"Parameter '{p_name}' declared in '{fn.name}' shadows global variable '{p_name}' (MISRA C:2012 Rule 5.3).",
+                            column_number=1,
+                            engine="AST",
+                        ))
+
+            # 2. Check local variables
+            block_parents = getattr(fn, "block_parents", {})
+            raw_vars = list(dict.values(fn.variables)) if isinstance(fn.variables, dict) else []
+
+            vars_by_name: Dict[str, List] = {}
+            for c_var in raw_vars:
+                v_name = getattr(c_var, "name", None)
+                if not v_name or v_name.startswith("__"):
+                    continue
+                vars_by_name.setdefault(v_name, []).append(c_var)
+
+            reported = set()
+
+            for v_name, var_list in vars_by_name.items():
+                for c_var in var_list:
+                    v_block = getattr(c_var, "enclosing_block_id", 0)
+                    line_no = c_var.declaration_line
+                    report_key = (v_name, line_no)
+                    if report_key in reported:
+                        continue
+
+                    # (a) Check if c_var shadows an outer local variable in an ancestor block scope
+                    shadowed_outer_local = False
+                    curr = v_block
+                    while curr in block_parents:
+                        parent_id = block_parents[curr]
+                        for other_var in var_list:
+                            if other_var is not c_var and getattr(other_var, "enclosing_block_id", 0) == parent_id:
+                                # Visibility check: outer declaration must precede or be on the same line as inner declaration
+                                if other_var.declaration_line <= line_no:
+                                    snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{c_var.type_name} {v_name};"
+                                    issues.append(self.create_issue(
+                                        file_path=file_path,
+                                        line_number=line_no,
+                                        code_snippet=snippet,
+                                        message=f"Local variable '{v_name}' declared in inner scope of '{fn.name}' shadows variable '{v_name}' declared in an outer scope (MISRA C:2012 Rule 5.3).",
+                                        column_number=1,
+                                        engine="AST",
+                                    ))
+                                    reported.add(report_key)
+                                    shadowed_outer_local = True
+                                    break
+                        if shadowed_outer_local:
+                            break
+                        curr = parent_id
+
+                    if shadowed_outer_local:
+                        continue
+
+                    # (b) Check if c_var shadows a function parameter
+                    if v_name in param_dict:
+                        param = param_dict[v_name]
+                        if param.line_number <= line_no:
+                            snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{c_var.type_name} {v_name};"
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=snippet,
+                                message=f"Local variable '{v_name}' declared in '{fn.name}' shadows function parameter '{v_name}' (MISRA C:2012 Rule 5.3).",
+                                column_number=1,
+                                engine="AST",
+                            ))
+                            reported.add(report_key)
+                            continue
+
+                    # (c) Check if c_var shadows a global variable
+                    if v_name in global_vars:
+                        g_var = global_vars[v_name]
+                        # Source-order check: global variable is visible only if declared before or on c_var's declaration line
+                        if g_var.declaration_line <= line_no:
+                            snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{c_var.type_name} {v_name};"
+                            issues.append(self.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=snippet,
+                                message=f"Local variable '{v_name}' declared in '{fn.name}' shadows global variable '{v_name}' (MISRA C:2012 Rule 5.3).",
+                                column_number=1,
+                                engine="AST",
+                            ))
+                            reported.add(report_key)
+                            continue
+
+        return issues

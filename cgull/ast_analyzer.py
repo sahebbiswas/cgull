@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, Tuple, Union, Mapping
 
 from .models import ParserStatus, ParseTier, ConfigProfile
-from .utils import strip_comments_keep_lines
+from .utils import strip_comments_keep_lines, mask_string_and_char_literals
 
 logger = logging.getLogger(__name__)
 
@@ -1796,6 +1796,7 @@ class _ASTFunctionAnalyzer:
         self.node_counter = 0
         self.block_counter = 0
         self.scope_stack: List[int] = [0]
+        self.block_parents: Dict[int, int] = {}
 
     def resolve_var(self, name: str) -> Optional[CVariable]:
         for block_id in reversed(self.scope_stack):
@@ -1817,8 +1818,10 @@ class _ASTFunctionAnalyzer:
                 self.current_target_var: Optional[str] = None
 
             def visit_Compound(self, node):
+                parent_id = self.outer.scope_stack[-1]
                 self.outer.block_counter += 1
                 block_id = self.outer.block_counter
+                self.outer.block_parents[block_id] = parent_id
                 self.outer.scope_stack.append(block_id)
                 self.generic_visit(node)
                 self.outer.scope_stack.pop()
@@ -2071,6 +2074,12 @@ class _ASTFunctionAnalyzer:
                 self.generic_visit(node)
 
             def visit_For(self, node):
+                parent_id = self.outer.scope_stack[-1]
+                self.outer.block_counter += 1
+                block_id = self.outer.block_counter
+                self.outer.block_parents[block_id] = parent_id
+                self.outer.scope_stack.append(block_id)
+
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
                 cond_ids = _extract_read_vars_from_ast(node.cond) if node.cond else set()
                 for v in cond_ids:
@@ -2088,6 +2097,7 @@ class _ASTFunctionAnalyzer:
                 )
                 self.outer.owning_fn.cfg_nodes.append(cfg_n)
                 self.generic_visit(node)
+                self.outer.scope_stack.pop()
 
             def visit_Return(self, node):
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
@@ -2114,6 +2124,7 @@ class _ASTFunctionAnalyzer:
                 self.generic_visit(node)
 
         Visitor(self).visit(body_node)
+        self.owning_fn.block_parents = dict(self.block_parents)
 
         # Connect sequential CFG nodes
         for i in range(len(self.owning_fn.cfg_nodes) - 1):
@@ -2743,50 +2754,66 @@ class CASTParser:
             'const', 'volatile', 'register', 'inline', 'restrict', '0', '1', 'NULL'
         }
 
-        # Track local variable declarations
+        # Track local variable declarations and block scope hierarchy
         var_decl_regex = re.compile(
             r'^[ \t]*((?:volatile\s+|static\s+|const\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?)\s*([a-zA-Z_]\w*)(?:\[([^\]]*)\])?(?:\s*=\s*([^;]+))?;'
         )
+        block_counter = 0
+        scope_stack = [0]
+        block_parents = {}
+
         for i, line in enumerate(body_lines):
             line_no = fn_start + i
+            masked_line = mask_string_and_char_literals(line)
             m = var_decl_regex.match(line)
-            if m:
-                type_prefix = m.group(1).strip()
-                v_name = m.group(2).strip()
-                array_dim = m.group(3)
-                init_val = m.group(4)
+            decl_start = m.start() if m else len(line)
 
-                if v_name in C_KEYWORDS or not v_name.isidentifier():
-                    continue
-                type_tokens = type_prefix.split()
-                if type_tokens and type_tokens[-1] in _STATEMENT_KEYWORDS:
-                    # e.g. "return c;" / "break;" mis-parsed as a decl of `c`.
-                    continue
+            for pos, char in enumerate(masked_line):
+                if pos == decl_start and m:
+                    type_prefix = m.group(1).strip()
+                    v_name = m.group(2).strip()
+                    array_dim = m.group(3)
+                    init_val = m.group(4)
 
-                is_ptr = '*' in type_prefix or '*' in v_name
-                is_signed = not is_unsigned_type(type_prefix, custom_typedefs)
-                is_volatile = 'volatile' in type_prefix
-                is_vla = False
-                if array_dim is not None:
-                    dim_clean = array_dim.strip()
-                    if dim_clean and not dim_clean.isdigit() and not dim_clean.isupper() and not dim_clean.startswith('0x'):
-                        # Array dimension is variable -> VLA
-                        is_vla = True
+                    if v_name not in C_KEYWORDS and v_name.isidentifier():
+                        type_tokens = type_prefix.split()
+                        if not (type_tokens and type_tokens[-1] in _STATEMENT_KEYWORDS):
+                            is_ptr = '*' in type_prefix or '*' in v_name
+                            is_signed = not is_unsigned_type(type_prefix, custom_typedefs)
+                            is_volatile = 'volatile' in type_prefix
+                            is_vla = False
+                            if array_dim is not None:
+                                dim_clean = array_dim.strip()
+                                if dim_clean and not dim_clean.isdigit() and not dim_clean.isupper() and not dim_clean.startswith('0x'):
+                                    is_vla = True
 
-                c_var = CVariable(
-                    name=v_name,
-                    type_name=type_prefix,
-                    is_pointer=is_ptr,
-                    is_signed=is_signed,
-                    is_volatile=is_volatile,
-                    is_vla=is_vla,
-                    array_size_expr=array_dim,
-                    has_initializer=(init_val is not None),
-                    declaration_line=line_no,
-                )
-                if init_val:
-                    c_var.assigned_lines.append(line_no)
-                fn.variables[v_name] = c_var
+                            curr_block = scope_stack[-1]
+                            c_var = CVariable(
+                                name=v_name,
+                                type_name=type_prefix,
+                                is_pointer=is_ptr,
+                                is_signed=is_signed,
+                                is_volatile=is_volatile,
+                                is_vla=is_vla,
+                                array_size_expr=array_dim,
+                                has_initializer=(init_val is not None),
+                                declaration_line=line_no,
+                                enclosing_block_id=curr_block,
+                            )
+                            if init_val:
+                                c_var.assigned_lines.append(line_no)
+                            fn.variables[(v_name, curr_block)] = c_var
+
+                if char == '{':
+                    block_counter += 1
+                    parent_id = scope_stack[-1]
+                    block_parents[block_counter] = parent_id
+                    scope_stack.append(block_counter)
+                elif char == '}':
+                    if len(scope_stack) > 1:
+                        scope_stack.pop()
+
+        fn.block_parents = block_parents
 
         # Track variable life cycles (free, null-checks, reads, assignments, address-taking)
         assign_regex = re.compile(r'^\s*([a-zA-Z_]\w*)\s*(?:\[[^\]]*\]|\.\w+|->\w+)*\s*=(?!=)')
