@@ -25,6 +25,7 @@ class CGullConfig:
     dealloc_funcs: List[str] = field(default_factory=list)
     banned_funcs: Dict[str, Dict[str, str]] = field(default_factory=dict)  # fn_name -> {"reason": ..., "remediation": ...}
     exclude_paths: List[str] = field(default_factory=list)
+    include_roots: List[str] = field(default_factory=list)
     default_format: Optional[str] = None
     fail_on: Optional[str] = None
     warn_on_fallback: bool = False
@@ -177,116 +178,141 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
     Loads configuration from config_path or auto-discovers starting at target_path.
     Returns CGullConfig instance.
     """
+    from .includes import IncludeResolver
+
     cfg = CGullConfig()
     explicit_path_provided = config_path is not None
 
     if not config_path and target_path:
         config_path = find_config_file(target_path)
 
-    if not config_path:
+    if explicit_path_provided and not os.path.exists(config_path):
+        cfg.error = f"Configuration file '{config_path}' does not exist."
         return cfg
 
-    if not os.path.exists(config_path):
-        if explicit_path_provided:
-            cfg.error = f"Configuration file '{config_path}' does not exist."
-        return cfg
-
-    cfg.config_file_path = config_path
-    cfg.config_dir = os.path.dirname(os.path.abspath(config_path))
-
-    try:
-        with open(config_path, "rb") as f:
-            raw_toml = tomllib.load(f)
-    except Exception as e:
-        cfg.error = f"Failed to parse TOML configuration file {config_path}: {e}"
-        return cfg
-
-    # If pyproject.toml, extract [tool.cgull]
-    if os.path.basename(config_path) == "pyproject.toml":
-        raw_toml = raw_toml.get("tool", {}).get("cgull", {})
-        if not isinstance(raw_toml, dict):
+    raw_toml = {}
+    if config_path and os.path.exists(config_path):
+        cfg.config_file_path = config_path
+        cfg.config_dir = os.path.dirname(os.path.abspath(config_path))
+        try:
+            with open(config_path, "rb") as f:
+                raw_toml = tomllib.load(f)
+        except Exception as e:
+            cfg.error = f"Failed to parse TOML configuration file {config_path}: {e}"
             return cfg
 
-    # Validate schema version
-    if "schema_version" in raw_toml:
-        try:
-            cfg.schema_version = int(raw_toml["schema_version"])
-        except (ValueError, TypeError):
-            cfg.warnings.append(f"Invalid schema_version in {config_path}: expected integer")
+        # If pyproject.toml, extract [tool.cgull]
+        if os.path.basename(config_path) == "pyproject.toml":
+            raw_toml = raw_toml.get("tool", {}).get("cgull", {})
+            if not isinstance(raw_toml, dict):
+                raw_toml = {}
 
-    # Check top-level keys for unknown keys
-    known_top_keys = {"schema_version", "rules", "functions", "paths", "output"}
-    for key in raw_toml.keys():
-        if key not in known_top_keys:
-            cfg.warnings.append(f"Unknown key/section '[{key}]' in configuration file {config_path}")
+    base_search_dir = cfg.config_dir or (os.path.abspath(target_path) if target_path else os.getcwd())
+    if os.path.isfile(base_search_dir):
+        base_search_dir = os.path.dirname(base_search_dir)
 
-    # Section [rules]
-    rules_sec = raw_toml.get("rules", {})
-    if isinstance(rules_sec, dict):
-        # rules.skip
-        skip_raw = rules_sec.get("skip", {})
-        if isinstance(skip_raw, dict):
-            for r_id, reason in skip_raw.items():
-                cfg.skipped_rules[str(r_id).strip().upper()] = str(reason)
-        elif isinstance(skip_raw, list):
-            for r_id in skip_raw:
-                cfg.skipped_rules[str(r_id).strip().upper()] = "Disabled via configuration"
+    inc_resolver = IncludeResolver(base_dir=base_search_dir, load_cgullincludes=False)
 
-        # rules.severity
-        sev_raw = rules_sec.get("severity", {})
-        if isinstance(sev_raw, dict):
-            for r_id, val in sev_raw.items():
-                sev_enum = parse_severity_str(val)
-                if sev_enum:
-                    cfg.severity_overrides[str(r_id).strip().upper()] = sev_enum
-                else:
-                    cfg.warnings.append(f"Invalid severity value '{val}' for rule {r_id} in {config_path}")
+    if raw_toml:
+        # Validate schema version
+        if "schema_version" in raw_toml:
+            try:
+                cfg.schema_version = int(raw_toml["schema_version"])
+            except (ValueError, TypeError):
+                cfg.warnings.append(f"Invalid schema_version in {config_path}: expected integer")
 
-    # Section [functions]
-    funcs_sec = raw_toml.get("functions", {})
-    if isinstance(funcs_sec, dict):
-        # functions.memory
-        mem_sec = funcs_sec.get("memory", {})
-        if isinstance(mem_sec, dict):
-            for key_name, target_attr in [("alloc", "alloc_funcs"), ("realloc", "realloc_funcs"), ("dealloc", "dealloc_funcs")]:
-                func_list = mem_sec.get(key_name, [])
-                if isinstance(func_list, list):
-                    cleaned_funcs = []
-                    for fn in func_list:
-                        fn_str = str(fn).strip()
-                        if not fn_str.isidentifier():
-                            cfg.error = f"Invalid C function identifier '{fn}' in [functions.memory].{key_name} in {config_path}."
-                            return cfg
-                        cleaned_funcs.append(fn_str)
-                    setattr(cfg, target_attr, cleaned_funcs)
+        # Check top-level keys for unknown keys
+        known_top_keys = {"schema_version", "rules", "functions", "paths", "output", "includes"}
+        for key in raw_toml.keys():
+            if key not in known_top_keys:
+                cfg.warnings.append(f"Unknown key/section '[{key}]' in configuration file {config_path}")
 
-        # functions.banned
-        banned_sec = funcs_sec.get("banned", {})
-        if isinstance(banned_sec, dict):
-            for fn_name, details in banned_sec.items():
-                fn_str = str(fn_name).strip()
-                if not fn_str.isidentifier():
-                    cfg.error = f"Invalid C function identifier '{fn_name}' in [functions.banned] in {config_path}."
-                    return cfg
-                if isinstance(details, dict):
-                    reason = details.get("reason", f"Banned function call '{fn_str}'")
-                    remediation = details.get("remediation", f"Avoid using {fn_str}()")
-                    cfg.banned_funcs[fn_str] = {
-                        "reason": str(reason),
-                        "remediation": str(remediation),
-                    }
-                elif isinstance(details, str):
-                    cfg.banned_funcs[fn_str] = {
-                        "reason": str(details),
-                        "remediation": f"Avoid using {fn_str}()",
-                    }
+        # Section [rules]
+        rules_sec = raw_toml.get("rules", {})
+        if isinstance(rules_sec, dict):
+            # rules.skip
+            skip_raw = rules_sec.get("skip", {})
+            if isinstance(skip_raw, dict):
+                for r_id, reason in skip_raw.items():
+                    cfg.skipped_rules[str(r_id).strip().upper()] = str(reason)
+            elif isinstance(skip_raw, list):
+                for r_id in skip_raw:
+                    cfg.skipped_rules[str(r_id).strip().upper()] = "Disabled via configuration"
 
-    # Section [paths]
-    paths_sec = raw_toml.get("paths", {})
-    if isinstance(paths_sec, dict):
-        exclude_list = paths_sec.get("exclude", [])
-        if isinstance(exclude_list, list):
-            cfg.exclude_paths = [str(x) for x in exclude_list]
+            # rules.severity
+            sev_raw = rules_sec.get("severity", {})
+            if isinstance(sev_raw, dict):
+                for r_id, val in sev_raw.items():
+                    sev_enum = parse_severity_str(val)
+                    if sev_enum:
+                        cfg.severity_overrides[str(r_id).strip().upper()] = sev_enum
+                    else:
+                        cfg.warnings.append(f"Invalid severity value '{val}' for rule {r_id} in {config_path}")
+
+        # Section [functions]
+        funcs_sec = raw_toml.get("functions", {})
+        if isinstance(funcs_sec, dict):
+            # functions.memory
+            mem_sec = funcs_sec.get("memory", {})
+            if isinstance(mem_sec, dict):
+                for key_name, target_attr in [("alloc", "alloc_funcs"), ("realloc", "realloc_funcs"), ("dealloc", "dealloc_funcs")]:
+                    func_list = mem_sec.get(key_name, [])
+                    if isinstance(func_list, list):
+                        cleaned_funcs = []
+                        for fn in func_list:
+                            fn_str = str(fn).strip()
+                            if not fn_str.isidentifier():
+                                cfg.error = f"Invalid C function identifier '{fn}' in [functions.memory].{key_name} in {config_path}."
+                                return cfg
+                            cleaned_funcs.append(fn_str)
+                        setattr(cfg, target_attr, cleaned_funcs)
+
+            # functions.banned
+            banned_sec = funcs_sec.get("banned", {})
+            if isinstance(banned_sec, dict):
+                for fn_name, details in banned_sec.items():
+                    fn_str = str(fn_name).strip()
+                    if not fn_str.isidentifier():
+                        cfg.error = f"Invalid C function identifier '{fn_name}' in [functions.banned] in {config_path}."
+                        return cfg
+                    if isinstance(details, dict):
+                        reason = details.get("reason", f"Banned function call '{fn_str}'")
+                        remediation = details.get("remediation", f"Avoid using {fn_str}()")
+                        cfg.banned_funcs[fn_str] = {
+                            "reason": str(reason),
+                            "remediation": str(remediation),
+                        }
+                    elif isinstance(details, str):
+                        cfg.banned_funcs[fn_str] = {
+                            "reason": str(details),
+                            "remediation": f"Avoid using {fn_str}()",
+                        }
+
+        # Section [paths]
+        paths_sec = raw_toml.get("paths", {})
+        if isinstance(paths_sec, dict):
+            exclude_list = paths_sec.get("exclude", [])
+            if isinstance(exclude_list, list):
+                cfg.exclude_paths = [str(x) for x in exclude_list]
+            inc_list = paths_sec.get("include_roots", [])
+            if isinstance(inc_list, list):
+                for x in inc_list:
+                    inc_resolver.add_include_root(str(x), relative_to=base_search_dir)
+
+        # Section [includes]
+        includes_sec = raw_toml.get("includes", {})
+        if isinstance(includes_sec, dict):
+            inc_list = includes_sec.get("include_roots", includes_sec.get("roots", []))
+            if isinstance(inc_list, list):
+                for x in inc_list:
+                    inc_resolver.add_include_root(str(x), relative_to=base_search_dir)
+
+    # Load .cgullincludes if present in base_search_dir
+    cgullinc_path = os.path.join(base_search_dir, ".cgullincludes")
+    if os.path.isfile(cgullinc_path):
+        inc_resolver.load_from_file(cgullinc_path)
+
+    cfg.include_roots = list(inc_resolver.include_roots)
 
     # Section [output]
     output_sec = raw_toml.get("output", {})

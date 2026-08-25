@@ -321,6 +321,7 @@ def handle_scan(args) -> int:
         defined_syms=seed_flags if seed_flags else None,
         config_strategy=config_strategy,
         exhaustive_threshold=exhaustive_threshold,
+        include_roots=config.include_roots,
     )
 
     scanner = CGullScanner(
