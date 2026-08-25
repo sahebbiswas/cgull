@@ -53,6 +53,7 @@ from .misra_and_style import (
     ParameterVoidRule,
     UnusedArgumentsRule,
     MissingAssertionsRule,
+    UnusedLocalVariablesRule,
 )
 
 ALL_RULES: List[Type[BaseRule]] = [
@@ -99,6 +100,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     ParameterVoidRule,
     UnusedArgumentsRule,
     MissingAssertionsRule,
+    UnusedLocalVariablesRule,
 ]
 
 RULE_REGISTRY: Dict[str, Type[BaseRule]] = {

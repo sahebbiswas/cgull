@@ -126,6 +126,26 @@ class TestVariableExtraction(unittest.TestCase):
         ctx = self.parser.parse("void f(void) {\n    while (1) {\n        break;\n    }\n}")
         self.assertEqual(len(ctx.functions[0].variables), 0)
 
+    def test_block_scoped_shadowing_variables_tracked_independently(self):
+        src = """
+        void f(void) {
+            int i = 0;
+            {
+                int i = 10;
+                i++;
+            }
+        }
+        """
+        ctx = self.parser.parse(src)
+        fn = ctx.functions[0]
+        # Should have 2 CVariables in total across scopes
+        all_vars = list(fn.variables.values())
+        self.assertEqual(len(all_vars), 2)
+        outer_i = next(v for v in all_vars if v.enclosing_block_id == 1)
+        inner_i = next(v for v in all_vars if v.enclosing_block_id == 2)
+        self.assertEqual(outer_i.read_lines, [])
+        self.assertGreater(len(inner_i.read_lines), 0)
+
 
 @unittest.skipUnless(_pycparser_available(), "pycparser not installed")
 class TestPycparserIntegration(unittest.TestCase):

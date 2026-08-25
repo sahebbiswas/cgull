@@ -1028,6 +1028,46 @@ class TestMemoryLeak(unittest.TestCase):
         self.assertEqual(len(issues), 0)
 
 
+class TestUnusedLocalVariables(unittest.TestCase):
+    def test_detects_unused_local_variable(self):
+        code = "int compute(int x) {\n    int unused_local = 42;\n    return x;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("unused_local", issues[0].message)
+
+    def test_detects_unused_variables_in_nested_scopes(self):
+        code = """
+        int compute(int x) {
+            int unused_local = 42;
+            switch (x) {
+                case 1: {
+                    int unused_case_var = 7;
+                    return 1;
+                }
+                default:
+                    return 0;
+            }
+        }
+        """
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 2)
+
+    def test_clean_used_local_variable(self):
+        code = "int compute(int x) {\n    int y = 42;\n    return x + y;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_address_taken(self):
+        code = "void f(void) {\n    int x = 0;\n    int *p = &x;\n    *p = 10;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_clean_void_cast_silenced(self):
+        code = "void f(void) {\n    int silenced = 10;\n    (void)silenced;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 
