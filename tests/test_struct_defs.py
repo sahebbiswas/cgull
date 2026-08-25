@@ -57,6 +57,72 @@ def test_acceptance_criteria_struct_defs():
     assert field_inner_buf.array_size == 16
 
 
+def test_tagged_inline_typedef():
+    code = """
+    typedef struct TaggedStruct {
+        int val;
+    } TaggedAlias_t;
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+
+    sd_tag = ctx.get_struct_def("TaggedStruct")
+    sd_struct_tag = ctx.get_struct_def("struct TaggedStruct")
+    sd_alias = ctx.get_struct_def("TaggedAlias_t")
+
+    assert sd_tag is not None
+    assert sd_tag is sd_struct_tag
+    assert sd_tag is sd_alias
+    assert sd_tag["val"].type_name in ("int", "int val")
+
+
+def test_pointer_typedef_fields():
+    code = """
+    struct Node { int data; };
+    typedef struct Node *NodePtr_t;
+    typedef int *IntPtr_t;
+
+    struct Wrapper {
+        NodePtr_t node_p;
+        IntPtr_t int_p;
+    };
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+
+    sd = ctx.get_struct_def("Wrapper")
+    assert sd is not None
+
+    p1 = sd["node_p"]
+    assert p1.is_pointer is True
+    assert p1.is_struct_or_union is True
+    assert p1.nested_tag == "Node"
+
+    p2 = sd["int_p"]
+    assert p2.is_pointer is True
+    assert p2.is_struct_or_union is False
+
+
+def test_array_typedef_fields():
+    code = """
+    typedef char Buffer32_t[32];
+
+    struct Header {
+        int magic;
+        Buffer32_t buf;
+    };
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+
+    sd = ctx.get_struct_def("Header")
+    assert sd is not None
+
+    f = sd["buf"]
+    assert f.is_array is True
+    assert f.array_size == 32
+
+
 def test_array_dimension_constant_resolution():
     code = """
     #define BUF_SIZE 64
@@ -150,9 +216,17 @@ def test_fallback_regex_parser_struct_defs():
         struct Inner *in_ptr;
     };
     typedef struct A A_t;
+
+    typedef struct TaggedStruct { int val; } TaggedAlias_t;
+    typedef struct Inner *InnerPtr_t;
+    typedef char Buffer32_t[32];
+
+    struct Container {
+        InnerPtr_t ptr;
+        Buffer32_t buf;
+    };
     """
     parser = CASTParser()
-    # Force regex fallback extraction directly
     struct_defs = parser._extract_struct_defs_from_regex(code)
 
     assert "A" in struct_defs
@@ -166,6 +240,17 @@ def test_fallback_regex_parser_struct_defs():
     assert sd_a["in"].nested_tag == "Inner"
     assert sd_a["in_ptr"].is_pointer is True
     assert sd_a["in_ptr"].nested_tag == "Inner"
+
+    assert "TaggedStruct" in struct_defs
+    assert "TaggedAlias_t" in struct_defs
+    assert struct_defs["TaggedStruct"] is struct_defs["TaggedAlias_t"]
+
+    sd_c = struct_defs["Container"]
+    assert sd_c["ptr"].is_pointer is True
+    assert sd_c["ptr"].is_struct_or_union is True
+    assert sd_c["ptr"].nested_tag == "Inner"
+    assert sd_c["buf"].is_array is True
+    assert sd_c["buf"].array_size == 32
 
 
 def test_struct_def_dict_methods():

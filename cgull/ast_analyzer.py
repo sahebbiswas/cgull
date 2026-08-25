@@ -1665,6 +1665,48 @@ class StructDef:
 
 
 @dataclass
+class TypedefShape:
+    """
+    Tracks typedef target type, pointer status, array status, and array size.
+    """
+    target: str
+    is_pointer: bool = False
+    is_array: bool = False
+    array_size: Optional[int] = None
+
+
+def resolve_typedef_shape(
+    type_name: str,
+    typedef_shapes: Dict[str, TypedefShape],
+    visited: Optional[Set[str]] = None
+) -> TypedefShape:
+    """
+    Recursively resolves typedef shape chains (pointers, arrays, target struct tags/types).
+    """
+    if visited is None:
+        visited = set()
+
+    clean_type = re.sub(r'^(?:const|volatile|struct|union)\s+', '', type_name.strip()).rstrip(' *').strip()
+    if not clean_type or clean_type in visited or clean_type not in typedef_shapes:
+        return TypedefShape(target=type_name)
+
+    visited.add(clean_type)
+    shape = typedef_shapes[clean_type]
+    sub = resolve_typedef_shape(shape.target, typedef_shapes, visited)
+
+    is_pointer = shape.is_pointer or sub.is_pointer or ('*' in type_name)
+    is_array = shape.is_array or sub.is_array
+    array_size = shape.array_size if shape.array_size is not None else sub.array_size
+
+    return TypedefShape(
+        target=sub.target,
+        is_pointer=is_pointer,
+        is_array=is_array,
+        array_size=array_size,
+    )
+
+
+@dataclass
 class CASTContext:
     functions: List[CFunction]
     global_variables: Dict[str, CVariable]
@@ -2356,12 +2398,13 @@ class CASTParser:
 
         struct_defs: Dict[str, StructDef] = {}
         typedef_aliases: Dict[str, str] = {}
+        typedef_shapes: Dict[str, TypedefShape] = {}
 
         def process_struct_or_union_node(node, name_override: Optional[str] = None):
             is_union = isinstance(node, c_ast.Union)
-            tag = name_override or node.name
-            if not tag and not getattr(node, "decls", None):
-                return None
+            struct_tag = node.name
+            typedef_name = name_override
+            main_name = struct_tag or typedef_name or f"anon_{id(node)}"
 
             fields_map: Dict[str, FieldInfo] = {}
             if getattr(node, "decls", None):
@@ -2428,14 +2471,15 @@ class CASTParser:
                         is_union=is_field_union,
                     )
 
-            main_name = tag or f"anon_{id(node)}"
             sd = StructDef(name=main_name, is_union=is_union, fields=fields_map)
-            if tag:
-                struct_defs[tag] = sd
-                prefix = "union" if is_union else "struct"
-                struct_defs[f"{prefix} {tag}"] = sd
-            if name_override and name_override != tag:
-                struct_defs[name_override] = sd
+            prefix = "union" if is_union else "struct"
+
+            if struct_tag:
+                struct_defs[struct_tag] = sd
+                struct_defs[f"{prefix} {struct_tag}"] = sd
+            if typedef_name:
+                struct_defs[typedef_name] = sd
+                struct_defs[f"{prefix} {typedef_name}"] = sd
 
             return sd
 
@@ -2448,11 +2492,42 @@ class CASTParser:
             def visit_Typedef(self, node):
                 td_name = node.name
                 curr = node.type
-                while isinstance(curr, c_ast.PtrDecl):
+
+                is_arr = False
+                arr_size = None
+                if isinstance(curr, c_ast.ArrayDecl):
+                    is_arr = True
+                    dim_node = curr.dim
+                    if dim_node is None:
+                        arr_size = None
+                    elif isinstance(dim_node, c_ast.Constant):
+                        try:
+                            val = int(str(dim_node.value), 0)
+                            arr_size = val if val > 0 else None
+                        except ValueError:
+                            arr_size = resolve_constant_expr(str(dim_node.value), clean_code)
+                    elif isinstance(dim_node, c_ast.ID):
+                        arr_size = resolve_constant_expr(dim_node.name, clean_code)
+                    else:
+                        expr_str = _format_pycparser_expr(dim_node)
+                        arr_size = resolve_constant_expr(expr_str, clean_code)
                     curr = curr.type
+
+                is_ptr = False
+                while isinstance(curr, c_ast.PtrDecl):
+                    is_ptr = True
+                    curr = curr.type
+
                 if isinstance(curr, c_ast.TypeDecl):
                     inner = curr.type
                     if isinstance(inner, (c_ast.Struct, c_ast.Union)):
+                        underlying = inner.name or td_name
+                        typedef_shapes[td_name] = TypedefShape(
+                            target=underlying,
+                            is_pointer=is_ptr,
+                            is_array=is_arr,
+                            array_size=arr_size,
+                        )
                         if getattr(inner, "decls", None):
                             sd = process_struct_or_union_node(inner, name_override=td_name)
                             if sd and td_name:
@@ -2463,12 +2538,19 @@ class CASTParser:
                     elif isinstance(inner, c_ast.IdentifierType):
                         underlying = ' '.join(getattr(inner, 'names', []))
                         if underlying:
+                            typedef_shapes[td_name] = TypedefShape(
+                                target=underlying,
+                                is_pointer=is_ptr,
+                                is_array=is_arr,
+                                array_size=arr_size,
+                            )
                             typedef_aliases[td_name] = underlying
+
                 self.generic_visit(node)
 
         StructVisitor().visit(pycparser_ast)
 
-        # Pass 2: Resolve typedef aliases and update field nested tags
+        # Pass 2: Resolve typedef aliases and update field nested tags, pointers, and array shapes
         for alias_name, target_name in typedef_aliases.items():
             target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
             if target_clean in struct_defs:
@@ -2476,40 +2558,90 @@ class CASTParser:
             elif target_name in struct_defs:
                 struct_defs[alias_name] = struct_defs[target_name]
 
-        # Post-process fields to resolve nested struct/union tags if field.type_name matches a struct/typedef
+        # Post-process fields to merge typedef pointer/array shapes and resolve nested struct/union tags
         for sd in list(struct_defs.values()):
             for field in sd.fields.values():
-                if not field.is_struct_or_union:
-                    raw_type = field.type_name.strip()
-                    clean_type = re.sub(r'^(?:const|volatile|struct|union)\s+', '', raw_type).rstrip(' *').strip()
-                    matched_sd = None
-                    if clean_type in struct_defs:
-                        matched_sd = struct_defs[clean_type]
-                    elif f"struct {clean_type}" in struct_defs:
-                        matched_sd = struct_defs[f"struct {clean_type}"]
-                    elif f"union {clean_type}" in struct_defs:
-                        matched_sd = struct_defs[f"union {clean_type}"]
+                raw_type = field.type_name.strip()
+                clean_type = re.sub(r'^(?:const|volatile|struct|union)\s+', '', raw_type).rstrip(' *').strip()
 
-                    if matched_sd:
-                        field.is_struct_or_union = True
-                        field.nested_tag = matched_sd.name
-                        field.is_union = matched_sd.is_union
+                if clean_type in typedef_shapes:
+                    shape = resolve_typedef_shape(clean_type, typedef_shapes)
+                    if shape.is_pointer:
+                        field.is_pointer = True
+                    if shape.is_array:
+                        field.is_array = True
+                        if field.array_size is None:
+                            field.array_size = shape.array_size
+
+                clean_target = clean_type
+                if clean_type in typedef_shapes:
+                    clean_target = resolve_typedef_shape(clean_type, typedef_shapes).target
+                    clean_target = re.sub(r'^(?:const|volatile|struct|union)\s+', '', clean_target).rstrip(' *').strip()
+
+                matched_sd = None
+                for candidate in (clean_target, clean_type):
+                    if candidate in struct_defs:
+                        matched_sd = struct_defs[candidate]
+                        break
+                    elif f"struct {candidate}" in struct_defs:
+                        matched_sd = struct_defs[f"struct {candidate}"]
+                        break
+                    elif f"union {candidate}" in struct_defs:
+                        matched_sd = struct_defs[f"union {candidate}"]
+                        break
+
+                if matched_sd:
+                    field.is_struct_or_union = True
+                    field.nested_tag = matched_sd.name
+                    field.is_union = matched_sd.is_union
 
         return struct_defs
 
     def _extract_struct_defs_from_regex(self, clean_code: str) -> Dict[str, StructDef]:
         struct_defs: Dict[str, StructDef] = {}
         typedef_aliases: Dict[str, str] = {}
+        typedef_shapes: Dict[str, TypedefShape] = {}
 
-        # 1. Match typedef alias statements: typedef struct A A_t; or typedef union A A_t;
-        alias_regex = re.compile(
-            r'\btypedef\s+(struct|union)\s+([a-zA-Z_]\w*)\s+([a-zA-Z_]\w*)\s*;',
+        # 1. Match typedef statements:
+        # e.g. typedef struct Inner * InnerPtr_t;
+        # typedef char Buffer16_t[16];
+        # typedef struct A A_t;
+        typedef_stmt_regex = re.compile(
+            r'\btypedef\s+([^;]+);',
             re.MULTILINE
         )
-        for m in alias_regex.finditer(clean_code):
-            tag = m.group(2)
-            alias = m.group(3)
-            typedef_aliases[alias] = tag
+        for m in typedef_stmt_regex.finditer(clean_code):
+            body = m.group(1).strip()
+            if '{' in body or '}' in body:
+                continue
+            m_arr = re.search(r'^(.*?)\b([a-zA-Z_]\w*)\s*\[\s*([^\]]*)\s*\]$', body)
+            m_decl = re.search(r'^(.*?)\b([a-zA-Z_]\w*)$', body)
+            if m_arr:
+                base_t = m_arr.group(1).strip()
+                td_name = m_arr.group(2).strip()
+                dim_s = m_arr.group(3).strip()
+                is_ptr = '*' in base_t
+                arr_sz = resolve_constant_expr(dim_s, clean_code) if dim_s else None
+                clean_target = re.sub(r'^(?:const|volatile|struct|union)\s+', '', base_t).rstrip(' *').strip()
+                typedef_shapes[td_name] = TypedefShape(
+                    target=clean_target,
+                    is_pointer=is_ptr,
+                    is_array=True,
+                    array_size=arr_sz,
+                )
+                typedef_aliases[td_name] = clean_target
+            elif m_decl:
+                base_t = m_decl.group(1).strip()
+                td_name = m_decl.group(2).strip()
+                is_ptr = '*' in base_t or '*' in td_name
+                clean_target = re.sub(r'^(?:const|volatile|struct|union)\s+', '', base_t).rstrip(' *').strip()
+                typedef_shapes[td_name] = TypedefShape(
+                    target=clean_target,
+                    is_pointer=is_ptr,
+                    is_array=False,
+                    array_size=None,
+                )
+                typedef_aliases[td_name] = clean_target
 
         # 2. Find struct and union definitions with bodies: [typedef] struct/union [Tag] { body } [Aliases];
         struct_def_regex = re.compile(
@@ -2540,7 +2672,6 @@ class CASTParser:
 
             body = clean_code[body_start:curr_pos - 1]
 
-            # Look for trailing declarators/aliases after closing brace before ';'
             after_pos = curr_pos
             semicolon_pos = clean_code.find(';', after_pos)
             trailing_str = ""
@@ -2556,7 +2687,6 @@ class CASTParser:
 
             fields_map: Dict[str, FieldInfo] = {}
 
-            # Parse fields inside body
             for stmt in body.split(';'):
                 stmt = stmt.strip()
                 if not stmt or stmt.startswith('#'):
@@ -2624,14 +2754,15 @@ class CASTParser:
 
             main_name = tag or (aliases[0] if aliases else f"anon_{m.start()}")
             sd = StructDef(name=main_name, is_union=is_union, fields=fields_map)
+            prefix = "union" if is_union else "struct"
 
             if tag:
                 struct_defs[tag] = sd
-                prefix = "union" if is_union else "struct"
                 struct_defs[f"{prefix} {tag}"] = sd
 
             for alias in aliases:
                 struct_defs[alias] = sd
+                struct_defs[f"{prefix} {alias}"] = sd
 
         # Pass 2: Resolve simple typedef aliases
         for alias_name, target_name in typedef_aliases.items():
@@ -2641,28 +2772,45 @@ class CASTParser:
             elif target_name in struct_defs:
                 struct_defs[alias_name] = struct_defs[target_name]
 
-        # Post-process fields for nested structs/unions
+        # Post-process fields for nested structs/unions and typedef shapes
         for sd in list(struct_defs.values()):
             for field in sd.fields.values():
-                if not field.is_struct_or_union:
-                    raw_type = field.type_name.strip()
-                    clean_type = re.sub(r'^(?:const|volatile|struct|union)\s+', '', raw_type).rstrip(' *').strip()
-                    if field.name and clean_type.endswith(field.name):
-                        clean_type = clean_type[:-len(field.name)].strip()
-                    clean_type = clean_type.rstrip(' *').strip()
+                raw_type = field.type_name.strip()
+                clean_type = re.sub(r'^(?:const|volatile|struct|union)\s+', '', raw_type).rstrip(' *').strip()
+                if field.name and clean_type.endswith(field.name):
+                    clean_type = clean_type[:-len(field.name)].strip()
+                clean_type = clean_type.rstrip(' *').strip()
 
-                    matched_sd = None
-                    if clean_type in struct_defs:
-                        matched_sd = struct_defs[clean_type]
-                    elif f"struct {clean_type}" in struct_defs:
-                        matched_sd = struct_defs[f"struct {clean_type}"]
-                    elif f"union {clean_type}" in struct_defs:
-                        matched_sd = struct_defs[f"union {clean_type}"]
+                if clean_type in typedef_shapes:
+                    shape = resolve_typedef_shape(clean_type, typedef_shapes)
+                    if shape.is_pointer:
+                        field.is_pointer = True
+                    if shape.is_array:
+                        field.is_array = True
+                        if field.array_size is None:
+                            field.array_size = shape.array_size
 
-                    if matched_sd:
-                        field.is_struct_or_union = True
-                        field.nested_tag = matched_sd.name
-                        field.is_union = matched_sd.is_union
+                clean_target = clean_type
+                if clean_type in typedef_shapes:
+                    clean_target = resolve_typedef_shape(clean_type, typedef_shapes).target
+                    clean_target = re.sub(r'^(?:const|volatile|struct|union)\s+', '', clean_target).rstrip(' *').strip()
+
+                matched_sd = None
+                for candidate in (clean_target, clean_type):
+                    if candidate in struct_defs:
+                        matched_sd = struct_defs[candidate]
+                        break
+                    elif f"struct {candidate}" in struct_defs:
+                        matched_sd = struct_defs[f"struct {candidate}"]
+                        break
+                    elif f"union {candidate}" in struct_defs:
+                        matched_sd = struct_defs[f"union {candidate}"]
+                        break
+
+                if matched_sd:
+                    field.is_struct_or_union = True
+                    field.nested_tag = matched_sd.name
+                    field.is_union = matched_sd.is_union
 
         return struct_defs
 
