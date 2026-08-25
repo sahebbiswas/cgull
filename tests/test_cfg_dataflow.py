@@ -1203,5 +1203,65 @@ class TestInterproceduralCFGSummaries(unittest.TestCase):
         self.assertEqual(len(issues_uaf), 0)
 
 
+class TestMultilineStatementLinePrecision(unittest.TestCase):
+
+    def test_multiline_call_param_deref_line_precision(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import MissingNullCheckOnFunctionParametersRule
+
+        code = """
+        void log3(int x, int y, int z);
+
+        int process(int *p) {
+            int x = 1;
+            int y = 2;
+            log3(
+                x,
+                y,
+                *p
+            );
+            return 0;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule = MissingNullCheckOnFunctionParametersRule()
+        issues = rule.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 10)
+        self.assertEqual(issues[0].code_snippet, "*p")
+
+    def test_multiline_call_null_deref_line_precision(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import MissingNullCheckOnFunctionParametersRule
+
+        code = """
+        void log3(int x, int y, int z);
+
+        int process(void) {
+            int x = 1;
+            int y = 2;
+            int *q = 0;
+            log3(
+                x,
+                y,
+                *q
+            );
+            return 0;
+        }
+        """
+        parser = CASTParser()
+        ast_ctx = parser.parse(code)
+        self.assertTrue(ast_ctx.has_pycparser)
+
+        rule = MissingNullCheckOnFunctionParametersRule()
+        issues = rule.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 11)
+        self.assertEqual(issues[0].code_snippet, "*q")
+
+
 if __name__ == "__main__":
     unittest.main()
