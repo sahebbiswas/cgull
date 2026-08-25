@@ -267,12 +267,51 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
 
-        def get_array_declared_size(arr_name: str, fn, line_no: Optional[int] = None, visited: Optional[set] = None) -> Optional[int]:
+        def get_array_declared_size(arr_name: str, fn, line_no: Optional[int] = None, visited: Optional[set] = None, node=None) -> Optional[int]:
             if visited is None:
                 visited = set()
             if arr_name in visited:
                 return None
             visited.add(arr_name)
+
+            # Check for struct member access chains (e.g. a->array_a, a.array_a, a->in.inner_buf, arr[k].array_a)
+            base_expr_str = None
+            fields = []
+
+            if node is not None:
+                s_node = node.name if type(node).__name__ == "ArrayRef" else node
+                if type(s_node).__name__ == "StructRef":
+                    curr = s_node
+                    while type(curr).__name__ == "StructRef":
+                        fields.append(curr.field.name)
+                        curr = curr.name
+                    fields.reverse()
+                    from ..ast_analyzer import _format_pycparser_expr
+                    base_expr_str = _format_pycparser_expr(curr)
+
+            if not fields and ('->' in arr_name or '.' in arr_name):
+                parts = re.split(r'->|\.', arr_name)
+                base_expr_str = parts[0].strip()
+                fields = [p.strip() for p in parts[1:] if p.strip()]
+
+            if base_expr_str and fields:
+                sdef = ast_ctx.resolve_struct_def(fn, base_expr_str)
+                curr_sdef = sdef
+                target_field = None
+                for f_name in fields:
+                    if not curr_sdef:
+                        target_field = None
+                        break
+                    target_field = curr_sdef.get(f_name)
+                    if not target_field:
+                        break
+                    if target_field.is_struct_or_union:
+                        nested_tag = target_field.nested_tag or target_field.type_name
+                        curr_sdef = ast_ctx.get_struct_def(nested_tag)
+                    else:
+                        curr_sdef = None
+                if target_field and target_field.is_array and target_field.array_size is not None:
+                    return target_field.array_size
 
             var_obj = fn.variables.get(arr_name) or ast_ctx.global_variables.get(arr_name)
             if var_obj and var_obj.array_size_expr:
@@ -518,7 +557,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                         sub_expr = _format_pycparser_expr(node.subscript)
                         sub_ids = _extract_identifiers_from_ast(node.subscript, ignore_callees=True)
 
-                        arr_size = get_array_declared_size(arr_name, fn, line_no=line_no)
+                        arr_size = get_array_declared_size(arr_name, fn, line_no=line_no, node=node)
 
                         # Find corresponding CFG node
                         cfg_nodes_for_line = [nid for nid, cfg_n in cfg.nodes.items() if cfg_n.line_number == line_no]
