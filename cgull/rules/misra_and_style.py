@@ -472,7 +472,7 @@ class DeadStoresRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
-        from ..cfg import build_cfg, find_function_def, _PRELUDE_LINE_COUNT
+        from ..cfg import build_cfg, find_function_def
 
         summaries = None
         if hasattr(ast_ctx, "functions") and ast_ctx.functions:
@@ -502,7 +502,7 @@ class DeadStoresRule(BaseRule):
 
             if cfg is not None and cfg.nodes:
                 # AST/CFG path reachability check
-                initial_initialized = set(p.name for p in fn.parameters if p.name) | set(getattr(ast_ctx, "global_variables", {}).keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
+                initial_initialized = set(p.name for p in fn.parameters if p.name) | set(getattr(ast_ctx, "global_variables", {}).keys()) | {var.name for var in fn.variables.values() if getattr(var, "has_initializer", False) and var.name}
                 cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
 
                 # For each write node writing to a local_var v:

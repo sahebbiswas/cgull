@@ -2788,7 +2788,7 @@ class CASTParser:
                     c_var.assigned_lines.append(line_no)
                 fn.variables[v_name] = c_var
 
-        # Track variable life cycles (free, null-checks, reads, assignments)
+        # Track variable life cycles (free, null-checks, reads, assignments, address-taking)
         assign_regex = re.compile(r'^\s*([a-zA-Z_]\w*)\s*(?:\[[^\]]*\]|\.\w+|->\w+)*\s*=(?!=)')
         for i, line in enumerate(body_lines):
             line_no = fn_start + i
@@ -2813,6 +2813,47 @@ class CASTParser:
                    re.search(rf'\bif\s*\(\s*{re.escape(v_name)}\s*\)', line):
                     if v_name in fn.variables:
                         fn.variables[v_name].checked_null_lines.append(line_no)
+
+            # Check address-taking & reads for local variables in fallback mode
+            for v_name, c_var in fn.variables.items():
+                if not v_name or v_name in C_KEYWORDS:
+                    continue
+
+                # Address-taken check: &v_name
+                if re.search(rf'&\s*\b{re.escape(v_name)}\b', line):
+                    c_var.address_taken = True
+                    if line_no not in c_var.address_taken_lines:
+                        c_var.address_taken_lines.append(line_no)
+
+                # Read check:
+                if re.search(rf'\b{re.escape(v_name)}\b', line):
+                    is_read = False
+                    # 1. Declaration line: read if v_name appears in initializer / RHS or multiple times on decl line
+                    if line_no == c_var.declaration_line:
+                        if '=' in line:
+                            rhs = line.split('=', 1)[1]
+                            if re.search(rf'\b{re.escape(v_name)}\b', rhs):
+                                is_read = True
+                        # Check if v_name appears > 1 times on declaration line
+                        if len(re.findall(rf'\b{re.escape(v_name)}\b', line)) > 1:
+                            is_read = True
+                    else:
+                        # 2. Compound assignment / inc / dec on v_name
+                        if re.search(rf'\b{re.escape(v_name)}\s*(?:\+\+|--|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=)', line) or \
+                           re.search(rf'(?:\+\+|--)\s*\b{re.escape(v_name)}\b', line):
+                            is_read = True
+                        else:
+                            # 3. Pure LHS assignment v_name = ...
+                            m_pure_assign = re.match(rf'^\s*{re.escape(v_name)}\s*=(?!=)\s*(.*)$', line)
+                            if m_pure_assign:
+                                rhs = m_pure_assign.group(1)
+                                if re.search(rf'\b{re.escape(v_name)}\b', rhs):
+                                    is_read = True
+                            else:
+                                is_read = True
+
+                    if is_read and line_no not in c_var.read_lines:
+                        c_var.read_lines.append(line_no)
 
     def _extract_global_vars(self, lines: List[str], functions: List[CFunction], custom_typedefs: Optional[Set[str]] = None) -> Dict[str, CVariable]:
         global_vars: Dict[str, CVariable] = {}

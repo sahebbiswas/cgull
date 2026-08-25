@@ -42,3 +42,28 @@ def test_dead_stores_volatile_and_address_taken():
     """
     issues = scan_with_rule("CGULL-042", code)
     assert len(issues) == 0
+
+
+def test_dead_stores_fallback_mode_address_taken_and_reads():
+    from cgull.ast_analyzer import CASTParser
+    code = """
+    void foo(void) {
+        volatile int v = 1;
+        v = 2;
+
+        int a = 10;
+        int *p = &a;
+        a = 20;
+        (void)p;
+
+        int used = 5;
+        use_val(used);
+    }
+    """
+    ast_parser = CASTParser()
+    ast_ctx = ast_parser.parse(code)
+    ast_ctx.has_pycparser = False
+    ast_ctx.pycparser_ast = None
+    rule = get_rule_by_id("CGULL-042")
+    issues = rule.scan_ast("test.c", ast_ctx)
+    assert len(issues) == 0
