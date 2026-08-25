@@ -279,15 +279,56 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             fields = []
 
             if node is not None:
-                s_node = node.name if type(node).__name__ == "ArrayRef" else node
-                if type(s_node).__name__ == "StructRef":
-                    curr = s_node
-                    while type(curr).__name__ == "StructRef":
-                        fields.append(curr.field.name)
-                        curr = curr.name
-                    fields.reverse()
-                    from ..ast_analyzer import _format_pycparser_expr
-                    base_expr_str = _format_pycparser_expr(curr)
+                from pycparser import c_ast
+                from ..ast_analyzer import _format_pycparser_expr
+
+                def decompose_access(n):
+                    if isinstance(n, c_ast.ArrayRef):
+                        base, chain = decompose_access(n.name)
+                        chain.append(('array_subscript', n.subscript))
+                        return base, chain
+                    elif isinstance(n, c_ast.StructRef):
+                        base, chain = decompose_access(n.name)
+                        chain.append(('member_access', n.type, n.field.name))
+                        return base, chain
+                    else:
+                        return n, []
+
+                base_node, access_chain = decompose_access(node)
+                if access_chain:
+                    base_expr_str = _format_pycparser_expr(base_node)
+                    curr_sdef = ast_ctx.resolve_struct_def(fn, base_expr_str)
+
+                    if curr_sdef:
+                        idx = 0
+                        N = len(access_chain)
+                        while idx < N and curr_sdef:
+                            elem_kind, *elem_data = access_chain[idx]
+                            if elem_kind != 'member_access':
+                                break
+                            _, f_name = elem_data
+                            field = curr_sdef.get(f_name)
+                            if not field:
+                                break
+                            idx += 1
+
+                            num_consumed = 0
+                            while idx < N and access_chain[idx][0] == 'array_subscript':
+                                num_consumed += 1
+                                idx += 1
+
+                            if idx == N:
+                                if field.is_array:
+                                    dims = field.array_dims if getattr(field, 'array_dims', None) else ([field.array_size] if field.array_size is not None else [])
+                                    if 1 <= num_consumed <= len(dims):
+                                        return dims[num_consumed - 1]
+                                return None
+                            else:
+                                if field.is_struct_or_union:
+                                    nested_tag = field.nested_tag or field.type_name
+                                    curr_sdef = ast_ctx.get_struct_def(nested_tag)
+                                else:
+                                    curr_sdef = None
 
             if not fields and ('->' in arr_name or '.' in arr_name):
                 parts = re.split(r'->|\.', arr_name)

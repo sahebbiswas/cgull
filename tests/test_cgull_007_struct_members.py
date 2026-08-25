@@ -173,3 +173,70 @@ def test_struct_member_variants_v1_to_v7():
     }
     for good_fn in expected_good:
         assert good_fn not in reported_fn_names, f"Unexpected issue in {good_fn}"
+
+
+def test_multidimensional_and_inline_anon_members():
+    code = """
+    struct Child { char buf[30]; };
+    struct Parent {
+        char matrix[10][20];
+        struct Child children[5];
+        struct {
+            int anon_buf[40];
+        } anon;
+    };
+
+    void fun_matrix_bad(struct Parent *p, int i, int j) {
+        if (j >= 0 && j < 50) { /* Wrong upper bound: real dim 1 capacity is 20 */
+            p->matrix[0][j] = 0;
+        }
+    }
+
+    void fun_matrix_good(struct Parent *p, int i, int j) {
+        if (j >= 0 && j < 20) {
+            p->matrix[0][j] = 0;
+        }
+    }
+
+    void fun_nested_array_struct_bad(struct Parent *p, int i) {
+        if (i >= 0 && i < 100) { /* Wrong upper bound: real buf capacity is 30 */
+            p->children[0].buf[i] = 0;
+        }
+    }
+
+    void fun_nested_array_struct_good(struct Parent *p, int i) {
+        if (i >= 0 && i < 30) {
+            p->children[0].buf[i] = 0;
+        }
+    }
+
+    void fun_anon_bad(struct Parent *p, int i) {
+        if (i >= 0 && i < 80) { /* Wrong upper bound: real anon_buf capacity is 40 */
+            p->anon.anon_buf[i] = 0;
+        }
+    }
+
+    void fun_anon_good(struct Parent *p, int i) {
+        if (i >= 0 && i < 40) {
+            p->anon.anon_buf[i] = 0;
+        }
+    }
+    """
+    ctx = CASTParser().parse(code)
+    rule = ArrayIndexOutOfBoundsRule()
+    issues = rule.scan_ast("test.c", ctx)
+
+    reported_fn_names = set()
+    for issue in issues:
+        for fn in ctx.functions:
+            if fn.start_line <= issue.line_number <= fn.end_line:
+                reported_fn_names.add(fn.name)
+
+    assert "fun_matrix_bad" in reported_fn_names
+    assert "fun_matrix_good" not in reported_fn_names
+
+    assert "fun_nested_array_struct_bad" in reported_fn_names
+    assert "fun_nested_array_struct_good" not in reported_fn_names
+
+    assert "fun_anon_bad" in reported_fn_names
+    assert "fun_anon_good" not in reported_fn_names

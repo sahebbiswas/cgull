@@ -1636,6 +1636,7 @@ class FieldInfo:
     type_name: str
     is_array: bool = False
     array_size: Optional[int] = None
+    array_dims: List[Optional[int]] = field(default_factory=list)
     is_pointer: bool = False
     is_struct_or_union: bool = False
     nested_tag: Optional[str] = None
@@ -1647,6 +1648,7 @@ class FieldInfo:
             "type_name": self.type_name,
             "is_array": self.is_array,
             "array_size": self.array_size,
+            "array_dims": self.array_dims,
             "is_pointer": self.is_pointer,
             "is_struct_or_union": self.is_struct_or_union,
             "nested_tag": self.nested_tag,
@@ -2809,23 +2811,29 @@ class CASTParser:
                     nested_tag = None
                     is_field_union = False
 
-                    if isinstance(curr_type, c_ast.ArrayDecl):
+                    array_dims = []
+                    while isinstance(curr_type, c_ast.ArrayDecl):
                         is_array = True
                         dim_node = curr_type.dim
+                        d_size = None
                         if dim_node is None:
-                            array_size = None
+                            d_size = None
                         elif isinstance(dim_node, c_ast.Constant):
                             try:
                                 val = int(str(dim_node.value), 0)
-                                array_size = val if val > 0 else None
+                                d_size = val if val > 0 else None
                             except ValueError:
-                                array_size = resolve_constant_expr(str(dim_node.value), clean_code)
+                                d_size = resolve_constant_expr(str(dim_node.value), clean_code)
                         elif isinstance(dim_node, c_ast.ID):
-                            array_size = resolve_constant_expr(dim_node.name, clean_code)
+                            d_size = resolve_constant_expr(dim_node.name, clean_code)
                         else:
                             expr_str = _format_pycparser_expr(dim_node)
-                            array_size = resolve_constant_expr(expr_str, clean_code)
+                            d_size = resolve_constant_expr(expr_str, clean_code)
+                        array_dims.append(d_size)
                         curr_type = curr_type.type
+
+                    if is_array:
+                        array_size = array_dims[0] if array_dims else None
 
                     while isinstance(curr_type, c_ast.PtrDecl):
                         is_pointer = True
@@ -2840,9 +2848,10 @@ class CASTParser:
                             is_struct_or_union = True
                             is_field_union = isinstance(type_node, c_ast.Union)
                             nested_tag = type_node.name
-                            type_name = f"{'union' if is_field_union else 'struct'} {type_node.name or ''}".strip()
                             if getattr(type_node, "decls", None):
-                                process_struct_or_union_node(type_node)
+                                nested_sd = process_struct_or_union_node(type_node)
+                                nested_tag = nested_sd.name
+                            type_name = f"{'union' if is_field_union else 'struct'} {nested_tag or ''}".strip()
                         else:
                             type_name = getattr(curr_type, 'declname', 'int') or 'int'
                     else:
@@ -2853,6 +2862,7 @@ class CASTParser:
                         type_name=type_name,
                         is_array=is_array,
                         array_size=array_size,
+                        array_dims=array_dims,
                         is_pointer=is_pointer,
                         is_struct_or_union=is_struct_or_union,
                         nested_tag=nested_tag,
@@ -2861,6 +2871,9 @@ class CASTParser:
 
             sd = StructDef(name=main_name, is_union=is_union, fields=fields_map)
             prefix = "union" if is_union else "struct"
+
+            struct_defs[main_name] = sd
+            struct_defs[f"{prefix} {main_name}"] = sd
 
             if struct_tag:
                 struct_defs[struct_tag] = sd
