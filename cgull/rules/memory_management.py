@@ -49,7 +49,7 @@ def _ast_cfg_for_function(
     if summaries is None:
         summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs)
     cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries)
-    initial_initialized = set(p.name for p in fn.parameters if p.name) | set(ast_ctx.global_variables.keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
+    initial_initialized = set(p.name for p in fn.parameters if p.name) | set(ast_ctx.global_variables.keys()) | {var.name for var in fn.variables.values() if getattr(var, "has_initializer", False) and var.name}
     cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
     return cfg
 

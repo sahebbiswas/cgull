@@ -1294,7 +1294,7 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
             returns_alloc: bool = False
 
             if cfg is not None:
-                initial_initialized = set(p.name for p in fn.parameters if p.name) | set(getattr(ast_ctx, "global_variables", {}).keys()) | {v for v, var in fn.variables.items() if var.has_initializer}
+                initial_initialized = set(p.name for p in fn.parameters if p.name) | set(getattr(ast_ctx, "global_variables", {}).keys()) | {var.name for var in fn.variables.values() if getattr(var, "has_initializer", False) and var.name}
                 cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
 
                 # Check parameter deallocation

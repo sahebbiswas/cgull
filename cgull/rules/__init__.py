@@ -54,6 +54,7 @@ from .misra_and_style import (
     UnusedArgumentsRule,
     MissingAssertionsRule,
     UnusedLocalVariablesRule,
+    DeadStoresRule,
 )
 
 ALL_RULES: List[Type[BaseRule]] = [
@@ -101,6 +102,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     UnusedArgumentsRule,
     MissingAssertionsRule,
     UnusedLocalVariablesRule,
+    DeadStoresRule,
 ]
 
 RULE_REGISTRY: Dict[str, Type[BaseRule]] = {
