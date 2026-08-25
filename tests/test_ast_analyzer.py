@@ -146,6 +146,22 @@ class TestVariableExtraction(unittest.TestCase):
         self.assertEqual(outer_i.read_lines, [])
         self.assertGreater(len(inner_i.read_lines), 0)
 
+    def test_scoped_var_dict_string_lookup_returns_innermost(self):
+        src = """
+        void f(void) {
+            int x = 1;
+            {
+                int x = 2;
+            }
+        }
+        """
+        ctx = self.parser.parse(src)
+        fn = ctx.functions[0]
+        # String lookup fn.variables["x"] should return the innermost declaration (x = 2)
+        v_str = fn.variables["x"]
+        self.assertEqual(v_str.enclosing_block_id, 2)
+        self.assertEqual(v_str.declaration_line, 5)
+
 
 @unittest.skipUnless(_pycparser_available(), "pycparser not installed")
 class TestPycparserIntegration(unittest.TestCase):

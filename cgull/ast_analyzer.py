@@ -1488,13 +1488,13 @@ class ScopedVarDict(dict):
     """
     A custom dictionary for function variables that supports tuple keys (var_name, enclosing_block_id)
     or string keys (var_name) for lexical block-scoping while maintaining backward-compatible
-    string key lookups (var_name) and iteration.
+    string key lookups (returning innermost binding) and de-duplicated string key iteration.
     """
     def __getitem__(self, key):
         if super().__contains__(key):
             return super().__getitem__(key)
         if isinstance(key, str):
-            for dict_key, var in super().items():
+            for dict_key, var in reversed(list(super().items())):
                 if dict_key == key or (isinstance(dict_key, tuple) and dict_key[0] == key):
                     return var
         raise KeyError(key)
@@ -1516,18 +1516,16 @@ class ScopedVarDict(dict):
         return False
 
     def items(self):
-        for dict_key, var in super().items():
-            if isinstance(dict_key, tuple):
-                yield dict_key[0], var
-            else:
-                yield dict_key, var
+        seen_names = set()
+        for dict_key, var in reversed(list(super().items())):
+            name = dict_key[0] if isinstance(dict_key, tuple) else dict_key
+            if name not in seen_names:
+                seen_names.add(name)
+                yield name, var
 
     def keys(self):
-        for dict_key in super().keys():
-            if isinstance(dict_key, tuple):
-                yield dict_key[0]
-            else:
-                yield dict_key
+        for name, _var in self.items():
+            yield name
 
 
 @dataclass
@@ -1748,8 +1746,9 @@ def _extract_identifiers_from_ast(node, ignore_callees: bool = False) -> Set[str
 def _extract_read_vars_from_ast(node) -> Set[str]:
     """
     Recursively extracts variable identifier names that are read in an AST node,
-    properly ignoring struct/union member names in StructRef (s.field or ptr->field)
-    and function names in FuncCall.
+    properly ignoring struct/union member names in StructRef (s.field or ptr->field).
+    For FuncCall nodes, recurses into node.name (to capture function pointer variable reads
+    such as fp(), obj->fp(), or callbacks[i]()) as well as node.args.
     """
     names: Set[str] = set()
     if node is None:
@@ -1761,6 +1760,8 @@ def _extract_read_vars_from_ast(node) -> Set[str]:
         names.update(_extract_read_vars_from_ast(node.name))
         return names
     elif kind == "FuncCall":
+        if node.name:
+            names.update(_extract_read_vars_from_ast(node.name))
         if node.args:
             names.update(_extract_read_vars_from_ast(node.args))
         return names
@@ -1974,7 +1975,9 @@ class _ASTFunctionAnalyzer:
                 if callee not in ('if', 'for', 'while', 'switch', 'sizeof', 'typeof', '__attribute__'):
                     self.outer.owning_fn.calls.append((callee, line_no, raw_args, self.current_target_var))
 
-                arg_ids = _extract_read_vars_from_ast(node.args) if node.args else set()
+                callee_read_ids = _extract_read_vars_from_ast(node.name)
+                arg_read_ids = _extract_read_vars_from_ast(node.args) if node.args else set()
+                all_read_ids = callee_read_ids | arg_read_ids
                 freed_set: Set[str] = set()
                 null_checked_set: Set[str] = set()
 
@@ -1998,7 +2001,7 @@ class _ASTFunctionAnalyzer:
                             if target_v:
                                 target_v.checked_null_lines.append(line_no)
 
-                for v in arg_ids:
+                for v in all_read_ids:
                     target_v = self.outer.resolve_var(v)
                     if target_v:
                         target_v.read_lines.append(line_no)
@@ -2010,7 +2013,7 @@ class _ASTFunctionAnalyzer:
                     line_number=line_no,
                     expr_str=f"{callee}({raw_args})",
                     target_var=callee,
-                    read_vars=arg_ids,
+                    read_vars=all_read_ids,
                     freed_vars=freed_set,
                     null_checked_vars=null_checked_set,
                 )

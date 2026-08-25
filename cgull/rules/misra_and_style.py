@@ -416,16 +416,28 @@ class UnusedLocalVariablesRule(BaseRule):
                 v_name = c_var.name
                 if not v_name or v_name in param_names:
                     continue
-                if v_name in ast_ctx.global_variables:
-                    continue
                 if v_name.startswith("__"):
                     continue
 
                 if not c_var.read_lines and not c_var.address_taken:
                     if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
-                        matches = list(re.finditer(rf'\b{re.escape(v_name)}\b', fn.body))
-                        max_expected = 1 if c_var.has_initializer else 1
-                        if len(matches) > max_expected:
+                        has_read_in_fallback = False
+                        body_start = getattr(fn, "body_start_line", fn.start_line + 1)
+                        decl_line_idx = c_var.declaration_line - body_start
+                        for i, line in enumerate(fn.body.splitlines()):
+                            if i == decl_line_idx:
+                                continue
+                            if re.search(rf'\b{re.escape(v_name)}\b', line):
+                                m_write = re.match(rf'^\s*{re.escape(v_name)}\s*=(?!=)\s*(.*)$', line)
+                                if m_write:
+                                    rhs = m_write.group(1)
+                                    if re.search(rf'\b{re.escape(v_name)}\b', rhs):
+                                        has_read_in_fallback = True
+                                        break
+                                else:
+                                    has_read_in_fallback = True
+                                    break
+                        if has_read_in_fallback:
                             continue
 
                     line_no = c_var.declaration_line

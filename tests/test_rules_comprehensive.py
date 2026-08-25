@@ -1067,6 +1067,28 @@ class TestUnusedLocalVariables(unittest.TestCase):
         issues = scan_with_rule("CGULL-041", code)
         self.assertEqual(len(issues), 0)
 
+    def test_clean_function_pointer_call(self):
+        code = "void g(void);\nvoid f(void) {\n    void (*fp)(void) = g;\n    fp();\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_detects_unused_local_shadowing_global(self):
+        code = "int x;\nvoid f(void) {\n    int x;\n}"
+        issues = scan_with_rule("CGULL-041", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 3)
+
+    def test_fallback_mode_write_only_variable_reported(self):
+        from cgull.ast_analyzer import CASTParser
+        code = "void f(void) {\n    int x;\n    x = 1;\n}"
+        ast_parser = CASTParser()
+        ast_ctx = ast_parser.parse(code)
+        ast_ctx.has_pycparser = False
+        rule = get_rule_by_id("CGULL-041")
+        issues = rule.scan_ast("test.c", ast_ctx)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
