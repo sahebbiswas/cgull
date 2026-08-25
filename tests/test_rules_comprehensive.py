@@ -1226,3 +1226,19 @@ class TestReturnStackVariable(unittest.TestCase):
         code = "int *f() { static int x; { int x = 0; } return &x; }"
         issues = scan_with_rule("CGULL-038", code)
         self.assertEqual(len(issues), 0)
+
+
+class TestVariableShadowingRule(unittest.TestCase):
+    def test_detects_variable_shadowing(self):
+        code = """
+        int global_val = 1;
+        void process(int global_val) {
+            int local_a = 10;
+            if (local_a > 0) {
+                int local_a = 20;
+                (void)local_a;
+            }
+        }
+        """
+        issues = scan_with_rule("CGULL-043", code)
+        self.assertEqual(len(issues), 2)

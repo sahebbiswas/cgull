@@ -1796,6 +1796,7 @@ class _ASTFunctionAnalyzer:
         self.node_counter = 0
         self.block_counter = 0
         self.scope_stack: List[int] = [0]
+        self.block_parents: Dict[int, int] = {}
 
     def resolve_var(self, name: str) -> Optional[CVariable]:
         for block_id in reversed(self.scope_stack):
@@ -1817,8 +1818,10 @@ class _ASTFunctionAnalyzer:
                 self.current_target_var: Optional[str] = None
 
             def visit_Compound(self, node):
+                parent_id = self.outer.scope_stack[-1]
                 self.outer.block_counter += 1
                 block_id = self.outer.block_counter
+                self.outer.block_parents[block_id] = parent_id
                 self.outer.scope_stack.append(block_id)
                 self.generic_visit(node)
                 self.outer.scope_stack.pop()
@@ -2071,6 +2074,12 @@ class _ASTFunctionAnalyzer:
                 self.generic_visit(node)
 
             def visit_For(self, node):
+                parent_id = self.outer.scope_stack[-1]
+                self.outer.block_counter += 1
+                block_id = self.outer.block_counter
+                self.outer.block_parents[block_id] = parent_id
+                self.outer.scope_stack.append(block_id)
+
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
                 cond_ids = _extract_read_vars_from_ast(node.cond) if node.cond else set()
                 for v in cond_ids:
@@ -2088,6 +2097,7 @@ class _ASTFunctionAnalyzer:
                 )
                 self.outer.owning_fn.cfg_nodes.append(cfg_n)
                 self.generic_visit(node)
+                self.outer.scope_stack.pop()
 
             def visit_Return(self, node):
                 line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
@@ -2114,6 +2124,7 @@ class _ASTFunctionAnalyzer:
                 self.generic_visit(node)
 
         Visitor(self).visit(body_node)
+        self.owning_fn.block_parents = dict(self.block_parents)
 
         # Connect sequential CFG nodes
         for i in range(len(self.owning_fn.cfg_nodes) - 1):

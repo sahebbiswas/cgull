@@ -285,6 +285,7 @@ C-GULL implements the security audit rules listed below:
 | **CGULL-038** | Return Stack Variable | **High** | Memory | CWE-562 | AST | Detects return statements that expose the address of an automatic-storage local variable or function parameter after the function returns. |
 | **CGULL-041** | Unused Local Variables | **Low** | Code Quality | CWE-563 | AST | Detects local variables declared in function body or nested block scopes that are never referenced anywhere in their scope. |
 | **CGULL-042** | Dead Stores | **Low** | Code Quality | CWE-563 | AST | Detects local variables assigned but never read afterward before reassignment or scope exit (-Wunused-but-set-variable). |
+| **CGULL-043** | Variable Shadowing Across Nested Scopes | **Low** | Code Quality | CWE-398 / MISRA Rule 5.3 | AST | Detects variable declarations in inner scopes (parameters, nested blocks, or local variables) that shadow identifiers in outer scopes (MISRA C:2012 Rule 5.3). |
 
 ---
 
