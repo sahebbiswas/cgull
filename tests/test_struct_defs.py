@@ -444,3 +444,109 @@ def test_bitfield_members_fallback():
 
     assert sd["flag_b"].type_name in ("unsigned int", "unsigned")
     assert sd["status"].type_name == "int"
+
+
+def test_f2_expression_to_struct_type_resolution():
+    code = """
+    struct Inner { char inner_buf[16]; };
+    struct A {
+        int id;
+        char array_a[100];
+        struct Inner in;
+    };
+    typedef struct A A_t;
+    typedef A_t A2_t;
+    typedef A2_t A3_t;
+
+    void fun_a(struct A *a, A_t *b, struct A arr[4]) {
+        struct A x;
+        struct A (*parr)[4];
+        A3_t *c;
+    }
+    """
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    fn = ctx.functions[0]
+
+    # 1. Direct tagged pointer: struct A *a
+    sd_a = ctx.resolve_struct_def(fn, "a")
+    assert sd_a is not None
+    assert sd_a.name == "A"
+    assert sd_a["array_a"].array_size == 100
+
+    # 2. Typedef'd pointer: A_t *b
+    sd_b = ctx.resolve_struct_def(fn, "b")
+    assert sd_b is not None
+    assert sd_b.name == "A"
+    assert sd_b["array_a"].array_size == 100
+
+    # 3. Array of structs: struct A arr[4]
+    sd_arr = ctx.resolve_struct_def(fn, "arr")
+    assert sd_arr is not None
+    assert sd_arr.name == "A"
+    assert sd_arr["array_a"].array_size == 100
+
+    # 4. By-value struct parameter/local: struct A x
+    sd_x = ctx.resolve_struct_def(fn, "x")
+    assert sd_x is not None
+    assert sd_x.name == "A"
+    assert sd_x["array_a"].array_size == 100
+
+    # 5. Pointer to array of structs: struct A (*parr)[4]
+    sd_parr = ctx.resolve_struct_def(fn, "parr")
+    assert sd_parr is not None
+    assert sd_parr.name == "A"
+    assert sd_parr["array_a"].array_size == 100
+
+    # 6. Multi-level typedef: typedef A_t A2_t; typedef A2_t A3_t; A3_t *c
+    sd_c = ctx.resolve_struct_def(fn, "c")
+    assert sd_c is not None
+    assert sd_c.name == "A"
+    assert sd_c["array_a"].array_size == 100
+
+    # 7. Member access expressions
+    assert ctx.resolve_struct_def(fn, "a->array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "b->array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "arr[0].array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "(*parr)[0].array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "c->array_a") is sd_a
+    assert ctx.resolve_struct_def(fn, "x.array_a") is sd_a
+
+
+def test_f2_expression_resolution_fallback_mode():
+    code = """
+    struct A {
+        int id;
+        char array_a[100];
+    };
+    typedef struct A A_t;
+    typedef A_t A2_t;
+
+    void fun_a(struct A *a, A_t *b, struct A arr[4]) {
+        struct A x;
+        struct A (*parr)[4];
+        A2_t *c;
+    }
+    """
+    parser = CASTParser()
+    clean_lines, clean_code = parser.strip_only(code)
+    functions = parser._extract_functions(clean_lines, clean_code)
+    struct_defs = parser._extract_struct_defs_from_regex(clean_code)
+
+    from cgull.ast_analyzer import CASTContext
+    ctx = CASTContext(
+        functions=functions,
+        global_variables={},
+        source_lines=clean_lines,
+        raw_source=code,
+        clean_source=clean_code,
+        struct_defs=struct_defs,
+        typedef_shapes=getattr(parser, "typedef_shapes", {}),
+    )
+    fn = functions[0]
+
+    for var_name in ("a", "b", "arr", "x", "parr", "c"):
+        sd = ctx.resolve_struct_def(fn, var_name)
+        assert sd is not None, f"Failed resolving '{var_name}'"
+        assert sd.name == "A"
+        assert sd["array_a"].array_size == 100

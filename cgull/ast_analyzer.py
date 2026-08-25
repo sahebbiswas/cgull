@@ -1755,16 +1755,124 @@ class CASTContext:
     parse_tier: str = ParseTier.REGEX_FALLBACK.value
     unsigned_typedefs: Set[str] = field(default_factory=set)
     struct_defs: Dict[str, StructDef] = field(default_factory=dict)
+    typedef_shapes: Dict[str, TypedefShape] = field(default_factory=dict)
+
+    def _clean_and_resolve_type_string(self, type_str: str) -> Optional[StructDef]:
+        if not type_str or not isinstance(type_str, str):
+            return None
+        tn = type_str.strip()
+        if tn in self.struct_defs:
+            return self.struct_defs[tn]
+
+        # 1. Clean out array brackets, e.g. [100], [4], []
+        cleaned = re.sub(r'\[[^\]]*\]', '', tn)
+        # 2. Clean out paren pointer declarators like (*parr) or (*)
+        cleaned = re.sub(r'\(\s*\*\s*[a-zA-Z_]\w*\s*\)', '', cleaned)
+        cleaned = re.sub(r'\(\s*\*\s*\)', '', cleaned)
+        # 3. Strip CV qualifiers, storage specifiers
+        cleaned = re.sub(r'\b(?:const|volatile|restrict|static|extern|inline|register)\b', '', cleaned)
+        # 4. Strip pointer asterisks and trim
+        cleaned = cleaned.replace('*', '').strip()
+        # 5. Clean leading struct/union keyword
+        tag_candidate = re.sub(r'^(?:struct|union)\s+', '', cleaned).strip()
+
+        # Try candidates in order
+        candidates = [tag_candidate, cleaned, f"struct {tag_candidate}", f"union {tag_candidate}"]
+        for cand in candidates:
+            if cand in self.struct_defs:
+                return self.struct_defs[cand]
+
+        # 6. Try recursive typedef resolution via typedef_shapes if available
+        if tag_candidate in self.typedef_shapes:
+            shape = resolve_typedef_shape(tag_candidate, self.typedef_shapes)
+            sub_clean = re.sub(r'^(?:const|volatile|struct|union)\s+', '', shape.target.strip()).replace('*', '').strip()
+            for cand in [sub_clean, shape.target, f"struct {sub_clean}", f"union {sub_clean}"]:
+                if cand in self.struct_defs:
+                    return self.struct_defs[cand]
+
+        return None
 
     def get_struct_def(self, type_name: str) -> Optional[StructDef]:
         if not type_name:
             return None
-        tn = type_name.strip()
-        if tn in self.struct_defs:
-            return self.struct_defs[tn]
-        clean = re.sub(r'^(?:struct|union)\s+', '', tn).rstrip(' *').strip()
-        if clean in self.struct_defs:
-            return self.struct_defs[clean]
+        return self._clean_and_resolve_type_string(type_name)
+
+    def resolve_struct_def(
+        self,
+        fn_or_type: Union[CFunction, CVariable, CParameter, str],
+        expr_or_var: Optional[str] = None
+    ) -> Optional[StructDef]:
+        """
+        Resolves an expression or base identifier (parameter, local variable, or global)
+        within a function (or a direct type string / variable object) to its underlying
+        struct or union definition (StructDef by tag or primary typedef).
+        """
+        # If passed a CVariable or CParameter directly
+        if isinstance(fn_or_type, (CVariable, CParameter)):
+            return self._clean_and_resolve_type_string(fn_or_type.type_name)
+
+        # If passed a type string or identifier string directly without function context
+        if isinstance(fn_or_type, str) and expr_or_var is None:
+            return self._clean_and_resolve_type_string(fn_or_type)
+
+        # If passed a function and variable/expression name
+        if isinstance(fn_or_type, CFunction):
+            fn = fn_or_type
+            if not expr_or_var:
+                return None
+            target_str = expr_or_var.strip()
+
+            # Find matching variable, parameter, or global
+            target_type_name: Optional[str] = None
+
+            # 1. Exact variable lookup in function body
+            if target_str in fn.variables:
+                v = fn.variables[target_str]
+                target_type_name = v.type_name
+            else:
+                # 2. Exact parameter lookup
+                for p in fn.parameters:
+                    if p.name == target_str:
+                        target_type_name = p.type_name
+                        break
+
+            # 3. Exact global variable lookup
+            if not target_type_name and target_str in self.global_variables:
+                target_type_name = self.global_variables[target_str].type_name
+
+            # 4. If target_str is a complex expression (e.g. "a->array_a", "arr[0]", "(*parr)"),
+            # extract candidate identifier tokens and search for matching local/param/global
+            if not target_type_name:
+                idents = re.findall(r'\b[a-zA-Z_]\w*\b', target_str)
+                keywords = {'struct', 'union', 'const', 'volatile', 'sizeof', 'return', 'int', 'char', 'void'}
+                for ident in idents:
+                    if ident in keywords:
+                        continue
+                    if ident in fn.variables:
+                        target_type_name = fn.variables[ident].type_name
+                        break
+                    for p in fn.parameters:
+                        if p.name == ident:
+                            target_type_name = p.type_name
+                            break
+                    if target_type_name:
+                        break
+                    if ident in self.global_variables:
+                        target_type_name = self.global_variables[ident].type_name
+                        break
+
+            # 5. Fallback: if not found as variable/param/global, treat target_str as type string
+            if not target_type_name:
+                target_type_name = target_str
+
+            return self._clean_and_resolve_type_string(target_type_name)
+
+        # Fallback for direct string lookup with expr_or_var
+        if isinstance(expr_or_var, str):
+            return self._clean_and_resolve_type_string(expr_or_var)
+        if isinstance(fn_or_type, str):
+            return self._clean_and_resolve_type_string(fn_or_type)
+
         return None
 
 
@@ -2807,13 +2915,26 @@ class CASTParser:
 
         StructVisitor().visit(pycparser_ast)
 
-        # Pass 2: Resolve typedef aliases and update field nested tags, pointers, and array shapes
-        for alias_name, target_name in typedef_aliases.items():
-            target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
-            if target_clean in struct_defs:
-                struct_defs[alias_name] = struct_defs[target_clean]
-            elif target_name in struct_defs:
-                struct_defs[alias_name] = struct_defs[target_name]
+        self.typedef_shapes = dict(typedef_shapes)
+
+        # Pass 2: Resolve typedef aliases and update field nested tags, pointers, and array shapes (with multi-level chain resolution)
+        changed = True
+        while changed:
+            changed = False
+            for alias_name, target_name in list(typedef_aliases.items()):
+                if alias_name in struct_defs:
+                    continue
+                target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
+                if target_clean in struct_defs:
+                    struct_defs[alias_name] = struct_defs[target_clean]
+                    struct_defs[f"struct {alias_name}"] = struct_defs[target_clean]
+                    struct_defs[f"union {alias_name}"] = struct_defs[target_clean]
+                    changed = True
+                elif target_name in struct_defs:
+                    struct_defs[alias_name] = struct_defs[target_name]
+                    struct_defs[f"struct {alias_name}"] = struct_defs[target_name]
+                    struct_defs[f"union {alias_name}"] = struct_defs[target_name]
+                    changed = True
 
         # Post-process fields to merge typedef pointer/array shapes and resolve nested struct/union tags
         for sd in list(struct_defs.values()):
@@ -2964,13 +3085,26 @@ class CASTParser:
                 struct_defs[alias] = sd
                 struct_defs[f"{prefix} {alias}"] = sd
 
-        # Pass 2: Resolve simple typedef aliases
-        for alias_name, target_name in typedef_aliases.items():
-            target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
-            if target_clean in struct_defs:
-                struct_defs[alias_name] = struct_defs[target_clean]
-            elif target_name in struct_defs:
-                struct_defs[alias_name] = struct_defs[target_name]
+        self.typedef_shapes = dict(typedef_shapes)
+
+        # Pass 2: Resolve simple typedef aliases (with multi-level chain resolution)
+        changed = True
+        while changed:
+            changed = False
+            for alias_name, target_name in list(typedef_aliases.items()):
+                if alias_name in struct_defs:
+                    continue
+                target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
+                if target_clean in struct_defs:
+                    struct_defs[alias_name] = struct_defs[target_clean]
+                    struct_defs[f"struct {alias_name}"] = struct_defs[target_clean]
+                    struct_defs[f"union {alias_name}"] = struct_defs[target_clean]
+                    changed = True
+                elif target_name in struct_defs:
+                    struct_defs[alias_name] = struct_defs[target_name]
+                    struct_defs[f"struct {alias_name}"] = struct_defs[target_name]
+                    struct_defs[f"union {alias_name}"] = struct_defs[target_name]
+                    changed = True
 
         # Post-process fields for nested structs/unions and typedef shapes
         for sd in list(struct_defs.values()):
@@ -3500,6 +3634,12 @@ class CASTParser:
                         p_type = "int"
                     else:
                         continue
+
+                    m_p_arr = re.match(r'^([a-zA-Z_]\w*)\s*(\[[^\]]*\])$', p_name)
+                    if m_p_arr:
+                        p_name = m_p_arr.group(1)
+                        p_type = f"{p_type}{m_p_arr.group(2)}"
+
                     params.append(CParameter(name=p_name, type_name=p_type, is_pointer=is_ptr, line_number=start_line))
 
             fn = CFunction(
@@ -3591,6 +3731,9 @@ class CASTParser:
         var_decl_regex = re.compile(
             r'^[ \t]*((?:volatile\s+|static\s+|const\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?)\s*([a-zA-Z_]\w*)(?:\[([^\]]*)\])?(?:\s*=\s*([^;]+))?;'
         )
+        ptr_arr_decl_regex = re.compile(
+            r'^[ \t]*((?:volatile\s+|static\s+|const\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+)\(\s*\*\s*([a-zA-Z_]\w*)\s*\)(?:\[([^\]]*)\])?(?:\s*=\s*([^;]+))?;'
+        )
         block_counter = 0
         scope_stack = [0]
         block_parents = {}
@@ -3599,19 +3742,21 @@ class CASTParser:
             line_no = fn_start + i
             masked_line = mask_string_and_char_literals(line)
             m = var_decl_regex.match(line)
-            decl_start = m.start() if m else len(line)
+            m_parr = ptr_arr_decl_regex.match(line) if not m else None
+            m_target = m or m_parr
+            decl_start = m_target.start() if m_target else len(line)
 
             for pos, char in enumerate(masked_line):
-                if pos == decl_start and m:
-                    type_prefix = m.group(1).strip()
-                    v_name = m.group(2).strip()
-                    array_dim = m.group(3)
-                    init_val = m.group(4)
+                if pos == decl_start and m_target:
+                    type_prefix = m_target.group(1).strip()
+                    v_name = m_target.group(2).strip()
+                    array_dim = m_target.group(3)
+                    init_val = m_target.group(4)
 
                     if v_name not in C_KEYWORDS and v_name.isidentifier():
                         type_tokens = type_prefix.split()
                         if not (type_tokens and type_tokens[-1] in _STATEMENT_KEYWORDS):
-                            is_ptr = '*' in type_prefix or '*' in v_name
+                            is_ptr = '*' in type_prefix or '*' in v_name or (m_parr is not None)
                             is_signed = not is_unsigned_type(type_prefix, custom_typedefs)
                             is_volatile = 'volatile' in type_prefix
                             is_vla = False
