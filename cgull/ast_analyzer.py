@@ -1581,6 +1581,90 @@ class CFunction:
 
 
 @dataclass
+class FieldInfo:
+    """
+    Represents a single field inside a C struct or union definition.
+
+    Attributes:
+        name: Name of the field.
+        type_name: Declared type of the field (e.g. "int", "char", "struct Inner").
+        is_array: True if the field is declared as an array (e.g., char buf[100]).
+        array_size: Resolved constant element count if compile-time constant or macro;
+            None if scalar, flexible array member (data[] or data[0]), or unknown size.
+        is_pointer: True if the field is a pointer.
+        is_struct_or_union: True if the field type is a nested struct or union.
+        nested_tag: Tag name or typedef name of the nested struct/union if applicable.
+        is_union: True if the field itself is a union.
+    """
+    name: str
+    type_name: str
+    is_array: bool = False
+    array_size: Optional[int] = None
+    is_pointer: bool = False
+    is_struct_or_union: bool = False
+    nested_tag: Optional[str] = None
+    is_union: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "type_name": self.type_name,
+            "is_array": self.is_array,
+            "array_size": self.array_size,
+            "is_pointer": self.is_pointer,
+            "is_struct_or_union": self.is_struct_or_union,
+            "nested_tag": self.nested_tag,
+            "is_union": self.is_union,
+        }
+
+
+@dataclass
+class StructDef:
+    """
+    Represents a C struct or union definition and its field schema table.
+
+    Attributes:
+        name: Struct or union tag or primary typedef name.
+        is_union: True if this definition is a union rather than a struct.
+        fields: Dict mapping field names to FieldInfo objects.
+    """
+    name: str
+    is_union: bool = False
+    fields: Dict[str, FieldInfo] = field(default_factory=dict)
+
+    def __getitem__(self, field_name: str) -> FieldInfo:
+        return self.fields[field_name]
+
+    def __contains__(self, field_name: str) -> bool:
+        return field_name in self.fields
+
+    def __iter__(self):
+        return iter(self.fields)
+
+    def __len__(self) -> int:
+        return len(self.fields)
+
+    def get(self, field_name: str, default=None):
+        return self.fields.get(field_name, default)
+
+    def keys(self):
+        return self.fields.keys()
+
+    def values(self):
+        return self.fields.values()
+
+    def items(self):
+        return self.fields.items()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "is_union": self.is_union,
+            "fields": {k: v.to_dict() for k, v in self.fields.items()},
+        }
+
+
+@dataclass
 class CASTContext:
     functions: List[CFunction]
     global_variables: Dict[str, CVariable]
@@ -1592,6 +1676,89 @@ class CASTContext:
     parser_status: str = ParserStatus.FALLBACK_PARSER.value
     parse_tier: str = ParseTier.REGEX_FALLBACK.value
     unsigned_typedefs: Set[str] = field(default_factory=set)
+    struct_defs: Dict[str, StructDef] = field(default_factory=dict)
+
+    def get_struct_def(self, type_name: str) -> Optional[StructDef]:
+        if not type_name:
+            return None
+        tn = type_name.strip()
+        if tn in self.struct_defs:
+            return self.struct_defs[tn]
+        clean = re.sub(r'^(?:struct|union)\s+', '', tn).rstrip(' *').strip()
+        if clean in self.struct_defs:
+            return self.struct_defs[clean]
+        return None
+
+
+def resolve_constant_expr(expr_str: str, clean_code: str) -> Optional[int]:
+    """
+    Resolves a constant expression string (digit, hex, macro #define, or const int variable)
+    to an integer value if compile-time constant, else returns None.
+    Used for struct array field dimension resolution.
+    """
+    if not expr_str or not expr_str.strip():
+        return None
+
+    s = expr_str.strip()
+
+    # 1. Direct integer literal (e.g. 100, 0x64, 0144)
+    m_num = re.match(r'^(0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', s)
+    if m_num:
+        try:
+            return int(m_num.group(1), 0)
+        except ValueError:
+            pass
+
+    # 2. Check for macro #define or const int in clean_code
+    macro_name = s
+    if re.match(r'^[a-zA-Z_]\w*$', macro_name):
+        def_m = re.search(rf'#\s*define\s+{re.escape(macro_name)}\s+(\d+|0x[0-9a-fA-F]+)\b', clean_code)
+        if def_m:
+            val_str = def_m.group(1)
+            try:
+                return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str, 0)
+            except ValueError:
+                pass
+
+        const_m = re.search(
+            rf'\bconst\s+(?:int|size_t|uint\w+_t|int\w+_t|unsigned\s+int|long|short)\s+{re.escape(macro_name)}\s*=\s*(\d+|0x[0-9a-fA-F]+)\b',
+            clean_code
+        )
+        if const_m:
+            val_str = const_m.group(1)
+            try:
+                return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str, 0)
+            except ValueError:
+                pass
+
+    # 3. Evaluate expression using tokenization if it contains operators or macros
+    macros: Dict[str, int] = {}
+    for m in re.finditer(r'#\s*define\s+([a-zA-Z_]\w*)\s+(\d+|0x[0-9a-fA-F]+)\b', clean_code):
+        m_name, m_val = m.group(1), m.group(2)
+        try:
+            macros[m_name] = int(m_val, 16) if m_val.startswith(('0x', '0X')) else int(m_val, 0)
+        except ValueError:
+            pass
+
+    for const_m in re.finditer(
+        r'\bconst\s+(?:int|size_t|uint\w+_t|int\w+_t|unsigned\s+int|long|short)\s+([a-zA-Z_]\w*)\s*=\s*(\d+|0x[0-9a-fA-F]+)\b',
+        clean_code
+    ):
+        m_name, m_val = const_m.group(1), const_m.group(2)
+        try:
+            macros[m_name] = int(m_val, 16) if m_val.startswith(('0x', '0X')) else int(m_val, 0)
+        except ValueError:
+            pass
+
+    tokens = _tokenize_c_prep_expr(s, macros)
+    if tokens:
+        try:
+            val = _eval_c_prep_tokens(tokens)
+            return val
+        except Exception:
+            pass
+
+    return None
 
 
 def _format_pycparser_expr(node) -> str:
@@ -2160,10 +2327,12 @@ class CASTParser:
 
         if has_pycparser and pycparser_ast is not None:
             functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code, unsigned_typedefs)
+            struct_defs = self._extract_struct_defs_from_ast(pycparser_ast, clean_code)
             parser_status = ParserStatus.PYCPARSER_SUCCESS.value
         else:
             functions = self._extract_functions(clean_lines, clean_code, unsigned_typedefs)
             global_vars = self._extract_global_vars(clean_lines, functions, unsigned_typedefs)
+            struct_defs = self._extract_struct_defs_from_regex(clean_code)
             parser_status = ParserStatus.FALLBACK_PARSER.value
             parse_tier = ParseTier.REGEX_FALLBACK.value
 
@@ -2179,7 +2348,323 @@ class CASTParser:
             parser_status=parser_status,
             parse_tier=parse_tier,
             unsigned_typedefs=unsigned_typedefs,
+            struct_defs=struct_defs,
         )
+
+    def _extract_struct_defs_from_ast(self, pycparser_ast, clean_code: str) -> Dict[str, StructDef]:
+        from pycparser import c_ast
+
+        struct_defs: Dict[str, StructDef] = {}
+        typedef_aliases: Dict[str, str] = {}
+
+        def process_struct_or_union_node(node, name_override: Optional[str] = None):
+            is_union = isinstance(node, c_ast.Union)
+            tag = name_override or node.name
+            if not tag and not getattr(node, "decls", None):
+                return None
+
+            fields_map: Dict[str, FieldInfo] = {}
+            if getattr(node, "decls", None):
+                for decl in node.decls:
+                    if not getattr(decl, "name", None):
+                        continue
+                    f_name = decl.name
+                    curr_type = decl.type
+
+                    is_array = False
+                    array_size = None
+                    is_pointer = False
+                    is_struct_or_union = False
+                    nested_tag = None
+                    is_field_union = False
+
+                    if isinstance(curr_type, c_ast.ArrayDecl):
+                        is_array = True
+                        dim_node = curr_type.dim
+                        if dim_node is None:
+                            array_size = None
+                        elif isinstance(dim_node, c_ast.Constant):
+                            try:
+                                val = int(str(dim_node.value), 0)
+                                array_size = val if val > 0 else None
+                            except ValueError:
+                                array_size = resolve_constant_expr(str(dim_node.value), clean_code)
+                        elif isinstance(dim_node, c_ast.ID):
+                            array_size = resolve_constant_expr(dim_node.name, clean_code)
+                        else:
+                            expr_str = _format_pycparser_expr(dim_node)
+                            array_size = resolve_constant_expr(expr_str, clean_code)
+                        curr_type = curr_type.type
+
+                    while isinstance(curr_type, c_ast.PtrDecl):
+                        is_pointer = True
+                        curr_type = curr_type.type
+
+                    if isinstance(curr_type, c_ast.TypeDecl):
+                        type_node = curr_type.type
+                        if isinstance(type_node, c_ast.IdentifierType):
+                            t_names = getattr(type_node, 'names', ['int'])
+                            type_name = ' '.join(t_names)
+                        elif isinstance(type_node, (c_ast.Struct, c_ast.Union)):
+                            is_struct_or_union = True
+                            is_field_union = isinstance(type_node, c_ast.Union)
+                            nested_tag = type_node.name
+                            type_name = f"{'union' if is_field_union else 'struct'} {type_node.name or ''}".strip()
+                            if getattr(type_node, "decls", None):
+                                process_struct_or_union_node(type_node)
+                        else:
+                            type_name = getattr(curr_type, 'declname', 'int') or 'int'
+                    else:
+                        type_name = _format_pycparser_expr(curr_type)
+
+                    fields_map[f_name] = FieldInfo(
+                        name=f_name,
+                        type_name=type_name,
+                        is_array=is_array,
+                        array_size=array_size,
+                        is_pointer=is_pointer,
+                        is_struct_or_union=is_struct_or_union,
+                        nested_tag=nested_tag,
+                        is_union=is_field_union,
+                    )
+
+            main_name = tag or f"anon_{id(node)}"
+            sd = StructDef(name=main_name, is_union=is_union, fields=fields_map)
+            if tag:
+                struct_defs[tag] = sd
+                prefix = "union" if is_union else "struct"
+                struct_defs[f"{prefix} {tag}"] = sd
+            if name_override and name_override != tag:
+                struct_defs[name_override] = sd
+
+            return sd
+
+        class StructVisitor(c_ast.NodeVisitor):
+            def visit_Decl(self, node):
+                if isinstance(node.type, (c_ast.Struct, c_ast.Union)) and getattr(node.type, "decls", None):
+                    process_struct_or_union_node(node.type)
+                self.generic_visit(node)
+
+            def visit_Typedef(self, node):
+                td_name = node.name
+                curr = node.type
+                while isinstance(curr, c_ast.PtrDecl):
+                    curr = curr.type
+                if isinstance(curr, c_ast.TypeDecl):
+                    inner = curr.type
+                    if isinstance(inner, (c_ast.Struct, c_ast.Union)):
+                        if getattr(inner, "decls", None):
+                            sd = process_struct_or_union_node(inner, name_override=td_name)
+                            if sd and td_name:
+                                struct_defs[td_name] = sd
+                        else:
+                            if inner.name:
+                                typedef_aliases[td_name] = inner.name
+                    elif isinstance(inner, c_ast.IdentifierType):
+                        underlying = ' '.join(getattr(inner, 'names', []))
+                        if underlying:
+                            typedef_aliases[td_name] = underlying
+                self.generic_visit(node)
+
+        StructVisitor().visit(pycparser_ast)
+
+        # Pass 2: Resolve typedef aliases and update field nested tags
+        for alias_name, target_name in typedef_aliases.items():
+            target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
+            if target_clean in struct_defs:
+                struct_defs[alias_name] = struct_defs[target_clean]
+            elif target_name in struct_defs:
+                struct_defs[alias_name] = struct_defs[target_name]
+
+        # Post-process fields to resolve nested struct/union tags if field.type_name matches a struct/typedef
+        for sd in list(struct_defs.values()):
+            for field in sd.fields.values():
+                if not field.is_struct_or_union:
+                    raw_type = field.type_name.strip()
+                    clean_type = re.sub(r'^(?:const|volatile|struct|union)\s+', '', raw_type).rstrip(' *').strip()
+                    matched_sd = None
+                    if clean_type in struct_defs:
+                        matched_sd = struct_defs[clean_type]
+                    elif f"struct {clean_type}" in struct_defs:
+                        matched_sd = struct_defs[f"struct {clean_type}"]
+                    elif f"union {clean_type}" in struct_defs:
+                        matched_sd = struct_defs[f"union {clean_type}"]
+
+                    if matched_sd:
+                        field.is_struct_or_union = True
+                        field.nested_tag = matched_sd.name
+                        field.is_union = matched_sd.is_union
+
+        return struct_defs
+
+    def _extract_struct_defs_from_regex(self, clean_code: str) -> Dict[str, StructDef]:
+        struct_defs: Dict[str, StructDef] = {}
+        typedef_aliases: Dict[str, str] = {}
+
+        # 1. Match typedef alias statements: typedef struct A A_t; or typedef union A A_t;
+        alias_regex = re.compile(
+            r'\btypedef\s+(struct|union)\s+([a-zA-Z_]\w*)\s+([a-zA-Z_]\w*)\s*;',
+            re.MULTILINE
+        )
+        for m in alias_regex.finditer(clean_code):
+            tag = m.group(2)
+            alias = m.group(3)
+            typedef_aliases[alias] = tag
+
+        # 2. Find struct and union definitions with bodies: [typedef] struct/union [Tag] { body } [Aliases];
+        struct_def_regex = re.compile(
+            r'\b(typedef\s+)?(struct|union)\b\s*([a-zA-Z_]\w*)?\s*\{',
+            re.MULTILINE
+        )
+
+        n = len(clean_code)
+        for m in struct_def_regex.finditer(clean_code):
+            is_typedef = bool(m.group(1))
+            kw = m.group(2)
+            is_union = (kw == 'union')
+            tag = m.group(3)
+
+            body_start = m.end()
+            brace_count = 1
+            curr_pos = body_start
+            while curr_pos < n and brace_count > 0:
+                ch = clean_code[curr_pos]
+                if ch == '{':
+                    brace_count += 1
+                elif ch == '}':
+                    brace_count -= 1
+                curr_pos += 1
+
+            if brace_count != 0:
+                continue
+
+            body = clean_code[body_start:curr_pos - 1]
+
+            # Look for trailing declarators/aliases after closing brace before ';'
+            after_pos = curr_pos
+            semicolon_pos = clean_code.find(';', after_pos)
+            trailing_str = ""
+            if semicolon_pos != -1 and semicolon_pos - after_pos < 100:
+                trailing_str = clean_code[after_pos:semicolon_pos].strip()
+
+            aliases = []
+            if trailing_str:
+                for token in trailing_str.split(','):
+                    t = token.strip().lstrip('*').strip()
+                    if t and t.isidentifier():
+                        aliases.append(t)
+
+            fields_map: Dict[str, FieldInfo] = {}
+
+            # Parse fields inside body
+            for stmt in body.split(';'):
+                stmt = stmt.strip()
+                if not stmt or stmt.startswith('#'):
+                    continue
+
+                m_array = re.search(r'^(.*?)\b([a-zA-Z_]\w*)\s*\[\s*([^\]]*)\s*\]$', stmt)
+                m_scalar = re.search(r'^(.*?)\b([a-zA-Z_]\w*)$', stmt)
+
+                if m_array:
+                    type_part = m_array.group(1).strip()
+                    f_name = m_array.group(2).strip()
+                    dim_expr = m_array.group(3).strip()
+                    is_array = True
+                    is_ptr = '*' in type_part
+                    if dim_expr == "" or dim_expr == "0":
+                        array_size = None
+                    else:
+                        array_size = resolve_constant_expr(dim_expr, clean_code)
+
+                    is_struct_or_union = False
+                    nested_tag = None
+                    is_field_union = False
+                    if type_part.startswith('struct ') or type_part.startswith('union '):
+                        is_struct_or_union = True
+                        is_field_union = type_part.startswith('union ')
+                        m_t = re.search(r'\b(?:struct|union)\s+([a-zA-Z_]\w*)', type_part)
+                        nested_tag = m_t.group(1) if m_t else None
+
+                    fields_map[f_name] = FieldInfo(
+                        name=f_name,
+                        type_name=f"{type_part} {f_name}".strip(),
+                        is_array=is_array,
+                        array_size=array_size,
+                        is_pointer=is_ptr,
+                        is_struct_or_union=is_struct_or_union,
+                        nested_tag=nested_tag,
+                        is_union=is_field_union,
+                    )
+                elif m_scalar:
+                    type_part = m_scalar.group(1).strip()
+                    f_name = m_scalar.group(2).strip()
+                    is_array = False
+                    array_size = None
+                    is_ptr = '*' in type_part or '*' in f_name
+
+                    is_struct_or_union = False
+                    nested_tag = None
+                    is_field_union = False
+                    if type_part.startswith('struct ') or type_part.startswith('union '):
+                        is_struct_or_union = True
+                        is_field_union = type_part.startswith('union ')
+                        m_t = re.search(r'\b(?:struct|union)\s+([a-zA-Z_]\w*)', type_part)
+                        nested_tag = m_t.group(1) if m_t else None
+
+                    fields_map[f_name] = FieldInfo(
+                        name=f_name,
+                        type_name=f"{type_part} {'*' if is_ptr else ''}{f_name}".strip(),
+                        is_array=is_array,
+                        array_size=array_size,
+                        is_pointer=is_ptr,
+                        is_struct_or_union=is_struct_or_union,
+                        nested_tag=nested_tag,
+                        is_union=is_field_union,
+                    )
+
+            main_name = tag or (aliases[0] if aliases else f"anon_{m.start()}")
+            sd = StructDef(name=main_name, is_union=is_union, fields=fields_map)
+
+            if tag:
+                struct_defs[tag] = sd
+                prefix = "union" if is_union else "struct"
+                struct_defs[f"{prefix} {tag}"] = sd
+
+            for alias in aliases:
+                struct_defs[alias] = sd
+
+        # Pass 2: Resolve simple typedef aliases
+        for alias_name, target_name in typedef_aliases.items():
+            target_clean = re.sub(r'^(?:struct|union)\s+', '', target_name).strip()
+            if target_clean in struct_defs:
+                struct_defs[alias_name] = struct_defs[target_clean]
+            elif target_name in struct_defs:
+                struct_defs[alias_name] = struct_defs[target_name]
+
+        # Post-process fields for nested structs/unions
+        for sd in list(struct_defs.values()):
+            for field in sd.fields.values():
+                if not field.is_struct_or_union:
+                    raw_type = field.type_name.strip()
+                    clean_type = re.sub(r'^(?:const|volatile|struct|union)\s+', '', raw_type).rstrip(' *').strip()
+                    if field.name and clean_type.endswith(field.name):
+                        clean_type = clean_type[:-len(field.name)].strip()
+                    clean_type = clean_type.rstrip(' *').strip()
+
+                    matched_sd = None
+                    if clean_type in struct_defs:
+                        matched_sd = struct_defs[clean_type]
+                    elif f"struct {clean_type}" in struct_defs:
+                        matched_sd = struct_defs[f"struct {clean_type}"]
+                    elif f"union {clean_type}" in struct_defs:
+                        matched_sd = struct_defs[f"union {clean_type}"]
+
+                    if matched_sd:
+                        field.is_struct_or_union = True
+                        field.nested_tag = matched_sd.name
+                        field.is_union = matched_sd.is_union
+
+        return struct_defs
 
     def _extract_unsigned_typedefs(self, clean_code: str, target_set: Set[str]) -> None:
         """
