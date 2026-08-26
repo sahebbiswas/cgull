@@ -27,9 +27,10 @@ void f(char *src) {
 """
 
 CLEAN_CODE = """
-void noop(void) {
+int noop(void) {
     int total = 0;
     total = total + 1;
+    return total;
 }
 """
 

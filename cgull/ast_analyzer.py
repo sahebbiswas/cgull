@@ -1575,6 +1575,7 @@ class CVariable:
     array_size_expr: Optional[str]
     has_initializer: bool
     declaration_line: int
+    is_array: bool = False
     assigned_lines: List[int] = field(default_factory=list)
     read_lines: List[int] = field(default_factory=list)
     freed_lines: List[int] = field(default_factory=list)
@@ -2467,7 +2468,7 @@ class _ASTFunctionAnalyzer:
                 if node.name and type(node.type).__name__ != "FuncDecl":
                     self.current_target_var = node.name
                     line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
-                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(node.type, self.outer.custom_typedefs)
+                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(node.type, self.outer.custom_typedefs)
                     current_block_id = self.outer.scope_stack[-1]
                     c_var = CVariable(
                         name=node.name,
@@ -2479,6 +2480,7 @@ class _ASTFunctionAnalyzer:
                         array_size_expr=arr_dim,
                         has_initializer=(node.init is not None),
                         declaration_line=line_no,
+                        is_array=is_arr,
                         enclosing_block_id=current_block_id,
                     )
                     var_key = (node.name, current_block_id)
@@ -3576,7 +3578,7 @@ class CASTParser:
                     custom_typedefs.add(ext.name)
             elif isinstance(ext, c_ast.Decl) and type(ext.type).__name__ != "FuncDecl" and type(ext).__name__ != "Typedef":
                 line_no = (ext.coord.line - _PRELUDE_LINE_COUNT) if ext.coord else 1
-                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(ext.type, custom_typedefs)
+                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(ext.type, custom_typedefs)
                 if ext.name and ext.name not in ('typedef', '#include', '#define', '#ifdef', '#ifndef'):
                     global_vars[ext.name] = CVariable(
                         name=ext.name,
@@ -3588,6 +3590,7 @@ class CASTParser:
                         array_size_expr=arr_dim,
                         has_initializer=(ext.init is not None),
                         declaration_line=line_no,
+                        is_array=is_arr,
                     )
 
             elif isinstance(ext, c_ast.FuncDef):
@@ -3862,6 +3865,7 @@ class CASTParser:
                                 array_size_expr=array_dim,
                                 has_initializer=(init_val is not None),
                                 declaration_line=line_no,
+                                is_array=(array_dim is not None),
                                 enclosing_block_id=curr_block,
                             )
                             if init_val:
@@ -3978,6 +3982,7 @@ class CASTParser:
                         array_size_expr=m.group(3),
                         has_initializer=m.group(4) is not None,
                         declaration_line=line_no,
+                        is_array=(m.group(3) is not None),
                     )
         return global_vars
 
