@@ -1518,6 +1518,7 @@ class CParameter:
     type_name: str
     is_pointer: bool
     line_number: int
+    is_array: bool = False
 
 
 class ScopedVarDict(dict):
@@ -1575,6 +1576,7 @@ class CVariable:
     array_size_expr: Optional[str]
     has_initializer: bool
     declaration_line: int
+    is_array: bool = False
     assigned_lines: List[int] = field(default_factory=list)
     read_lines: List[int] = field(default_factory=list)
     freed_lines: List[int] = field(default_factory=list)
@@ -2424,11 +2426,12 @@ class _ASTFunctionAnalyzer:
     function calls, dataflow events, and CFG nodes.
     """
 
-    def __init__(self, owning_fn: CFunction, prelude_offset: int, clean_lines: List[str], custom_typedefs: Optional[Set[str]] = None):
+    def __init__(self, owning_fn: CFunction, prelude_offset: int, clean_lines: List[str], custom_typedefs: Optional[Set[str]] = None, typedef_shapes: Optional[Dict[str, TypedefShape]] = None):
         self.owning_fn = owning_fn
         self.prelude_offset = prelude_offset
         self.clean_lines = clean_lines
         self.custom_typedefs = custom_typedefs
+        self.typedef_shapes = typedef_shapes or {}
         self.node_counter = 0
         self.block_counter = 0
         self.scope_stack: List[int] = [0]
@@ -2467,18 +2470,23 @@ class _ASTFunctionAnalyzer:
                 if node.name and type(node.type).__name__ != "FuncDecl":
                     self.current_target_var = node.name
                     line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
-                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(node.type, self.outer.custom_typedefs)
+                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(node.type, self.outer.custom_typedefs)
+                    shape = resolve_typedef_shape(tname, self.outer.typedef_shapes) if hasattr(self.outer, "typedef_shapes") and self.outer.typedef_shapes else None
+                    v_is_array = is_arr or (shape.is_array if shape else False)
+                    v_is_pointer = (is_ptr or is_fp) or (shape.is_pointer if shape else False)
+                    v_arr_dim = arr_dim if arr_dim is not None else (str(shape.array_size) if shape and shape.array_size is not None else None)
                     current_block_id = self.outer.scope_stack[-1]
                     c_var = CVariable(
                         name=node.name,
                         type_name=tname,
-                        is_pointer=(is_ptr or is_fp),
+                        is_pointer=v_is_pointer,
                         is_signed=is_sig,
                         is_volatile=is_vol,
                         is_vla=is_vla,
-                        array_size_expr=arr_dim,
+                        array_size_expr=v_arr_dim,
                         has_initializer=(node.init is not None),
                         declaration_line=line_no,
+                        is_array=v_is_array,
                         enclosing_block_id=current_block_id,
                     )
                     var_key = (node.name, current_block_id)
@@ -2795,13 +2803,13 @@ class CASTParser:
         clean_lines = clean_code.splitlines()
 
         if has_pycparser and pycparser_ast is not None:
-            functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code, unsigned_typedefs)
             struct_defs = self._extract_struct_defs_from_ast(pycparser_ast, clean_code)
+            functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code, unsigned_typedefs)
             parser_status = ParserStatus.PYCPARSER_SUCCESS.value
         else:
+            struct_defs = self._extract_struct_defs_from_regex(clean_code)
             functions = self._extract_functions(clean_lines, clean_code, unsigned_typedefs)
             global_vars = self._extract_global_vars(clean_lines, functions, unsigned_typedefs)
-            struct_defs = self._extract_struct_defs_from_regex(clean_code)
             parser_status = ParserStatus.FALLBACK_PARSER.value
             parse_tier = ParseTier.REGEX_FALLBACK.value
 
@@ -3576,18 +3584,23 @@ class CASTParser:
                     custom_typedefs.add(ext.name)
             elif isinstance(ext, c_ast.Decl) and type(ext.type).__name__ != "FuncDecl" and type(ext).__name__ != "Typedef":
                 line_no = (ext.coord.line - _PRELUDE_LINE_COUNT) if ext.coord else 1
-                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, _ = _format_pycparser_type(ext.type, custom_typedefs)
+                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(ext.type, custom_typedefs)
+                shape = resolve_typedef_shape(tname, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
+                v_is_array = is_arr or (shape.is_array if shape else False)
+                v_is_pointer = (is_ptr or is_fp) or (shape.is_pointer if shape else False)
+                v_arr_dim = arr_dim if arr_dim is not None else (str(shape.array_size) if shape and shape.array_size is not None else None)
                 if ext.name and ext.name not in ('typedef', '#include', '#define', '#ifdef', '#ifndef'):
                     global_vars[ext.name] = CVariable(
                         name=ext.name,
                         type_name=tname,
-                        is_pointer=(is_ptr or is_fp),
+                        is_pointer=v_is_pointer,
                         is_signed=is_sig,
                         is_volatile=is_vol,
                         is_vla=is_vla,
-                        array_size_expr=arr_dim,
+                        array_size_expr=v_arr_dim,
                         has_initializer=(ext.init is not None),
                         declaration_line=line_no,
+                        is_array=v_is_array,
                     )
 
             elif isinstance(ext, c_ast.FuncDef):
@@ -3616,13 +3629,17 @@ class CASTParser:
                             if type(param).__name__ == "EllipsisParam" or not hasattr(param, "type"):
                                 continue
                             p_name = getattr(param, "name", None) or ""
-                            p_type, p_is_ptr, p_is_fp, _, _, _, _, _ = _format_pycparser_type(param.type, custom_typedefs)
+                            p_type, p_is_ptr, p_is_fp, _, _, _, _, p_is_arr = _format_pycparser_type(param.type, custom_typedefs)
                             p_line = (param.coord.line - _PRELUDE_LINE_COUNT) if param.coord else fn_start
+                            p_shape = resolve_typedef_shape(p_type, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
+                            p_is_array = p_is_arr or (p_shape.is_array if p_shape else False)
+                            p_is_pointer = p_is_ptr or p_is_fp or (p_shape.is_pointer if p_shape else False)
                             params.append(CParameter(
                                 name=p_name,
                                 type_name=p_type,
-                                is_pointer=(p_is_ptr or p_is_fp),
+                                is_pointer=p_is_pointer,
                                 line_number=p_line,
+                                is_array=p_is_array,
                             ))
 
                 fn_end = _get_max_ast_line(ext.body, fn_start, _PRELUDE_LINE_COUNT)
@@ -3649,7 +3666,7 @@ class CASTParser:
                 )
 
                 if ext.body:
-                    _ASTFunctionAnalyzer(fn, _PRELUDE_LINE_COUNT, clean_lines, custom_typedefs).analyze(ext.body)
+                    _ASTFunctionAnalyzer(fn, _PRELUDE_LINE_COUNT, clean_lines, custom_typedefs, typedef_shapes=self.typedef_shapes).analyze(ext.body)
 
                 functions.append(fn)
 
@@ -3721,12 +3738,17 @@ class CASTParser:
                     else:
                         continue
 
+                    p_is_arr = False
                     m_p_arr = re.match(r'^([a-zA-Z_]\w*)\s*(\[[^\]]*\])$', p_name)
                     if m_p_arr:
                         p_name = m_p_arr.group(1)
                         p_type = f"{p_type}{m_p_arr.group(2)}"
+                        p_is_arr = True
 
-                    params.append(CParameter(name=p_name, type_name=p_type, is_pointer=is_ptr, line_number=start_line))
+                    if '[' in p_type:
+                        p_is_arr = True
+
+                    params.append(CParameter(name=p_name, type_name=p_type, is_pointer=is_ptr, line_number=start_line, is_array=p_is_arr))
 
             fn = CFunction(
                 name=func_name,
@@ -3852,16 +3874,21 @@ class CASTParser:
                                     is_vla = True
 
                             curr_block = scope_stack[-1]
+                            shape = resolve_typedef_shape(type_prefix, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
+                            v_is_array = (array_dim is not None) or (shape.is_array if shape else False)
+                            v_is_pointer = is_ptr or (shape.is_pointer if shape else False)
+                            v_arr_dim = array_dim if array_dim is not None else (str(shape.array_size) if shape and shape.array_size is not None else None)
                             c_var = CVariable(
                                 name=v_name,
                                 type_name=type_prefix,
-                                is_pointer=is_ptr,
+                                is_pointer=v_is_pointer,
                                 is_signed=is_signed,
                                 is_volatile=is_volatile,
                                 is_vla=is_vla,
-                                array_size_expr=array_dim,
+                                array_size_expr=v_arr_dim,
                                 has_initializer=(init_val is not None),
                                 declaration_line=line_no,
+                                is_array=v_is_array,
                                 enclosing_block_id=curr_block,
                             )
                             if init_val:
@@ -3968,16 +3995,21 @@ class CASTParser:
                 if type_tokens and type_tokens[-1] in _STATEMENT_KEYWORDS:
                     continue
                 if v_name not in ('typedef', '#include', '#define', '#ifdef', '#ifndef'):
+                    shape = resolve_typedef_shape(type_prefix, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
+                    v_is_array = (m.group(3) is not None) or (shape.is_array if shape else False)
+                    v_is_pointer = ('*' in type_prefix) or (shape.is_pointer if shape else False)
+                    v_arr_dim = m.group(3) if m.group(3) is not None else (str(shape.array_size) if shape and shape.array_size is not None else None)
                     global_vars[v_name] = CVariable(
                         name=v_name,
                         type_name=type_prefix,
-                        is_pointer='*' in type_prefix,
+                        is_pointer=v_is_pointer,
                         is_signed=not is_unsigned_type(type_prefix, custom_typedefs),
                         is_volatile='volatile' in type_prefix,
                         is_vla=False,
-                        array_size_expr=m.group(3),
+                        array_size_expr=v_arr_dim,
                         has_initializer=m.group(4) is not None,
                         declaration_line=line_no,
+                        is_array=v_is_array,
                     )
         return global_vars
 

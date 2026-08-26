@@ -1242,3 +1242,58 @@ class TestVariableShadowingRule(unittest.TestCase):
         """
         issues = scan_with_rule("CGULL-043", code)
         self.assertEqual(len(issues), 2)
+
+
+class TestIncorrectPointerScalingRule(unittest.TestCase):
+    def test_compound_assignment_does_not_raise_attribute_error(self):
+        code = """
+        int sum_table(void) {
+            int total = 0;
+            for (int i = 0; i < 4; i++) {
+                total += 1;
+            }
+            return total;
+        }
+        """
+        issues = scan_with_rule("CGULL-040", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_incorrect_pointer_scaling_detected(self):
+        code = """
+        #include <stdlib.h>
+        void calc(void) {
+            int *ptr = (int *)malloc(10 * sizeof(int));
+            if (!ptr) return;
+            ptr += 2 * sizeof(int);
+            free(ptr);
+        }
+        """
+        issues = scan_with_rule("CGULL-040", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].rule_id, "CGULL-040")
+
+    def test_array_parameter_pointer_scaling_detected(self):
+        code = """
+        #include <stdlib.h>
+        void process_array(int arr[]) {
+            int *offset = arr + (2 * sizeof(int));
+            (void)offset;
+        }
+        """
+        issues = scan_with_rule("CGULL-040", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].rule_id, "CGULL-040")
+
+    def test_array_typedef_pointer_scaling_detected(self):
+        code = """
+        #include <stdlib.h>
+        typedef int IntArray[10];
+        void process_typedef(void) {
+            IntArray table;
+            int *offset = table + (2 * sizeof(int));
+            (void)offset;
+        }
+        """
+        issues = scan_with_rule("CGULL-040", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].rule_id, "CGULL-040")

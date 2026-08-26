@@ -93,19 +93,19 @@ class IncorrectPointerScalingRule(BaseRule):
 
                 if fn and var_name in fn.variables:
                     var_obj = fn.variables[var_name]
-                    if var_obj.is_pointer or var_obj.is_array or '*' in var_obj.type_name or '*' in var_obj.name:
+                    if var_obj.is_pointer or getattr(var_obj, "is_array", False) or '*' in var_obj.type_name or '*' in var_obj.name:
                         if not is_byte_ptr(var_obj.type_name, var_obj.name):
                             return True
 
                 if var_name in ast_ctx.global_variables:
                     var_obj = ast_ctx.global_variables[var_name]
-                    if var_obj.is_pointer or var_obj.is_array or '*' in var_obj.type_name or '*' in var_obj.name:
+                    if var_obj.is_pointer or getattr(var_obj, "is_array", False) or '*' in var_obj.type_name or '*' in var_obj.name:
                         if not is_byte_ptr(var_obj.type_name, var_obj.name):
                             return True
 
                 if fn:
                     for param in fn.parameters:
-                        if param.name == var_name and (param.is_pointer or '*' in param.type_name or '*' in param.name):
+                        if param.name == var_name and (param.is_pointer or getattr(param, "is_array", False) or '*' in param.type_name or '*' in param.name or '[' in param.type_name):
                             if not is_byte_ptr(param.type_name, param.name):
                                 return True
 

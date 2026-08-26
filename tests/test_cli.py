@@ -117,7 +117,7 @@ class TestScanCommand(unittest.TestCase):
         # Clean file
         clean_file = os.path.join(self.temp_dir, "clean.c")
         with open(clean_file, "w") as f:
-            f.write("void noop(void) {\n    int total = 0;\n    total = total + 1;\n}\n")
+            f.write("int noop(void) {\n    int total = 0;\n    total = total + 1;\n    return total;\n}\n")
 
         # --fail-on high on medium_only file should pass (0)
         code, _ = self._run(["scan", med_file, "--fail-on", "high"])
