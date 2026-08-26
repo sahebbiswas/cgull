@@ -289,8 +289,10 @@ class CGullScanner:
         analyzed_count = 0
         failed_count = 0
 
+        real_base_dir = os.path.realpath(base_dir)
         for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err in results:
             display_path = os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path)
+            real_file_path = os.path.realpath(file_path)
 
             analysis_status_counts[parser_status] = analysis_status_counts.get(parser_status, 0) + 1
 
@@ -312,11 +314,12 @@ class CGullScanner:
                 if self.severity_filter:
                     file_issues = [i for i in file_issues if i.impact in self.severity_filter]
                 for issue in file_issues:
-                    if not issue.file_path or issue.file_path == file_path:
+                    if not issue.file_path or issue.file_path == file_path or os.path.realpath(issue.file_path) == real_file_path:
                         issue.file_path = display_path
                     elif os.path.isabs(issue.file_path):
                         try:
-                            issue.file_path = os.path.relpath(issue.file_path, base_dir) if os.path.isdir(abs_target) else issue.file_path
+                            if os.path.isdir(abs_target):
+                                issue.file_path = os.path.relpath(os.path.realpath(issue.file_path), real_base_dir)
                         except ValueError:
                             pass
                     issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
