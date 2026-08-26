@@ -389,3 +389,87 @@ def test_tu_include_expansion_integration_with_scanner(tmp_path):
     # Vulnerability in included header is found in main.c TU!
     gets_issues = [i for i in res.issues if "gets" in i.message.lower() or i.rule_id == "CGULL-005"]
     assert len(gets_issues) >= 1
+    # Check that the reported issue's file_path and line_number match the original header file
+    assert gets_issues[0].file_path == str(hdr.resolve())
+    assert gets_issues[0].line_number == 1
+
+
+def test_inactive_include_in_untaken_branch_does_not_mutate_guards(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr_once = inc_dir / "once.h"
+    hdr_once.write_text("#pragma once\nint once_val = 1;\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text(
+        "#ifdef UNTAKEN_MACRO\n"
+        '#include "once.h"\n'
+        "#endif\n"
+        '#include "once.h"\n'
+        "int main(void) { return once_val; }\n"
+    )
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver, defined_syms={})
+
+    tu = expander.expand(main_c.read_text(), str(main_c))
+
+    # "once.h" should be active and expanded on line 4, NOT muted by line 2
+    assert "int once_val = 1;" in tu.expanded_text
+
+
+def test_partial_header_guard_rejection(tmp_path):
+    from cgull.includes import _detect_header_guard
+
+    # Whole-file header guard
+    valid_guard = "#ifndef MY_GUARD_H\n#define MY_GUARD_H\nint x;\n#endif\n"
+    assert _detect_header_guard(valid_guard) == "MY_GUARD_H"
+
+    # Partial guard (code outside the guard)
+    partial_guard = "int external_var = 0;\n#ifndef MY_GUARD_H\n#define MY_GUARD_H\nint x;\n#endif\n"
+    assert _detect_header_guard(partial_guard) is None
+
+    # Premature endif
+    premature_guard = "#ifndef MY_GUARD_H\n#define MY_GUARD_H\nint x;\n#endif\nint y;\n"
+    assert _detect_header_guard(premature_guard) is None
+
+
+def test_boundary_containment_rejection(tmp_path):
+    from cgull.includes import IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_hdr = outside_dir / "outside.h"
+    outside_hdr.write_text("int secret = 42;\n")
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(inc_dir), allow_external_includes=False)
+
+    # Attempt path traversal escape
+    resolved = resolver.resolve("../outside/outside.h", str(inc_dir), is_quote=True)
+    assert resolved is None
+
+
+def test_streamed_bounded_reads_and_caching(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr = inc_dir / "hdr.h"
+    hdr.write_text("int data = 1234567890;\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "hdr.h"\n#include "hdr.h"\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver, max_total_bytes=10)
+
+    tu = expander.expand(main_c.read_text(), str(main_c))
+
+    assert str(hdr.resolve()) in expander.rejected_paths

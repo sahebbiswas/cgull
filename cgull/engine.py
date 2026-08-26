@@ -312,7 +312,13 @@ class CGullScanner:
                 if self.severity_filter:
                     file_issues = [i for i in file_issues if i.impact in self.severity_filter]
                 for issue in file_issues:
-                    issue.file_path = display_path
+                    if not issue.file_path or issue.file_path == file_path:
+                        issue.file_path = display_path
+                    elif os.path.isabs(issue.file_path):
+                        try:
+                            issue.file_path = os.path.relpath(issue.file_path, base_dir) if os.path.isdir(abs_target) else issue.file_path
+                        except ValueError:
+                            pass
                     issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
                 all_issues.extend(file_issues)
 
@@ -664,8 +670,10 @@ def _scan_file_content(
     inc_roots = config.include_roots if config else []
     source_dir = os.path.dirname(os.path.abspath(file_path)) if file_path and file_path != "source.c" else os.getcwd()
     resolver = IncludeResolver(include_roots=inc_roots, base_dir=source_dir)
-    expander = TUIncludeExpander(resolver=resolver)
-    content = expander.expand(content, source_path=file_path)
+    expander = TUIncludeExpander(resolver=resolver, defined_syms=config.defined_syms if config else None)
+    tu = expander.expand(content, source_path=file_path)
+    content = tu.expanded_text
+    line_map = tu.line_map
 
     ast_parser = ast_parser or CASTParser()
     raw_lines = content.splitlines()
@@ -675,19 +683,53 @@ def _scan_file_content(
 
     suppressions = SuppressionMap.from_source(raw_lines) if enable_suppressions else None
 
+    # Cache per-file suppression maps so inline ignore comments work across included headers
+    file_suppressions: Dict[str, SuppressionMap] = {
+        file_path: suppressions if suppressions is not None else SuppressionMap.from_source([]),
+        os.path.realpath(file_path): suppressions if suppressions is not None else SuppressionMap.from_source([])
+    }
+
+    def get_suppression_map(f_path: str) -> Optional[SuppressionMap]:
+        if not enable_suppressions:
+            return None
+        if f_path in file_suppressions:
+            return file_suppressions[f_path]
+        try:
+            if os.path.isfile(f_path):
+                with open(f_path, "r", encoding="utf-8", errors="replace") as f:
+                    file_lines = f.read().splitlines()
+                file_suppressions[f_path] = SuppressionMap.from_source(file_lines)
+            else:
+                file_suppressions[f_path] = SuppressionMap.from_source([])
+        except Exception:
+            file_suppressions[f_path] = SuppressionMap.from_source([])
+        return file_suppressions[f_path]
+
     def add_issue_if_unique(issue: Issue):
-        if suppressions and suppressions.is_suppressed(issue.line_number, issue.rule_id):
+        exp_line = issue.line_number
+        src_loc = line_map.get(exp_line)
+        if src_loc:
+            orig_file = src_loc.file_path
+            orig_line = src_loc.line_number
+            orig_snippet = src_loc.line_content.strip()
+        else:
+            orig_file = file_path
+            orig_line = exp_line
+            orig_snippet = raw_lines[exp_line - 1].strip() if 0 < exp_line <= len(raw_lines) else ""
+
+        f_supp = get_suppression_map(orig_file)
+        if f_supp and f_supp.is_suppressed(orig_line, issue.rule_id):
             return
         if sev_filter and issue.impact not in sev_filter:
             return
-        key = f"{issue.rule_id}:{issue.line_number}:{issue.message}"
+
+        issue.file_path = orig_file
+        issue.line_number = orig_line
+        issue.code_snippet = orig_snippet
+
+        key = f"{issue.rule_id}:{issue.file_path}:{issue.line_number}:{issue.message}"
         if key not in seen_keys:
             seen_keys.add(key)
-            # Restore the original (uncleaned) source line for display,
-            # regardless of what internal cleaned/masked view the rule
-            # matched against.
-            if 0 < issue.line_number <= len(raw_lines):
-                issue.code_snippet = raw_lines[issue.line_number - 1].strip()
             issues.append(issue)
 
     parser_status = ParserStatus.FALLBACK_PARSER.value
