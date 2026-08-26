@@ -10,7 +10,7 @@ from .logging_config import configure_logging, TRACE_LEVEL_NUM
 from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError, ParseTier, ConfigProfile, OUTPUT_SCHEMA_VERSION
 from .engine import CGullScanner
 from .ignore import CGullIgnoreFilter
-from .includes import IncludeResolver
+from .includes import IncludeResolver, TUIncludeExpander, expand_includes
 from .reporter import ReportGenerator
 from .config import CGullConfig, load_config
 from .ast_analyzer import (
@@ -31,6 +31,8 @@ __all__ = [
     "CGullScanner",
     "CGullIgnoreFilter",
     "IncludeResolver",
+    "TUIncludeExpander",
+    "expand_includes",
     "ReportGenerator",
     "Issue",
     "Severity",

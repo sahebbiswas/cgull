@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile
 from .ignore import CGullIgnoreFilter
+from .includes import IncludeResolver, TUIncludeExpander
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
 from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint, sanitize_terminal_text
@@ -660,6 +661,12 @@ def _scan_file_content(
         enable_suppressions = True
 
     t0 = time.time()
+    inc_roots = config.include_roots if config else []
+    source_dir = os.path.dirname(os.path.abspath(file_path)) if file_path and file_path != "source.c" else os.getcwd()
+    resolver = IncludeResolver(include_roots=inc_roots, base_dir=source_dir)
+    expander = TUIncludeExpander(resolver=resolver)
+    content = expander.expand(content, source_path=file_path)
+
     ast_parser = ast_parser or CASTParser()
     raw_lines = content.splitlines()
     loc = len(raw_lines)
