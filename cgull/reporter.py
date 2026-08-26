@@ -10,7 +10,11 @@ from .models import ScanResult, Severity, FixType
 from . import __version__
 
 
+import logging
 from .utils import sanitize_terminal_text
+
+logger = logging.getLogger(__name__)
+
 
 
 def _escape_markdown_cell(text: str) -> str:

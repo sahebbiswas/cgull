@@ -10,7 +10,11 @@ masked view of the source -- rather than each rule re-implementing its own
 import hashlib
 import re
 import sys
+import logging
 from typing import Dict, List, Optional, Set, TextIO, Tuple
+
+logger = logging.getLogger(__name__)
+
 
 # Matches: // cgull-ignore
 #          // cgull-ignore: CGULL-001

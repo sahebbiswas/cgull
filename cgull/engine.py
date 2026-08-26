@@ -7,6 +7,7 @@ regex scanning, AST parsing, and issue aggregation.
 import os
 import sys
 import time
+import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union, Any
@@ -17,6 +18,8 @@ from .ignore import CGullIgnoreFilter
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
 from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint, sanitize_terminal_text
+
+logger = logging.getLogger(__name__)
 
 
 def _emit_error(
@@ -32,13 +35,14 @@ def _emit_error(
     san_type = sanitize_terminal_text(error_type)
     san_msg = sanitize_terminal_text(message)
     prefix = "\n" if progress_active else ""
-    sys.stderr.write(f"{prefix}[ERROR] Analysis failed for {san_path}: {san_type}: {san_msg}\n")
-    sys.stderr.flush()
+    if not logging.getLogger().handlers:
+        sys.stderr.write(f"{prefix}[ERROR] Analysis failed for {san_path}: {san_type}: {san_msg}\n")
+        sys.stderr.flush()
+    else:
+        logger.error("%s[ERROR] Analysis failed for %s: %s: %s", prefix, san_path, san_type, san_msg)
 
 
 def _collect_files_flags(files: List[str], quiet: bool = False) -> Tuple[Set[str], Set[str], Dict[str, Tuple[str, int]], Dict[str, Tuple[str, int]]]:
-    import logging
-    logger = logging.getLogger(__name__)
     from .utils import strip_comments_keep_lines
     from .ast_analyzer import ConditionalFlagCollector
 
@@ -67,14 +71,10 @@ def _collect_files_flags(files: List[str], quiet: bool = False) -> Tuple[Set[str
                     value_locs[k] = v
         except OSError as e:
             skipped_error_count += 1
-            if not quiet:
-                sys.stderr.write(f"[WARNING] Flag collection skipped '{fpath}' due to OS error: {e}\n")
-                sys.stderr.flush()
+            logger.warning("[WARNING] Flag collection skipped '%s' due to OS error: %s", fpath, e)
         except Exception as e:
             skipped_error_count += 1
-            if not quiet:
-                sys.stderr.write(f"[WARNING] Flag collection skipped '{fpath}' due to error: {e}\n")
-                sys.stderr.flush()
+            logger.warning("[WARNING] Flag collection skipped '%s' due to error: %s", fpath, e)
 
     if skipped_error_count > 0 and not quiet:
         logger.warning("Flag collection skipped %d file(s) due to errors", skipped_error_count)
@@ -110,8 +110,7 @@ def _validate_seed_flags_diagnostics(files: List[str], seed_profiles: List[Confi
     # Diagnostic 1: Unused macro warning (warn once per unused macro per run)
     for m_name in sorted(seed_macros.keys()):
         if m_name not in all_discovered:
-            sys.stderr.write(f"Warning: Seed macro '{m_name}' is defined in configuration seed but never tested in any scanned source file.\n")
-            sys.stderr.flush()
+            logger.warning("Warning: Seed macro '%s' is defined in configuration seed but never tested in any scanned source file.", m_name)
 
     # Diagnostic 2: Value-macro seed for a flag only tested as a presence flag (#ifdef)
     for m_name, (val, prof_name) in sorted(value_seed_macros.items()):
@@ -120,8 +119,7 @@ def _validate_seed_flags_diagnostics(files: List[str], seed_profiles: List[Confi
             if m_name in presence_locs:
                 fpath, lno = presence_locs[m_name]
                 loc_str = f" in {fpath}:{lno}"
-            sys.stderr.write(f"Warning: Seed value macro '{m_name}' is configured with value '{val}' but was only tested as a presence flag{loc_str}.\n")
-            sys.stderr.flush()
+            logger.warning("Warning: Seed value macro '%s' is configured with value '%s' but was only tested as a presence flag%s.", m_name, val, loc_str)
 
 
 class CGullScanner:

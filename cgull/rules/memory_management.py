@@ -8,7 +8,11 @@ from .base import BaseRule
 from .banned_functions import BannedFunctionsRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext, CFunction, get_type_byte_size
+import logging
 from ..cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
+
+logger = logging.getLogger(__name__)
+
 
 
 def _brace_depths(body_lines: List[str]) -> List[int]:

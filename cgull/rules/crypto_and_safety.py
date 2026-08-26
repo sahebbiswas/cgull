@@ -6,7 +6,11 @@ import re
 from typing import List, Optional, Tuple, Set, Dict
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
+import logging
 from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
+
+logger = logging.getLogger(__name__)
+
 
 
 def _is_sensitive_identifier(token: str) -> bool:

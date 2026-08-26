@@ -7,7 +7,11 @@ from enum import Enum
 import types
 from typing import List, Dict, Any, Optional, Set, Union, Mapping
 import time
+import logging
 from . import __version__
+
+logger = logging.getLogger(__name__)
+
 
 OUTPUT_SCHEMA_VERSION = "1"
 
