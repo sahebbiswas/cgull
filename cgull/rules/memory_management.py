@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from .base import BaseRule
 from .banned_functions import BannedFunctionsRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
-from ..ast_analyzer import CASTContext, CFunction
+from ..ast_analyzer import CASTContext, CFunction, get_type_byte_size
 from ..cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
 
 
@@ -1492,6 +1492,10 @@ class MemcpyStructMemberOverflowRule(BaseRule):
                         curr_sdef = None
 
                 if target_field and target_field.is_array:
+                    elem_byte_size = get_type_byte_size(target_field.type_name, ast_ctx)
+                    if elem_byte_size is None:
+                        return None
+
                     dims = getattr(target_field, 'array_dims', None) or (
                         [target_field.array_size] if target_field.array_size is not None else []
                     )
@@ -1518,7 +1522,8 @@ class MemcpyStructMemberOverflowRule(BaseRule):
                         selected_dim = None
 
                     if selected_dim is not None and isinstance(selected_dim, int):
-                        return max(0, selected_dim - offset_val)
+                        remaining_elems = max(0, selected_dim - offset_val)
+                        return remaining_elems * elem_byte_size
 
         # 2. Plain local or global array (with optional offset)
         elem_offset = 0
@@ -1533,12 +1538,17 @@ class MemcpyStructMemberOverflowRule(BaseRule):
             var_name = dest_clean_base
             var_obj = fn.variables.get(var_name) or (ast_ctx.global_variables.get(var_name) if ast_ctx else None)
             if var_obj and var_obj.array_size_expr:
+                elem_byte_size = get_type_byte_size(var_obj.type_name, ast_ctx)
+                if elem_byte_size is None:
+                    return None
                 expr = var_obj.array_size_expr.strip()
                 if expr.isdigit():
-                    return max(0, int(expr) - elem_offset)
+                    remaining_elems = max(0, int(expr) - elem_offset)
+                    return remaining_elems * elem_byte_size
                 m = re.search(r'\b(\d+)\b', expr)
                 if m:
-                    return max(0, int(m.group(1)) - elem_offset)
+                    remaining_elems = max(0, int(m.group(1)) - elem_offset)
+                    return remaining_elems * elem_byte_size
 
             # Check pointer aliasing or local array decl in source lines
             body_lines = fn.body.splitlines() if fn else []
@@ -1576,7 +1586,11 @@ class MemcpyStructMemberOverflowRule(BaseRule):
                     if alias_target and alias_target != var_name:
                         t_var = fn.variables.get(alias_target) or (ast_ctx.global_variables.get(alias_target) if ast_ctx else None)
                         if t_var and t_var.array_size_expr and t_var.array_size_expr.isdigit():
-                            return max(0, int(t_var.array_size_expr) - offset - elem_offset)
+                            elem_byte_size = get_type_byte_size(t_var.type_name, ast_ctx)
+                            if elem_byte_size is None:
+                                return None
+                            remaining_elems = max(0, int(t_var.array_size_expr) - offset - elem_offset)
+                            return remaining_elems * elem_byte_size
 
         return None
 
@@ -1594,29 +1608,43 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         """
         expr = size_expr.strip()
 
-        # Handle sizeof(...) expressions (e.g. sizeof(struct Big) or sizeof(var))
-        m_sizeof = re.search(r'sizeof\s*\(\s*(.+?)\s*\)', size_expr) or re.search(r'sizeof\s*([a-zA-Z_]\w*)', size_expr)
+        # Handle sizeof(...) expressions (e.g. sizeof(struct Big), sizeof(int), or sizeof(var))
+        m_sizeof = re.search(r'sizeof\s*\(\s*(.+?)\s*\)', expr) or re.search(r'sizeof\s*([a-zA-Z_]\w*)', expr)
         if m_sizeof:
             so_arg = m_sizeof.group(1).strip()
-            if ast_ctx:
-                sdef = ast_ctx.get_struct_def(so_arg)
-                if sdef and sdef.fields:
-                    total = 0
-                    for f in sdef.fields.values():
-                        f_size = f.array_size if (f.is_array and f.array_size is not None) else 1
-                        total += f_size
-                    if total > 0:
-                        return total, None
+            # 1. Try primitive scalar / pointer type byte size
+            scalar_size = get_type_byte_size(so_arg, ast_ctx)
+            if scalar_size is not None:
+                return scalar_size, None
 
+            # 2. Check if variable in function or global
+            if fn and ast_ctx:
                 var_obj = fn.variables.get(so_arg) or ast_ctx.global_variables.get(so_arg)
                 if var_obj:
                     cap = self._resolve_dest_capacity(so_arg, fn, line_no, ast_ctx)
                     if cap is not None:
                         return cap, None
+                    v_size = get_type_byte_size(var_obj.type_name, ast_ctx)
+                    if v_size is not None:
+                        return v_size, None
 
-            type_sizes = {'char': 1, 'int8_t': 1, 'uint8_t': 1, 'short': 2, 'int16_t': 2, 'uint16_t': 2, 'int': 4, 'uint32_t': 4, 'int32_t': 4, 'float': 4, 'long': 8, 'double': 8, 'uint64_t': 8, 'int64_t': 8}
-            if so_arg.lower() in type_sizes:
-                return type_sizes[so_arg.lower()], None
+            # 3. Check struct definition field byte sum
+            if ast_ctx:
+                sdef = ast_ctx.get_struct_def(so_arg)
+                if sdef and sdef.fields:
+                    field_bytes = 0
+                    for f in sdef.fields.values():
+                        f_elem_size = get_type_byte_size(f.type_name, ast_ctx)
+                        if f_elem_size is None:
+                            field_bytes = None
+                            break
+                        f_count = f.array_size if (f.is_array and f.array_size is not None) else 1
+                        field_bytes += f_count * f_elem_size
+                    if field_bytes is not None and field_bytes > 0:
+                        return field_bytes, None
+
+            # 4. Otherwise leave unresolved
+            return None, expr
 
         # Check pure integer literal
         if expr.isdigit():
@@ -1641,7 +1669,239 @@ class MemcpyStructMemberOverflowRule(BaseRule):
 
         return None, None
 
+    def _resolve_upper_bound(
+        self,
+        limit_expr: str,
+        fn: CFunction,
+        line_no: int,
+        ast_ctx: CASTContext,
+    ) -> Optional[int]:
+        s = limit_expr.strip()
+        s = re.sub(r'^\s*\(\s*(?:[a-zA-Z_]\w*\s*\*+|\w+)\s*\)\s*', '', s).strip()
+        while s.startswith('(') and s.endswith(')'):
+            s = s[1:-1].strip()
+
+        if s.isdigit():
+            return int(s)
+        if s.startswith(('0x', '0X')):
+            try:
+                return int(s, 16)
+            except ValueError:
+                pass
+
+        m_op = re.match(r'^([a-zA-Z_]\w*(?:\s*->\s*\w+|\s*\.\s*\w+)?)\s*([\+\-])\s*(\d+)$', s)
+        if m_op:
+            base_str = m_op.group(1)
+            op = m_op.group(2)
+            val = int(m_op.group(3))
+            base_bound = self._resolve_upper_bound(base_str, fn, line_no, ast_ctx)
+            if base_bound is not None:
+                return base_bound + val if op == '+' else base_bound - val
+
+        if 'sizeof' in s:
+            const_val, _ = self._resolve_size_arg(s, fn, line_no, ast_ctx)
+            if const_val is not None:
+                return const_val
+
+        if ast_ctx and ast_ctx.clean_source:
+            def_m = re.search(rf'#\s*define\s+{re.escape(s)}\s+(\d+|0x[0-9a-fA-F]+)\b', ast_ctx.clean_source)
+            if def_m:
+                val_str = def_m.group(1)
+                return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
+
+        cap = self._resolve_dest_capacity(s, fn, line_no, ast_ctx)
+        if cap is not None:
+            return cap
+
+        body_lines = fn.body.splitlines() if fn else []
+        fn_start = getattr(fn, "body_start_line", fn.start_line) if fn else 1
+        max_idx = min(len(body_lines), line_no - fn_start) if line_no >= fn_start else len(body_lines)
+        assign_pat = re.compile(rf'(?:^|[;{{}}\s]){re.escape(s)}\s*=(?!=)\s*(.+?)(?:;|$)')
+        for idx in range(max_idx - 1, -1, -1):
+            line = body_lines[idx]
+            m = assign_pat.search(line)
+            if m:
+                rhs = m.group(1).strip()
+                return self._resolve_upper_bound(rhs, fn, fn_start + idx, ast_ctx)
+
+        return None
+
+    def _eval_branch_bounds(
+        self,
+        cond_str: str,
+        var_name: str,
+        dest_capacity: int,
+        current_bounded: bool,
+        fn: CFunction,
+        line_no: int,
+        ast_ctx: CASTContext,
+    ) -> Tuple[bool, bool]:
+        v_esc = re.escape(var_name)
+        if not re.search(r'\b' + v_esc + r'\b', cond_str):
+            return current_bounded, current_bounded
+
+        true_bounded = current_bounded
+        false_bounded = current_bounded
+
+        for m in re.finditer(r'\b' + v_esc + r'\s*(<=|>=|<|>|==)\s*([^&|;)]+)', cond_str):
+            op = m.group(1)
+            rhs = m.group(2).strip()
+            ub = self._resolve_upper_bound(rhs, fn, line_no, ast_ctx)
+            if ub is None:
+                continue
+
+            if op in ('<=', '=='):
+                if ub <= dest_capacity:
+                    true_bounded = True
+            elif op == '<':
+                if ub - 1 <= dest_capacity:
+                    true_bounded = True
+            elif op == '>=':
+                if ub - 1 <= dest_capacity:
+                    false_bounded = True
+            elif op == '>':
+                if ub <= dest_capacity:
+                    false_bounded = True
+
+        for m in re.finditer(r'([^&|;(]+)\s*(<=|>=|<|>|==)\s*\b' + v_esc + r'\b', cond_str):
+            lhs = m.group(1).strip()
+            op = m.group(2)
+            ub = self._resolve_upper_bound(lhs, fn, line_no, ast_ctx)
+            if ub is None:
+                continue
+
+            if op in ('>=', '=='):
+                if ub <= dest_capacity:
+                    true_bounded = True
+            elif op == '>':
+                if ub - 1 <= dest_capacity:
+                    true_bounded = True
+            elif op == '<=':
+                if ub - 1 <= dest_capacity:
+                    false_bounded = True
+            elif op == '<':
+                if ub <= dest_capacity:
+                    false_bounded = True
+
+        return true_bounded, false_bounded
+
+    def _is_min_clamp_bound(
+        self,
+        expr_str: Optional[str],
+        var_name: str,
+        dest_capacity: int,
+        fn: CFunction,
+        line_no: int,
+        ast_ctx: CASTContext,
+    ) -> bool:
+        if not expr_str:
+            return False
+        v_esc = re.escape(var_name)
+        if not re.search(r'\b' + v_esc + r'\b', expr_str):
+            return False
+
+        m_call = re.search(r'\b(?:min|clamp)\s*\(([^)]+)\)', expr_str)
+        if m_call:
+            args = [a.strip() for a in m_call.group(1).split(',')]
+            for arg in args:
+                if arg == var_name:
+                    continue
+                ub = self._resolve_upper_bound(arg, fn, line_no, ast_ctx)
+                if ub is not None and ub <= dest_capacity:
+                    return True
+
+        m_tern = re.search(r'\b' + v_esc + r'\s*=\s*\([^)]*?\b' + v_esc + r'\b[^)]*?\)\s*\?\s*([^:]+)\s*:\s*' + v_esc, expr_str)
+        if m_tern:
+            ub = self._resolve_upper_bound(m_tern.group(1), fn, line_no, ast_ctx)
+            if ub is not None and ub <= dest_capacity:
+                return True
+
+        return False
+
     def _is_size_var_gated(
+        self,
+        var_name: str,
+        dest_capacity: int,
+        fn: CFunction,
+        line_no: int,
+        ast_ctx: CASTContext,
+    ) -> bool:
+        if not fn or not ast_ctx:
+            return False
+
+        cfg = _ast_cfg_for_function(ast_ctx, fn)
+        if cfg is not None and cfg.entry is not None:
+            target_node_ids = [nid for nid, node in cfg.nodes.items() if node.line_number == line_no and any(tf in (node.expr_str or '') for tf in self.TARGET_FUNCS)]
+            if not target_node_ids:
+                target_node_ids = [nid for nid, node in cfg.nodes.items() if node.line_number == line_no]
+
+            if target_node_ids:
+                target_node_id = target_node_ids[0]
+                import collections
+                queue = collections.deque([(cfg.entry, False)])
+                visited = set()
+                path_reached = False
+
+                while queue:
+                    curr_id, bounded = queue.popleft()
+                    state_key = (curr_id, bounded)
+                    if state_key in visited:
+                        continue
+                    visited.add(state_key)
+
+                    if curr_id == target_node_id:
+                        path_reached = True
+                        if not bounded:
+                            return False
+                        continue
+
+                    node = cfg.nodes[curr_id]
+                    new_bounded = bounded
+
+                    if var_name in node.writes:
+                        if self._is_min_clamp_bound(node.expr_str, var_name, dest_capacity, fn, node.line_number, ast_ctx):
+                            new_bounded = True
+                        else:
+                            new_bounded = False
+
+                    if node.kind in ("if_cond", "while_cond", "do_cond") and node.expr_str:
+                        true_b, false_b = self._eval_branch_bounds(
+                            node.expr_str, var_name, dest_capacity, new_bounded, fn, node.line_number, ast_ctx
+                        )
+                        if len(node.successors) >= 2:
+                            queue.append((node.successors[0], true_b))
+                            queue.append((node.successors[1], false_b))
+                        elif len(node.successors) == 1:
+                            succ_node = cfg.nodes[node.successors[0]]
+                            if_ast = getattr(node, '_ast_node', None)
+                            is_inside_if = False
+                            if if_ast and getattr(if_ast, 'iftrue', None):
+                                def _is_ast_child(child, parent):
+                                    if parent is None or child is None:
+                                        return False
+                                    if parent is child:
+                                        return True
+                                    for _, c in getattr(parent, 'children', lambda: [])():
+                                        if _is_ast_child(child, c):
+                                            return True
+                                    return False
+                                is_inside_if = _is_ast_child(getattr(succ_node, '_ast_node', None), if_ast.iftrue)
+
+                            if is_inside_if:
+                                queue.append((node.successors[0], true_b))
+                            else:
+                                queue.append((node.successors[0], false_b))
+                        continue
+
+                    for succ_id in node.successors:
+                        queue.append((succ_id, new_bounded))
+
+                if path_reached:
+                    return True
+
+        return self._is_size_var_gated_lexical(var_name, dest_capacity, fn, line_no, ast_ctx)
+
+    def _is_size_var_gated_lexical(
         self,
         var_name: str,
         dest_capacity: int,
@@ -1654,48 +1914,24 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         fn_start = getattr(fn, "body_start_line", fn.start_line) if fn else 1
         line_idx = line_no - fn_start
 
-        # Check preceding 8 lines for if (var <= cap), min(), clamp(), assert()
-        start_idx = max(0, line_idx - 10)
+        start_idx = max(0, line_idx - 15)
         preceding_lines = body_lines[start_idx:line_idx]
 
-        for p_line in preceding_lines:
+        for idx, p_line in enumerate(preceding_lines):
             if not re.search(r'\b' + v_esc + r'\b', p_line):
                 continue
 
-            # Check min / clamp
-            if re.search(r'\bmin\s*\(', p_line) or re.search(r'\bclamp\s*\(', p_line):
-                nums = [int(n) for n in re.findall(r'\b\d+\b', p_line)]
-                if nums and any(n <= dest_capacity for n in nums):
-                    return True
-                elif not nums:
+            if self._is_min_clamp_bound(p_line, var_name, dest_capacity, fn, fn_start + start_idx + idx, ast_ctx):
+                subsequent = preceding_lines[idx + 1:]
+                if not any(re.search(rf'(?:^|[;{{}}\s]){v_esc}\s*=(?!=)', l) for l in subsequent):
                     return True
 
-            # Check if/assert guard statement
             if re.search(r'\b(?:if|assert|ASSERT|while)\b', p_line):
-                # Check bounds like var <= capacity or var < capacity + 1 or capacity >= var
-                for m in re.finditer(r'\b' + v_esc + r'\s*(<|<=|>|>=)\s*([a-zA-Z0-9_]+)\b', p_line):
-                    op, val_str = m.group(1), m.group(2)
-                    if val_str.isdigit():
-                        limit = int(val_str)
-                        if op == '<=' and limit <= dest_capacity:
-                            return True
-                        if op == '<' and limit <= dest_capacity + 1:
-                            return True
-                    else:
-                        if op in ('<', '<='):
-                            return True
-
-                for m in re.finditer(r'\b([a-zA-Z0-9_]+)\s*(<|<=|>|>=)\s*' + v_esc + r'\b', p_line):
-                    val_str, op = m.group(1), m.group(2)
-                    if val_str.isdigit():
-                        limit = int(val_str)
-                        if op == '>=' and limit <= dest_capacity:
-                            return True
-                        if op == '>' and limit <= dest_capacity + 1:
-                            return True
-                    else:
-                        if op in ('>', '>='):
-                            return True
+                tb, fb = self._eval_branch_bounds(p_line, var_name, dest_capacity, False, fn, fn_start + start_idx + idx, ast_ctx)
+                if tb or fb:
+                    subsequent = preceding_lines[idx + 1:]
+                    if not any(re.search(rf'(?:^|[;{{}}\s]){v_esc}\s*=(?!=)', l) for l in subsequent):
+                        return True
 
         return False
 

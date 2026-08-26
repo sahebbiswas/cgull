@@ -1713,6 +1713,46 @@ class TypedefShape:
     array_size: Optional[int] = None
 
 
+def get_type_byte_size(type_str: str, ast_ctx: Optional["CASTContext"] = None) -> Optional[int]:
+    """
+    Returns the byte size of a C type string if it is a primitive scalar type or pointer.
+    Returns None if the type is a struct, union, or unknown layout.
+    """
+    if not type_str:
+        return None
+
+    tn = type_str.strip()
+    tn = re.sub(r'\[[^\]]*\]', '', tn).strip()
+
+    if '*' in tn:
+        return 8
+
+    if ast_ctx and hasattr(ast_ctx, 'typedef_shapes') and ast_ctx.typedef_shapes:
+        clean_tag = re.sub(r'^(?:const|volatile|struct|union)\s+', '', tn).strip()
+        if clean_tag in ast_ctx.typedef_shapes:
+            shape = resolve_typedef_shape(clean_tag, ast_ctx.typedef_shapes)
+            if shape.is_pointer:
+                return 8
+            tn = shape.target.strip()
+            tn = re.sub(r'\[[^\]]*\]', '', tn).strip()
+            if '*' in tn:
+                return 8
+
+    tn_lower = re.sub(r'\b(?:const|volatile)\b', '', tn).strip().lower()
+    tn_lower = re.sub(r'\s+', ' ', tn_lower)
+
+    if tn_lower in ('char', 'signed char', 'unsigned char', 'int8_t', 'uint8_t', 'void', 'bool', '_bool'):
+        return 1
+    if tn_lower in ('short', 'signed short', 'unsigned short', 'short int', 'signed short int', 'unsigned short int', 'int16_t', 'uint16_t', 'char16_t'):
+        return 2
+    if tn_lower in ('int', 'signed int', 'unsigned int', 'signed', 'unsigned', 'int32_t', 'uint32_t', 'float', 'char32_t', 'wchar_t'):
+        return 4
+    if tn_lower in ('long', 'signed long', 'unsigned long', 'long int', 'signed long int', 'unsigned long int', 'long long', 'signed long long', 'unsigned long long', 'long long int', 'signed long long int', 'unsigned long long int', 'int64_t', 'uint64_t', 'double', 'long double', 'size_t', 'ssize_t', 'intptr_t', 'uintptr_t', 'ptrdiff_t', 'time_t'):
+        return 8
+
+    return None
+
+
 def resolve_typedef_shape(
     type_name: str,
     typedef_shapes: Dict[str, TypedefShape],
