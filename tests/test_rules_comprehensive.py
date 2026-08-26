@@ -1271,3 +1271,29 @@ class TestIncorrectPointerScalingRule(unittest.TestCase):
         issues = scan_with_rule("CGULL-040", code)
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].rule_id, "CGULL-040")
+
+    def test_array_parameter_pointer_scaling_detected(self):
+        code = """
+        #include <stdlib.h>
+        void process_array(int arr[]) {
+            int *offset = arr + (2 * sizeof(int));
+            (void)offset;
+        }
+        """
+        issues = scan_with_rule("CGULL-040", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].rule_id, "CGULL-040")
+
+    def test_array_typedef_pointer_scaling_detected(self):
+        code = """
+        #include <stdlib.h>
+        typedef int IntArray[10];
+        void process_typedef(void) {
+            IntArray table;
+            int *offset = table + (2 * sizeof(int));
+            (void)offset;
+        }
+        """
+        issues = scan_with_rule("CGULL-040", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].rule_id, "CGULL-040")

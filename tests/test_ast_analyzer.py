@@ -829,18 +829,22 @@ class TestParseTiers(unittest.TestCase):
         self.assertIsNotNone(res_seq)
         self.assertIn("int seq_flags_active;", res_seq)
 
-    def test_cvariable_is_array(self):
+    def test_cvariable_and_cparameter_is_array_and_typedefs(self):
         code = """
+        typedef int IntArray[10];
+
+        IntArray global_typedef_arr;
         int global_scalar = 10;
         int global_arr[5];
 
-        int sum_table(void) {
+        int sum_table(IntArray param_typedef_arr, int param_arr[], int param_scalar) {
             int total = 0;
             int local_arr[10];
+            IntArray local_typedef_arr;
             for (int i = 0; i < 4; i++) {
                 total += 1;
             }
-            return total + local_arr[0] + global_arr[0] + global_scalar;
+            return total + local_arr[0] + global_arr[0] + global_scalar + local_typedef_arr[0] + global_typedef_arr[0] + param_typedef_arr[0] + param_arr[0] + param_scalar;
         }
         """
         # Test AST mode
@@ -850,8 +854,15 @@ class TestParseTiers(unittest.TestCase):
         fn_ast = ctx_ast.functions[0]
         self.assertFalse(fn_ast.variables["total"].is_array)
         self.assertTrue(fn_ast.variables["local_arr"].is_array)
+        self.assertTrue(fn_ast.variables["local_typedef_arr"].is_array)
         self.assertFalse(ctx_ast.global_variables["global_scalar"].is_array)
         self.assertTrue(ctx_ast.global_variables["global_arr"].is_array)
+        self.assertTrue(ctx_ast.global_variables["global_typedef_arr"].is_array)
+
+        params = {p.name: p for p in fn_ast.parameters}
+        self.assertTrue(params["param_typedef_arr"].is_array)
+        self.assertTrue(params["param_arr"].is_array)
+        self.assertFalse(params["param_scalar"].is_array)
 
         # Test Regex fallback mode
         with patch.object(parser, "_try_pycparser", return_value=(None, False, "regex-fallback")):
@@ -859,8 +870,10 @@ class TestParseTiers(unittest.TestCase):
             fn_regex = ctx_regex.functions[0]
             self.assertFalse(fn_regex.variables["total"].is_array)
             self.assertTrue(fn_regex.variables["local_arr"].is_array)
+            self.assertTrue(fn_regex.variables["local_typedef_arr"].is_array)
             self.assertFalse(ctx_regex.global_variables["global_scalar"].is_array)
             self.assertTrue(ctx_regex.global_variables["global_arr"].is_array)
+            self.assertTrue(ctx_regex.global_variables["global_typedef_arr"].is_array)
 
 
 if __name__ == "__main__":

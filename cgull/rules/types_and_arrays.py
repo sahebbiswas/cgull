@@ -105,7 +105,7 @@ class IncorrectPointerScalingRule(BaseRule):
 
                 if fn:
                     for param in fn.parameters:
-                        if param.name == var_name and (param.is_pointer or '*' in param.type_name or '*' in param.name):
+                        if param.name == var_name and (param.is_pointer or getattr(param, "is_array", False) or '*' in param.type_name or '*' in param.name or '[' in param.type_name):
                             if not is_byte_ptr(param.type_name, param.name):
                                 return True
 
