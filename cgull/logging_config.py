@@ -83,7 +83,13 @@ def configure_logging(
     else:
         level = logging.WARNING
 
-    fmt = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+    # If unconfigured/default WARNING level or quiet logging, use raw message format
+    # so unformatted direct stderr error messages like "\n[ERROR] Analysis failed for ..."
+    # remain prefixed by newline and exactly match terminal expectations without timestamp prefixes.
+    if level >= logging.WARNING and not log_file and verbose_count == 0 and not log_level_str:
+        fmt = "%(message)s"
+    else:
+        fmt = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
     formatter = UTCFormatter(fmt)
 
     root_logger = logging.getLogger()
@@ -93,15 +99,55 @@ def configure_logging(
     for h in list(root_logger.handlers):
         root_logger.removeHandler(h)
 
-    # Dynamic Stderr handler so patch("sys.stderr", ...) in tests dynamically receives logs
-    class DynamicStderrHandler(logging.StreamHandler):
-        @property
-        def stream(self):
-            return sys.stderr
+class DynamicStderrHandler(logging.StreamHandler):
+    """
+    StreamHandler whose stream dynamically evaluates sys.stderr at emit time
+    so that sys.stderr patching in tests is respected.
+    """
+    @property
+    def stream(self):
+        return sys.stderr
 
-        @stream.setter
-        def stream(self, value):
-            pass
+    @stream.setter
+    def stream(self, value):
+        pass
+
+
+def configure_logging(
+    verbose_count: int = 0,
+    log_level_str: Optional[str] = None,
+    log_file: Optional[str] = None,
+) -> None:
+    """
+    Configures root logging with a standard structured format.
+    """
+    # Determine log level
+    if log_level_str:
+        level = parse_log_level(log_level_str)
+    elif verbose_count >= 3:
+        level = TRACE_LEVEL_NUM
+    elif verbose_count == 2:
+        level = logging.DEBUG
+    elif verbose_count == 1:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
+
+    # If unconfigured/default WARNING level or quiet logging, use raw message format
+    # so unformatted direct stderr error messages like "\n[ERROR] Analysis failed for ..."
+    # remain prefixed by newline and exactly match terminal expectations without timestamp prefixes.
+    if level >= logging.WARNING and not log_file and verbose_count == 0 and not log_level_str:
+        fmt = "%(message)s"
+    else:
+        fmt = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+    formatter = UTCFormatter(fmt)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    # Remove existing handlers to avoid duplicates on re-configuration
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
 
     stderr_handler = DynamicStderrHandler()
     stderr_handler.setLevel(level)

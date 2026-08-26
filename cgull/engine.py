@@ -35,11 +35,9 @@ def _emit_error(
     san_type = sanitize_terminal_text(error_type)
     san_msg = sanitize_terminal_text(message)
     prefix = "\n" if progress_active else ""
-    if not logging.getLogger().handlers:
-        sys.stderr.write(f"{prefix}[ERROR] Analysis failed for {san_path}: {san_type}: {san_msg}\n")
-        sys.stderr.flush()
-    else:
-        logger.error("%s[ERROR] Analysis failed for %s: %s: %s", prefix, san_path, san_type, san_msg)
+    sys.stderr.write(f"{prefix}[ERROR] Analysis failed for {san_path}: {san_type}: {san_msg}\n")
+    sys.stderr.flush()
+    logger.error("Analysis failed for %s: %s: %s", san_path, san_type, san_msg)
 
 
 def _collect_files_flags(files: List[str], quiet: bool = False) -> Tuple[Set[str], Set[str], Dict[str, Tuple[str, int]], Dict[str, Tuple[str, int]]]:
@@ -254,6 +252,9 @@ class CGullScanner:
         if total_files > 0:
             resolved_jobs = min(resolved_jobs, total_files)
 
+        logger.info("Starting scan of target path '%s' (jobs=%d, strategy=%s)", target_path, resolved_jobs, config_strategy or getattr(self.config, "config_strategy", "one-at-a-time"))
+        logger.debug("Discovered %d total files to scan (%d ignored)", len(files_to_scan), len(ignored_paths))
+
         if seed_profiles and not quiet:
             _validate_seed_flags_diagnostics(files_to_scan, seed_profiles, quiet=quiet)
 
@@ -333,6 +334,7 @@ class CGullScanner:
             ))
 
         duration = time.time() - start_time
+        logger.info("Scan completed for '%s' in %.2fs: %d files analyzed, %d issues, %d failed", target_path, duration, analyzed_count, len(all_issues), failed_count)
         high_total = sum(1 for i in all_issues if i.impact == Severity.HIGH)
         med_total = sum(1 for i in all_issues if i.impact == Severity.MEDIUM)
         low_total = sum(1 for i in all_issues if i.impact == Severity.LOW)
@@ -706,6 +708,8 @@ def _scan_file_content(
             parse_tier = ast_ctx.parse_tier
             confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
 
+        logger.info("Entering file scan: %s", file_path)
+
         # 1. Regex Pass
         if engine_mode in (AnalysisEngine.REGEX, AnalysisEngine.HYBRID):
             masked_lines = [mask_string_and_char_literals(line) for line in clean_lines]
@@ -716,6 +720,7 @@ def _scan_file_content(
                 for rule in rules:
                     if engine_mode == AnalysisEngine.HYBRID and rule.analysis_engine == AnalysisEngine.AST:
                         continue
+                    logger.log(5, "Executing regex rule %s (%s) on %s:%d", rule.rule_id, rule.name, file_path, line_no)
                     found = rule.scan_line(
                         file_path=file_path,
                         line_number=line_no,
@@ -736,6 +741,7 @@ def _scan_file_content(
                 parser_status = ast_ctx.parser_status
                 confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
             for rule in rules:
+                logger.log(5, "Executing AST rule %s (%s) on %s", rule.rule_id, rule.name, file_path)
                 ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
                 for iss in ast_found:
                     if iss.confidence is None:
@@ -758,6 +764,7 @@ def _scan_file_content(
     # Sort issues by line number
     issues.sort(key=lambda x: (x.line_number, x.column_number))
     duration_ms = (time.time() - t0) * 1000.0
+    logger.info("Leaving file scan: %s (status=%s, parse_tier=%s, issues=%d, duration=%.2fms)", file_path, file_status, parse_tier, len(issues), duration_ms)
     return issues, loc, duration_ms, parser_status, parse_tier, file_status, confidence_val, scan_error
 
 
