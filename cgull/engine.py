@@ -69,10 +69,12 @@ def _collect_files_flags(files: List[str], quiet: bool = False) -> Tuple[Set[str
                     value_locs[k] = v
         except OSError as e:
             skipped_error_count += 1
-            logger.warning("[WARNING] Flag collection skipped '%s' due to OS error: %s", fpath, e)
+            if not quiet:
+                logger.warning("[WARNING] Flag collection skipped '%s' due to OS error: %s", fpath, e)
         except Exception as e:
             skipped_error_count += 1
-            logger.warning("[WARNING] Flag collection skipped '%s' due to error: %s", fpath, e)
+            if not quiet:
+                logger.warning("[WARNING] Flag collection skipped '%s' due to error: %s", fpath, e)
 
     if skipped_error_count > 0 and not quiet:
         logger.warning("Flag collection skipped %d file(s) due to errors", skipped_error_count)
