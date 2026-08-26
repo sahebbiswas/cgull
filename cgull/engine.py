@@ -670,6 +670,8 @@ def _scan_file_content(
         enable_suppressions = True
 
     t0 = time.time()
+    orig_loc = len(content.splitlines())
+
     inc_roots = config.include_roots if config else []
     source_dir = os.path.dirname(os.path.abspath(file_path)) if file_path and file_path != "source.c" else os.getcwd()
     resolver = IncludeResolver(include_roots=inc_roots, base_dir=source_dir)
@@ -680,7 +682,7 @@ def _scan_file_content(
 
     ast_parser = ast_parser or CASTParser()
     raw_lines = content.splitlines()
-    loc = len(raw_lines)
+    loc = orig_loc
     issues: List[Issue] = []
     seen_keys: Set[str] = set()
 
@@ -871,7 +873,8 @@ def _scan_file_content_profiles(
 
     total_duration_ms = 0.0
     merged_issues: Dict[Tuple[str, int, str], Tuple[Issue, Set[ConfigProfile]]] = {}
-    loc = len(content.splitlines())
+    orig_loc = len(content.splitlines())
+    loc = orig_loc
 
     best_parser_status = ParserStatus.PARSE_FAILED.value
     best_parse_tier = ParseTier.REGEX_FALLBACK.value
