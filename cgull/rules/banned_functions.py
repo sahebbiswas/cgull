@@ -101,7 +101,7 @@ class BannedFunctionsRule(BaseRule):
                 cur_arg.append(c)
             i += 1
 
-        if len(args) >= 1:
+        if paren_depth == 0 and len(args) >= 1:
             return tuple(args)
         return None
 

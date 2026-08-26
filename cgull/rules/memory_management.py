@@ -1594,6 +1594,48 @@ class MemcpyStructMemberOverflowRule(BaseRule):
 
         return None
 
+    @staticmethod
+    def _eval_const_arithmetic(expr_str: str) -> Optional[int]:
+        import ast
+        try:
+            tree = ast.parse(expr_str, mode='eval')
+        except Exception:
+            return None
+
+        def _eval_node(node):
+            if isinstance(node, ast.Expression):
+                return _eval_node(node.body)
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return int(node.value)
+            if isinstance(node, ast.UnaryOp):
+                val = _eval_node(node.operand)
+                if val is None:
+                    return None
+                if isinstance(node.op, ast.USub):
+                    return -val
+                if isinstance(node.op, ast.UAdd):
+                    return +val
+            if isinstance(node, ast.BinOp):
+                left = _eval_node(node.left)
+                right = _eval_node(node.right)
+                if left is None or right is None:
+                    return None
+                if isinstance(node.op, ast.Add):
+                    return left + right
+                if isinstance(node.op, ast.Sub):
+                    return left - right
+                if isinstance(node.op, ast.Mult):
+                    return left * right
+                if isinstance(node.op, (ast.FloorDiv, ast.Div)):
+                    return left // right if right != 0 else None
+                if isinstance(node.op, ast.LShift):
+                    return left << right if 0 <= right <= 63 else None
+                if isinstance(node.op, ast.RShift):
+                    return left >> right if 0 <= right <= 63 else None
+            return None
+
+        return _eval_node(tree)
+
     def _resolve_size_arg(
         self,
         size_expr: str,
@@ -1604,70 +1646,65 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         """
         Returns (const_value, var_name).
         If const_value is not None, size is a static constant.
-        If var_name is not None, size is a dynamic variable identifier.
+        If var_name is not None, size is a dynamic variable identifier or expression.
         """
         expr = size_expr.strip()
+        s_sub = expr
 
-        # Handle sizeof(...) expressions (e.g. sizeof(struct Big), sizeof(int), or sizeof(var))
-        m_sizeof = re.search(r'sizeof\s*\(\s*(.+?)\s*\)', expr) or re.search(r'sizeof\s*([a-zA-Z_]\w*)', expr)
-        if m_sizeof:
-            so_arg = m_sizeof.group(1).strip()
-            # 1. Try primitive scalar / pointer type byte size
-            scalar_size = get_type_byte_size(so_arg, ast_ctx)
-            if scalar_size is not None:
-                return scalar_size, None
+        # 1. Substitute all sizeof(...) occurrences with resolved integer sizes
+        sizeof_matches = list(re.finditer(r'sizeof\s*\(\s*(.+?)\s*\)', expr)) or list(re.finditer(r'sizeof\s*([a-zA-Z_]\w*)', expr))
+        if sizeof_matches:
+            offset_shift = 0
+            for m in sizeof_matches:
+                so_arg = m.group(1).strip()
+                so_val = get_type_byte_size(so_arg, ast_ctx)
+                if so_val is None and fn and ast_ctx:
+                    var_obj = fn.variables.get(so_arg) or ast_ctx.global_variables.get(so_arg)
+                    if var_obj:
+                        so_val = self._resolve_dest_capacity(so_arg, fn, line_no, ast_ctx) or get_type_byte_size(var_obj.type_name, ast_ctx)
+                if so_val is None and ast_ctx:
+                    sdef = ast_ctx.get_struct_def(so_arg)
+                    if sdef and sdef.fields:
+                        fb = 0
+                        for f in sdef.fields.values():
+                            fe = get_type_byte_size(f.type_name, ast_ctx)
+                            if fe is None:
+                                fb = None
+                                break
+                            fc = f.array_size if (f.is_array and f.array_size is not None) else 1
+                            fb += fc * fe
+                        if fb is not None and fb > 0:
+                            so_val = fb
 
-            # 2. Check if variable in function or global
-            if fn and ast_ctx:
-                var_obj = fn.variables.get(so_arg) or ast_ctx.global_variables.get(so_arg)
-                if var_obj:
-                    cap = self._resolve_dest_capacity(so_arg, fn, line_no, ast_ctx)
-                    if cap is not None:
-                        return cap, None
-                    v_size = get_type_byte_size(var_obj.type_name, ast_ctx)
-                    if v_size is not None:
-                        return v_size, None
+                if so_val is None:
+                    # An unresolvable sizeof term makes the full expression unresolved
+                    return None, expr
 
-            # 3. Check struct definition field byte sum
-            if ast_ctx:
-                sdef = ast_ctx.get_struct_def(so_arg)
-                if sdef and sdef.fields:
-                    field_bytes = 0
-                    for f in sdef.fields.values():
-                        f_elem_size = get_type_byte_size(f.type_name, ast_ctx)
-                        if f_elem_size is None:
-                            field_bytes = None
-                            break
-                        f_count = f.array_size if (f.is_array and f.array_size is not None) else 1
-                        field_bytes += f_count * f_elem_size
-                    if field_bytes is not None and field_bytes > 0:
-                        return field_bytes, None
+                start = m.start() + offset_shift
+                end = m.end() + offset_shift
+                rep = str(so_val)
+                s_sub = s_sub[:start] + rep + s_sub[end:]
+                offset_shift += len(rep) - (m.end() - m.start())
 
-            # 4. Otherwise leave unresolved
-            return None, expr
-
-        # Check pure integer literal
-        if expr.isdigit():
-            return int(expr), None
-        if expr.startswith(('0x', '0X')):
-            try:
-                return int(expr, 16), None
-            except ValueError:
-                pass
-
-        # Check macro define
+        # 2. Substitute macro constants
         if ast_ctx and ast_ctx.clean_source:
-            def_m = re.search(rf'#\s*define\s+{re.escape(expr)}\s+(\d+|0x[0-9a-fA-F]+)\b', ast_ctx.clean_source)
-            if def_m:
-                val_str = def_m.group(1)
-                val = int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
-                return val, None
+            for macro_m in re.finditer(r'\b([a-zA-Z_]\w*)\b', s_sub):
+                m_name = macro_m.group(1)
+                if m_name.isdigit():
+                    continue
+                def_m = re.search(rf'#\s*define\s+{re.escape(m_name)}\s+(\d+|0x[0-9a-fA-F]+)\b', ast_ctx.clean_source)
+                if def_m:
+                    v_str = def_m.group(1)
+                    val = int(v_str, 16) if v_str.startswith(('0x', '0X')) else int(v_str)
+                    s_sub = re.sub(rf'\b{re.escape(m_name)}\b', str(val), s_sub)
 
-        # Variable identifier
-        if re.match(r'^[a-zA-Z_]\w*$', expr):
-            return None, expr
+        # 3. Try evaluating complete constant arithmetic expression
+        const_val = self._eval_const_arithmetic(s_sub)
+        if const_val is not None:
+            return const_val, None
 
-        return None, None
+        # 4. Expression is dynamic / variable
+        return None, expr
 
     def _resolve_upper_bound(
         self,
@@ -1681,13 +1718,9 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         while s.startswith('(') and s.endswith(')'):
             s = s[1:-1].strip()
 
-        if s.isdigit():
-            return int(s)
-        if s.startswith(('0x', '0X')):
-            try:
-                return int(s, 16)
-            except ValueError:
-                pass
+        const_v = self._eval_const_arithmetic(s)
+        if const_v is not None:
+            return const_v
 
         m_op = re.match(r'^([a-zA-Z_]\w*(?:\s*->\s*\w+|\s*\.\s*\w+)?)\s*([\+\-])\s*(\d+)$', s)
         if m_op:
@@ -1726,64 +1759,92 @@ class MemcpyStructMemberOverflowRule(BaseRule):
 
         return None
 
+    @staticmethod
+    def _is_signed_var(var_name: str, fn: CFunction, ast_ctx: CASTContext) -> bool:
+        if not fn:
+            return True
+        var_obj = fn.variables.get(var_name) or (ast_ctx.global_variables.get(var_name) if ast_ctx else None)
+        if var_obj:
+            return var_obj.is_signed
+        param = next((p for p in fn.parameters if p.name == var_name), None)
+        if param:
+            from ..ast_analyzer import is_unsigned_type
+            return not is_unsigned_type(param.type_name, getattr(ast_ctx, "unsigned_typedefs", None))
+        return True
+
     def _eval_branch_bounds(
         self,
         cond_str: str,
         var_name: str,
         dest_capacity: int,
-        current_bounded: bool,
+        curr_upper: bool,
+        curr_lower: bool,
         fn: CFunction,
         line_no: int,
         ast_ctx: CASTContext,
-    ) -> Tuple[bool, bool]:
+    ) -> Tuple[Tuple[bool, bool], Tuple[bool, bool]]:
         v_esc = re.escape(var_name)
         if not re.search(r'\b' + v_esc + r'\b', cond_str):
-            return current_bounded, current_bounded
+            return (curr_upper, curr_lower), (curr_upper, curr_lower)
 
-        true_bounded = current_bounded
-        false_bounded = current_bounded
+        true_upper, true_lower = curr_upper, curr_lower
+        false_upper, false_lower = curr_upper, curr_lower
 
+        # Upper bound checks
         for m in re.finditer(r'\b' + v_esc + r'\s*(<=|>=|<|>|==)\s*([^&|;)]+)', cond_str):
-            op = m.group(1)
-            rhs = m.group(2).strip()
+            op, rhs = m.group(1), m.group(2).strip()
             ub = self._resolve_upper_bound(rhs, fn, line_no, ast_ctx)
-            if ub is None:
-                continue
-
-            if op in ('<=', '=='):
-                if ub <= dest_capacity:
-                    true_bounded = True
-            elif op == '<':
-                if ub - 1 <= dest_capacity:
-                    true_bounded = True
-            elif op == '>=':
-                if ub - 1 <= dest_capacity:
-                    false_bounded = True
-            elif op == '>':
-                if ub <= dest_capacity:
-                    false_bounded = True
+            if ub is not None:
+                if op in ('<=', '=='):
+                    if ub <= dest_capacity:
+                        true_upper = True
+                elif op == '<':
+                    if ub - 1 <= dest_capacity:
+                        true_upper = True
+                elif op == '>=':
+                    if ub - 1 <= dest_capacity:
+                        false_upper = True
+                elif op == '>':
+                    if ub <= dest_capacity:
+                        false_upper = True
 
         for m in re.finditer(r'([^&|;(]+)\s*(<=|>=|<|>|==)\s*\b' + v_esc + r'\b', cond_str):
-            lhs = m.group(1).strip()
-            op = m.group(2)
+            lhs, op = m.group(1).strip(), m.group(2)
             ub = self._resolve_upper_bound(lhs, fn, line_no, ast_ctx)
-            if ub is None:
-                continue
+            if ub is not None:
+                if op in ('>=', '=='):
+                    if ub <= dest_capacity:
+                        true_upper = True
+                elif op == '>':
+                    if ub - 1 <= dest_capacity:
+                        true_upper = True
+                elif op == '<=':
+                    if ub - 1 <= dest_capacity:
+                        false_upper = True
+                elif op == '<':
+                    if ub <= dest_capacity:
+                        false_upper = True
 
-            if op in ('>=', '=='):
-                if ub <= dest_capacity:
-                    true_bounded = True
-            elif op == '>':
-                if ub - 1 <= dest_capacity:
-                    true_bounded = True
-            elif op == '<=':
-                if ub - 1 <= dest_capacity:
-                    false_bounded = True
-            elif op == '<':
-                if ub <= dest_capacity:
-                    false_bounded = True
+        # Non-negative lower bound checks (var >= 0, var > -1)
+        for m in re.finditer(r'\b' + v_esc + r'\s*(>=|>|<|<=|==)\s*(-?\d+)\b', cond_str):
+            op, val = m.group(1), int(m.group(2))
+            if op in ('>=', '==') and val >= 0:
+                true_lower = True
+            elif op == '>' and val >= -1:
+                true_lower = True
+            elif op in ('<', '<=') and val <= 0:
+                false_lower = True
 
-        return true_bounded, false_bounded
+        for m in re.finditer(r'(-?\d+)\s*(<=|<|>|>=|==)\s*\b' + v_esc + r'\b', cond_str):
+            val, op = int(m.group(1)), m.group(2)
+            if op in ('<=', '==') and val >= 0:
+                true_lower = True
+            elif op == '<' and val >= -1:
+                true_lower = True
+            elif op in ('>', '>=') and val <= 0:
+                false_lower = True
+
+        return (true_upper, true_lower), (false_upper, false_lower)
 
     def _is_min_clamp_bound(
         self,
@@ -1793,14 +1854,28 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         fn: CFunction,
         line_no: int,
         ast_ctx: CASTContext,
-    ) -> bool:
+    ) -> Tuple[bool, bool]:
         if not expr_str:
-            return False
+            return False, False
         v_esc = re.escape(var_name)
         if not re.search(r'\b' + v_esc + r'\b', expr_str):
-            return False
+            return False, False
 
-        m_call = re.search(r'\b(?:min|clamp)\s*\(([^)]+)\)', expr_str)
+        upper = False
+        lower = False
+
+        m_clamp = re.search(r'\bclamp\s*\(\s*' + v_esc + r'\s*,\s*(-?\d+)\s*,\s*([^)]+)\)', expr_str)
+        if m_clamp:
+            min_v = int(m_clamp.group(1))
+            max_expr = m_clamp.group(2).strip()
+            ub = self._resolve_upper_bound(max_expr, fn, line_no, ast_ctx)
+            if min_v >= 0:
+                lower = True
+            if ub is not None and ub <= dest_capacity:
+                upper = True
+            return upper, lower
+
+        m_call = re.search(r'\bmin\s*\(([^)]+)\)', expr_str)
         if m_call:
             args = [a.strip() for a in m_call.group(1).split(',')]
             for arg in args:
@@ -1808,15 +1883,9 @@ class MemcpyStructMemberOverflowRule(BaseRule):
                     continue
                 ub = self._resolve_upper_bound(arg, fn, line_no, ast_ctx)
                 if ub is not None and ub <= dest_capacity:
-                    return True
+                    upper = True
 
-        m_tern = re.search(r'\b' + v_esc + r'\s*=\s*\([^)]*?\b' + v_esc + r'\b[^)]*?\)\s*\?\s*([^:]+)\s*:\s*' + v_esc, expr_str)
-        if m_tern:
-            ub = self._resolve_upper_bound(m_tern.group(1), fn, line_no, ast_ctx)
-            if ub is not None and ub <= dest_capacity:
-                return True
-
-        return False
+        return upper, lower
 
     def _is_size_var_gated(
         self,
@@ -1829,6 +1898,9 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         if not fn or not ast_ctx:
             return False
 
+        is_signed = self._is_signed_var(var_name, fn, ast_ctx)
+        init_lower = not is_signed
+
         cfg = _ast_cfg_for_function(ast_ctx, fn)
         if cfg is not None and cfg.entry is not None:
             target_node_ids = [nid for nid, node in cfg.nodes.items() if node.line_number == line_no and any(tf in (node.expr_str or '') for tf in self.TARGET_FUNCS)]
@@ -1838,39 +1910,38 @@ class MemcpyStructMemberOverflowRule(BaseRule):
             if target_node_ids:
                 target_node_id = target_node_ids[0]
                 import collections
-                queue = collections.deque([(cfg.entry, False)])
+                queue = collections.deque([(cfg.entry, False, init_lower)])
                 visited = set()
                 path_reached = False
 
                 while queue:
-                    curr_id, bounded = queue.popleft()
-                    state_key = (curr_id, bounded)
+                    curr_id, upper_b, lower_b = queue.popleft()
+                    state_key = (curr_id, upper_b, lower_b)
                     if state_key in visited:
                         continue
                     visited.add(state_key)
 
                     if curr_id == target_node_id:
                         path_reached = True
-                        if not bounded:
+                        if not (upper_b and lower_b):
                             return False
                         continue
 
                     node = cfg.nodes[curr_id]
-                    new_bounded = bounded
+                    new_upper, new_lower = upper_b, lower_b
 
                     if var_name in node.writes:
-                        if self._is_min_clamp_bound(node.expr_str, var_name, dest_capacity, fn, node.line_number, ast_ctx):
-                            new_bounded = True
-                        else:
-                            new_bounded = False
+                        u_bound, l_bound = self._is_min_clamp_bound(node.expr_str, var_name, dest_capacity, fn, node.line_number, ast_ctx)
+                        new_upper = u_bound
+                        new_lower = l_bound or (not is_signed)
 
                     if node.kind in ("if_cond", "while_cond", "do_cond") and node.expr_str:
-                        true_b, false_b = self._eval_branch_bounds(
-                            node.expr_str, var_name, dest_capacity, new_bounded, fn, node.line_number, ast_ctx
+                        true_st, false_st = self._eval_branch_bounds(
+                            node.expr_str, var_name, dest_capacity, new_upper, new_lower, fn, node.line_number, ast_ctx
                         )
                         if len(node.successors) >= 2:
-                            queue.append((node.successors[0], true_b))
-                            queue.append((node.successors[1], false_b))
+                            queue.append((node.successors[0], true_st[0], true_st[1]))
+                            queue.append((node.successors[1], false_st[0], false_st[1]))
                         elif len(node.successors) == 1:
                             succ_node = cfg.nodes[node.successors[0]]
                             if_ast = getattr(node, '_ast_node', None)
@@ -1888,13 +1959,13 @@ class MemcpyStructMemberOverflowRule(BaseRule):
                                 is_inside_if = _is_ast_child(getattr(succ_node, '_ast_node', None), if_ast.iftrue)
 
                             if is_inside_if:
-                                queue.append((node.successors[0], true_b))
+                                queue.append((node.successors[0], true_st[0], true_st[1]))
                             else:
-                                queue.append((node.successors[0], false_b))
+                                queue.append((node.successors[0], false_st[0], false_st[1]))
                         continue
 
                     for succ_id in node.successors:
-                        queue.append((succ_id, new_bounded))
+                        queue.append((succ_id, new_upper, new_lower))
 
                 if path_reached:
                     return True
@@ -1909,6 +1980,7 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         line_no: int,
         ast_ctx: CASTContext,
     ) -> bool:
+        is_signed = self._is_signed_var(var_name, fn, ast_ctx)
         v_esc = re.escape(var_name)
         body_lines = fn.body.splitlines() if fn else []
         fn_start = getattr(fn, "body_start_line", fn.start_line) if fn else 1
@@ -1917,21 +1989,27 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         start_idx = max(0, line_idx - 15)
         preceding_lines = body_lines[start_idx:line_idx]
 
+        curr_u = False
+        curr_l = not is_signed
+
         for idx, p_line in enumerate(preceding_lines):
             if not re.search(r'\b' + v_esc + r'\b', p_line):
                 continue
 
-            if self._is_min_clamp_bound(p_line, var_name, dest_capacity, fn, fn_start + start_idx + idx, ast_ctx):
+            u_m, l_m = self._is_min_clamp_bound(p_line, var_name, dest_capacity, fn, fn_start + start_idx + idx, ast_ctx)
+            if u_m:
+                curr_u = True
+            if l_m:
+                curr_l = True
+
+            if re.search(r'\b(?:if|assert|ASSERT|while)\b', p_line):
+                (t_u, t_l), _ = self._eval_branch_bounds(p_line, var_name, dest_capacity, curr_u, curr_l, fn, fn_start + start_idx + idx, ast_ctx)
+                curr_u, curr_l = t_u, t_l
+
+            if curr_u and curr_l:
                 subsequent = preceding_lines[idx + 1:]
                 if not any(re.search(rf'(?:^|[;{{}}\s]){v_esc}\s*=(?!=)', l) for l in subsequent):
                     return True
-
-            if re.search(r'\b(?:if|assert|ASSERT|while)\b', p_line):
-                tb, fb = self._eval_branch_bounds(p_line, var_name, dest_capacity, False, fn, fn_start + start_idx + idx, ast_ctx)
-                if tb or fb:
-                    subsequent = preceding_lines[idx + 1:]
-                    if not any(re.search(rf'(?:^|[;{{}}\s]){v_esc}\s*=(?!=)', l) for l in subsequent):
-                        return True
 
         return False
 
@@ -1992,17 +2070,25 @@ class MemcpyStructMemberOverflowRule(BaseRule):
                 if callee not in self.TARGET_FUNCS:
                     continue
 
+                args = None
                 snippet = _source_snippet(ast_ctx, line_no, "")
-                paren_pos = snippet.find('(') if snippet else -1
-                if paren_pos != -1:
-                    args = BannedFunctionsRule._extract_call_args(snippet, paren_pos)
-                else:
-                    args = None
+                if snippet:
+                    paren_pos = snippet.find('(')
+                    if paren_pos != -1:
+                        args = BannedFunctionsRule._extract_call_args(snippet, paren_pos)
 
-                if not args:
-                    args = BannedFunctionsRule._extract_call_args(f"{callee}({raw_args})", len(callee))
-                if not args:
-                    args = [a.strip() for a in raw_args.split(',')]
+                req_args = 3
+                if not args or len(args) < req_args:
+                    multiline_code = "\n".join(ast_ctx.source_lines[line_no - 1 : line_no + 10]) if (ast_ctx and ast_ctx.source_lines) else ""
+                    paren_pos = multiline_code.find('(') if multiline_code else -1
+                    if paren_pos != -1:
+                        args = BannedFunctionsRule._extract_call_args(multiline_code, paren_pos)
+
+                if not args or len(args) < req_args:
+                    if raw_args:
+                        args = BannedFunctionsRule._extract_call_args(f"{callee}({raw_args})", len(callee))
+                if not args or len(args) < req_args:
+                    args = [a.strip() for a in raw_args.split(',')] if raw_args else []
 
                 if callee in ("memcpy", "memmove") and len(args) >= 3:
                     dest_arg, src_arg, size_arg = args[0], args[1], args[2]
