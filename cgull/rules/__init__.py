@@ -23,6 +23,7 @@ from .memory_management import (
     ReallocOverwriteRule,
     MemoryLeakRule,
     ReturnStackVariableRule,
+    MemcpyStructMemberOverflowRule,
 )
 from .crypto_and_safety import (
     NonConstantTimeMemoryComparisonRule,
@@ -84,6 +85,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     ReallocOverwriteRule,
     MemoryLeakRule,
     ReturnStackVariableRule,
+    MemcpyStructMemberOverflowRule,
     ToctouFileAccessRule,
     StrncpyNullTerminationRule,
     # Medium Impact

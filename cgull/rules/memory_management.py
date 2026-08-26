@@ -5,6 +5,7 @@ Rules for Memory Allocation, Null-checks, Lifecycles, and Pointer Safety.
 import re
 from typing import Dict, List, Optional, Set, Tuple
 from .base import BaseRule
+from .banned_functions import BannedFunctionsRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext, CFunction
 from ..cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
@@ -1425,5 +1426,392 @@ class ReturnStackVariableRule(BaseRule):
                     engine="AST",
                     fix_type=FixType.MANUAL_REVIEW,
                 ))
+
+        return issues
+
+
+class MemcpyStructMemberOverflowRule(BaseRule):
+    rule_id = "CGULL-044"
+    name = "Size-Aware Struct-Member / Array Buffer Overflow in Memory Copy Functions"
+    impact = Severity.HIGH
+    category = RuleCategory.MEMORY
+    description = "Detect memcpy(), memmove(), or memset() calls where the specified byte count provably exceeds the destination buffer's capacity (struct member or plain array) or is ungated by a preceding bounds check."
+    implementation_method = "AST / CFG dataflow and bounds check analysis with regex fallback"
+    implementation_complexity = "High"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-787 / CWE-120"
+    remediation_suggestion = "Ensure memory copy/fill operations do not write past destination buffer capacity, and gate variable size arguments with explicit bounds checks: if (n <= capacity) memcpy(dest, src, n);"
+    sample_vulnerable_code = "struct A { char array_a[100]; };\nvoid fun_c(struct A *a, const char *src, int n) {\n    memcpy(a->array_a, src, n); // n exceeds 100 or ungated!\n}"
+    sample_remediated_code = "struct A { char array_a[100]; };\nvoid fun_c(struct A *a, const char *src, int n) {\n    if (n <= 100) {\n        memcpy(a->array_a, src, n);\n    }\n}"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    TARGET_FUNCS = {"memcpy", "memmove", "memset"}
+
+    def _resolve_dest_capacity(
+        self,
+        dest_expr: str,
+        fn: CFunction,
+        line_no: int,
+        ast_ctx: CASTContext,
+    ) -> Optional[int]:
+        dest_clean = dest_expr.strip()
+        dest_clean = re.sub(
+            r'^\s*\(\s*(?:const\s+)?(?:char|int8_t|uint8_t|void|unsigned\s+char|signed\s+char|int)\s*\*+\s*\)\s*',
+            '',
+            dest_clean,
+        ).strip()
+        while dest_clean.startswith('(') and dest_clean.endswith(')'):
+            dest_clean = dest_clean[1:-1].strip()
+
+        is_address_of = dest_expr.strip().startswith('&')
+        if dest_clean.startswith('&'):
+            dest_clean = dest_clean[1:].strip()
+
+        # 1. Struct member access chain resolution (V1-V7)
+        if '->' in dest_clean or '.' in dest_clean:
+            parts = re.split(r'->|\.', dest_clean)
+            base_expr_str = parts[0].strip()
+            fields = [p.strip() for p in parts[1:] if p.strip()]
+
+            if base_expr_str and fields and ast_ctx:
+                sdef = ast_ctx.resolve_struct_def(fn, base_expr_str)
+                curr_sdef = sdef
+                target_field = None
+                for field_expr in fields:
+                    if not curr_sdef:
+                        target_field = None
+                        break
+                    f_name = re.sub(r'\[[^\]]*\]', '', field_expr).strip()
+                    target_field = curr_sdef.get(f_name)
+                    if not target_field:
+                        break
+                    if target_field.is_struct_or_union:
+                        nested_tag = target_field.nested_tag or target_field.type_name
+                        curr_sdef = ast_ctx.get_struct_def(nested_tag)
+                    else:
+                        curr_sdef = None
+
+                if target_field and target_field.is_array:
+                    dims = getattr(target_field, 'array_dims', None) or (
+                        [target_field.array_size] if target_field.array_size is not None else []
+                    )
+                    last_field_expr = fields[-1]
+                    subscripts = re.findall(r'\[\s*([^\]]+)\s*\]', last_field_expr)
+
+                    if is_address_of and subscripts:
+                        dim_subscripts = subscripts[:-1]
+                        offset_str = subscripts[-1].strip()
+                        try:
+                            offset_val = int(offset_str)
+                        except ValueError:
+                            offset_val = 0
+                    else:
+                        dim_subscripts = subscripts
+                        offset_val = 0
+
+                    dim_idx = len(dim_subscripts)
+                    if dims and dim_idx < len(dims):
+                        selected_dim = dims[dim_idx]
+                    elif target_field.array_size is not None and dim_idx == 0:
+                        selected_dim = target_field.array_size
+                    else:
+                        selected_dim = None
+
+                    if selected_dim is not None and isinstance(selected_dim, int):
+                        return max(0, selected_dim - offset_val)
+
+        # 2. Plain local or global array (with optional offset)
+        elem_offset = 0
+        m_idx = re.match(r'^(.*?)\s*\[\s*(\d+)\s*\]$', dest_clean)
+        if m_idx:
+            dest_clean_base = m_idx.group(1).strip()
+            elem_offset = int(m_idx.group(2))
+        else:
+            dest_clean_base = dest_clean
+
+        if re.match(r'^[a-zA-Z_]\w*$', dest_clean_base):
+            var_name = dest_clean_base
+            var_obj = fn.variables.get(var_name) or (ast_ctx.global_variables.get(var_name) if ast_ctx else None)
+            if var_obj and var_obj.array_size_expr:
+                expr = var_obj.array_size_expr.strip()
+                if expr.isdigit():
+                    return max(0, int(expr) - elem_offset)
+                m = re.search(r'\b(\d+)\b', expr)
+                if m:
+                    return max(0, int(m.group(1)) - elem_offset)
+
+            # Check pointer aliasing or local array decl in source lines
+            body_lines = fn.body.splitlines() if fn else []
+            fn_start = getattr(fn, "body_start_line", fn.start_line) if fn else 1
+            max_idx = min(len(body_lines), line_no - fn_start) if line_no >= fn_start else len(body_lines)
+
+            assign_stmt_pattern = re.compile(
+                rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(var_name)}\s*=(?!=)\s*(.+?)(?:;|$)'
+            )
+            for idx in range(max_idx - 1, -1, -1):
+                line = body_lines[idx]
+                m = assign_stmt_pattern.search(line)
+                if m:
+                    rhs = m.group(1).strip()
+                    rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
+                    alias_target = None
+                    offset = 0
+                    m_idx_rhs = re.match(r'^&\s*([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\]$', rhs_clean)
+                    m_add1 = re.match(r'^([a-zA-Z_]\w*)\s*\+\s*(\d+)$', rhs_clean)
+                    m_add2 = re.match(r'^(\d+)\s*\+\s*([a-zA-Z_]\w*)$', rhs_clean)
+                    m_simple = re.match(r'^(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?$', rhs_clean)
+                    if m_idx_rhs:
+                        alias_target = m_idx_rhs.group(1)
+                        offset = int(m_idx_rhs.group(2))
+                    elif m_add1:
+                        alias_target = m_add1.group(1)
+                        offset = int(m_add1.group(2))
+                    elif m_add2:
+                        alias_target = m_add2.group(2)
+                        offset = int(m_add2.group(1))
+                    elif m_simple:
+                        alias_target = m_simple.group(1)
+                        offset = 0
+
+                    if alias_target and alias_target != var_name:
+                        t_var = fn.variables.get(alias_target) or (ast_ctx.global_variables.get(alias_target) if ast_ctx else None)
+                        if t_var and t_var.array_size_expr and t_var.array_size_expr.isdigit():
+                            return max(0, int(t_var.array_size_expr) - offset - elem_offset)
+
+        return None
+
+    def _resolve_size_arg(
+        self,
+        size_expr: str,
+        fn: CFunction,
+        line_no: int,
+        ast_ctx: CASTContext,
+    ) -> Tuple[Optional[int], Optional[str]]:
+        """
+        Returns (const_value, var_name).
+        If const_value is not None, size is a static constant.
+        If var_name is not None, size is a dynamic variable identifier.
+        """
+        expr = size_expr.strip()
+
+        # Handle sizeof(...) expressions (e.g. sizeof(struct Big) or sizeof(var))
+        m_sizeof = re.search(r'sizeof\s*\(\s*(.+?)\s*\)', size_expr) or re.search(r'sizeof\s*([a-zA-Z_]\w*)', size_expr)
+        if m_sizeof:
+            so_arg = m_sizeof.group(1).strip()
+            if ast_ctx:
+                sdef = ast_ctx.get_struct_def(so_arg)
+                if sdef and sdef.fields:
+                    total = 0
+                    for f in sdef.fields.values():
+                        f_size = f.array_size if (f.is_array and f.array_size is not None) else 1
+                        total += f_size
+                    if total > 0:
+                        return total, None
+
+                var_obj = fn.variables.get(so_arg) or ast_ctx.global_variables.get(so_arg)
+                if var_obj:
+                    cap = self._resolve_dest_capacity(so_arg, fn, line_no, ast_ctx)
+                    if cap is not None:
+                        return cap, None
+
+            type_sizes = {'char': 1, 'int8_t': 1, 'uint8_t': 1, 'short': 2, 'int16_t': 2, 'uint16_t': 2, 'int': 4, 'uint32_t': 4, 'int32_t': 4, 'float': 4, 'long': 8, 'double': 8, 'uint64_t': 8, 'int64_t': 8}
+            if so_arg.lower() in type_sizes:
+                return type_sizes[so_arg.lower()], None
+
+        # Check pure integer literal
+        if expr.isdigit():
+            return int(expr), None
+        if expr.startswith(('0x', '0X')):
+            try:
+                return int(expr, 16), None
+            except ValueError:
+                pass
+
+        # Check macro define
+        if ast_ctx and ast_ctx.clean_source:
+            def_m = re.search(rf'#\s*define\s+{re.escape(expr)}\s+(\d+|0x[0-9a-fA-F]+)\b', ast_ctx.clean_source)
+            if def_m:
+                val_str = def_m.group(1)
+                val = int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
+                return val, None
+
+        # Variable identifier
+        if re.match(r'^[a-zA-Z_]\w*$', expr):
+            return None, expr
+
+        return None, None
+
+    def _is_size_var_gated(
+        self,
+        var_name: str,
+        dest_capacity: int,
+        fn: CFunction,
+        line_no: int,
+        ast_ctx: CASTContext,
+    ) -> bool:
+        v_esc = re.escape(var_name)
+        body_lines = fn.body.splitlines() if fn else []
+        fn_start = getattr(fn, "body_start_line", fn.start_line) if fn else 1
+        line_idx = line_no - fn_start
+
+        # Check preceding 8 lines for if (var <= cap), min(), clamp(), assert()
+        start_idx = max(0, line_idx - 10)
+        preceding_lines = body_lines[start_idx:line_idx]
+
+        for p_line in preceding_lines:
+            if not re.search(r'\b' + v_esc + r'\b', p_line):
+                continue
+
+            # Check min / clamp
+            if re.search(r'\bmin\s*\(', p_line) or re.search(r'\bclamp\s*\(', p_line):
+                nums = [int(n) for n in re.findall(r'\b\d+\b', p_line)]
+                if nums and any(n <= dest_capacity for n in nums):
+                    return True
+                elif not nums:
+                    return True
+
+            # Check if/assert guard statement
+            if re.search(r'\b(?:if|assert|ASSERT|while)\b', p_line):
+                # Check bounds like var <= capacity or var < capacity + 1 or capacity >= var
+                for m in re.finditer(r'\b' + v_esc + r'\s*(<|<=|>|>=)\s*([a-zA-Z0-9_]+)\b', p_line):
+                    op, val_str = m.group(1), m.group(2)
+                    if val_str.isdigit():
+                        limit = int(val_str)
+                        if op == '<=' and limit <= dest_capacity:
+                            return True
+                        if op == '<' and limit <= dest_capacity + 1:
+                            return True
+                    else:
+                        if op in ('<', '<='):
+                            return True
+
+                for m in re.finditer(r'\b([a-zA-Z0-9_]+)\s*(<|<=|>|>=)\s*' + v_esc + r'\b', p_line):
+                    val_str, op = m.group(1), m.group(2)
+                    if val_str.isdigit():
+                        limit = int(val_str)
+                        if op == '>=' and limit <= dest_capacity:
+                            return True
+                        if op == '>' and limit <= dest_capacity + 1:
+                            return True
+                    else:
+                        if op in ('>', '>='):
+                            return True
+
+        return False
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        target = masked_line_content or line_content
+        if target.lstrip().startswith('#'):
+            return issues
+
+        for callee in self.TARGET_FUNCS:
+            for m in re.finditer(rf'\b{re.escape(callee)}\s*\(', target):
+                call_args = BannedFunctionsRule._extract_call_args(line_content, m.end() - 1)
+                if not call_args or len(call_args) < 3:
+                    continue
+
+                if callee in ("memcpy", "memmove"):
+                    dest_arg, src_arg, size_arg = call_args[0], call_args[1], call_args[2]
+                else:  # memset
+                    dest_arg, val_arg, size_arg = call_args[0], call_args[1], call_args[2]
+
+                dest_clean = dest_arg.strip()
+                dest_clean = re.sub(
+                    r'^\s*\(\s*(?:const\s+)?(?:char|int8_t|uint8_t|void|unsigned\s+char|signed\s+char|int)\s*\*+\s*\)\s*',
+                    '',
+                    dest_clean,
+                ).strip()
+                if dest_clean.startswith('&'):
+                    dest_clean = dest_clean[1:].strip()
+
+                m_decl = re.search(rf'\b(?:char|int|float|double|uint\w+_t|size_t|struct\s+\w+|\w+)\s+(?:\*|\s)*\b{re.escape(dest_clean)}\s*\[\s*(\d+)\s*\]', full_code)
+                dest_cap = int(m_decl.group(1)) if m_decl else None
+
+                if dest_cap is None:
+                    continue
+
+                const_size = int(size_arg) if size_arg.isdigit() else None
+                if const_size is not None and const_size > dest_cap:
+                    issues.append(self.create_issue(
+                        file_path=file_path,
+                        line_number=line_number,
+                        code_snippet=line_content,
+                        message=f"Buffer Overflow in '{callee}': size argument ({const_size} bytes) provably exceeds destination buffer capacity ({dest_cap} bytes for '{dest_arg}'). Provable out-of-bounds write.",
+                        column_number=m.start() + 1,
+                        engine="Regex",
+                        fix_type=FixType.SUGGESTED_FIX,
+                        suggested_fix_replacement=f"{callee}({dest_arg}, ..., {dest_cap});"
+                    ))
+
+        return issues
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        reported_calls = set()
+
+        for fn in ast_ctx.functions:
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
+                if callee not in self.TARGET_FUNCS:
+                    continue
+
+                snippet = _source_snippet(ast_ctx, line_no, "")
+                paren_pos = snippet.find('(') if snippet else -1
+                if paren_pos != -1:
+                    args = BannedFunctionsRule._extract_call_args(snippet, paren_pos)
+                else:
+                    args = None
+
+                if not args:
+                    args = BannedFunctionsRule._extract_call_args(f"{callee}({raw_args})", len(callee))
+                if not args:
+                    args = [a.strip() for a in raw_args.split(',')]
+
+                if callee in ("memcpy", "memmove") and len(args) >= 3:
+                    dest_arg, src_arg, size_arg = args[0], args[1], args[2]
+                elif callee == "memset" and len(args) >= 3:
+                    dest_arg, val_arg, size_arg = args[0], args[1], args[2]
+                else:
+                    continue
+
+                dest_cap = self._resolve_dest_capacity(dest_arg, fn, line_no, ast_ctx)
+                if dest_cap is None:
+                    continue
+
+                const_size, var_size = self._resolve_size_arg(size_arg, fn, line_no, ast_ctx)
+
+                key = (line_no, callee, dest_arg)
+                if key in reported_calls:
+                    continue
+
+                if const_size is not None:
+                    if const_size > dest_cap:
+                        reported_calls.add(key)
+                        snippet = _source_snippet(ast_ctx, line_no, f"{callee}({raw_args})")
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=snippet,
+                            message=f"Buffer Overflow in '{callee}': size argument ({const_size} bytes) provably exceeds destination buffer capacity ({dest_cap} bytes for '{dest_arg}'). Provable out-of-bounds write.",
+                            column_number=1,
+                            engine="AST",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=f"{callee}({dest_arg}, ..., {dest_cap});"
+                        ))
+                elif var_size is not None:
+                    if not self._is_size_var_gated(var_size, dest_cap, fn, line_no, ast_ctx):
+                        reported_calls.add(key)
+                        snippet = _source_snippet(ast_ctx, line_no, f"{callee}({raw_args})")
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=snippet,
+                            message=f"Potentially Unchecked Buffer Overflow in '{callee}': variable size argument '{var_size}' is not gated by a bounds check against destination capacity ({dest_cap} bytes for '{dest_arg}').",
+                            column_number=1,
+                            engine="AST",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=f"if ({var_size} <= {dest_cap}) {{\n    {snippet}\n}}"
+                        ))
 
         return issues
