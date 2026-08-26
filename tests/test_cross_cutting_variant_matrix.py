@@ -229,15 +229,77 @@ void banned_strcpy_multilevel_bad(A_ptr_level3 c) {
     strcpy(c->array_a, "This string literal is way too long and definitely exceeds the one hundred byte capacity of the array_a field in struct A!");
 }
 
-/* strncpy null termination (CGULL-037) */
-void strncpy_v1_good(const char *src) {
-    char buf[100];
-    strncpy(buf, src, 100);
-    buf[99] = '\0';
+/* strncpy null termination (CGULL-037) - V1 to V7, Union, Multi-level typedef */
+void strncpy_v1_good(struct A *a1, const char *src) {
+    strncpy(a1->array_a, src, 100);
+    a1[0] = 0;
 }
-void strncpy_v1_bad(const char *src) {
-    char buf[100];
-    strncpy(buf, src, 100);
+void strncpy_v1_bad(struct A *a1, const char *src) {
+    strncpy(a1->array_a, src, 100);
+}
+
+void strncpy_v2_good(struct A a_val, const char *src) {
+    strncpy(a_val.array_a, src, 100);
+    a_val[0] = 0;
+}
+void strncpy_v2_bad(struct A a_val, const char *src) {
+    strncpy(a_val.array_a, src, 100);
+}
+
+void strncpy_v3_good(struct A *a3, const char *src) {
+    strncpy(a3->in.inner_buf, src, 50);
+    a3[0] = 0;
+}
+void strncpy_v3_bad(struct A *a3, const char *src) {
+    strncpy(a3->in.inner_buf, src, 50);
+}
+
+void strncpy_v4_good(struct A *a4, const char *src) {
+    strncpy(a4->in_ptr->inner_buf, src, 50);
+    a4[0] = 0;
+}
+void strncpy_v4_bad(struct A *a4, const char *src) {
+    strncpy(a4->in_ptr->inner_buf, src, 50);
+}
+
+void strncpy_v5_good(struct A arr[10], const char *src) {
+    strncpy(arr[0].array_a, src, 100);
+    arr[0] = 0;
+}
+void strncpy_v5_bad(struct A arr[10], const char *src) {
+    strncpy(arr[0].array_a, src, 100);
+}
+
+void strncpy_v6_good(struct A *parr[10], const char *src) {
+    strncpy(parr[0]->array_a, src, 100);
+    parr[0] = 0;
+}
+void strncpy_v6_bad(struct A *parr[10], const char *src) {
+    strncpy(parr[0]->array_a, src, 100);
+}
+
+void strncpy_v7_good(A_t *b7, const char *src) {
+    strncpy(b7->array_a, src, 100);
+    b7[0] = 0;
+}
+void strncpy_v7_bad(A_t *b7, const char *src) {
+    strncpy(b7->array_a, src, 100);
+}
+
+void strncpy_union_good(Union_t_level2 *u, const char *src) {
+    strncpy(u->buf, src, 60);
+    u[0] = 0;
+}
+void strncpy_union_bad(Union_t_level2 *u, const char *src) {
+    strncpy(u->buf, src, 60);
+}
+
+void strncpy_multilevel_good(A_ptr_level3 c, const char *src) {
+    strncpy(c->array_a, src, 100);
+    c[0] = 0;
+}
+void strncpy_multilevel_bad(A_ptr_level3 c, const char *src) {
+    strncpy(c->array_a, src, 100);
 }
 
 /* =========================================================================
@@ -385,11 +447,25 @@ def test_cross_cutting_banned_strcpy_and_strncpy_variants():
         assert issues[0].impact == Severity.LOW
         assert "provably shorter than destination buffer size" in issues[0].message
 
-    # Strncpy tests
-    assert "strncpy_v1_good" not in fn_issues
-    assert "strncpy_v1_bad" in fn_issues
-    assert len(fn_issues["strncpy_v1_bad"]) == 1
-    assert fn_issues["strncpy_v1_bad"][0].rule_id == "CGULL-037"
+    # Strncpy variants (V1-V7, Union, Multi-level typedef)
+    strncpy_bad_fns = [
+        "strncpy_v1_bad", "strncpy_v2_bad", "strncpy_v3_bad", "strncpy_v4_bad",
+        "strncpy_v5_bad", "strncpy_v6_bad", "strncpy_v7_bad",
+        "strncpy_union_bad", "strncpy_multilevel_bad"
+    ]
+    strncpy_good_fns = [
+        "strncpy_v1_good", "strncpy_v2_good", "strncpy_v3_good", "strncpy_v4_good",
+        "strncpy_v5_good", "strncpy_v6_good", "strncpy_v7_good",
+        "strncpy_union_good", "strncpy_multilevel_good"
+    ]
+
+    for bad_fn in strncpy_bad_fns:
+        assert bad_fn in fn_issues, f"Expected strncpy finding in {bad_fn}"
+        assert len(fn_issues[bad_fn]) == 1
+        assert fn_issues[bad_fn][0].rule_id == "CGULL-037"
+
+    for good_fn in strncpy_good_fns:
+        assert good_fn not in fn_issues, f"Unexpected strncpy finding in {good_fn}"
 
 
 def test_cross_cutting_memcpy_variants():
@@ -432,7 +508,7 @@ def test_cross_cutting_all_rules_combined():
     # Assert exact deterministic total finding counts across rules:
     # CGULL-007: 9 bad functions -> 9 findings
     # CGULL-001: 9 bad (HIGH) + 9 good (LOW) -> 18 findings
-    # CGULL-037: 1 bad -> 1 finding
-    # CGULL-044: 9 bad -> 9 findings
-    # Total expected findings = 9 + 18 + 1 + 9 = 37 findings
-    assert len(res.issues) == 37, f"Expected 37 total issues, got {len(res.issues)}"
+    # CGULL-037: 9 bad functions -> 9 findings
+    # CGULL-044: 9 bad functions -> 9 findings
+    # Total expected findings = 9 + 18 + 9 + 9 = 45 findings
+    assert len(res.issues) == 45, f"Expected 45 total issues, got {len(res.issues)}"
