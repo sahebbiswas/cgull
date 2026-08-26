@@ -12,7 +12,11 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore
 
 from .models import Severity
+import logging
 from .rules import BaseRule
+
+logger = logging.getLogger(__name__)
+
 
 
 @dataclass

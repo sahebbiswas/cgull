@@ -23,7 +23,11 @@ import json
 from collections import Counter
 from typing import List, Tuple, Optional
 
+import logging
 from .models import ScanResult, Issue, Severity
+
+logger = logging.getLogger(__name__)
+
 
 
 class BaselineError(Exception):

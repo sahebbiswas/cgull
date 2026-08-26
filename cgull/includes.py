@@ -5,7 +5,11 @@ against local source directories, -I include roots, and .cgullincludes configura
 """
 
 import os
+import logging
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
+
 
 
 class IncludeResolver:

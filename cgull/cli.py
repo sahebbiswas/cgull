@@ -14,7 +14,11 @@ from .reporter import ReportGenerator
 from .rules import get_all_rules
 from .baseline import load_baseline_fingerprints, apply_baseline, BaselineError
 from .utils import ProgressIndicator
+import logging
 from .config import load_config
+
+logger = logging.getLogger(__name__)
+
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,12 +48,20 @@ Suppressing findings inline:
   // cgull-ignore-next-line: CGULL-001,CGULL-003
         """
     )
-    parser.add_argument("--version", "-v", action="version", version=f"C-GULL {__version__}")
+    parser.add_argument("--version", action="version", version=f"C-GULL {__version__}")
+
+    # Common logging arguments
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase output verbosity (-v for INFO, -vv for DEBUG, -vvv for TRACE)")
+    parser.add_argument("--log-level", choices=["error", "warning", "info", "debug", "trace"], default=None, help="Set logging verbosity level")
+    parser.add_argument("--log-file", metavar="PATH", help="Write diagnostic log messages to file")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # SCAN subcommand
     scan_parser = subparsers.add_parser("scan", help="Scan C source files or directories for vulnerabilities")
+    scan_parser.add_argument("-v", "--verbose", action="count", default=argparse.SUPPRESS, help="Increase output verbosity (-v for INFO, -vv for DEBUG, -vvv for TRACE)")
+    scan_parser.add_argument("--log-level", choices=["error", "warning", "info", "debug", "trace"], default=argparse.SUPPRESS, help="Set logging verbosity level")
+    scan_parser.add_argument("--log-file", metavar="PATH", default=argparse.SUPPRESS, help="Write diagnostic log messages to file")
     scan_parser.add_argument("target", nargs="?", default=".", help="Target file or directory to scan (default: current directory)")
     scan_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
     scan_parser.add_argument("-o", "--output", help="Path to write the report file (defaults to stdout)")
@@ -522,12 +534,30 @@ def main(argv: Optional[List[str]] = None) -> int:
             argv = sys.argv[1:]
 
         # Default to 'scan .' if no args provided or path given without subcommand
+        known_subcommands = {"scan", "rules", "flags", "init-ignore"}
         if not argv:
             argv = ["scan", "."]
-        elif argv[0] not in ("scan", "rules", "flags", "init-ignore", "--help", "-h", "--version", "-v"):
-            argv = ["scan"] + argv
+        else:
+            first_non_opt = None
+            for a in argv:
+                if not a.startswith("-"):
+                    first_non_opt = a
+                    break
+            if first_non_opt is None or first_non_opt not in known_subcommands:
+                if argv[0] not in ("--help", "-h", "--version"):
+                    argv = ["scan"] + argv
 
         args = parser.parse_args(argv)
+
+        from .logging_config import configure_logging
+        verbose_cnt = getattr(args, "verbose", 0) or 0
+        log_lvl = getattr(args, "log_level", None)
+        log_fl = getattr(args, "log_file", None)
+        try:
+            configure_logging(verbose_count=verbose_cnt, log_level_str=log_lvl, log_file=log_fl)
+        except OSError as e:
+            print(f"Error configuring logging: {e}", file=sys.stderr)
+            return 1
 
         if args.command == "rules":
             return handle_rules(args)

@@ -6,6 +6,7 @@ A lightweight & AST-capable C Static Code Security Analyzer.
 __version__ = "0.9.2"
 __author__ = "Saheb Biswas"
 
+from .logging_config import configure_logging, TRACE_LEVEL_NUM
 from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError, ParseTier, ConfigProfile, OUTPUT_SCHEMA_VERSION
 from .engine import CGullScanner
 from .ignore import CGullIgnoreFilter
@@ -55,4 +56,6 @@ __all__ = [
     "parse_compile_commands",
     "find_compile_commands",
     "merge_profile_flags",
+    "configure_logging",
+    "TRACE_LEVEL_NUM",
 ]

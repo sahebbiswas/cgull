@@ -6,7 +6,11 @@ import re
 from typing import List, Optional, Tuple
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
+import logging
 from ..ast_analyzer import CASTContext
+
+logger = logging.getLogger(__name__)
+
 
 
 class BannedFunctionsRule(BaseRule):

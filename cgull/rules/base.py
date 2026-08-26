@@ -5,7 +5,11 @@ Base Rule definitions for C-GULL Static Analyzer.
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from ..models import Issue, Severity, RuleCategory, RuleDefinition, AnalysisEngine, FixType
+import logging
 from ..ast_analyzer import CASTContext
+
+logger = logging.getLogger(__name__)
+
 
 
 class BaseRule(ABC):

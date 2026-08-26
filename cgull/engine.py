@@ -7,6 +7,7 @@ regex scanning, AST parsing, and issue aggregation.
 import os
 import sys
 import time
+import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union, Any
@@ -17,6 +18,8 @@ from .ignore import CGullIgnoreFilter
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
 from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint, sanitize_terminal_text
+
+logger = logging.getLogger(__name__)
 
 
 def _emit_error(
@@ -34,11 +37,10 @@ def _emit_error(
     prefix = "\n" if progress_active else ""
     sys.stderr.write(f"{prefix}[ERROR] Analysis failed for {san_path}: {san_type}: {san_msg}\n")
     sys.stderr.flush()
+    logger.error("Analysis failed for %s: %s: %s", san_path, san_type, san_msg)
 
 
 def _collect_files_flags(files: List[str], quiet: bool = False) -> Tuple[Set[str], Set[str], Dict[str, Tuple[str, int]], Dict[str, Tuple[str, int]]]:
-    import logging
-    logger = logging.getLogger(__name__)
     from .utils import strip_comments_keep_lines
     from .ast_analyzer import ConditionalFlagCollector
 
@@ -68,13 +70,11 @@ def _collect_files_flags(files: List[str], quiet: bool = False) -> Tuple[Set[str
         except OSError as e:
             skipped_error_count += 1
             if not quiet:
-                sys.stderr.write(f"[WARNING] Flag collection skipped '{fpath}' due to OS error: {e}\n")
-                sys.stderr.flush()
+                logger.warning("[WARNING] Flag collection skipped '%s' due to OS error: %s", fpath, e)
         except Exception as e:
             skipped_error_count += 1
             if not quiet:
-                sys.stderr.write(f"[WARNING] Flag collection skipped '{fpath}' due to error: {e}\n")
-                sys.stderr.flush()
+                logger.warning("[WARNING] Flag collection skipped '%s' due to error: %s", fpath, e)
 
     if skipped_error_count > 0 and not quiet:
         logger.warning("Flag collection skipped %d file(s) due to errors", skipped_error_count)
@@ -110,8 +110,7 @@ def _validate_seed_flags_diagnostics(files: List[str], seed_profiles: List[Confi
     # Diagnostic 1: Unused macro warning (warn once per unused macro per run)
     for m_name in sorted(seed_macros.keys()):
         if m_name not in all_discovered:
-            sys.stderr.write(f"Warning: Seed macro '{m_name}' is defined in configuration seed but never tested in any scanned source file.\n")
-            sys.stderr.flush()
+            logger.warning("Warning: Seed macro '%s' is defined in configuration seed but never tested in any scanned source file.", m_name)
 
     # Diagnostic 2: Value-macro seed for a flag only tested as a presence flag (#ifdef)
     for m_name, (val, prof_name) in sorted(value_seed_macros.items()):
@@ -120,8 +119,7 @@ def _validate_seed_flags_diagnostics(files: List[str], seed_profiles: List[Confi
             if m_name in presence_locs:
                 fpath, lno = presence_locs[m_name]
                 loc_str = f" in {fpath}:{lno}"
-            sys.stderr.write(f"Warning: Seed value macro '{m_name}' is configured with value '{val}' but was only tested as a presence flag{loc_str}.\n")
-            sys.stderr.flush()
+            logger.warning("Warning: Seed value macro '%s' is configured with value '%s' but was only tested as a presence flag%s.", m_name, val, loc_str)
 
 
 class CGullScanner:
@@ -256,6 +254,9 @@ class CGullScanner:
         if total_files > 0:
             resolved_jobs = min(resolved_jobs, total_files)
 
+        logger.info("Starting scan of target path '%s' (jobs=%d, strategy=%s)", target_path, resolved_jobs, config_strategy or getattr(self.config, "config_strategy", "one-at-a-time"))
+        logger.debug("Discovered %d total files to scan (%d ignored)", len(files_to_scan), len(ignored_paths))
+
         if seed_profiles and not quiet:
             _validate_seed_flags_diagnostics(files_to_scan, seed_profiles, quiet=quiet)
 
@@ -335,6 +336,7 @@ class CGullScanner:
             ))
 
         duration = time.time() - start_time
+        logger.info("Scan completed for '%s' in %.2fs: %d files analyzed, %d issues, %d failed", target_path, duration, analyzed_count, len(all_issues), failed_count)
         high_total = sum(1 for i in all_issues if i.impact == Severity.HIGH)
         med_total = sum(1 for i in all_issues if i.impact == Severity.MEDIUM)
         low_total = sum(1 for i in all_issues if i.impact == Severity.LOW)
@@ -708,6 +710,8 @@ def _scan_file_content(
             parse_tier = ast_ctx.parse_tier
             confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
 
+        logger.info("Entering file scan: %s", file_path)
+
         # 1. Regex Pass
         if engine_mode in (AnalysisEngine.REGEX, AnalysisEngine.HYBRID):
             masked_lines = [mask_string_and_char_literals(line) for line in clean_lines]
@@ -718,6 +722,7 @@ def _scan_file_content(
                 for rule in rules:
                     if engine_mode == AnalysisEngine.HYBRID and rule.analysis_engine == AnalysisEngine.AST:
                         continue
+                    logger.log(5, "Executing regex rule %s (%s) on %s:%d", rule.rule_id, rule.name, file_path, line_no)
                     found = rule.scan_line(
                         file_path=file_path,
                         line_number=line_no,
@@ -738,6 +743,7 @@ def _scan_file_content(
                 parser_status = ast_ctx.parser_status
                 confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
             for rule in rules:
+                logger.log(5, "Executing AST rule %s (%s) on %s", rule.rule_id, rule.name, file_path)
                 ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
                 for iss in ast_found:
                     if iss.confidence is None:
@@ -760,6 +766,7 @@ def _scan_file_content(
     # Sort issues by line number
     issues.sort(key=lambda x: (x.line_number, x.column_number))
     duration_ms = (time.time() - t0) * 1000.0
+    logger.info("Leaving file scan: %s (status=%s, parse_tier=%s, issues=%d, duration=%.2fms)", file_path, file_status, parse_tier, len(issues), duration_ms)
     return issues, loc, duration_ms, parser_status, parse_tier, file_status, confidence_val, scan_error
 
 

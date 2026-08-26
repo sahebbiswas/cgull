@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+import logging
 from .ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr, _PRELUDE_LINE_COUNT
+
+logger = logging.getLogger(__name__)
+
 
 
 class Nullness(Enum):

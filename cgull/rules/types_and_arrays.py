@@ -6,7 +6,11 @@ import re
 from typing import List, Optional
 from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
+import logging
 from ..ast_analyzer import CASTContext, is_unsigned_type
+
+logger = logging.getLogger(__name__)
+
 
 
 class VariableLengthArraysRule(BaseRule):

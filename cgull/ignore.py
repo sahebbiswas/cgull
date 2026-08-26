@@ -7,7 +7,11 @@ import os
 import re
 import fnmatch
 from pathlib import Path
+import logging
 from typing import List, Tuple, Optional
+
+logger = logging.getLogger(__name__)
+
 
 
 class CGullIgnoreFilter:
