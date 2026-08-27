@@ -875,6 +875,25 @@ class TestParseTiers(unittest.TestCase):
             self.assertTrue(ctx_regex.global_variables["global_arr"].is_array)
             self.assertTrue(ctx_regex.global_variables["global_typedef_arr"].is_array)
 
+    def test_filter_prelude_with_duplicate_typedefs_and_header_inclusions(self):
+        from cgull.ast_analyzer import _PYCPARSER_PRELUDE
+        parser = CASTParser()
+        # Code containing duplicate typedefs from headers included multiple times
+        code = (
+            "typedef unsigned long size_t;\n"
+            "typedef unsigned int uint32_t;\n"
+            "typedef unsigned long size_t;\n"
+            "void test(void) { int x; }\n"
+        )
+        filtered = parser._filter_prelude(_PYCPARSER_PRELUDE, code)
+        # Prelude typedefs for size_t and uint32_t should both be filtered out safely
+        self.assertNotIn("typedef unsigned long size_t;", filtered)
+        self.assertNotIn("typedef unsigned int uint32_t;", filtered)
+        # Other prelude typedefs like uint8_t remain intact
+        self.assertIn("typedef unsigned char uint8_t;", filtered)
+        # Line count of prelude should be preserved via newline substitution
+        self.assertEqual(filtered.count("\n"), _PYCPARSER_PRELUDE.count("\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

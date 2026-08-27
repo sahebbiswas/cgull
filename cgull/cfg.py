@@ -6,10 +6,10 @@ real AST; the existing lexical fallback remains available otherwise.
 """
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import logging
-from .ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr, _PRELUDE_LINE_COUNT
+from .ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr, _PRELUDE_LINE_COUNT, _map_line
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +113,12 @@ class StructuredCFG:
         self.nodes[node.node_id] = node
         return node.node_id
 
-    def new_node(self, kind: str, ast_node=None, **kwargs) -> int:
+    def new_node(self, kind: str, ast_node=None, line_map: Optional[Dict[int, Any]] = None, **kwargs) -> int:
         self._next_id += 1
         line = 1
         if ast_node is not None and getattr(ast_node, "coord", None):
-            line = max(1, ast_node.coord.line - _PRELUDE_LINE_COUNT)
+            exp_line = max(1, ast_node.coord.line - _PRELUDE_LINE_COUNT)
+            line = _map_line(exp_line, line_map)
         node = CFGEvent(node_id=self._next_id, kind=kind, line_number=line, **kwargs)
         setattr(node, "_ast_node", ast_node)
         return self.add_node(node)
@@ -730,7 +731,7 @@ def _unwrap_cast(node):
     return node
 
 
-def _deref_vars_with_lines(node, default_line: Optional[int] = None) -> Dict[str, int]:
+def _deref_vars_with_lines(node, default_line: Optional[int] = None, line_map: Optional[Dict[int, Any]] = None) -> Dict[str, int]:
     result: Dict[str, int] = {}
     if node is None:
         return result
@@ -752,7 +753,8 @@ def _deref_vars_with_lines(node, default_line: Optional[int] = None) -> Dict[str
     if matched_var:
         coord = getattr(node, "coord", None)
         if coord is not None:
-            line = max(1, coord.line - _PRELUDE_LINE_COUNT)
+            exp_line = max(1, coord.line - _PRELUDE_LINE_COUNT)
+            line = _map_line(exp_line, line_map)
         elif default_line is not None:
             line = default_line
         else:
@@ -760,7 +762,7 @@ def _deref_vars_with_lines(node, default_line: Optional[int] = None) -> Dict[str
         result[matched_var] = line
 
     for _, child in node.children():
-        child_res = _deref_vars_with_lines(child, default_line=default_line)
+        child_res = _deref_vars_with_lines(child, default_line=default_line, line_map=line_map)
         for var, line in child_res.items():
             if var not in result:
                 result[var] = line
@@ -919,7 +921,7 @@ def _find_value_producing_call(node) -> Optional[Tuple[str, list]]:
     return None
 
 
-def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, int], Set[str], Dict[str, str], Set[str], Dict[str, str]]:
+def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None, line_map: Optional[Dict[int, Any]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, int], Set[str], Dict[str, str], Set[str], Dict[str, str]]:
     """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, deref_lines, asserted, alias_writes, realloc_inputs, realloc_bindings for an executable AST node."""
     kind = type(ast_node).__name__
     reads: Set[str] = set()
@@ -929,8 +931,12 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     freed: Set[str] = _freed_vars(ast_node, dealloc_funcs=dealloc_funcs)
     allocated: Set[str] = set()
     stmt_coord = getattr(ast_node, "coord", None)
-    default_line = max(1, stmt_coord.line - _PRELUDE_LINE_COUNT) if stmt_coord is not None else 1
-    deref_lines = _deref_vars_with_lines(ast_node, default_line=default_line)
+    if stmt_coord is not None:
+        exp_line = max(1, stmt_coord.line - _PRELUDE_LINE_COUNT)
+        default_line = _map_line(exp_line, line_map)
+    else:
+        default_line = 1
+    deref_lines = _deref_vars_with_lines(ast_node, default_line=default_line, line_map=line_map)
     derefs = set(deref_lines.keys())
     alias_writes: Dict[str, str] = {}
     realloc_inputs: Set[str] = set()
@@ -1056,7 +1062,7 @@ def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_fun
     return kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, deref_lines, asserted, alias_writes, realloc_inputs, realloc_bindings
 
 
-def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None) -> StructuredCFG:
+def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None, line_map: Optional[Dict[int, Any]] = None) -> StructuredCFG:
     """Build a structured CFG rooted at a pycparser FuncDef body."""
     from pycparser import c_ast
 
@@ -1065,13 +1071,13 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     pending_gotos: List[Tuple[int, str]] = []
 
     def make_event(stmt) -> int:
-        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, deref_lines, asserted, alias_writes, realloc_inputs, realloc_bindings = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries)
+        kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, deref_lines, asserted, alias_writes, realloc_inputs, realloc_bindings = _event_payload(stmt, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=line_map)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
         if kind == "Return":
             expr_str = _format_pycparser_expr(stmt.expr) if getattr(stmt, "expr", None) is not None else ""
         else:
             expr_str = _format_pycparser_expr(stmt)
-        return cfg.new_node(node_kind, stmt, expr_str=expr_str, reads=reads, writes=writes, null_writes=null_writes, maybe_null_writes=maybe_null_writes,
+        return cfg.new_node(node_kind, stmt, line_map=line_map, expr_str=expr_str, reads=reads, writes=writes, null_writes=null_writes, maybe_null_writes=maybe_null_writes,
                             freed=freed, allocated=allocated, derefs=derefs, deref_lines=deref_lines, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs, realloc_bindings=realloc_bindings)
 
     def build_compound(items, next_entry, break_target, continue_target):
@@ -1128,7 +1134,7 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
             return node
 
         if kind == "If":
-            cond = cfg.new_node("if_cond", stmt, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
+            cond = cfg.new_node("if_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
             true_add, true_remove = _simple_null_facts(stmt.cond)
             false_add, false_remove = true_remove, true_add
             # _simple_null_facts returns the nonnull fact for each branch; the
@@ -1144,14 +1150,14 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
 
         if kind in {"While", "DoWhile"}:
             if kind == "While":
-                cond = cfg.new_node("while_cond", stmt, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
+                cond = cfg.new_node("while_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
                 body = build_stmt(stmt.stmt, cond, next_entry, cond)
                 true_add, true_remove = _simple_null_facts(stmt.cond)
                 false_add, false_remove = true_remove, true_add
                 cfg.connect(cond, body, add=true_add, remove=true_remove)
                 cfg.connect(cond, next_entry, add=false_add, remove=false_remove)
                 return cond
-            cond = cfg.new_node("do_cond", stmt, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
+            cond = cfg.new_node("do_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
             body = build_stmt(stmt.stmt, cond, next_entry, cond)
             true_add, true_remove = _simple_null_facts(stmt.cond)
             false_add, false_remove = true_remove, true_add
@@ -1161,7 +1167,7 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
 
         if kind == "For":
             cond_expr = stmt.cond
-            cond = cfg.new_node("for_cond", stmt, expr_str=_format_pycparser_expr(cond_expr) if cond_expr else "1",
+            cond = cfg.new_node("for_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(cond_expr) if cond_expr else "1",
                                 reads=_ids(cond_expr) if cond_expr is not None else set())
             iter_node = None
             if stmt.next is not None:
@@ -1179,7 +1185,7 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
             return cond
 
         if kind == "Switch":
-            switch_node = cfg.new_node("switch_cond", stmt, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
+            switch_node = cfg.new_node("switch_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
             body = stmt.stmt
             cases = list(getattr(body, "block_items", []) or []) if type(body).__name__ == "Compound" else []
             case_entries = [None] * len(cases)
@@ -1208,14 +1214,14 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
             return node
 
         if kind == "Label":
-            label_node = cfg.new_node("label", stmt, expr_str=stmt.name)
+            label_node = cfg.new_node("label", stmt, line_map=line_map, expr_str=stmt.name)
             labels_map[stmt.name] = label_node
             inner_entry = build_stmt(stmt.stmt, next_entry, break_target, continue_target)
             cfg.connect(label_node, inner_entry)
             return label_node
 
         if kind == "Goto":
-            goto_node = cfg.new_node("goto", stmt, expr_str=f"goto {stmt.name}")
+            goto_node = cfg.new_node("goto", stmt, line_map=line_map, expr_str=f"goto {stmt.name}")
             pending_gotos.append((goto_node, stmt.name))
             return goto_node
 
@@ -1291,7 +1297,7 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
             if getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None:
                 funcdef = find_function_def(ast_ctx.pycparser_ast, name)
                 if funcdef is not None:
-                    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries)
+                    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
 
             freed_params: Set[int] = set()
             return_nullness_set: Set[Nullness] = set()
