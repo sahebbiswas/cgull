@@ -473,3 +473,111 @@ def test_streamed_bounded_reads_and_caching(tmp_path):
     tu = expander.expand(main_c.read_text(), str(main_c))
 
     assert str(hdr.resolve()) in expander.rejected_paths
+
+
+def test_cross_file_line_provenance_nested_includes(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr_c = inc_dir / "c.h"
+    hdr_c.write_text("// c.h line 1\nint c_func(void) { return 42; }\n// c.h line 3\n")
+
+    hdr_b = inc_dir / "b.h"
+    hdr_b.write_text("// b.h line 1\n#include \"c.h\"\n// b.h line 3\nint b_var = 10;\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text("// main line 1\n#include \"b.h\"\n// main line 3\nint main(void) { return b_var + c_func(); }\n")
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver)
+
+    tu = expander.expand(main_c.read_text(), str(main_c))
+
+    # Verify every line in expanded TU resolves to the correct (file_path, line_number)
+    line_map = tu.line_map
+    lines = tu.expanded_text.splitlines()
+
+    # Find c_func in expanded text
+    c_func_line_idx = next(i for i, line in enumerate(lines, 1) if "c_func(void)" in line)
+    src_loc = line_map[c_func_line_idx]
+    assert src_loc.file_path == str(hdr_c.resolve())
+    assert src_loc.line_number == 2
+    assert "c_func(void)" in src_loc.line_content
+
+    # Find b_var in expanded text
+    b_var_line_idx = next(i for i, line in enumerate(lines, 1) if "b_var = 10" in line)
+    src_loc_b = line_map[b_var_line_idx]
+    assert src_loc_b.file_path == str(hdr_b.resolve())
+    assert src_loc_b.line_number == 4
+    assert "b_var = 10" in src_loc_b.line_content
+
+    # Find main in expanded text
+    main_line_idx = next(i for i, line in enumerate(lines, 1) if "int main(void)" in line)
+    src_loc_main = line_map[main_line_idx]
+    assert src_loc_main.file_path == str(main_c.resolve())
+    assert src_loc_main.line_number == 4
+    assert "int main(void)" in src_loc_main.line_content
+
+
+def test_prelude_and_pcpp_composition_underneath_tu_map(tmp_path):
+    """
+    Tests that AST-level prelude offsets (_PRELUDE_LINE_COUNT) and pcpp line reconstruction
+    compose correctly underneath the TU-level line_map.
+    Scenario: A macro-using function inside an included header containing an AST-only finding (CGULL-041 unused variable).
+    Explicitly requires pycparser and pcpp, asserts parse_tier is pcpp+pycparser, and verifies
+    the exact AST-only rule finding maps back to the original header file path, line number, and snippet.
+    """
+    try:
+        import pycparser  # noqa: F401
+        import pcpp  # noqa: F401
+    except ImportError:
+        pytest.skip("pycparser and pcpp both required for pcpp composition test")
+
+    from cgull.engine import CGullScanner
+    from cgull.models import ScanConfig, AnalysisEngine
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    # Create header containing a macro-using function with an AST-only finding (CGULL-041 unused local variable 'unused_var')
+    hdr = inc_dir / "macro_header.h"
+    hdr.write_text(
+        "#define BUFFER_SIZE 256\n"
+        "#define UNUSED_MACRO 1\n"
+        "// line 3 comment\n"
+        "void process_input(void) {\n"
+        "    int unused_var;\n"
+        "    char buf[BUFFER_SIZE];\n"
+        "    buf[0] = 'a';\n"
+        "}\n"
+    )
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text(
+        "// main.c line 1\n"
+        '#include "macro_header.h"\n'
+        "int main(void) {\n"
+        "    process_input();\n"
+        "    return 0;\n"
+        "}\n"
+    )
+
+    config = ScanConfig.create(include_roots=[str(inc_dir)], engine_mode=AnalysisEngine.HYBRID)
+    scanner = CGullScanner(config=config)
+
+    res = scanner.scan_path(str(main_c))
+
+    assert res.scanned_files_count == 1
+    assert res.file_summaries[0].parse_tier == "pcpp+pycparser"
+
+    # CGULL-041 is UnusedLocalVariablesRule (AST-only engine)
+    ast_issues = [i for i in res.issues if i.rule_id == "CGULL-041" or "unused_var" in i.message]
+    assert len(ast_issues) >= 1
+
+    issue = ast_issues[0]
+    # Check that the AST finding maps to the header file at line 5 (int unused_var;)
+    assert issue.file_path == str(hdr.resolve())
+    assert issue.line_number == 5
+    assert "unused_var" in issue.code_snippet
