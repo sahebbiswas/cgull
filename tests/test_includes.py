@@ -242,3 +242,234 @@ def test_include_resolver_edge_cases(tmp_path):
     local_hdr = tmp_path / "src" / "local.h"
     local_hdr.write_text("// local\n")
     assert resolver.resolve("local.h", str(src_file), is_quote=True) == str(local_hdr.resolve())
+
+
+def test_tu_include_expander_depth_first_recursion(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr_a = inc_dir / "a.h"
+    hdr_b = inc_dir / "b.h"
+
+    hdr_a.write_text('#include "b.h"\nint a = 1;\n')
+    hdr_b.write_text("int b = 2;\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "a.h"\nint main(void) { return a + b; }\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver)
+
+    expanded = expander.expand(main_c.read_text(), str(main_c))
+    assert "int b = 2;" in expanded
+    assert "int a = 1;" in expanded
+    assert expanded.index("int b = 2;") < expanded.index("int a = 1;")
+    assert expanded.index("int a = 1;") < expanded.index("int main(void)")
+
+
+def test_tu_include_expander_guards_and_pragma_once(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr_once = inc_dir / "once.h"
+    hdr_once.write_text("#pragma once\nstruct Once { int x; };\n")
+
+    hdr_guard = inc_dir / "guard.h"
+    hdr_guard.write_text("#ifndef GUARD_H\n#define GUARD_H\nstruct Guard { int y; };\n#endif\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text(
+        '#include "once.h"\n'
+        '#include "once.h"\n'
+        '#include "guard.h"\n'
+        '#include "guard.h"\n'
+        "int main(void) { return 0; }\n"
+    )
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver)
+
+    expanded = expander.expand(main_c.read_text(), str(main_c))
+
+    assert expanded.count("struct Once") == 1
+    assert expanded.count("struct Guard") == 1
+
+
+def test_tu_include_expander_circular_includes(tmp_path, caplog):
+    import logging
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr_a = inc_dir / "a.h"
+    hdr_b = inc_dir / "b.h"
+
+    hdr_a.write_text('#include "b.h"\nint a = 1;\n')
+    hdr_b.write_text('#include "a.h"\nint b = 2;\n')
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "a.h"\nint main(void) { return 0; }\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver)
+
+    with caplog.at_level(logging.WARNING):
+        expanded = expander.expand(main_c.read_text(), str(main_c))
+
+    assert "Circular include detected" in caplog.text
+    assert "int a = 1;" in expanded
+    assert "int b = 2;" in expanded
+
+
+def test_tu_include_expander_limits(tmp_path, caplog):
+    import logging
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr1 = inc_dir / "hdr1.h"
+    hdr2 = inc_dir / "hdr2.h"
+    hdr1.write_text('#include "hdr2.h"\n')
+    hdr2.write_text("int deep = 1;\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "hdr1.h"\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+
+    # 1. Depth limit test (max_depth=1)
+    expander_depth = TUIncludeExpander(resolver=resolver, max_depth=1)
+    with caplog.at_level(logging.WARNING):
+        expanded_depth = expander_depth.expand(main_c.read_text(), str(main_c))
+    assert "Max include depth (1) exceeded" in caplog.text
+
+    # 2. Size limit test (max_total_bytes=5)
+    caplog.clear()
+    hdr_large = inc_dir / "large.h"
+    hdr_large.write_text("char large_buf[1000];\n")
+    main_large = tmp_path / "main_large.c"
+    main_large.write_text('#include "large.h"\n')
+
+    expander_size = TUIncludeExpander(resolver=resolver, max_total_bytes=5)
+    with caplog.at_level(logging.WARNING):
+        expanded_size = expander_size.expand(main_large.read_text(), str(main_large))
+    assert "Max total expanded include size" in caplog.text
+
+
+def test_tu_include_expansion_integration_with_scanner(tmp_path):
+    from cgull.engine import CGullScanner
+    from cgull.models import ScanConfig
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    # Create header with a vulnerability (gets usage)
+    hdr = inc_dir / "vulnerable.h"
+    hdr.write_text("void unsafe_func(char *buf) { gets(buf); }\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "vulnerable.h"\nint main(void) { char b[10]; unsafe_func(b); return 0; }\n')
+
+    # Also create a .cgullignore that ignores header files directly in include/
+    cgullignore = tmp_path / ".cgullignore"
+    cgullignore.write_text("include/\n")
+
+    config = ScanConfig.create(include_roots=[str(inc_dir)])
+    scanner = CGullScanner(config=config)
+
+    res = scanner.scan_path(str(main_c))
+
+    assert res.scanned_files_count == 1
+    # Vulnerability in included header is found in main.c TU!
+    gets_issues = [i for i in res.issues if "gets" in i.message.lower() or i.rule_id == "CGULL-005"]
+    assert len(gets_issues) >= 1
+    # Check that the reported issue's file_path and line_number match the original header file
+    assert gets_issues[0].file_path == str(hdr.resolve())
+    assert gets_issues[0].line_number == 1
+
+
+def test_inactive_include_in_untaken_branch_does_not_mutate_guards(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr_once = inc_dir / "once.h"
+    hdr_once.write_text("#pragma once\nint once_val = 1;\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text(
+        "#ifdef UNTAKEN_MACRO\n"
+        '#include "once.h"\n'
+        "#endif\n"
+        '#include "once.h"\n'
+        "int main(void) { return once_val; }\n"
+    )
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver, defined_syms={})
+
+    tu = expander.expand(main_c.read_text(), str(main_c))
+
+    # "once.h" should be active and expanded on line 4, NOT muted by line 2
+    assert "int once_val = 1;" in tu.expanded_text
+
+
+def test_partial_header_guard_rejection(tmp_path):
+    from cgull.includes import _detect_header_guard
+
+    # Whole-file header guard
+    valid_guard = "#ifndef MY_GUARD_H\n#define MY_GUARD_H\nint x;\n#endif\n"
+    assert _detect_header_guard(valid_guard) == "MY_GUARD_H"
+
+    # Partial guard (code outside the guard)
+    partial_guard = "int external_var = 0;\n#ifndef MY_GUARD_H\n#define MY_GUARD_H\nint x;\n#endif\n"
+    assert _detect_header_guard(partial_guard) is None
+
+    # Premature endif
+    premature_guard = "#ifndef MY_GUARD_H\n#define MY_GUARD_H\nint x;\n#endif\nint y;\n"
+    assert _detect_header_guard(premature_guard) is None
+
+
+def test_boundary_containment_rejection(tmp_path):
+    from cgull.includes import IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_hdr = outside_dir / "outside.h"
+    outside_hdr.write_text("int secret = 42;\n")
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(inc_dir), allow_external_includes=False)
+
+    # Attempt path traversal escape
+    resolved = resolver.resolve("../outside/outside.h", str(inc_dir), is_quote=True)
+    assert resolved is None
+
+
+def test_streamed_bounded_reads_and_caching(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver
+
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    hdr = inc_dir / "hdr.h"
+    hdr.write_text("int data = 1234567890;\n")
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "hdr.h"\n#include "hdr.h"\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver, max_total_bytes=10)
+
+    tu = expander.expand(main_c.read_text(), str(main_c))
+
+    assert str(hdr.resolve()) in expander.rejected_paths

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile
 from .ignore import CGullIgnoreFilter
+from .includes import IncludeResolver, TUIncludeExpander
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
 from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint, sanitize_terminal_text
@@ -288,8 +289,10 @@ class CGullScanner:
         analyzed_count = 0
         failed_count = 0
 
+        real_base_dir = os.path.realpath(base_dir)
         for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err in results:
             display_path = os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path)
+            real_file_path = os.path.realpath(file_path)
 
             analysis_status_counts[parser_status] = analysis_status_counts.get(parser_status, 0) + 1
 
@@ -311,7 +314,14 @@ class CGullScanner:
                 if self.severity_filter:
                     file_issues = [i for i in file_issues if i.impact in self.severity_filter]
                 for issue in file_issues:
-                    issue.file_path = display_path
+                    if not issue.file_path or issue.file_path == file_path or os.path.realpath(issue.file_path) == real_file_path:
+                        issue.file_path = display_path
+                    elif os.path.isabs(issue.file_path):
+                        try:
+                            if os.path.isdir(abs_target):
+                                issue.file_path = os.path.relpath(os.path.realpath(issue.file_path), real_base_dir)
+                        except ValueError:
+                            pass
                     issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
                 all_issues.extend(file_issues)
 
@@ -660,27 +670,71 @@ def _scan_file_content(
         enable_suppressions = True
 
     t0 = time.time()
+    orig_loc = len(content.splitlines())
+
+    inc_roots = config.include_roots if config else []
+    source_dir = os.path.dirname(os.path.abspath(file_path)) if file_path and file_path != "source.c" else os.getcwd()
+    resolver = IncludeResolver(include_roots=inc_roots, base_dir=source_dir)
+    expander = TUIncludeExpander(resolver=resolver, defined_syms=config.defined_syms if config else None)
+    tu = expander.expand(content, source_path=file_path)
+    content = tu.expanded_text
+    line_map = tu.line_map
+
     ast_parser = ast_parser or CASTParser()
     raw_lines = content.splitlines()
-    loc = len(raw_lines)
+    loc = orig_loc
     issues: List[Issue] = []
     seen_keys: Set[str] = set()
 
     suppressions = SuppressionMap.from_source(raw_lines) if enable_suppressions else None
 
+    # Cache per-file suppression maps so inline ignore comments work across included headers
+    file_suppressions: Dict[str, SuppressionMap] = {
+        file_path: suppressions if suppressions is not None else SuppressionMap.from_source([]),
+        os.path.realpath(file_path): suppressions if suppressions is not None else SuppressionMap.from_source([])
+    }
+
+    def get_suppression_map(f_path: str) -> Optional[SuppressionMap]:
+        if not enable_suppressions:
+            return None
+        if f_path in file_suppressions:
+            return file_suppressions[f_path]
+        try:
+            if os.path.isfile(f_path):
+                with open(f_path, "r", encoding="utf-8", errors="replace") as f:
+                    file_lines = f.read().splitlines()
+                file_suppressions[f_path] = SuppressionMap.from_source(file_lines)
+            else:
+                file_suppressions[f_path] = SuppressionMap.from_source([])
+        except Exception:
+            file_suppressions[f_path] = SuppressionMap.from_source([])
+        return file_suppressions[f_path]
+
     def add_issue_if_unique(issue: Issue):
-        if suppressions and suppressions.is_suppressed(issue.line_number, issue.rule_id):
+        exp_line = issue.line_number
+        src_loc = line_map.get(exp_line)
+        if src_loc:
+            orig_file = src_loc.file_path
+            orig_line = src_loc.line_number
+            orig_snippet = src_loc.line_content.strip()
+        else:
+            orig_file = file_path
+            orig_line = exp_line
+            orig_snippet = raw_lines[exp_line - 1].strip() if 0 < exp_line <= len(raw_lines) else ""
+
+        f_supp = get_suppression_map(orig_file)
+        if f_supp and f_supp.is_suppressed(orig_line, issue.rule_id):
             return
         if sev_filter and issue.impact not in sev_filter:
             return
-        key = f"{issue.rule_id}:{issue.line_number}:{issue.message}"
+
+        issue.file_path = orig_file
+        issue.line_number = orig_line
+        issue.code_snippet = orig_snippet
+
+        key = f"{issue.rule_id}:{issue.file_path}:{issue.line_number}:{issue.message}"
         if key not in seen_keys:
             seen_keys.add(key)
-            # Restore the original (uncleaned) source line for display,
-            # regardless of what internal cleaned/masked view the rule
-            # matched against.
-            if 0 < issue.line_number <= len(raw_lines):
-                issue.code_snippet = raw_lines[issue.line_number - 1].strip()
             issues.append(issue)
 
     parser_status = ParserStatus.FALLBACK_PARSER.value
@@ -819,7 +873,8 @@ def _scan_file_content_profiles(
 
     total_duration_ms = 0.0
     merged_issues: Dict[Tuple[str, int, str], Tuple[Issue, Set[ConfigProfile]]] = {}
-    loc = len(content.splitlines())
+    orig_loc = len(content.splitlines())
+    loc = orig_loc
 
     best_parser_status = ParserStatus.PARSE_FAILED.value
     best_parse_tier = ParseTier.REGEX_FALLBACK.value
