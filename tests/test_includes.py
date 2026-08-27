@@ -525,24 +525,32 @@ def test_prelude_and_pcpp_composition_underneath_tu_map(tmp_path):
     """
     Tests that AST-level prelude offsets (_PRELUDE_LINE_COUNT) and pcpp line reconstruction
     compose correctly underneath the TU-level line_map.
-    Scenario: A macro-using function inside an included header, included from main.c.
-    AST and regex rules must map back to the original header file path and line number.
+    Scenario: A macro-using function inside an included header containing an AST-only finding (CGULL-041 unused variable).
+    Explicitly requires pycparser and pcpp, asserts parse_tier is pcpp+pycparser, and verifies
+    the exact AST-only rule finding maps back to the original header file path, line number, and snippet.
     """
+    try:
+        import pycparser  # noqa: F401
+        import pcpp  # noqa: F401
+    except ImportError:
+        pytest.skip("pycparser and pcpp both required for pcpp composition test")
+
     from cgull.engine import CGullScanner
     from cgull.models import ScanConfig, AnalysisEngine
 
     inc_dir = tmp_path / "include"
     inc_dir.mkdir()
 
-    # Create header containing a macro-using function with a banned function call (gets)
+    # Create header containing a macro-using function with an AST-only finding (CGULL-041 unused local variable 'unused_var')
     hdr = inc_dir / "macro_header.h"
     hdr.write_text(
         "#define BUFFER_SIZE 256\n"
         "#define UNUSED_MACRO 1\n"
         "// line 3 comment\n"
         "void process_input(void) {\n"
+        "    int unused_var;\n"
         "    char buf[BUFFER_SIZE];\n"
-        "    gets(buf);\n"
+        "    buf[0] = 'a';\n"
         "}\n"
     )
 
@@ -562,11 +570,14 @@ def test_prelude_and_pcpp_composition_underneath_tu_map(tmp_path):
     res = scanner.scan_path(str(main_c))
 
     assert res.scanned_files_count == 1
-    gets_issues = [i for i in res.issues if "gets" in i.message.lower() or i.rule_id == "CGULL-005"]
-    assert len(gets_issues) >= 1
+    assert res.file_summaries[0].parse_tier == "pcpp+pycparser"
 
-    issue = gets_issues[0]
-    # Check that issue maps to the header file at line 6 (gets(buf);)
+    # CGULL-041 is UnusedLocalVariablesRule (AST-only engine)
+    ast_issues = [i for i in res.issues if i.rule_id == "CGULL-041" or "unused_var" in i.message]
+    assert len(ast_issues) >= 1
+
+    issue = ast_issues[0]
+    # Check that the AST finding maps to the header file at line 5 (int unused_var;)
     assert issue.file_path == str(hdr.resolve())
-    assert issue.line_number == 6
-    assert "gets(buf)" in issue.code_snippet
+    assert issue.line_number == 5
+    assert "unused_var" in issue.code_snippet
