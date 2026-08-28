@@ -107,17 +107,17 @@ class TestScanCommand(unittest.TestCase):
         # File with only a MEDIUM severity issue (naked control flow / atoi / magic number / etc.)
         med_file = os.path.join(self.temp_dir, "medium_only.c")
         with open(med_file, "w") as f:
-            f.write("void g(char *str) {\n    int val = atoi(str);\n}\n")
+            f.write("#pragma once\nvoid g(char *str) {\n    int val = atoi(str);\n}\n")
 
         # File with only a LOW severity issue
         low_file = os.path.join(self.temp_dir, "low_only.c")
         with open(low_file, "w") as f:
-            f.write("void h(void) {\n    goto start;\nstart:\n    return;\n}\n")
+            f.write("#pragma once\nvoid h(void) {\n    goto start;\nstart:\n    return;\n}\n")
 
         # Clean file
         clean_file = os.path.join(self.temp_dir, "clean.c")
         with open(clean_file, "w") as f:
-            f.write("int noop(void) {\n    int total = 0;\n    total = total + 1;\n    return total;\n}\n")
+            f.write("#pragma once\nint noop(void) {\n    int total = 0;\n    total = total + 1;\n    return total;\n}\n")
 
         # --fail-on high on medium_only file should pass (0)
         code, _ = self._run(["scan", med_file, "--fail-on", "high"])
@@ -150,7 +150,7 @@ class TestScanCommand(unittest.TestCase):
     def test_fail_on_high_precedence_over_fail_on_flag(self):
         med_file = os.path.join(self.temp_dir, "medium_only.c")
         with open(med_file, "w") as f:
-            f.write("void g(char *str) {\n    int val = atoi(str);\n}\n")
+            f.write("#pragma once\nvoid g(char *str) {\n    int val = atoi(str);\n}\n")
 
         # Passing --fail-on low but also --fail-on-high should force threshold to high (so medium_only passes)
         code, _ = self._run(["scan", med_file, "--fail-on", "low", "--fail-on-high"])

@@ -16,7 +16,7 @@ from cgull.models import ScanError
 from cgull.reporter import ReportGenerator
 from cgull.utils import compute_issue_fingerprint
 
-VULNERABLE_CODE = "void f(char *b) {\n    gets(b);\n}\n"
+VULNERABLE_CODE = "#pragma once\nvoid f(char *b) {\n    gets(b);\n}\n"
 
 
 class TestFingerprintStability(unittest.TestCase):
@@ -114,7 +114,7 @@ class TestApplyBaseline(unittest.TestCase):
     def test_fixed_issue_counted_as_resolved(self):
         vulnerable = CGullScanner().scan_text(VULNERABLE_CODE, "app.c")
         baseline_counts = Counter(i.fingerprint for i in vulnerable.issues)
-        clean = CGullScanner().scan_text("void f(char *b, size_t n) {\n    fgets(b, n, stdin);\n}\n", "app.c")
+        clean = CGullScanner().scan_text("#pragma once\nvoid f(char *b, size_t n) {\n    fgets(b, n, stdin);\n}\n", "app.c")
         diffed = apply_baseline(clean, baseline_counts)
         self.assertEqual(diffed.baseline_new_count, 0)
         self.assertEqual(diffed.baseline_resolved_count, len(vulnerable.issues))

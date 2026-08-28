@@ -27,6 +27,7 @@ void f(char *src) {
 """
 
 CLEAN_CODE = """
+#pragma once
 int noop(void) {
     int total = 0;
     total = total + 1;
