@@ -98,6 +98,9 @@ class TestSecurityRuleBehavioralCorpus(unittest.TestCase):
         success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-038", verbose=False)
         self.assertTrue(success, f"CGULL-038 Corpus Failed:\n{report}")
 
+    def test_rule_cgull_045_missing_inclusion_guard(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-045", verbose=False)
+        self.assertTrue(success, f"CGULL-045 Corpus Failed:\n{report}")
 
 
 if __name__ == "__main__":

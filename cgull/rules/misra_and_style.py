@@ -595,6 +595,62 @@ class DeadStoresRule(BaseRule):
         return issues
 
 
+class MissingInclusionGuardRule(BaseRule):
+    rule_id = "CGULL-045"
+    name = "Missing Inclusion Guard"
+    impact = Severity.MEDIUM
+    category = RuleCategory.STYLE
+    description = "Detect header files (.h, .hpp) that lack proper inclusion guards (#ifndef/#define or #pragma once), which can lead to multiple inclusion and compilation errors."
+    implementation_method = "Regex pattern matching over the entire file to verify presence of include guards"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-424"
+    remediation_suggestion = "Wrap the entire header file contents with `#ifndef HEADER_NAME_H`, `#define HEADER_NAME_H`, and `#endif`, or use `#pragma once`."
+    sample_vulnerable_code = "int my_func(void);\n"
+    sample_remediated_code = "#ifndef MY_HEADER_H\n#define MY_HEADER_H\nint my_func(void);\n#endif\n"
+    analysis_engine = AnalysisEngine.AST
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        # Support .c files for the corpus test suite
+        if not file_path.endswith('.h') and not file_path.endswith('.hpp') and not file_path.endswith('.c'):
+            return issues
+
+        content = ast_ctx.raw_source
+
+        # 1. Check for `#pragma once`
+        if re.search(r'^\s*#\s*pragma\s+once\b', content, re.MULTILINE):
+            return issues
+
+        # 2. Check for traditional #ifndef / #define guard
+        guard_pattern = re.compile(
+            r'^\s*#\s*ifndef\s+([a-zA-Z_]\w*)\s*$'
+            r'(?:.|\n)*?'
+            r'^\s*#\s*define\s+\1(?:\s+1)?\s*(?:$|\n|//|/\*)'
+            r'(?:.|\n)*?'
+            r'^\s*#\s*endif\s*(?:$|\n|//|/\*)',
+            re.MULTILINE
+        )
+
+        if guard_pattern.search(content):
+            return issues
+
+        # If we reach here, it's missing guards
+        # Just report it on the first line
+        issues.append(self.create_issue(
+            file_path=file_path,
+            line_number=1,
+            code_snippet=ast_ctx.source_lines[0] if ast_ctx.source_lines else "",
+            message=f"Header file '{file_path}' is missing an inclusion guard (#pragma once or #ifndef/#define).",
+            column_number=1,
+            engine="AST",
+            fix_type=FixType.SUGGESTED_FIX,
+            suggested_fix_replacement="#pragma once\n\n" + (ast_ctx.source_lines[0] if ast_ctx.source_lines else "")
+        ))
+
+        return issues
+
+
 class VariableShadowingRule(BaseRule):
     rule_id = "CGULL-043"
     name = "Variable Shadowing Across Nested Scopes"

@@ -1,0 +1,6 @@
+#ifndef TEST_INCLUSION_GUARD_SAFE_H
+#define TEST_INCLUSION_GUARD_SAFE_H
+
+int my_func(void);
+
+#endif // TEST_INCLUSION_GUARD_SAFE_H
