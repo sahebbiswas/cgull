@@ -124,6 +124,8 @@ class TestConfigStrategyCLI(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, "test.c")
+            # Prevent include guard rule from running on this C file
+            source_code = "#pragma once\n" + source_code
             report_path = os.path.join(tmpdir, "report.json")
             with open(file_path, "w") as f:
                 f.write(source_code)
@@ -143,6 +145,8 @@ class TestConfigStrategyCLI(unittest.TestCase):
         source_code = "\n".join([f"#ifdef FLAG_{i}\nint x_{i};\n#endif" for i in range(12)])
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, "test.c")
+            # Prevent include guard rule from running on this C file
+            source_code = "#pragma once\n" + source_code
             with open(file_path, "w") as f:
                 f.write(source_code)
 

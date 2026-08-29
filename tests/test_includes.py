@@ -436,6 +436,14 @@ def test_partial_header_guard_rejection(tmp_path):
     premature_guard = "#ifndef MY_GUARD_H\n#define MY_GUARD_H\nint x;\n#endif\nint y;\n"
     assert _detect_header_guard(premature_guard) is None
 
+    # Branching guard (has #else or #elif)
+    branching_guard = "#ifndef MY_GUARD_H\n#define MY_GUARD_H\nint x;\n#else\nint bad;\n#endif\n"
+    assert _detect_header_guard(branching_guard) is None
+
+    # Nested conditional inside guard is fine
+    nested_guard = "#ifndef MY_GUARD_H\n#define MY_GUARD_H\n#if 1\nint x;\n#endif\n#endif\n"
+    assert _detect_header_guard(nested_guard) == "MY_GUARD_H"
+
 
 def test_boundary_containment_rejection(tmp_path):
     from cgull.includes import IncludeResolver

@@ -239,7 +239,7 @@ def _detect_header_guard(content: str) -> Optional[str]:
 
     # Second non-comment directive must be #define GUARD
     second = lines[1]
-    m2 = re.match(r'^#[ \t]*define[ \t]+([a-zA-Z_]\w*)', second)
+    m2 = re.match(r'^#[ \t]*define[ \t]+([a-zA-Z_]\w*)(?:\s|$)', second)
     if not m2 or m2.group(1) != guard_sym:
         return None
 
@@ -255,6 +255,9 @@ def _detect_header_guard(content: str) -> Optional[str]:
             body = line.lstrip('#').strip()
             if re.match(r'^(?:if|ifdef|ifndef)\b', body):
                 depth += 1
+            elif re.match(r'^(?:elif|else)\b', body):
+                if depth == 1:
+                    return None
             elif re.match(r'^endif\b', body):
                 depth -= 1
                 if depth == 0 and idx != len(lines) - 1:

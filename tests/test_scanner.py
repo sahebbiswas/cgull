@@ -293,6 +293,7 @@ class TestFalsePositiveRegressions(unittest.TestCase):
         # A real strcpy() call on one line and a string mentioning strcpy()
         # on another -- only the real call should be flagged.
         code = """
+        #pragma once
         #include <string.h>
         void f(char *dest, char *src) {
             char *msg = "don't use strcpy()";
@@ -302,7 +303,7 @@ class TestFalsePositiveRegressions(unittest.TestCase):
         result = self.scanner.scan_text(code, "test_mixed.c")
         banned_issues = [i for i in result.issues if i.rule_id == "CGULL-001"]
         self.assertEqual(len(banned_issues), 1)
-        self.assertEqual(banned_issues[0].line_number, 5)
+        self.assertEqual(banned_issues[0].line_number, 6)
 
     def test_return_statement_not_mistaken_for_declaration(self):
         # Regression test: the regex variable-declaration extractor used
@@ -349,6 +350,7 @@ class TestSuppressionComments(unittest.TestCase):
 
     def test_suppress_specific_rule_same_line(self):
         code = """
+        #pragma once
         #include <string.h>
         void f(char *dest, char *src) {
             strcpy(dest, src); // cgull-ignore: CGULL-001
@@ -359,6 +361,7 @@ class TestSuppressionComments(unittest.TestCase):
 
     def test_suppress_all_rules_same_line(self):
         code = """
+        #pragma once
         #include <string.h>
         void f(char *dest, char *src) {
             strcpy(dest, src); // cgull-ignore
@@ -369,6 +372,7 @@ class TestSuppressionComments(unittest.TestCase):
 
     def test_suppress_next_line(self):
         code = """
+        #pragma once
         #include <string.h>
         void f(char *dest, char *src) {
             // cgull-ignore-next-line: CGULL-001
@@ -380,6 +384,7 @@ class TestSuppressionComments(unittest.TestCase):
 
     def test_unrelated_rule_not_suppressed(self):
         code = """
+        #pragma once
         #include <string.h>
         void f(char *dest, char *src) {
             strcpy(dest, src); // cgull-ignore: CGULL-099

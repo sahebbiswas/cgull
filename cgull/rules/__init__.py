@@ -57,6 +57,7 @@ from .misra_and_style import (
     UnusedLocalVariablesRule,
     DeadStoresRule,
     VariableShadowingRule,
+    MissingInclusionGuardRule,
 )
 
 ALL_RULES: List[Type[BaseRule]] = [
@@ -107,6 +108,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     UnusedLocalVariablesRule,
     DeadStoresRule,
     VariableShadowingRule,
+    MissingInclusionGuardRule,
 ]
 
 RULE_REGISTRY: Dict[str, Type[BaseRule]] = {
