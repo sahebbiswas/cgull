@@ -128,7 +128,7 @@ class CGullScanner:
     Main static analyzer engine for C source code.
     """
 
-    C_EXTENSIONS: Set[str] = {".c", ".h"}
+    C_EXTENSIONS: Set[str] = {".c", ".h", ".hpp"}
 
     def __init__(
         self,

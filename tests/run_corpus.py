@@ -96,12 +96,12 @@ def run_corpus_scan(
 
         c_files = [
             f for f in os.listdir(rule_dir)
-            if f.endswith(".c")
+            if f.endswith((".c", ".h", ".hpp"))
         ]
         c_files.sort()
 
         if not c_files:
-            log_lines.append(f"WARNING: Rule ID '{rule_id}' directory has no .c test files. Skipping coverage count.")
+            log_lines.append(f"WARNING: Rule ID '{rule_id}' directory has no .c/.h/.hpp test files. Skipping coverage count.")
             continue
 
         log_lines.append(f"\nRule [{rule_id}] - {rule_instance.name}")

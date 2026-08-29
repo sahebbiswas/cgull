@@ -604,7 +604,7 @@ class MissingInclusionGuardRule(BaseRule):
     implementation_method = "Regex pattern matching over the entire file to verify presence of include guards"
     implementation_complexity = "Low"
     chances_of_false_positives = "Low"
-    cwe_id = "CWE-424"
+    cwe_id = "N/A"
     remediation_suggestion = "Wrap the entire header file contents with `#ifndef HEADER_NAME_H`, `#define HEADER_NAME_H`, and `#endif`, or use `#pragma once`."
     sample_vulnerable_code = "int my_func(void);\n"
     sample_remediated_code = "#ifndef MY_HEADER_H\n#define MY_HEADER_H\nint my_func(void);\n#endif\n"
@@ -612,27 +612,20 @@ class MissingInclusionGuardRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
-        # Support .c files for the corpus test suite
-        if not file_path.endswith('.h') and not file_path.endswith('.hpp') and not file_path.endswith('.c'):
+        
+        file_path_lower = file_path.lower()
+        if not file_path_lower.endswith('.h') and not file_path_lower.endswith('.hpp'):
             return issues
 
-        content = ast_ctx.raw_source
+        from ..includes import _has_pragma_once, _detect_header_guard
 
-        # 1. Check for `#pragma once`
-        if re.search(r'^\s*#\s*pragma\s+once\b', content, re.MULTILINE):
+        # 1. Check for `#pragma once` (must be checked against clean_source to ignore inactive blocks)
+        if _has_pragma_once(ast_ctx.clean_source):
             return issues
 
         # 2. Check for traditional #ifndef / #define guard
-        guard_pattern = re.compile(
-            r'^\s*#\s*ifndef\s+([a-zA-Z_]\w*)\s*$'
-            r'(?:.|\n)*?'
-            r'^\s*#\s*define\s+\1(?:\s+1)?\s*(?:$|\n|//|/\*)'
-            r'(?:.|\n)*?'
-            r'^\s*#\s*endif\s*(?:$|\n|//|/\*)',
-            re.MULTILINE
-        )
-
-        if guard_pattern.search(content):
+        # Must be checked against raw_source because clean_source evaluates and strips the active #ifndef guard.
+        if _detect_header_guard(ast_ctx.raw_source):
             return issues
 
         # If we reach here, it's missing guards

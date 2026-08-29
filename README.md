@@ -20,7 +20,7 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
 - **🔇 Inline Suppression**: silence specific findings with `// cgull-ignore`, `// cgull-disable-next-line CGULL-007`, `/* cgull-disable-line CGULL-019 */`, or `// cgull-ignore-next-line: CGULL-001,CGULL-003`.
 - **⚙️ Parallel Scanning**: `-j/--jobs` scans multiple files concurrently across CPU cores for larger codebases.
 - **📏 Baseline / Diff Mode**: `--baseline`/`--update-baseline` let CI enforce "no *new* issues" on an existing, imperfect codebase instead of requiring it to already be fully clean -- see "Baseline / Diff Mode" below.
-- **📁 Recursive Directory Scanning**: Automatically discovers and audits C source and header files (`.c`, `.h`) across nested codebases.
+- **📁 Recursive Directory Scanning**: Automatically discovers and audits C source and header files (`.c`, `.h`, `.hpp`) across nested codebases.
 - **🚫 .cgullignore Support**: Exclude vendor libraries, third-party dependencies, build output directories, or test mock files using standard gitignore glob patterns and negations (`!`).
 - **📊 Multi-Format Reporting**:
   - Structured **JSON** for automated ingestion and reporting dashboards.
@@ -479,7 +479,7 @@ C-GULL strictly separates mechanically safe transformations from code suggestion
 
 ## ⚠️ Known Limitations
 
-- **C++ is NOT supported**: C-GULL is strictly designed for C source code (`.c`, `.h`). C++ features (classes, namespaces, templates, references, operator overloading, etc.) are not supported by the parser or rules engine.
+- **C++ is NOT supported**: C-GULL is strictly designed for C source code (`.c`, `.h`, `.hpp`). C++ features (classes, namespaces, templates, references, operator overloading, etc.) are not supported by the parser or rules engine.
 - **Heuristic Static Analysis**: C-GULL relies on regex pattern matching and lightweight AST structural checks. It is not a formal verification tool or full symbolic execution solver and may produce false positives or miss complex interprocedural control flow vulnerabilities.
 - **Performance on very large or macro-heavy codebases is not yet optimized.** Function/variable extraction is currently regex-based (`O(n)` per file but with a real constant-factor cost), and the `pycparser` cross-check adds further parse time on top of that. On pathological inputs (e.g. thousands of small functions in one file) total scan time can be significant. Use `-j/--jobs` to parallelize across files in the meantime; a follow-up pass on the extraction/parse hot path is planned.
 - **AST-tagged rules degrade gracefully when `pycparser` can't parse a file** (see "AST Engine Notes" above) -- the report surfaces each file's exact AST `parse_tier` (`pcpp+pycparser`, `directive-stripped`, or `regex-fallback`) in `file_summaries`, and CI pipelines can enforce non-degraded AST analysis using `--warn-on-fallback`.
