@@ -255,6 +255,9 @@ def _detect_header_guard(content: str) -> Optional[str]:
             body = line.lstrip('#').strip()
             if re.match(r'^(?:if|ifdef|ifndef)\b', body):
                 depth += 1
+            elif re.match(r'^(?:elif|else)\b', body):
+                if depth == 1:
+                    return None
             elif re.match(r'^endif\b', body):
                 depth -= 1
                 if depth == 0 and idx != len(lines) - 1:

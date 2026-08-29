@@ -618,9 +618,11 @@ class MissingInclusionGuardRule(BaseRule):
             return issues
 
         from ..includes import _has_pragma_once, _detect_header_guard
+        from ..ast_analyzer import resolve_preprocessor_conditionals
 
         # 1. Check for `#pragma once` (must be checked against clean_source to ignore inactive blocks)
-        if _has_pragma_once(ast_ctx.clean_source):
+        active_source = resolve_preprocessor_conditionals(ast_ctx.clean_source)
+        if _has_pragma_once(active_source):
             return issues
 
         # 2. Check for traditional #ifndef / #define guard
