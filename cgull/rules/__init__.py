@@ -37,6 +37,7 @@ from .crypto_and_safety import (
     ToctouFileAccessRule,
 )
 from .types_and_arrays import (
+    PointerSubtractionSizeRule,
     VariableLengthArraysRule,
     ArrayIndexOutOfBoundsRule,
     ArithmeticIntegerOverflowRule,
@@ -70,6 +71,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     NonConstantTimeMemoryComparisonRule,
     ArithmeticIntegerOverflowRule,
     DivisionByZeroRule,
+    PointerSubtractionSizeRule,
     ArrayIndexOutOfBoundsRule,
     SizeofOnPointerRule,
     UnsafeSensitiveMemoryClearingRule,
