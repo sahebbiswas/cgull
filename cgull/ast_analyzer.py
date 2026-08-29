@@ -1600,6 +1600,18 @@ class CFGNode:
     next_nodes: List["CFGNode"] = field(default_factory=list)
 
 
+def _map_line(exp_line: int, line_map: Optional[Dict[int, Any]]) -> int:
+    if line_map and exp_line in line_map:
+        src_loc = line_map[exp_line]
+        if isinstance(src_loc, int):
+            return src_loc
+        if hasattr(src_loc, "line_number"):
+            return src_loc.line_number
+        if hasattr(src_loc, "line"):
+            return src_loc.line
+    return exp_line
+
+
 @dataclass
 class CFunction:
     name: str
@@ -1616,6 +1628,8 @@ class CFunction:
     has_assertions: bool = False
     cfg_nodes: List[CFGNode] = field(default_factory=list)
     body_start_line: int = 0
+    start_line_exp: int = 0
+    end_line_exp: int = 0
 
 
 @dataclass
@@ -1800,6 +1814,7 @@ class CASTContext:
     unsigned_typedefs: Set[str] = field(default_factory=set)
     struct_defs: Dict[str, StructDef] = field(default_factory=dict)
     typedef_shapes: Dict[str, TypedefShape] = field(default_factory=dict)
+    line_map: Optional[Dict[int, Any]] = None
 
     def _clean_and_resolve_type_string(self, type_str: str) -> Optional[StructDef]:
         if not type_str or not isinstance(type_str, str):
@@ -2426,12 +2441,13 @@ class _ASTFunctionAnalyzer:
     function calls, dataflow events, and CFG nodes.
     """
 
-    def __init__(self, owning_fn: CFunction, prelude_offset: int, clean_lines: List[str], custom_typedefs: Optional[Set[str]] = None, typedef_shapes: Optional[Dict[str, TypedefShape]] = None):
+    def __init__(self, owning_fn: CFunction, prelude_offset: int, clean_lines: List[str], custom_typedefs: Optional[Set[str]] = None, typedef_shapes: Optional[Dict[str, TypedefShape]] = None, line_map: Optional[Dict[int, Any]] = None):
         self.owning_fn = owning_fn
         self.prelude_offset = prelude_offset
         self.clean_lines = clean_lines
         self.custom_typedefs = custom_typedefs
         self.typedef_shapes = typedef_shapes or {}
+        self.line_map = line_map
         self.node_counter = 0
         self.block_counter = 0
         self.scope_stack: List[int] = [0]
@@ -2469,7 +2485,8 @@ class _ASTFunctionAnalyzer:
                 prev_target = self.current_target_var
                 if node.name and type(node.type).__name__ != "FuncDecl":
                     self.current_target_var = node.name
-                    line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                    exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                    line_no = _map_line(exp_line, self.outer.line_map)
                     tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(node.type, self.outer.custom_typedefs)
                     shape = resolve_typedef_shape(tname, self.outer.typedef_shapes) if hasattr(self.outer, "typedef_shapes") and self.outer.typedef_shapes else None
                     v_is_array = is_arr or (shape.is_array if shape else False)
@@ -2525,7 +2542,8 @@ class _ASTFunctionAnalyzer:
 
             def visit_Assignment(self, node):
                 prev_target = self.current_target_var
-                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                line_no = _map_line(exp_line, self.outer.line_map)
                 lval_ids = _extract_identifiers_from_ast(node.lvalue)
                 rval_ids = _extract_read_vars_from_ast(node.rvalue)
                 target = list(lval_ids)[0] if lval_ids else None
@@ -2566,7 +2584,8 @@ class _ASTFunctionAnalyzer:
                 self.current_target_var = prev_target
 
             def visit_Cast(self, node):
-                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                line_no = _map_line(exp_line, self.outer.line_map)
                 read_ids = _extract_read_vars_from_ast(node.expr)
                 for v in read_ids:
                     target_v = self.outer.resolve_var(v)
@@ -2581,7 +2600,8 @@ class _ASTFunctionAnalyzer:
                 self.current_target_var = prev_target
 
             def visit_UnaryOp(self, node):
-                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                line_no = _map_line(exp_line, self.outer.line_map)
                 if node.op == '&':
                     addr_ids = _extract_read_vars_from_ast(node.expr)
                     for v in addr_ids:
@@ -2616,7 +2636,8 @@ class _ASTFunctionAnalyzer:
                     self.outer.owning_fn.calls.append(("sizeof", line_no, expr_str, self.current_target_var))
 
             def visit_FuncCall(self, node):
-                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                line_no = _map_line(exp_line, self.outer.line_map)
                 callee = _format_pycparser_expr(node.name)
                 raw_args = _format_pycparser_expr(node.args) if node.args else ""
                 if callee not in ('if', 'for', 'while', 'switch', 'sizeof', 'typeof', '__attribute__'):
@@ -2668,7 +2689,8 @@ class _ASTFunctionAnalyzer:
                 self.generic_visit(node)
 
             def visit_If(self, node):
-                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                line_no = _map_line(exp_line, self.outer.line_map)
                 cond_ids = _extract_read_vars_from_ast(node.cond)
                 null_checked_set = set(cond_ids)
                 for v in null_checked_set:
@@ -2693,7 +2715,8 @@ class _ASTFunctionAnalyzer:
                 self.generic_visit(node)
 
             def visit_While(self, node):
-                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                line_no = _map_line(exp_line, self.outer.line_map)
                 cond_ids = _extract_read_vars_from_ast(node.cond)
                 null_checked_set = set(cond_ids)
                 for v in null_checked_set:
@@ -2724,7 +2747,8 @@ class _ASTFunctionAnalyzer:
                 self.outer.block_parents[block_id] = parent_id
                 self.outer.scope_stack.append(block_id)
 
-                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                line_no = _map_line(exp_line, self.outer.line_map)
                 cond_ids = _extract_read_vars_from_ast(node.cond) if node.cond else set()
                 for v in cond_ids:
                     target_v = self.outer.resolve_var(v)
@@ -2744,7 +2768,8 @@ class _ASTFunctionAnalyzer:
                 self.outer.scope_stack.pop()
 
             def visit_Return(self, node):
-                line_no = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line
+                exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
+                line_no = _map_line(exp_line, self.outer.line_map)
                 ret_expr_str = _format_pycparser_expr(node.expr)
                 if ret_expr_str in ("0", "1", "true", "false"):
                     if any(term in self.outer.owning_fn.name.lower() for term in ['auth', 'verify', 'check_password', 'validate_token', 'boot_secure', 'crypto', 'admin', 'login', 'permission']):
@@ -2785,7 +2810,12 @@ class CASTParser:
     def __init__(self):
         pass
 
-    def parse(self, source_code: str, defined_syms: Optional[Any] = None) -> CASTContext:
+    def parse(
+        self,
+        source_code: str,
+        defined_syms: Optional[Any] = None,
+        line_map: Optional[Dict[int, Any]] = None,
+    ) -> CASTContext:
         lines = source_code.splitlines()
         clean_lines, clean_code = strip_comments_keep_lines(source_code)
 
@@ -2804,12 +2834,12 @@ class CASTParser:
 
         if has_pycparser and pycparser_ast is not None:
             struct_defs = self._extract_struct_defs_from_ast(pycparser_ast, clean_code)
-            functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code, unsigned_typedefs)
+            functions, global_vars = self._build_model_from_ast(pycparser_ast, clean_lines, clean_code, unsigned_typedefs, line_map=line_map)
             parser_status = ParserStatus.PYCPARSER_SUCCESS.value
         else:
             struct_defs = self._extract_struct_defs_from_regex(clean_code)
-            functions = self._extract_functions(clean_lines, clean_code, unsigned_typedefs)
-            global_vars = self._extract_global_vars(clean_lines, functions, unsigned_typedefs)
+            functions = self._extract_functions(clean_lines, clean_code, unsigned_typedefs, line_map=line_map)
+            global_vars = self._extract_global_vars(clean_lines, functions, unsigned_typedefs, line_map=line_map)
             parser_status = ParserStatus.FALLBACK_PARSER.value
             parse_tier = ParseTier.REGEX_FALLBACK.value
 
@@ -2829,6 +2859,7 @@ class CASTParser:
             unsigned_typedefs=unsigned_typedefs,
             struct_defs=struct_defs,
             typedef_shapes=typedef_shapes,
+            line_map=line_map,
         )
 
     def _extract_struct_defs_from_ast(self, pycparser_ast, clean_code: str) -> Dict[str, StructDef]:
@@ -3565,7 +3596,7 @@ class CASTParser:
             return None
 
     def _build_model_from_ast(
-        self, pycparser_ast, clean_lines: List[str], clean_code: str, custom_typedefs: Optional[Set[str]] = None
+        self, pycparser_ast, clean_lines: List[str], clean_code: str, custom_typedefs: Optional[Set[str]] = None, line_map: Optional[Dict[int, Any]] = None
     ) -> Tuple[List[CFunction], Dict[str, CVariable]]:
         """
         Builds the authoritative structural representation (functions, parameters,
@@ -3583,7 +3614,8 @@ class CASTParser:
                 if not is_sig and ext.name:
                     custom_typedefs.add(ext.name)
             elif isinstance(ext, c_ast.Decl) and type(ext.type).__name__ != "FuncDecl" and type(ext).__name__ != "Typedef":
-                line_no = (ext.coord.line - _PRELUDE_LINE_COUNT) if ext.coord else 1
+                exp_line = (ext.coord.line - _PRELUDE_LINE_COUNT) if ext.coord else 1
+                line_no = _map_line(exp_line, line_map)
                 tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(ext.type, custom_typedefs)
                 shape = resolve_typedef_shape(tname, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
                 v_is_array = is_arr or (shape.is_array if shape else False)
@@ -3605,7 +3637,8 @@ class CASTParser:
 
             elif isinstance(ext, c_ast.FuncDef):
                 fname = ext.decl.name
-                fn_start = (ext.decl.coord.line - _PRELUDE_LINE_COUNT) if ext.decl.coord else 1
+                fn_start_exp = (ext.decl.coord.line - _PRELUDE_LINE_COUNT) if ext.decl.coord else 1
+                fn_start = _map_line(fn_start_exp, line_map)
 
                 ret_t, _, _, _, _, _, _, _ = _format_pycparser_type(ext.decl.type.type, custom_typedefs)
 
@@ -3630,7 +3663,8 @@ class CASTParser:
                                 continue
                             p_name = getattr(param, "name", None) or ""
                             p_type, p_is_ptr, p_is_fp, _, _, _, _, p_is_arr = _format_pycparser_type(param.type, custom_typedefs)
-                            p_line = (param.coord.line - _PRELUDE_LINE_COUNT) if param.coord else fn_start
+                            p_line_exp = (param.coord.line - _PRELUDE_LINE_COUNT) if param.coord else fn_start_exp
+                            p_line = _map_line(p_line_exp, line_map)
                             p_shape = resolve_typedef_shape(p_type, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
                             p_is_array = p_is_arr or (p_shape.is_array if p_shape else False)
                             p_is_pointer = p_is_ptr or p_is_fp or (p_shape.is_pointer if p_shape else False)
@@ -3642,16 +3676,18 @@ class CASTParser:
                                 is_array=p_is_array,
                             ))
 
-                fn_end = _get_max_ast_line(ext.body, fn_start, _PRELUDE_LINE_COUNT)
+                fn_end_exp = _get_max_ast_line(ext.body, fn_start_exp, _PRELUDE_LINE_COUNT)
                 brace_count = 0
-                for l in range(fn_start, len(clean_lines) + 1):
+                for l in range(fn_start_exp, len(clean_lines) + 1):
                     line_str = clean_lines[l - 1]
                     brace_count += line_str.count("{") - line_str.count("}")
-                    if l >= fn_end and brace_count <= 0:
-                        fn_end = l
+                    if l >= fn_end_exp and brace_count <= 0:
+                        fn_end_exp = l
                         break
 
-                fn_body = "\n".join(clean_lines[fn_start: max(fn_start, fn_end - 1)]) if fn_start < fn_end else ""
+                fn_end = _map_line(fn_end_exp, line_map)
+                fn_body = "\n".join(clean_lines[fn_start_exp: max(fn_start_exp, fn_end_exp - 1)]) if fn_start_exp < fn_end_exp else ""
+                body_start_line = _map_line(fn_start_exp + 1 if fn_start_exp < fn_end_exp else fn_start_exp, line_map)
 
                 fn = CFunction(
                     name=fname,
@@ -3662,17 +3698,19 @@ class CASTParser:
                     body=fn_body,
                     has_void_param_list=has_void_param,
                     is_empty_param_list=is_empty_params,
-                    body_start_line=fn_start + 1 if fn_start < fn_end else fn_start,
+                    body_start_line=body_start_line,
+                    start_line_exp=fn_start_exp,
+                    end_line_exp=fn_end_exp,
                 )
 
                 if ext.body:
-                    _ASTFunctionAnalyzer(fn, _PRELUDE_LINE_COUNT, clean_lines, custom_typedefs, typedef_shapes=self.typedef_shapes).analyze(ext.body)
+                    _ASTFunctionAnalyzer(fn, _PRELUDE_LINE_COUNT, clean_lines, custom_typedefs, typedef_shapes=self.typedef_shapes, line_map=line_map).analyze(ext.body)
 
                 functions.append(fn)
 
         return functions, global_vars
 
-    def _extract_functions(self, lines: List[str], full_code: str, custom_typedefs: Optional[Set[str]] = None) -> List[CFunction]:
+    def _extract_functions(self, lines: List[str], full_code: str, custom_typedefs: Optional[Set[str]] = None, line_map: Optional[Dict[int, Any]] = None) -> List[CFunction]:
         functions: List[CFunction] = []
         # Pattern to match C function header: return_type func_name(params) {
         # e.g., int auth_user(char *user, const char *pass)
@@ -3683,7 +3721,8 @@ class CASTParser:
 
         for match in func_header_regex.finditer(full_code):
             start_pos = match.start()
-            start_line = full_code[:start_pos].count('\n') + 1
+            start_line_exp = full_code[:start_pos].count('\n') + 1
+            start_line = _map_line(start_line_exp, line_map)
 
             ret_type = match.group(1).strip()
             raw_name = match.group(2).strip()
@@ -3713,9 +3752,11 @@ class CASTParser:
                     brace_count -= 1
                 curr_pos += 1
 
-            end_line = full_code[:curr_pos].count('\n') + 1
+            end_line_exp = full_code[:curr_pos].count('\n') + 1
+            end_line = _map_line(end_line_exp, line_map)
             body = full_code[body_start_pos:curr_pos - 1]
-            body_start_line = full_code[:body_start_pos].count('\n') + 1
+            body_start_line_exp = full_code[:body_start_pos].count('\n') + 1
+            body_start_line = _map_line(body_start_line_exp, line_map)
 
             # Parse parameters
             params: List[CParameter] = []
@@ -3760,17 +3801,19 @@ class CASTParser:
                 has_void_param_list=has_void_param,
                 is_empty_param_list=is_empty_params,
                 body_start_line=body_start_line,
+                start_line_exp=start_line_exp,
+                end_line_exp=end_line_exp,
             )
 
             # Analyze function body variables & calls
-            self._analyze_function_body(fn, lines, custom_typedefs)
+            self._analyze_function_body(fn, lines, custom_typedefs, line_map=line_map)
             functions.append(fn)
 
         return functions
 
-    def _analyze_function_body(self, fn: CFunction, all_lines: List[str], custom_typedefs: Optional[Set[str]] = None) -> None:
+    def _analyze_function_body(self, fn: CFunction, all_lines: List[str], custom_typedefs: Optional[Set[str]] = None, line_map: Optional[Dict[int, Any]] = None) -> None:
         body_lines = fn.body.splitlines()
-        fn_start = fn.start_line
+        fn_start_exp = fn.start_line_exp or fn.start_line
 
         # Detect assertions
         if "assert(" in fn.body or "ASSERT(" in fn.body or "assert_param(" in fn.body:
@@ -3818,7 +3861,8 @@ class CASTParser:
                     args = fn.body[args_start + 1 : j]
                     # Calc line number
                     prefix = fn.body[:m.start()]
-                    line_no = fn_start + prefix.count('\n')
+                    exp_line = fn_start_exp + prefix.count('\n')
+                    line_no = _map_line(exp_line, line_map)
 
                     target_var = None
                     stmt_prefix_match = re.search(r'(?:^|[;{}])\s*([^;{}]+)\s*=\s*[^;{}]*$', prefix)
@@ -3847,7 +3891,8 @@ class CASTParser:
         block_parents = {}
 
         for i, line in enumerate(body_lines):
-            line_no = fn_start + i
+            exp_line = fn_start_exp + i
+            line_no = _map_line(exp_line, line_map)
             masked_line = mask_string_and_char_literals(line)
             m = var_decl_regex.match(line)
             m_parr = ptr_arr_decl_regex.match(line) if not m else None
@@ -3909,7 +3954,8 @@ class CASTParser:
         # Track variable life cycles (free, null-checks, reads, assignments, address-taking)
         assign_regex = re.compile(r'^\s*([a-zA-Z_]\w*)\s*(?:\[[^\]]*\]|\.\w+|->\w+)*\s*=(?!=)')
         for i, line in enumerate(body_lines):
-            line_no = fn_start + i
+            exp_line = fn_start_exp + i
+            line_no = _map_line(exp_line, line_map)
             m_assign = assign_regex.match(line)
             if m_assign:
                 v_name = m_assign.group(1)
@@ -3973,20 +4019,23 @@ class CASTParser:
                     if is_read and line_no not in c_var.read_lines:
                         c_var.read_lines.append(line_no)
 
-    def _extract_global_vars(self, lines: List[str], functions: List[CFunction], custom_typedefs: Optional[Set[str]] = None) -> Dict[str, CVariable]:
+    def _extract_global_vars(self, lines: List[str], functions: List[CFunction], custom_typedefs: Optional[Set[str]] = None, line_map: Optional[Dict[int, Any]] = None) -> Dict[str, CVariable]:
         global_vars: Dict[str, CVariable] = {}
         func_line_ranges = set()
         for fn in functions:
-            for l in range(fn.start_line, fn.end_line + 1):
+            start_exp = fn.start_line_exp or fn.start_line
+            end_exp = fn.end_line_exp or fn.end_line
+            for l in range(start_exp, end_exp + 1):
                 func_line_ranges.add(l)
 
         var_decl_regex = re.compile(
             r'^[ \t]*((?:volatile\s+|static\s+|const\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?)\s*(\w+)(?:\[([^\]]*)\])?(?:\s*=\s*([^;]+))?;'
         )
 
-        for line_no, line in enumerate(lines, 1):
-            if line_no in func_line_ranges:
+        for line_no_exp, line in enumerate(lines, 1):
+            if line_no_exp in func_line_ranges:
                 continue
+            line_no = _map_line(line_no_exp, line_map)
             m = var_decl_regex.match(line)
             if m:
                 type_prefix = m.group(1).strip()

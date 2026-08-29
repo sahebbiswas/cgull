@@ -502,7 +502,7 @@ class DeadStoresRule(BaseRule):
             if getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None:
                 funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
                 if funcdef is not None:
-                    cfg = build_cfg(funcdef, summaries=summaries)
+                    cfg = build_cfg(funcdef, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
 
             if cfg is not None and cfg.nodes:
                 # AST/CFG path reachability check
