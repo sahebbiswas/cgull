@@ -1954,6 +1954,72 @@ class CASTContext:
 
         return None
 
+    def infer_expr_type(self, node: Any, fn: Optional[CFunction] = None) -> Optional[str]:
+        """
+        Infers the C type string of a pycparser AST expression node,
+        resolving struct/union members and array indices.
+        """
+        if node is None:
+            return None
+            
+        node_type = type(node).__name__
+        if node_type == 'ID':
+            var_name = node.name
+            if fn and var_name in fn.variables:
+                return fn.variables[var_name].type_name
+            if fn:
+                for p in fn.parameters:
+                    if p.name == var_name:
+                        return p.type_name
+            if var_name in self.global_variables:
+                return self.global_variables[var_name].type_name
+            return None
+        elif node_type == 'Cast':
+            from .ast_analyzer import _format_pycparser_expr
+            return _format_pycparser_expr(node.to_type)
+        elif node_type == 'UnaryOp':
+            if node.op == '&':
+                sub_t = self.infer_expr_type(node.expr, fn)
+                return f"{sub_t} *" if sub_t else "void *"
+            elif node.op == '*':
+                sub_t = self.infer_expr_type(node.expr, fn)
+                if sub_t:
+                    sub_t = sub_t.strip()
+                    if sub_t.endswith('*'):
+                        return sub_t[:-1].strip()
+            return None
+        elif node_type == 'ArrayRef':
+            base_t = self.infer_expr_type(node.name, fn)
+            if base_t:
+                base_t = base_t.strip()
+                if base_t.endswith(']'):
+                    return re.sub(r'\[[^\]]*\]$', '', base_t).strip()
+                elif base_t.endswith('*'):
+                    return base_t[:-1].strip()
+                else:
+                    if base_t in self.typedef_shapes:
+                        shape = resolve_typedef_shape(base_t, self.typedef_shapes)
+                        if shape.is_array or shape.is_pointer:
+                            return shape.target
+            return None
+        elif node_type == 'StructRef':
+            base_t = self.infer_expr_type(node.name, fn)
+            if not base_t:
+                return None
+            struct_def = self.resolve_struct_def(base_t)
+            if struct_def:
+                field_name = getattr(node.field, 'name', None)
+                if field_name and field_name in struct_def.fields:
+                    f_info = struct_def.fields[field_name]
+                    base_type = f_info.type_name
+                    if getattr(f_info, 'is_pointer', False):
+                        return f"{base_type} *"
+                    if getattr(f_info, 'is_array', False):
+                        dim = f_info.array_dims[0] if getattr(f_info, 'array_dims', None) else (f_info.array_size if getattr(f_info, 'array_size', None) else '')
+                        return f"{base_type} [{dim}]"
+                    return base_type
+            return None
+        return None
 
 def split_c_statements_at_outer_depth(code_block: str) -> List[str]:
     """

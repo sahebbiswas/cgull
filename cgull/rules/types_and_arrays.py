@@ -1498,7 +1498,16 @@ class PointerSubtractionSizeRule(BaseRule):
 
         def is_byte_ptr(type_name: str, name: str = "") -> bool:
             import re
-            tn = type_name.lower()
+            clean_tag = re.sub(r'^(?:const|volatile|struct|union)\s+', '', type_name.strip()).split('[')[0].replace('*', '').strip()
+            if clean_tag and clean_tag in ast_ctx.typedef_shapes:
+                from ..ast_analyzer import resolve_typedef_shape
+                shape = resolve_typedef_shape(clean_tag, ast_ctx.typedef_shapes)
+                tn = type_name.replace(clean_tag, shape.target).lower()
+                if shape.is_pointer:
+                    tn += "*"
+            else:
+                tn = type_name.lower()
+                
             if tn.count('*') + name.count('*') > 1:
                 return False
             for byte_t in ('char', 'int8_t', 'uint8_t', 'byte'):
@@ -1522,43 +1531,66 @@ class PointerSubtractionSizeRule(BaseRule):
         }
 
         def _is_unscaled_pointer_subtraction(node, fn) -> bool:
-            if isinstance(node, c_ast.BinaryOp) and node.op == '-':
-                def is_pointer_type(n) -> bool:
-                    if isinstance(n, c_ast.ID):
-                        var_name = n.name
-                        if fn and var_name in fn.variables:
-                            var_obj = fn.variables[var_name]
-                            if var_obj.is_pointer or getattr(var_obj, "is_array", False) or '*' in var_obj.type_name or '*' in var_obj.name:
-                                if not is_byte_ptr(var_obj.type_name, var_obj.name):
-                                    return True
-                        if var_name in ast_ctx.global_variables:
-                            var_obj = ast_ctx.global_variables[var_name]
-                            if var_obj.is_pointer or getattr(var_obj, "is_array", False) or '*' in var_obj.type_name or '*' in var_obj.name:
-                                if not is_byte_ptr(var_obj.type_name, var_obj.name):
-                                    return True
-                        if fn:
-                            for param in fn.parameters:
-                                if param.name == var_name and (param.is_pointer or getattr(param, "is_array", False) or '*' in param.type_name or '*' in param.name or '[' in param.type_name):
-                                    if not is_byte_ptr(param.type_name, param.name):
-                                        return True
-                    elif isinstance(n, c_ast.Cast):
-                        type_str = _format_pycparser_expr(n.to_type)
-                        if '*' in type_str:
-                            if not is_byte_ptr(type_str):
+            def is_pointer_type(n) -> bool:
+                type_str = ast_ctx.infer_expr_type(n, fn)
+                if type_str:
+                    if '*' in type_str or '[' in type_str:
+                        if not is_byte_ptr(type_str):
+                            return True
+                    
+                    clean_tag = re.sub(r'^(?:const|volatile|struct|union)\s+', '', type_str.strip()).split('[')[0].strip()
+                    if clean_tag in ast_ctx.typedef_shapes:
+                        from ..ast_analyzer import resolve_typedef_shape
+                        shape = resolve_typedef_shape(clean_tag, ast_ctx.typedef_shapes)
+                        if shape.is_pointer or shape.is_array:
+                            if not is_byte_ptr(shape.target + "*"):
                                 return True
-                    elif isinstance(n, c_ast.UnaryOp) and n.op == '&':
-                         type_str = _format_pycparser_expr(n)
-                         if not is_byte_ptr("void*", type_str):
-                             return True
                     return False
 
-                left_is_ptr = is_pointer_type(node.left)
-                right_is_ptr = is_pointer_type(node.right)
+                if isinstance(n, c_ast.ID):
+                    var_name = n.name
+                    if fn and var_name in fn.variables:
+                        var_obj = fn.variables[var_name]
+                        if var_obj.is_pointer or getattr(var_obj, "is_array", False) or '*' in var_obj.type_name or '*' in var_obj.name:
+                            if not is_byte_ptr(var_obj.type_name, var_obj.name):
+                                return True
+                    elif fn and any(p.name == var_name for p in fn.parameters):
+                        for param in fn.parameters:
+                            if param.name == var_name:
+                                if param.is_pointer or getattr(param, "is_array", False) or '*' in param.type_name or '*' in param.name or '[' in param.type_name:
+                                    if not is_byte_ptr(param.type_name, param.name):
+                                        return True
+                                break
+                    elif var_name in ast_ctx.global_variables:
+                        var_obj = ast_ctx.global_variables[var_name]
+                        if var_obj.is_pointer or getattr(var_obj, "is_array", False) or '*' in var_obj.type_name or '*' in var_obj.name:
+                            if not is_byte_ptr(var_obj.type_name, var_obj.name):
+                                return True
+                elif isinstance(n, c_ast.Cast):
+                    type_str = _format_pycparser_expr(n.to_type)
+                    if '*' in type_str:
+                        if not is_byte_ptr(type_str):
+                            return True
+                return False
 
-                if left_is_ptr and right_is_ptr:
-                    return True
+            if isinstance(node, c_ast.BinaryOp):
+                if node.op == '-':
+                    left_is_ptr = is_pointer_type(node.left)
+                    right_is_ptr = is_pointer_type(node.right)
+                    if left_is_ptr and right_is_ptr:
+                        return True
+                
+                if node.op == '*':
+                    def is_sizeof(n):
+                        return isinstance(n, c_ast.UnaryOp) and n.op == 'sizeof'
+                    if is_sizeof(node.left) or is_sizeof(node.right):
+                        return False
+
+                return _is_unscaled_pointer_subtraction(node.left, fn) or _is_unscaled_pointer_subtraction(node.right, fn)
+
             elif isinstance(node, c_ast.Cast):
                  return _is_unscaled_pointer_subtraction(node.expr, fn)
+            
             return False
 
         for fn in ast_ctx.functions:
