@@ -461,34 +461,8 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
 
 def _split_fn_args(raw_args: str) -> List[str]:
     """Split comma-separated arguments at top paren/quote depth."""
-    args = []
-    curr = []
-    paren = 0
-    in_quote = False
-    quote_char = None
-    for i, c in enumerate(raw_args):
-        if in_quote:
-            curr.append(c)
-            if c == quote_char and (i == 0 or raw_args[i - 1] != '\\'):
-                in_quote = False
-        elif c in ('"', "'"):
-            in_quote = True
-            quote_char = c
-            curr.append(c)
-        elif c in ('(', '[', '{'):
-            paren += 1
-            curr.append(c)
-        elif c in (')', ']', '}'):
-            paren -= 1
-            curr.append(c)
-        elif c == ',' and paren == 0:
-            args.append("".join(curr).strip())
-            curr = []
-        else:
-            curr.append(c)
-    if curr:
-        args.append("".join(curr).strip())
-    return args
+    from ..utils import split_call_args
+    return split_call_args(raw_args)
 
 
 def _clean_path_arg(expr: str) -> str:
@@ -505,36 +479,8 @@ def _extract_balanced_parens(text: str, start_paren_pos: int) -> Tuple[Optional[
     Given text and position of opening '(', returns (inside_args_str, closing_paren_pos).
     Handles string literals, character literals, escape sequences, and nested parens.
     """
-    if start_paren_pos >= len(text) or text[start_paren_pos] != '(':
-        return None, start_paren_pos
-
-    paren_depth = 0
-    in_string = False
-    in_char = False
-    escape = False
-    j = start_paren_pos
-    n = len(text)
-
-    while j < n:
-        c = text[j]
-        if escape:
-            escape = False
-        elif c == '\\':
-            escape = True
-        elif c == '"' and not in_char:
-            in_string = not in_string
-        elif c == "'" and not in_string:
-            in_char = not in_char
-        elif not in_string and not in_char:
-            if c == '(':
-                paren_depth += 1
-            elif c == ')':
-                paren_depth -= 1
-                if paren_depth == 0:
-                    return text[start_paren_pos + 1 : j], j
-        j += 1
-
-    return None, j
+    from ..utils import extract_balanced_parens
+    return extract_balanced_parens(text, start_paren_pos)
 
 
 def _find_else_branch_calls(pycparser_ast) -> Set[Tuple[int, int]]:

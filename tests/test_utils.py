@@ -10,6 +10,9 @@ from cgull.utils import (
     strip_comments_keep_lines,
     mask_string_and_char_literals,
     is_in_string_or_char_literal,
+    extract_balanced_parens,
+    split_call_args,
+    extract_call_args,
     SuppressionMap,
     ProgressIndicator,
 )
@@ -163,6 +166,87 @@ class TestProgressIndicator(unittest.TestCase):
         progress = ProgressIndicator(stream=stream)
         progress.update(0, 0, "")
         self.assertIn("100% (0/0 files)", stream.getvalue())
+
+
+class TestExtractBalancedParens(unittest.TestCase):
+    def test_simple_parens(self):
+        inner, close_idx = extract_balanced_parens("foo(a, b)", 3)
+        self.assertEqual(inner, "a, b")
+        self.assertEqual(close_idx, 8)
+
+    def test_nested_parens(self):
+        s = "memset(buf, 0, sizeof(buf))"
+        inner, close_idx = extract_balanced_parens(s, 6)
+        self.assertEqual(inner, "buf, 0, sizeof(buf)")
+        self.assertEqual(close_idx, len(s) - 1)
+
+    def test_parens_in_strings_and_chars(self):
+        s = 'func("nested ) paren", \'(\', (x + 1))'
+        inner, close_idx = extract_balanced_parens(s, 4)
+        self.assertEqual(inner, '"nested ) paren", \'(\', (x + 1)')
+        self.assertEqual(close_idx, len(s) - 1)
+
+    def test_escaped_quotes_inside_string(self):
+        s = 'func("escaped \\" quote", 42)'
+        inner, close_idx = extract_balanced_parens(s, 4)
+        self.assertEqual(inner, '"escaped \\" quote", 42')
+        self.assertEqual(close_idx, len(s) - 1)
+
+    def test_unclosed_parens_returns_none(self):
+        inner, _ = extract_balanced_parens("func(a, b", 4)
+        self.assertIsNone(inner)
+
+    def test_invalid_start_pos_returns_none(self):
+        inner, _ = extract_balanced_parens("func(a, b)", 0)
+        self.assertIsNone(inner)
+        inner, _ = extract_balanced_parens("func(a, b)", 99)
+        self.assertIsNone(inner)
+
+
+class TestSplitCallArgs(unittest.TestCase):
+    def test_simple_args(self):
+        self.assertEqual(split_call_args("a, b, c"), ["a", "b", "c"])
+
+    def test_nested_expressions(self):
+        self.assertEqual(
+            split_call_args("secret_key, 0, sizeof(secret_key)"),
+            ["secret_key", "0", "sizeof(secret_key)"]
+        )
+
+    def test_nested_brackets_and_braces(self):
+        self.assertEqual(
+            split_call_args("arr[1, 2], {3, 4}, (5, 6)"),
+            ["arr[1, 2]", "{3, 4}", "(5, 6)"]
+        )
+
+    def test_commas_in_string_literals(self):
+        self.assertEqual(
+            split_call_args('"a, b", 10, "c, d"'),
+            ['"a, b"', "10", '"c, d"']
+        )
+
+    def test_empty_string(self):
+        self.assertEqual(split_call_args(""), [])
+        self.assertEqual(split_call_args("   "), [])
+
+
+class TestExtractCallArgs(unittest.TestCase):
+    def test_extract_call_args_nested_sizeof(self):
+        s = "memset(secret_key, 0, sizeof(secret_key));"
+        args = extract_call_args(s, 6)
+        self.assertEqual(args, ("secret_key", "0", "sizeof(secret_key)"))
+
+    def test_extract_call_args_empty(self):
+        args = extract_call_args("init()", 4)
+        self.assertEqual(args, ())
+
+    def test_extract_call_args_single(self):
+        args = extract_call_args("free(ptr)", 4)
+        self.assertEqual(args, ("ptr",))
+
+    def test_extract_call_args_unclosed(self):
+        args = extract_call_args("memset(a, b", 6)
+        self.assertIsNone(args)
 
 
 if __name__ == "__main__":

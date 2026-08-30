@@ -516,6 +516,77 @@ class TestUnsafeSensitiveMemoryClearing(unittest.TestCase):
         code = "int process_data(void) {\n    char secret_key[128];\n    memset(secret_key, 0, sizeof(secret_key));\n    return 0;\n}"
         issues = scan_with_rule("CGULL-008", code)
         self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].auto_fix_replacement, "explicit_bzero(secret_key, sizeof(secret_key));")
+
+    def test_auto_fix_replacement_balanced_parens_regex_scan_line(self):
+        rule = get_rule_by_id("CGULL-008")
+        line = "memset(secret_key, 0, sizeof(secret_key));"
+        source_lines = [line, "return;"]
+        issues = rule.scan_line("test.c", 1, line, "\n".join(source_lines), source_lines)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].auto_fix_replacement, "explicit_bzero(secret_key, sizeof(secret_key));")
+
+    def test_regex_engine_memset_sizeof_auto_fix_balanced(self):
+        code = "void f(void) {\n    char secret_key[32];\n    memset(secret_key, 0, sizeof(secret_key));\n    return;\n}"
+        rule = get_rule_by_id("CGULL-008")
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.REGEX)
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].auto_fix_replacement, "explicit_bzero(secret_key, sizeof(secret_key));")
+
+    def test_complex_destination_expressions_preserved_in_auto_fix(self):
+        code = "void f(struct Ctx *ctx) {\n    memset(ctx->session_key, 0, sizeof(ctx->session_key));\n    return;\n}"
+        issues = scan_with_rule("CGULL-008", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].auto_fix_replacement, "explicit_bzero(ctx->session_key, sizeof(ctx->session_key));")
+
+        code2 = "void f(struct Session *sess) {\n    memset(&sess->keys[0].secret, 0, 32);\n    return;\n}"
+        issues2 = scan_with_rule("CGULL-008", code2)
+        self.assertEqual(len(issues2), 1)
+        self.assertEqual(issues2[0].auto_fix_replacement, "explicit_bzero(&sess->keys[0].secret, 32);")
+
+    def test_same_line_surrounding_statements_preserved_in_auto_fix(self):
+        rule = get_rule_by_id("CGULL-008")
+        line = "    do_first(); memset(secret_key, 0, sizeof(secret_key)); do_last();"
+        source_lines = [line, "    return;"]
+        issues = rule.scan_line("test.c", 1, line, "\n".join(source_lines), source_lines)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(
+            issues[0].auto_fix_replacement,
+            "do_first(); explicit_bzero(secret_key, sizeof(secret_key)); do_last();"
+        )
+        self.assertEqual(
+            issues[0].code_snippet,
+            "do_first(); memset(secret_key, 0, sizeof(secret_key)); do_last();"
+        )
+
+    def test_multiple_same_line_matches_enumerated_and_isolated(self):
+        rule = get_rule_by_id("CGULL-008")
+        line = "memset(key1, 0, sizeof(key1)); memset(key2, 0, sizeof(key2));"
+        source_lines = [line, "return;"]
+        issues = rule.scan_line("test.c", 1, line, "\n".join(source_lines), source_lines)
+        self.assertEqual(len(issues), 2)
+        self.assertEqual(
+            issues[0].auto_fix_replacement,
+            "explicit_bzero(key1, sizeof(key1)); memset(key2, 0, sizeof(key2));"
+        )
+        self.assertEqual(
+            issues[1].auto_fix_replacement,
+            "memset(key1, 0, sizeof(key1)); explicit_bzero(key2, sizeof(key2));"
+        )
+
+    def test_rejects_non_three_argument_memset_calls(self):
+        code_2args = "void f(void) {\n    char secret_key[32];\n    memset(secret_key, 0);\n    return;\n}"
+        issues_2args = scan_with_rule("CGULL-008", code_2args)
+        self.assertEqual(len(issues_2args), 0)
+
+        code_4args = "void f(void) {\n    char secret_key[32];\n    memset(secret_key, 0, 32, 0);\n    return;\n}"
+        issues_4args = scan_with_rule("CGULL-008", code_4args)
+        self.assertEqual(len(issues_4args), 0)
+
+        code_1arg = "void f(void) {\n    char secret_key[32];\n    memset(secret_key);\n    return;\n}"
+        issues_1arg = scan_with_rule("CGULL-008", code_1arg)
+        self.assertEqual(len(issues_1arg), 0)
 
 
 class TestStrippingVolatileQualifiers(unittest.TestCase):

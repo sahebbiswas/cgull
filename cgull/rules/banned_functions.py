@@ -64,50 +64,8 @@ class BannedFunctionsRule(BaseRule):
         Extracts top-level arguments from a function call like strcpy(dest, src) or strncpy(dest, src, n).
         start_offset should be the position of '(' in line_content.
         """
-        paren_depth = 1
-        in_quote = False
-        quote_char = None
-        escape = False
-        args = []
-        cur_arg = []
-
-        i = start_offset + 1
-        n = len(line_content)
-        while i < n:
-            c = line_content[i]
-            if escape:
-                cur_arg.append(c)
-                escape = False
-            elif c == '\\':
-                cur_arg.append(c)
-                escape = True
-            elif in_quote:
-                cur_arg.append(c)
-                if c == quote_char:
-                    in_quote = False
-            elif c in ('"', "'"):
-                in_quote = True
-                quote_char = c
-                cur_arg.append(c)
-            elif c == '(':
-                paren_depth += 1
-                cur_arg.append(c)
-            elif c == ')':
-                paren_depth -= 1
-                if paren_depth == 0:
-                    args.append("".join(cur_arg).strip())
-                    break
-                cur_arg.append(c)
-            elif c == ',' and paren_depth == 1:
-                args.append("".join(cur_arg).strip())
-                cur_arg = []
-            else:
-                cur_arg.append(c)
-            i += 1
-
-        if paren_depth == 0 and len(args) >= 1:
-            return tuple(args)
-        return None
+        from ..utils import extract_call_args
+        return extract_call_args(line_content, start_offset)
 
     @staticmethod
     def _is_byte_type(type_str: str) -> bool:
