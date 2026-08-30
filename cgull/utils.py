@@ -11,7 +11,7 @@ import hashlib
 import re
 import sys
 import logging
-from typing import Dict, List, Optional, Set, TextIO, Tuple
+from typing import Dict, List, Optional, Set, TextIO, Tuple, Any
 
 logger = logging.getLogger(__name__)
 
@@ -416,14 +416,31 @@ def compute_issue_fingerprint(rule_id: str, relative_file_path: str, code_snippe
     return hashlib.sha256(basis.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
-def compute_issue_fingerprint_tu(rule_id: str, original_file_path: str, original_line: int, code_snippet: str) -> str:
-    """TU-aware fingerprint including original file path and line.
-    Ensures duplicate findings from the same header across multiple TUs collapse.
+def compute_issue_fingerprint_tu(
+    rule_id: str,
+    original_file_path: str,
+    *args: Any,
+    **kwargs: Any,
+) -> str:
     """
-    normalized_path = original_file_path.replace("\\", "/")
-    normalized_snippet = _WHITESPACE_RUN_RE.sub(" ", code_snippet.strip())
-    basis = f"{rule_id}|{normalized_path}|{original_line}|{normalized_snippet}"
-    return hashlib.sha256(basis.encode("utf-8", errors="replace")).hexdigest()[:16]
+    Computes a stable TU-aware fingerprint retaining canonical origin path,
+    rule ID, and normalized snippet semantics without hashing the line number
+    to ensure stability under unrelated edits earlier in the file.
+
+    Accepts both `(rule_id, canonical_path, code_snippet)` and legacy
+    `(rule_id, canonical_path, original_line, code_snippet)`.
+    """
+    code_snippet = ""
+    if "code_snippet" in kwargs:
+        code_snippet = kwargs["code_snippet"]
+    elif len(args) == 2:
+        code_snippet = str(args[1])
+    elif len(args) == 1:
+        code_snippet = str(args[0])
+    elif "snippet" in kwargs:
+        code_snippet = kwargs["snippet"]
+
+    return compute_issue_fingerprint(rule_id, original_file_path, code_snippet)
 
 
 class ProgressIndicator:

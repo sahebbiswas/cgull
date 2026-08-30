@@ -293,7 +293,7 @@ class CGullScanner:
 
         real_base_dir = os.path.realpath(base_dir)
         # Global deduplication across translation units
-        global_issue_keys: Set[str] = set()
+        dedup_issues_map: Dict[Any, Issue] = {}
         
         for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err in results:
             display_path = os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path)
@@ -319,49 +319,70 @@ class CGullScanner:
                 if self.severity_filter:
                     file_issues = [i for i in file_issues if i.impact in self.severity_filter]
                 for issue in file_issues:
-                    # original_path is absolute (set by add_issue_if_unique via line_map)
+                    # original_path is the provenance file path (header or translation unit)
                     original_path = issue.file_path
-                    # Compute TU-aware fingerprint using the original (absolute) path
-                    issue.fingerprint = compute_issue_fingerprint_tu(issue.rule_id, original_path, issue.line_number, issue.code_snippet)
+                    real_origin_path = os.path.realpath(original_path)
+                    try:
+                        canonical_rel_path = os.path.relpath(real_origin_path, real_base_dir)
+                    except ValueError:
+                        canonical_rel_path = real_origin_path
+
+                    normalized_canonical_path = canonical_rel_path.replace("\\", "/")
+
+                    # Compute stable project-relative fingerprint without line numbers
+                    issue.fingerprint = compute_issue_fingerprint(
+                        issue.rule_id,
+                        normalized_canonical_path,
+                        issue.code_snippet,
+                    )
 
                     # Determine if this issue originates from a different file (e.g., a header)
-                    # Both original_path and real_file_path are absolute, so comparison is reliable
-                    is_from_header = os.path.realpath(original_path) != real_file_path
+                    is_from_header = real_origin_path != real_file_path
+
+                    # Preserve the canonical header path as the primary location in both modes
+                    if is_from_header:
+                        try:
+                            issue.file_path = os.path.relpath(original_path, base_dir)
+                        except ValueError:
+                            issue.file_path = canonical_rel_path
+                        if display_path not in issue.related_tus:
+                            issue.related_tus.append(display_path)
+                    else:
+                        issue.file_path = display_path
+
+                    # Normalize any absolute paths in related_tus
+                    norm_related: List[str] = []
+                    for related in issue.related_tus:
+                        if os.path.isabs(related):
+                            try:
+                                norm_related.append(os.path.relpath(os.path.realpath(related), real_base_dir))
+                            except ValueError:
+                                norm_related.append(related)
+                        else:
+                            norm_related.append(related)
+                    issue.related_tus = norm_related
 
                     if getattr(config, "dedup_headers", True):
-                        # Convert file_path to relative for reporting
-                        if is_from_header:
-                            issue.file_path = os.path.relpath(original_path, base_dir)
-                            # Record the current TU as a related translation unit
-                            if display_path not in issue.related_tus:
-                                issue.related_tus.append(display_path)
-                        else:
-                            issue.file_path = display_path
-
-                        # Normalize any absolute paths in related_tus
-                        for related in list(issue.related_tus):
-                            if os.path.isabs(related):
-                                try:
-                                    issue.related_tus.remove(related)
-                                    issue.related_tus.append(os.path.relpath(os.path.realpath(related), real_base_dir))
-                                except ValueError:
-                                    pass
-
-                        dedup_key = issue.fingerprint
-                        if dedup_key not in global_issue_keys:
-                            global_issue_keys.add(dedup_key)
+                        # Disambiguation aggregation key across translation units
+                        dedup_key = (
+                            issue.fingerprint,
+                            normalized_canonical_path,
+                            issue.line_number,
+                            issue.column_number,
+                            issue.message,
+                        )
+                        if dedup_key not in dedup_issues_map:
+                            dedup_issues_map[dedup_key] = issue
                             all_issues.append(issue)
                         else:
                             # Merge related_tus into existing deduplicated issue
-                            for existing_issue in all_issues:
-                                if existing_issue.fingerprint == dedup_key:
-                                    for tu in issue.related_tus:
-                                        if tu not in existing_issue.related_tus:
-                                            existing_issue.related_tus.append(tu)
-                                    break
+                            existing_issue = dedup_issues_map[dedup_key]
+                            for tu in issue.related_tus:
+                                if tu not in existing_issue.related_tus:
+                                    existing_issue.related_tus.append(tu)
                     else:
-                        # No header deduplication: report each issue per translation unit
-                        issue.file_path = display_path
+                        # No header deduplication: report each issue per translation unit,
+                        # preserving canonical header path as primary location and TU in related_tus
                         all_issues.append(issue)
 
             total_loc += loc

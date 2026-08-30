@@ -47,6 +47,16 @@ class TestFingerprintStability(unittest.TestCase):
         fp2 = compute_issue_fingerprint("CGULL-001", "src\\app.c", "gets(buf);")
         self.assertEqual(fp1, fp2)
 
+    def test_tu_fingerprint_ignores_line_numbers(self):
+        from cgull.utils import compute_issue_fingerprint_tu
+        fp_line10 = compute_issue_fingerprint_tu("CGULL-001", "include/header.h", 10, "gets(buf);")
+        fp_line50 = compute_issue_fingerprint_tu("CGULL-001", "include/header.h", 50, "gets(buf);")
+        fp_standard = compute_issue_fingerprint("CGULL-001", "include/header.h", "gets(buf);")
+        fp_no_line = compute_issue_fingerprint_tu("CGULL-001", "include/header.h", "gets(buf);")
+        self.assertEqual(fp_line10, fp_line50)
+        self.assertEqual(fp_line10, fp_standard)
+        self.assertEqual(fp_line10, fp_no_line)
+
     def test_scanned_issues_have_nonempty_fingerprints(self):
         result = CGullScanner().scan_text(VULNERABLE_CODE, "app.c")
         self.assertTrue(all(i.fingerprint for i in result.issues))

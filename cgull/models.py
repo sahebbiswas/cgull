@@ -239,6 +239,7 @@ class ScanConfig:
             "config_strategy": self.config_strategy,
             "exhaustive_threshold": self.exhaustive_threshold,
             "include_roots": list(self.include_roots),
+            "dedup_headers": self.dedup_headers,
         }
 
     @classmethod
@@ -259,6 +260,7 @@ class ScanConfig:
             config_strategy=data.get("config_strategy", "one-at-a-time"),
             exhaustive_threshold=data.get("exhaustive_threshold", 10),
             include_roots=list(data.get("include_roots", [])),
+            dedup_headers=data.get("dedup_headers", True),
         )
 
 

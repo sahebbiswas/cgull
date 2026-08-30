@@ -72,6 +72,7 @@ class TestHeaderDeduplication(unittest.TestCase):
 
     def test_no_deduplication_flag(self):
         """When deduplication of headers is disabled, each TU should report its own CGULL-001 issue.
+        The primary file_path must remain the canonical header path, with the TU represented in related_tus.
         """
         config = ScanConfig.create(dedup_headers=False)
         scanner = CGullScanner(config=config)
@@ -81,10 +82,82 @@ class TestHeaderDeduplication(unittest.TestCase):
         # Expect at least two issues: one per .c TU that includes the header
         # (plus potentially one from scanning header.h directly)
         self.assertGreaterEqual(len(gets_issues), 2)
-        # Verify that at least the two .c source files are represented
-        file_paths = {issue.file_path for issue in gets_issues}
-        self.assertIn(os.path.relpath(self.file1, self.temp_dir), file_paths)
-        self.assertIn(os.path.relpath(self.file2, self.temp_dir), file_paths)
+        # Verify that all issues retain the canonical header path as primary location
+        for issue in gets_issues:
+            self.assertTrue(issue.file_path.endswith("header.h"))
+        # Verify that the including TUs are represented in related_tus
+        all_related_tus = {tu for issue in gets_issues for tu in issue.related_tus}
+        self.assertIn(os.path.relpath(self.file1, self.temp_dir), all_related_tus)
+        self.assertIn(os.path.relpath(self.file2, self.temp_dir), all_related_tus)
+
+    def test_header_multiple_findings_disambiguated(self):
+        """If a header contains multiple identical vulnerabilities on different lines,
+        deduplication must preserve both distinct occurrences while merging their related_tus.
+        """
+        multi_header = """
+#ifndef MULTI_HEADER_H
+#define MULTI_HEADER_H
+
+void f1(char *b) {
+    gets(b);
+}
+
+void f2(char *b) {
+    gets(b);
+}
+
+#endif
+"""
+        with open(self.header_path, "w") as f:
+            f.write(multi_header)
+
+        scanner = CGullScanner()  # dedup_headers=True
+        result = scanner.scan_path(self.temp_dir)
+        gets_issues = [i for i in result.issues if i.rule_id == "CGULL-001"]
+        # Should have 2 distinct deduplicated issues (for the 2 distinct lines in header.h)
+        self.assertEqual(len(gets_issues), 2)
+        # Both issues share the same fingerprint since rule, relpath, and snippet are identical
+        self.assertEqual(gets_issues[0].fingerprint, gets_issues[1].fingerprint)
+        # But their line numbers are distinct
+        self.assertNotEqual(gets_issues[0].line_number, gets_issues[1].line_number)
+        # And both have both TUs in related_tus
+        for issue in gets_issues:
+            self.assertTrue(issue.file_path.endswith("header.h"))
+            self.assertIn(os.path.relpath(self.file1, self.temp_dir), issue.related_tus)
+            self.assertIn(os.path.relpath(self.file2, self.temp_dir), issue.related_tus)
+
+    def test_sarif_header_location_preserved_when_dedup_disabled(self):
+        """SARIF report must maintain the canonical header URI and region coordinates
+        even when dedup_headers=False, surfacing the including TU in relatedTUs property.
+        """
+        import json
+        from cgull.reporter import ReportGenerator
+        config = ScanConfig.create(dedup_headers=False)
+        scanner = CGullScanner(config=config)
+        result = scanner.scan_path(self.temp_dir)
+        sarif_str = ReportGenerator.to_sarif(result)
+        sarif_obj = json.loads(sarif_str)
+        results = [r for r in sarif_obj["runs"][0]["results"] if r["ruleId"] == "CGULL-001"]
+        self.assertGreaterEqual(len(results), 2)
+        including_tus = set()
+        for r in results:
+            uri = r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            self.assertTrue(uri.endswith("header.h"))
+            for tu in r["properties"].get("relatedTUs", []):
+                including_tus.add(tu)
+        self.assertIn(os.path.relpath(self.file1, self.temp_dir), including_tus)
+        self.assertIn(os.path.relpath(self.file2, self.temp_dir), including_tus)
+
+    def test_fingerprint_checkout_location_independence(self):
+        """Fingerprints must depend only on rule_id, project-relative canonical path, and normalized snippet,
+        making them identical regardless of checkout location or absolute path.
+        """
+        from cgull.utils import compute_issue_fingerprint
+        scanner = CGullScanner()
+        result = scanner.scan_path(self.temp_dir)
+        gets_issue = next(i for i in result.issues if i.rule_id == "CGULL-001")
+        expected_fp = compute_issue_fingerprint("CGULL-001", "header.h", gets_issue.code_snippet)
+        self.assertEqual(gets_issue.fingerprint, expected_fp)
 
 if __name__ == "__main__":
     unittest.main()
