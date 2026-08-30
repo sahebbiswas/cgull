@@ -256,3 +256,55 @@ def test_memcpy_scan_line_regex_mode():
     issues_by_line = {issue.line_number: issue for issue in res.issues}
     assert 105 in issues_by_line
     assert "120 bytes" in issues_by_line[105].message
+
+
+CLAMP_TEST_CODE = """
+#include <string.h>
+
+struct A {
+    char array_a[100];
+};
+
+int clamp(int val, int min_val, int max_val);
+
+/* Clamp on unrelated variable x does not gate n */
+void fun_clamp_unrelated(struct A *a, const char *src, int n, int x) {
+    n = clamp(x, 0, 50);
+    memcpy(a->array_a, src, n);
+}
+
+/* Clamp with surrounding arithmetic does not gate n */
+void fun_clamp_surrounding_arithmetic(struct A *a, const char *src, int n) {
+    n = clamp(n, 0, 50) + 100;
+    memcpy(a->array_a, src, n);
+}
+
+/* Clamp with nonnumeric lower bound that cannot be proven nonnegative */
+void fun_clamp_nonnumeric_lower(struct A *a, const char *src, int n, int min_val) {
+    n = clamp(n, min_val, 50);
+    memcpy(a->array_a, src, n);
+}
+
+/* Valid clamp gating n */
+void fun_clamp_valid(struct A *a, const char *src, int n) {
+    n = clamp(n, 0, 50);
+    memcpy(a->array_a, src, n);
+}
+"""
+
+def test_memcpy_clamp_bounds_validation():
+    scanner = CGullScanner(rules=[MemcpyStructMemberOverflowRule()])
+    res = scanner.scan_text(CLAMP_TEST_CODE, file_path="test_clamp.c")
+    issues_by_line = {issue.line_number: issue for issue in res.issues}
+
+    # Line 13: clamp(x, 0, 50) does NOT gate n -> flagged
+    assert 13 in issues_by_line
+
+    # Line 19: clamp(n, 0, 50) + 100 has surrounding arithmetic -> flagged
+    assert 19 in issues_by_line
+
+    # Line 25: min_val is nonnumeric/unproven -> signed n lacks proven lower bound -> flagged
+    assert 25 in issues_by_line
+
+    # Line 30: clamp(n, 0, 50) is valid gating -> not flagged
+    assert 30 not in issues_by_line

@@ -192,6 +192,12 @@ class TestExtractBalancedParens(unittest.TestCase):
         self.assertEqual(inner, '"escaped \\" quote", 42')
         self.assertEqual(close_idx, len(s) - 1)
 
+    def test_whitespace_before_paren(self):
+        s = "func   (a, b)"
+        inner, close_idx = extract_balanced_parens(s, 4)
+        self.assertEqual(inner, "a, b")
+        self.assertEqual(close_idx, len(s) - 1)
+
     def test_unclosed_parens_returns_none(self):
         inner, _ = extract_balanced_parens("func(a, b", 4)
         self.assertIsNone(inner)
@@ -211,6 +217,18 @@ class TestSplitCallArgs(unittest.TestCase):
         self.assertEqual(
             split_call_args("secret_key, 0, sizeof(secret_key)"),
             ["secret_key", "0", "sizeof(secret_key)"]
+        )
+
+    def test_nested_function_calls(self):
+        self.assertEqual(
+            split_call_args("foo(1, 2), bar(3, 4), 5"),
+            ["foo(1, 2)", "bar(3, 4)", "5"]
+        )
+
+    def test_nested_macro_calls_with_commas(self):
+        self.assertEqual(
+            split_call_args("MACRO(a, b), c"),
+            ["MACRO(a, b)", "c"]
         )
 
     def test_nested_brackets_and_braces(self):
@@ -235,6 +253,14 @@ class TestExtractCallArgs(unittest.TestCase):
         s = "memset(secret_key, 0, sizeof(secret_key));"
         args = extract_call_args(s, 6)
         self.assertEqual(args, ("secret_key", "0", "sizeof(secret_key)"))
+
+    def test_extract_call_args_complex_casts_and_calls(self):
+        s = "memcpy((void *)dest, src + get_offset(1, 2), sizeof(dest))"
+        args = extract_call_args(s, 6)
+        self.assertEqual(
+            args,
+            ("(void *)dest", "src + get_offset(1, 2)", "sizeof(dest)")
+        )
 
     def test_extract_call_args_empty(self):
         args = extract_call_args("init()", 4)

@@ -439,6 +439,27 @@ class MemcpyStructMemberOverflowRule(BaseRule):
 
         return (true_upper, true_lower), (false_upper, false_lower)
 
+    @staticmethod
+    def _clean_expr(expr: str) -> str:
+        s = expr.strip()
+        s = re.sub(r'^\s*\(\s*(?:[a-zA-Z_]\w*\s*\*+|\w+)\s*\)\s*', '', s)
+        s = s.strip().lstrip('(').rstrip(')')
+        return re.sub(r'\s+', '', s)
+
+    @staticmethod
+    def _get_rhs_expr(expr_str: str) -> str:
+        s = expr_str.strip().rstrip(';')
+        if '=' in s and not s.startswith('if') and not s.startswith('while'):
+            s = s.split('=', 1)[1].strip()
+        s = re.sub(r'^\s*\(\s*(?:const\s+)?(?:[a-zA-Z_]\w*\s*\*+|\w+)\s*\)\s*', '', s).strip()
+        while s.startswith('(') and s.endswith(')'):
+            inner, close_idx = extract_balanced_parens(s, 0)
+            if inner is not None and close_idx == len(s) - 1:
+                s = inner.strip()
+            else:
+                break
+        return s
+
     def _is_min_clamp_bound(
         self,
         expr_str: Optional[str],
@@ -457,26 +478,48 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         upper = False
         lower = False
 
-        m_clamp = re.search(r'\bclamp\s*\(\s*' + v_esc + r'\s*,\s*(-?\d+)\s*,\s*([^)]+)\)', expr_str)
+        m_clamp = re.search(r'\bclamp\s*\(', expr_str)
         if m_clamp:
-            min_v = int(m_clamp.group(1))
-            max_expr = m_clamp.group(2).strip()
-            ub = self._resolve_upper_bound(max_expr, fn, line_no, ast_ctx)
-            if min_v >= 0:
-                lower = True
-            if ub is not None and ub <= dest_capacity:
-                upper = True
-            return upper, lower
+            inner, close_idx = extract_balanced_parens(expr_str, m_clamp.end() - 1)
+            if inner is not None:
+                rhs = self._get_rhs_expr(expr_str)
+                clamp_call_str = expr_str[m_clamp.start():close_idx + 1]
+                if rhs == clamp_call_str or self._get_rhs_expr(rhs) == clamp_call_str:
+                    clamp_args = split_call_args(inner)
+                    if len(clamp_args) == 3:
+                        first_arg_clean = self._clean_expr(clamp_args[0])
+                        if first_arg_clean == var_name:
+                            min_arg = clamp_args[1].strip()
+                            max_expr = clamp_args[2].strip()
 
-        m_call = re.search(r'\bmin\s*\(([^)]+)\)', expr_str)
+                            min_v = self._eval_const_arithmetic(min_arg)
+                            if min_v is None and ast_ctx:
+                                min_v = self._resolve_upper_bound(min_arg, fn, line_no, ast_ctx)
+
+                            if min_v is not None and min_v >= 0:
+                                lower = True
+
+                            ub = self._resolve_upper_bound(max_expr, fn, line_no, ast_ctx)
+                            if ub is not None and ub <= dest_capacity:
+                                upper = True
+                            return upper, lower
+
+        m_call = re.search(r'\bmin\s*\(', expr_str)
         if m_call:
-            args = [a.strip() for a in m_call.group(1).split(',')]
-            for arg in args:
-                if arg == var_name:
-                    continue
-                ub = self._resolve_upper_bound(arg, fn, line_no, ast_ctx)
-                if ub is not None and ub <= dest_capacity:
-                    upper = True
+            inner, close_idx = extract_balanced_parens(expr_str, m_call.end() - 1)
+            if inner is not None:
+                rhs = self._get_rhs_expr(expr_str)
+                min_call_str = expr_str[m_call.start():close_idx + 1]
+                if rhs == min_call_str or self._get_rhs_expr(rhs) == min_call_str:
+                    args = split_call_args(inner)
+                    clean_args = [self._clean_expr(a) for a in args]
+                    if var_name in clean_args:
+                        for arg, clean_a in zip(args, clean_args):
+                            if clean_a == var_name:
+                                continue
+                            ub = self._resolve_upper_bound(arg, fn, line_no, ast_ctx)
+                            if ub is not None and ub <= dest_capacity:
+                                upper = True
 
         return upper, lower
 
@@ -681,7 +724,7 @@ class MemcpyStructMemberOverflowRule(BaseRule):
                     if raw_args:
                         args = BannedFunctionsRule._extract_call_args(f"{callee}({raw_args})", len(callee))
                 if not args or len(args) < req_args:
-                    args = [a.strip() for a in raw_args.split(',')] if raw_args else []
+                    args = split_call_args(raw_args) if raw_args else []
 
                 if callee in ("memcpy", "memmove") and len(args) >= 3:
                     dest_arg, src_arg, size_arg = args[0], args[1], args[2]

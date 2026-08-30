@@ -8,7 +8,7 @@ from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 import logging
 from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
-from ..utils import extract_balanced_parens
+from ..utils import extract_balanced_parens, split_call_args
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
             for call in fn.calls:
                 callee, line_no, raw_args = call[0], call[1], call[2]
                 if callee in target_funcs:
-                    arg_list = [a.strip() for a in raw_args.split(',')] if raw_args else []
+                    arg_list = split_call_args(raw_args) if raw_args else []
 
                     if callee == "bcmp":
                         should_flag = True
