@@ -8,6 +8,7 @@ from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 import logging
 from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
+from ..utils import extract_balanced_parens
 
 logger = logging.getLogger(__name__)
 
@@ -209,10 +210,16 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         # Fallback for line-based scanner when AST is not used
-        m = re.search(r'\b(memcmp|strcmp|strncmp|bcmp)\s*\(([^)]+)\)', line_content)
-        if m:
+        target_line = masked_line_content or line_content
+        for m in re.finditer(r'\b(memcmp|strcmp|strncmp|bcmp)\s*\(', target_line):
             func_name = m.group(1)
-            args = m.group(2)
+            start_paren_pos = m.end() - 1
+            raw_args, _ = extract_balanced_parens(line_content, start_paren_pos)
+            if raw_args is None:
+                raw_args, _ = extract_balanced_parens(target_line, start_paren_pos)
+            if raw_args is None:
+                continue
+            args = raw_args.strip()
             if func_name == "bcmp":
                 should_flag = True
             else:
@@ -474,13 +481,6 @@ def _clean_path_arg(expr: str) -> str:
     return re.sub(r'\s+', '', s)
 
 
-def _extract_balanced_parens(text: str, start_paren_pos: int) -> Tuple[Optional[str], int]:
-    """
-    Given text and position of opening '(', returns (inside_args_str, closing_paren_pos).
-    Handles string literals, character literals, escape sequences, and nested parens.
-    """
-    from ..utils import extract_balanced_parens
-    return extract_balanced_parens(text, start_paren_pos)
 
 
 def _find_else_branch_calls(pycparser_ast) -> Set[Tuple[int, int]]:
@@ -650,11 +650,11 @@ class ToctouFileAccessRule(BaseRule):
         check_fn = m.group(1)
         start_paren_pos = m.end() - 1
 
-        raw_args_masked, _ = _extract_balanced_parens(target_line, start_paren_pos)
+        raw_args_masked, _ = extract_balanced_parens(target_line, start_paren_pos)
         if raw_args_masked is None:
             return issues
 
-        raw_args_unmasked, _ = _extract_balanced_parens(line_content, start_paren_pos)
+        raw_args_unmasked, _ = extract_balanced_parens(line_content, start_paren_pos)
         raw_args_display = raw_args_unmasked if raw_args_unmasked is not None else raw_args_masked
 
         args_masked = _split_fn_args(raw_args_masked)
@@ -698,7 +698,7 @@ class ToctouFileAccessRule(BaseRule):
                     use_fn = m_use.group(1)
                     u_start_paren = m_use.end() - 1
 
-                    u_args_masked, _ = _extract_balanced_parens(future_target_line, u_start_paren)
+                    u_args_masked, _ = extract_balanced_parens(future_target_line, u_start_paren)
                     if u_args_masked is None:
                         continue
 
@@ -1018,11 +1018,18 @@ class NoInsecureRandRule(BaseRule):
         issues = []
         target_line = masked_line_content if masked_line_content else line_content
 
-        target_regex = re.compile(r'\b(rand|random|drand48|mrand48|lrand48)\s*\(\s*\)|\b(srand|srandom)\s*\(([^)]*)\)')
+        target_regex = re.compile(r'\b(rand|random|drand48|mrand48|lrand48)\s*\(\s*\)|\b(srand|srandom)\s*\(')
         m = target_regex.search(target_line)
         if m:
             callee = m.group(1) or m.group(2)
-            args = m.group(3) if m.group(3) else ""
+            args = ""
+            if callee in ("srand", "srandom"):
+                start_paren_pos = m.end() - 1
+                raw_args, _ = extract_balanced_parens(line_content, start_paren_pos)
+                if raw_args is None:
+                    raw_args, _ = extract_balanced_parens(target_line, start_paren_pos)
+                args = raw_args.strip() if raw_args is not None else ""
+
             should_flag = False
 
             if callee in ("srand", "srandom"):
