@@ -1297,3 +1297,258 @@ class TestIncorrectPointerScalingRule(unittest.TestCase):
         issues = scan_with_rule("CGULL-040", code)
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].rule_id, "CGULL-040")
+
+
+class TestPointerSubtractionSizeRule(unittest.TestCase):
+    def test_detects_unscaled_pointer_subtraction(self):
+        code = """
+        void *memcpy(void *dest, const void *src, unsigned long n);
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_scaled_pointer_subtraction(self):
+        code = """
+        void *memcpy(void *dest, const void *src, unsigned long n);
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (p2 - p1) * sizeof(int));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 0)
+
+    def test_global_and_parameter_pointer_subtraction(self):
+        code = """
+        void *memcpy(void *dest, const void *src, unsigned long n);
+        int *g_ptr;
+        void f(char *p1, char *p2, int *p3) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+            memcpy(dest, p1, g_ptr - p3);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_cast_pointer_subtraction(self):
+        code = """
+        void *memcpy(void *dest, const void *src, unsigned long n);
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (long)p2 - (long)p1);
+            memcpy(dest, p1, (long)(p2 - p1));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 2)
+
+class TestPointerSubtractionSizeRule(unittest.TestCase):
+    def test_detects_unscaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_scaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (p2 - p1) * sizeof(int));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 0)
+
+    def test_full_coverage_pointer_subtraction(self):
+        code = """
+        void *memcpy(void *dest, const void *src, unsigned long n);
+        int *g1; int *g2;
+        void f(int **p1, int **p2, void *v1, void *v2, int arr1[], int arr2[]) {
+            char dest[100];
+            int *l1; int *l2;
+            int a, b;
+            // 1503: double pointers
+            memcpy(dest, p1, p2 - p1);
+            // 1508: void pointers (which are byte ptrs, shouldn't report unscaled)
+            memcpy(dest, v1, v2 - v1);
+            // 1530: local variables
+            memcpy(dest, l1, l2 - l1);
+            // 1535: global variables
+            memcpy(dest, g1, g2 - g1);
+            // array parameters
+            memcpy(dest, arr1, arr2 - arr1);
+            // 1548: casted pointers
+            memcpy(dest, l1, (int*)l2 - (int*)l1);
+            // 1561: unary address
+            memcpy(dest, l1, &a - &b);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        # p2-p1 (1), l2-l1 (1), g2-g1 (1), arr2-arr1 (1), (int*)l2-(int*)l1 (1), &a-&b (1)
+        # v2-v1 is byte pointer, so 0.
+        self.assertEqual(len(issues), 5)
+
+class TestPointerSubtractionSizeRule(unittest.TestCase):
+    def test_detects_unscaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_scaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (p2 - p1) * sizeof(int));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 0)
+
+class TestPointerSubtractionSizeRule(unittest.TestCase):
+    def test_detects_unscaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_scaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (p2 - p1) * sizeof(int));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 0)
+
+    def test_full_coverage_pointer_subtraction_casts(self):
+        code = """
+        void *memcpy(void *dest, const void *src, unsigned long n);
+        void f(int **p1, int **p2, void *v1, void *v2) {
+            char dest[100];
+            int a, b;
+            // 1503: double pointers via cast
+            memcpy(dest, p1, (int**)p2 - (int**)p1);
+            // 1508: void pointers via cast
+            memcpy(dest, v1, (void*)v2 - (void*)v1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        # neither of these should be reported (one is double ptr, one is byte ptr)
+        self.assertEqual(len(issues), 0)
+
+class TestPointerSubtractionSizeRule(unittest.TestCase):
+    def test_detects_unscaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_scaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (p2 - p1) * sizeof(int));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 0)
+
+class TestPointerSubtractionSizeRule(unittest.TestCase):
+    def test_detects_unscaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_scaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (p2 - p1) * sizeof(int));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 0)
+
+class TestPointerSubtractionSizeRule(unittest.TestCase):
+    def test_detects_unscaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_scaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (p2 - p1) * sizeof(int));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 0)
+
+class TestPointerSubtractionSizeRule(unittest.TestCase):
+    def test_detects_unscaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, p2 - p1);
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 1)
+
+    def test_clean_scaled_pointer_subtraction(self):
+        code = """
+        #include <string.h>
+        void f(int *p1, int *p2) {
+            char dest[100];
+            memcpy(dest, p1, (p2 - p1) * sizeof(int));
+        }
+        """
+        issues = scan_with_rule('CGULL-046', code)
+        self.assertEqual(len(issues), 0)
