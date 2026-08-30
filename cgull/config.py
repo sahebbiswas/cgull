@@ -11,7 +11,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore
 
-from .models import Severity
+from .models import Severity, ScanMode
 import logging
 from .rules import BaseRule
 
@@ -30,6 +30,7 @@ class CGullConfig:
     banned_funcs: Dict[str, Dict[str, str]] = field(default_factory=dict)  # fn_name -> {"reason": ..., "remediation": ...}
     exclude_paths: List[str] = field(default_factory=list)
     include_roots: List[str] = field(default_factory=list)
+    mode: Optional[ScanMode] = None
     default_format: Optional[str] = None
     fail_on: Optional[str] = None
     warn_on_fallback: bool = False
@@ -226,10 +227,26 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 cfg.warnings.append(f"Invalid schema_version in {config_path}: expected integer")
 
         # Check top-level keys for unknown keys
-        known_top_keys = {"schema_version", "rules", "functions", "paths", "output", "includes"}
+        known_top_keys = {"schema_version", "rules", "functions", "paths", "output", "includes", "scan", "mode"}
         for key in raw_toml.keys():
             if key not in known_top_keys:
                 cfg.warnings.append(f"Unknown key/section '[{key}]' in configuration file {config_path}")
+
+        # Top-level mode or section [scan]
+        if "mode" in raw_toml:
+            m_val = str(raw_toml["mode"]).strip().lower()
+            if m_val in ("file", "tu"):
+                cfg.mode = ScanMode(m_val)
+            else:
+                cfg.warnings.append(f"Invalid mode '{m_val}' in {config_path}. Expected 'file' or 'tu'.")
+
+        scan_sec = raw_toml.get("scan", {})
+        if isinstance(scan_sec, dict) and "mode" in scan_sec:
+            m_val = str(scan_sec["mode"]).strip().lower()
+            if m_val in ("file", "tu"):
+                cfg.mode = ScanMode(m_val)
+            else:
+                cfg.warnings.append(f"Invalid [scan].mode '{m_val}' in {config_path}. Expected 'file' or 'tu'.")
 
         # Section [rules]
         rules_sec = raw_toml.get("rules", {})

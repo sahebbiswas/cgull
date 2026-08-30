@@ -23,6 +23,11 @@ class Severity(str, Enum):
     INFO = "Info"
 
 
+class ScanMode(str, Enum):
+    FILE = "file"
+    TU = "tu"
+
+
 class AnalysisEngine(str, Enum):
     REGEX = "Regex"
     AST = "AST"
@@ -173,6 +178,7 @@ class ScanConfig:
     exhaustive_threshold: int = 10
     include_roots: List[str] = field(default_factory=list)
     dedup_headers: bool = True
+    mode: ScanMode = ScanMode.FILE
 
     @classmethod
     def create(
@@ -187,7 +193,10 @@ class ScanConfig:
         exhaustive_threshold: int = 10,
         include_roots: Optional[List[str]] = None,
         dedup_headers: bool = True,
+        mode: Union[ScanMode, str] = ScanMode.FILE,
     ) -> "ScanConfig":
+        if isinstance(mode, str):
+            mode = ScanMode(mode.lower())
         if rules is None:
             from .rules import get_all_rules
             rule_instances = get_all_rules()
@@ -209,6 +218,7 @@ class ScanConfig:
             exhaustive_threshold=exhaustive_threshold,
             include_roots=list(include_roots) if include_roots is not None else [],
             dedup_headers=dedup_headers,
+            mode=mode,
         )
 
     def get_rules(self) -> List[Any]:
@@ -240,6 +250,7 @@ class ScanConfig:
             "exhaustive_threshold": self.exhaustive_threshold,
             "include_roots": list(self.include_roots),
             "dedup_headers": self.dedup_headers,
+            "mode": self.mode.value if isinstance(self.mode, ScanMode) else str(self.mode),
         }
 
     @classmethod
@@ -261,6 +272,7 @@ class ScanConfig:
             exhaustive_threshold=data.get("exhaustive_threshold", 10),
             include_roots=list(data.get("include_roots", [])),
             dedup_headers=data.get("dedup_headers", True),
+            mode=ScanMode(data.get("mode", ScanMode.FILE.value)),
         )
 
 

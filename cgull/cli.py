@@ -8,7 +8,7 @@ import argparse
 from typing import List, Optional
 
 from .engine import CGullScanner
-from .models import Severity, AnalysisEngine, ParseTier, ScanConfig
+from .models import Severity, AnalysisEngine, ParseTier, ScanConfig, ScanMode
 from .ignore import CGullIgnoreFilter
 from .reporter import ReportGenerator
 from .rules import get_all_rules
@@ -80,6 +80,7 @@ Suppressing findings inline:
     scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
     scan_parser.add_argument("--config-seed", action="append", metavar="PATH", help="Path to a header (.h/.hpp), directory, or JSON (.json) configuration seed file (can be specified multiple times)")
     scan_parser.add_argument("--compile-commands", metavar="PATH", help="Path to compile_commands.json database file")
+    scan_parser.add_argument("--mode", choices=["file", "tu"], default=None, help="Scan mode: 'file' (per-file scan) or 'tu' (translation unit mode) (default: file)")
     scan_parser.add_argument("--config-strategy", choices=["baseline", "one-at-a-time", "pairwise", "exhaustive"], default="one-at-a-time", help="Configuration space expansion strategy (default: one-at-a-time)")
     scan_parser.add_argument("--exhaustive-threshold", type=int, default=10, help="Maximum flag threshold permitted for exhaustive strategy (default: 10)")
     scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
@@ -328,6 +329,14 @@ def handle_scan(args) -> int:
     config_strategy = getattr(args, "config_strategy", "one-at-a-time")
     exhaustive_threshold = getattr(args, "exhaustive_threshold", 10)
 
+    mode_arg = getattr(args, "mode", None)
+    if mode_arg is not None:
+        scan_mode = ScanMode(mode_arg.lower())
+    elif config.mode is not None:
+        scan_mode = config.mode
+    else:
+        scan_mode = ScanMode.FILE
+
     scan_config = ScanConfig.create(
         rules=active_rules,
         severity_filter=sev_filter,
@@ -337,6 +346,7 @@ def handle_scan(args) -> int:
         exhaustive_threshold=exhaustive_threshold,
         include_roots=config.include_roots,
         dedup_headers=args.dedup_headers,
+        mode=scan_mode,
     )
 
     scanner = CGullScanner(
