@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile, ScanMode
 from .ignore import CGullIgnoreFilter
-from .includes import IncludeResolver, TUIncludeExpander
+from .includes import IncludeResolver, TUIncludeExpander, HEADER_CACHE
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
 from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint, compute_issue_fingerprint_tu, sanitize_terminal_text
@@ -211,6 +211,7 @@ class CGullScanner:
 
         resolved_jobs = (os.cpu_count() or 1) if jobs == 0 else jobs
 
+        HEADER_CACHE.clear()
         start_time = time.time()
         abs_target = os.path.abspath(target_path)
 
@@ -594,6 +595,7 @@ class CGullScanner:
         """
         Directly scans in-memory C source text.
         """
+        HEADER_CACHE.clear()
         start_time = time.time()
         config = self._get_active_config()
         self.config = config

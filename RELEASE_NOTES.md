@@ -38,3 +38,12 @@ Findings produced across configuration variants (`List[ConfigProfile]`) are auto
 Wall-clock scan duration benchmarks on the `examples/` directory:
 - **Single-Pass Baseline Scan (1 run)**: ~0.378s
 - **Multi-Config Variant Scan (3 profiles: baseline, +DEBUG, +LEGACY_AUTH)**: ~0.967s (linear N+1 scaling with profile count)
+
+## ⚡ Translation-Unit Mode: Preprocessed-Unit Caching Benchmark
+
+Translation-Unit (`--mode tu`) mode now caches the expanded-and-parsed representation of each header keyed on its resolved path and SHA256 content hash, so headers pulled into multiple TUs are lexed and expanded once per `cgull` scan invocation and reused across TUs. Caches invalidate automatically on content hash mismatch.
+
+### ⏱️ Synthetic Multi-File Fixture Benchmark (`--engine ast --mode tu`)
+Wall-clock scan duration benchmark on a synthetic multi-file fixture (1 shared header with 100 declarations included by 50 small `.c` files):
+- **Uncached Header Expansion**: ~1.84s
+- **Cached Header Expansion**: ~1.70s (~1.08x speedup)
