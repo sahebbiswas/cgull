@@ -1,0 +1,943 @@
+{
+  "suite": "Juliet C Security Benchmark for C-GULL",
+  "version": "1.0",
+  "description": "NIST Juliet-based detection quality benchmark covering CWE-476, CWE-690, CWE-416, and CWE-457 across 9 control-flow categories.",
+  "test_cases": [
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__01_baseline",
+      "cwe": "CWE-476",
+      "category": "baseline",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__02_ifelse",
+      "cwe": "CWE-476",
+      "category": "if/else",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__02_ifelse.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__02_ifelse_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__02_ifelse_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__03_nested_cond",
+      "cwe": "CWE-476",
+      "category": "nested conditionals",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__03_nested_cond.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__03_nested_cond_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__03_nested_cond_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__04_loops",
+      "cwe": "CWE-476",
+      "category": "loops",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__04_loops.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__04_loops_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__04_loops_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__05_switch",
+      "cwe": "CWE-476",
+      "category": "switch",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__05_switch.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__05_switch_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__05_switch_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__06_fallthrough",
+      "cwe": "CWE-476",
+      "category": "fallthrough",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__06_fallthrough.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__06_fallthrough_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__06_fallthrough_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__07_break_continue",
+      "cwe": "CWE-476",
+      "category": "break / continue",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__07_break_continue.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__07_break_continue_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__07_break_continue_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__08_goto",
+      "cwe": "CWE-476",
+      "category": "goto",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__08_goto.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__08_goto_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__08_goto_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE476_NULL_Pointer_Dereference__09_interprocedural",
+      "cwe": "CWE-476",
+      "category": "interprocedural cases",
+      "file": "testcases/CWE476_NULL_Pointer_Dereference__09_interprocedural.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__09_interprocedural_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        },
+        {
+          "function": "CWE476_NULL_Pointer_Dereference__09_interprocedural_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-476",
+          "expected_rules": [
+            "CGULL-003",
+            "CGULL-004"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__01_baseline",
+      "cwe": "CWE-690",
+      "category": "baseline",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__02_ifelse",
+      "cwe": "CWE-690",
+      "category": "if/else",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__02_ifelse.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__02_ifelse_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__02_ifelse_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__03_nested_cond",
+      "cwe": "CWE-690",
+      "category": "nested conditionals",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__03_nested_cond.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__03_nested_cond_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__03_nested_cond_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__04_loops",
+      "cwe": "CWE-690",
+      "category": "loops",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__04_loops.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__04_loops_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__04_loops_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__05_switch",
+      "cwe": "CWE-690",
+      "category": "switch",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__05_switch.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__05_switch_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__05_switch_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__06_fallthrough",
+      "cwe": "CWE-690",
+      "category": "fallthrough",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__06_fallthrough.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__06_fallthrough_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__06_fallthrough_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__07_break_continue",
+      "cwe": "CWE-690",
+      "category": "break / continue",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__07_break_continue.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__07_break_continue_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__07_break_continue_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__08_goto",
+      "cwe": "CWE-690",
+      "category": "goto",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__08_goto.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__08_goto_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__08_goto_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE690_NULL_Deref_From_Return__09_interprocedural",
+      "cwe": "CWE-690",
+      "category": "interprocedural cases",
+      "file": "testcases/CWE690_NULL_Deref_From_Return__09_interprocedural.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE690_NULL_Deref_From_Return__09_interprocedural_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        },
+        {
+          "function": "CWE690_NULL_Deref_From_Return__09_interprocedural_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-690",
+          "expected_rules": [
+            "CGULL-003"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__01_baseline",
+      "cwe": "CWE-416",
+      "category": "baseline",
+      "file": "testcases/CWE416_Use_After_Free__01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__02_ifelse",
+      "cwe": "CWE-416",
+      "category": "if/else",
+      "file": "testcases/CWE416_Use_After_Free__02_ifelse.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__02_ifelse_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__02_ifelse_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__03_nested_cond",
+      "cwe": "CWE-416",
+      "category": "nested conditionals",
+      "file": "testcases/CWE416_Use_After_Free__03_nested_cond.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__03_nested_cond_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__03_nested_cond_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__04_loops",
+      "cwe": "CWE-416",
+      "category": "loops",
+      "file": "testcases/CWE416_Use_After_Free__04_loops.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__04_loops_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__04_loops_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__05_switch",
+      "cwe": "CWE-416",
+      "category": "switch",
+      "file": "testcases/CWE416_Use_After_Free__05_switch.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__05_switch_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__05_switch_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__06_fallthrough",
+      "cwe": "CWE-416",
+      "category": "fallthrough",
+      "file": "testcases/CWE416_Use_After_Free__06_fallthrough.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__06_fallthrough_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__06_fallthrough_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__07_break_continue",
+      "cwe": "CWE-416",
+      "category": "break / continue",
+      "file": "testcases/CWE416_Use_After_Free__07_break_continue.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__07_break_continue_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__07_break_continue_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__08_goto",
+      "cwe": "CWE-416",
+      "category": "goto",
+      "file": "testcases/CWE416_Use_After_Free__08_goto.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__08_goto_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__08_goto_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE416_Use_After_Free__09_interprocedural",
+      "cwe": "CWE-416",
+      "category": "interprocedural cases",
+      "file": "testcases/CWE416_Use_After_Free__09_interprocedural.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE416_Use_After_Free__09_interprocedural_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        },
+        {
+          "function": "CWE416_Use_After_Free__09_interprocedural_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-416",
+          "expected_rules": [
+            "CGULL-022"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__01_baseline",
+      "cwe": "CWE-457",
+      "category": "baseline",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__02_ifelse",
+      "cwe": "CWE-457",
+      "category": "if/else",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__02_ifelse.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__02_ifelse_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__02_ifelse_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__03_nested_cond",
+      "cwe": "CWE-457",
+      "category": "nested conditionals",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__03_nested_cond.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__03_nested_cond_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__03_nested_cond_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__04_loops",
+      "cwe": "CWE-457",
+      "category": "loops",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__04_loops.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__04_loops_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__04_loops_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__05_switch",
+      "cwe": "CWE-457",
+      "category": "switch",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__05_switch.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__05_switch_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__05_switch_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__06_fallthrough",
+      "cwe": "CWE-457",
+      "category": "fallthrough",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__06_fallthrough.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__06_fallthrough_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__06_fallthrough_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__07_break_continue",
+      "cwe": "CWE-457",
+      "category": "break / continue",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__07_break_continue.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__07_break_continue_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__07_break_continue_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__08_goto",
+      "cwe": "CWE-457",
+      "category": "goto",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__08_goto.c",
+      "ci_subset": false,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__08_goto_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__08_goto_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CWE457_Use_of_Uninitialized_Variable__09_interprocedural",
+      "cwe": "CWE-457",
+      "category": "interprocedural cases",
+      "file": "testcases/CWE457_Use_of_Uninitialized_Variable__09_interprocedural.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__09_interprocedural_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        },
+        {
+          "function": "CWE457_Use_of_Uninitialized_Variable__09_interprocedural_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-457",
+          "expected_rules": [
+            "CGULL-021",
+            "CGULL-023"
+          ]
+        }
+      ]
+    }
+  ]
+}
