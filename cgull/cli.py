@@ -83,6 +83,8 @@ Suppressing findings inline:
     scan_parser.add_argument("--config-strategy", choices=["baseline", "one-at-a-time", "pairwise", "exhaustive"], default="one-at-a-time", help="Configuration space expansion strategy (default: one-at-a-time)")
     scan_parser.add_argument("--exhaustive-threshold", type=int, default=10, help="Maximum flag threshold permitted for exhaustive strategy (default: 10)")
     scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
+    scan_parser.add_argument('--no-dedup-headers', dest='dedup_headers', action='store_false', default=True,
+                             help='Do not collapse duplicate header findings across translation units (disable header deduplication)')
 
     # FLAGS subcommand
     flags_parser = subparsers.add_parser("flags", help="Discover and enumerate tested preprocessor flags in target C source files")
@@ -334,6 +336,7 @@ def handle_scan(args) -> int:
         config_strategy=config_strategy,
         exhaustive_threshold=exhaustive_threshold,
         include_roots=config.include_roots,
+        dedup_headers=args.dedup_headers,
     )
 
     scanner = CGullScanner(

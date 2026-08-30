@@ -90,6 +90,7 @@ class ReportGenerator:
                 "suggestedFix": issue.suggested_fix_replacement,
                 "reachableUnder": list(issue.reachable_under),
                 "reachable_under": list(issue.reachable_under),
+                "relatedTUs": list(issue.related_tus) if hasattr(issue, "related_tus") else [],
             }
             if issue.confidence:
                 props["confidence"] = issue.confidence.value if hasattr(issue.confidence, "value") else str(issue.confidence)

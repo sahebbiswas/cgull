@@ -172,6 +172,7 @@ class ScanConfig:
     config_strategy: str = "one-at-a-time"
     exhaustive_threshold: int = 10
     include_roots: List[str] = field(default_factory=list)
+    dedup_headers: bool = True
 
     @classmethod
     def create(
@@ -185,6 +186,7 @@ class ScanConfig:
         config_strategy: str = "one-at-a-time",
         exhaustive_threshold: int = 10,
         include_roots: Optional[List[str]] = None,
+        dedup_headers: bool = True,
     ) -> "ScanConfig":
         if rules is None:
             from .rules import get_all_rules
@@ -206,6 +208,7 @@ class ScanConfig:
             config_strategy=config_strategy,
             exhaustive_threshold=exhaustive_threshold,
             include_roots=list(include_roots) if include_roots is not None else [],
+            dedup_headers=dedup_headers,
         )
 
     def get_rules(self) -> List[Any]:
@@ -321,6 +324,8 @@ class Issue:
     suggested_fix_replacement: Optional[str] = None
     confidence: Optional[Confidence] = None
     reachable_under: List[str] = field(default_factory=list)
+    # List of translation units (files) that contributed this issue (for header deduplication)
+    related_tus: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         conf_val = self.confidence.value if isinstance(self.confidence, Confidence) else (str(self.confidence) if self.confidence else None)
@@ -341,6 +346,7 @@ class Issue:
             "suggested_fix_replacement": self.suggested_fix_replacement,
             "fingerprint": self.fingerprint,
             "reachable_under": list(self.reachable_under),
+            "related_tus": list(self.related_tus),
         }
         if conf_val:
             d["confidence"] = conf_val

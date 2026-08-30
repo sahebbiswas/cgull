@@ -416,6 +416,16 @@ def compute_issue_fingerprint(rule_id: str, relative_file_path: str, code_snippe
     return hashlib.sha256(basis.encode("utf-8", errors="replace")).hexdigest()[:16]
 
 
+def compute_issue_fingerprint_tu(rule_id: str, original_file_path: str, original_line: int, code_snippet: str) -> str:
+    """TU-aware fingerprint including original file path and line.
+    Ensures duplicate findings from the same header across multiple TUs collapse.
+    """
+    normalized_path = original_file_path.replace("\\", "/")
+    normalized_snippet = _WHITESPACE_RUN_RE.sub(" ", code_snippet.strip())
+    basis = f"{rule_id}|{normalized_path}|{original_line}|{normalized_snippet}"
+    return hashlib.sha256(basis.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
 class ProgressIndicator:
     """
     In-place CLI progress indicator for file scanning.
