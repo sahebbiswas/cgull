@@ -394,6 +394,13 @@ class TestNonConstantTimeMemoryComparison(unittest.TestCase):
         issues = scan_with_rule("CGULL-005", code)
         self.assertEqual(len(issues), 1)
 
+    def test_detects_memcmp_nested_parens(self):
+        code = "int check(char *token, char *expected_token) {\n    if (memcmp(token, expected_token, sizeof(get_key(0))) == 0) return 1;\n    return 0;\n}"
+        rule = get_rule_by_id("CGULL-005")
+        issues = rule.scan_line("test.c", 2, "    if (memcmp(token, expected_token, sizeof(get_key(0))) == 0) return 1;", code, code.splitlines())
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].suggested_fix_replacement, "CRYPTO_memcmp(token, expected_token, sizeof(get_key(0)))")
+
     def test_clean_memcmp_on_non_secret(self):
         code = "int compare_lengths(char *a, char *b) {\n    if (memcmp(a, b, 4) == 0) return 1;\n    return 0;\n}"
         issues = scan_with_rule("CGULL-005", code)
@@ -643,6 +650,12 @@ class TestUnsafeIntegerConversions(unittest.TestCase):
         issues = scan_with_rule("CGULL-012", code)
         self.assertEqual(len(issues), 1)
 
+    def test_detects_atoi_nested_parens(self):
+        code = "int f(char *s) {\n    return atoi(get_str(sizeof(int)));\n}"
+        issues = scan_with_rule("CGULL-012", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].suggested_fix_replacement, "strtol(get_str(sizeof(int)), &endptr, 10)")
+
     def test_clean_strtol(self):
         code = "long f(char *s) {\n    char *endptr;\n    return strtol(s, &endptr, 10);\n}"
         issues = scan_with_rule("CGULL-012", code)
@@ -869,6 +882,11 @@ class TestInsecurePRNG(unittest.TestCase):
 
     def test_detects_srand_time(self):
         code = "void f(void) {\n    srand(time(NULL));\n}"
+        issues = scan_with_rule("CGULL-028", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_detects_srand_nested_parens(self):
+        code = "void f(void) {\n    srand((unsigned int)get_seed(time(NULL)));\n}"
         issues = scan_with_rule("CGULL-028", code)
         self.assertEqual(len(issues), 1)
 

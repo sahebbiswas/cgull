@@ -676,10 +676,15 @@ class UnsafeIntegerConversionsRule(BaseRule):
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         match_target = masked_line_content or line_content
+        from ..utils import extract_balanced_parens
         for fn in ["atoi", "atol", "atoll", "atof"]:
-            m = re.search(rf'\b{fn}\s*\(([^)]+)\)', match_target)
-            if m:
-                arg = m.group(1).strip()
+            for m in re.finditer(rf'\b{fn}\s*\(', match_target):
+                start_paren_pos = m.end() - 1
+                arg, _ = extract_balanced_parens(line_content, start_paren_pos)
+                if arg is None:
+                    arg_masked, _ = extract_balanced_parens(match_target, start_paren_pos)
+                    arg = arg_masked if arg_masked is not None else ""
+                arg = arg.strip()
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,
