@@ -27,15 +27,18 @@ class SourceLocation:
 
 class ExpandedTU(str):
     """
-    Result of Translation Unit (TU) expansion containing expanded source text
-    and a line-by-line provenance mapping back to original source locations.
-    Subclasses str so it can be passed directly as a string or inspected for line_map/expanded_text.
+    Result of Translation Unit (TU) expansion containing expanded source text,
+    a line-by-line provenance mapping back to original source locations,
+    and a set of all included file paths expanded into the TU.
+    Subclasses str so it can be passed directly as a string or inspected for line_map/expanded_text/included_files.
     """
     line_map: Dict[int, SourceLocation]
+    included_files: Set[str]
 
-    def __new__(cls, expanded_text: str, line_map: Optional[Dict[int, SourceLocation]] = None):
+    def __new__(cls, expanded_text: str, line_map: Optional[Dict[int, SourceLocation]] = None, included_files: Optional[Set[str]] = None):
         obj = super().__new__(cls, expanded_text)
         obj.line_map = line_map or {}
+        obj.included_files = included_files or set()
         return obj
 
     @property
@@ -319,6 +322,7 @@ class TUIncludeExpander:
             guarded_files.add(abs_source_path)
 
         output_tuples: List[Tuple[str, SourceLocation]] = []
+        included_files: Set[str] = set()
         from .ast_analyzer import _normalize_macro_dict
         macros = _normalize_macro_dict(self.defined_syms)
 
@@ -331,6 +335,7 @@ class TUIncludeExpander:
             state,
             output_tuples,
             macros,
+            included_files,
         )
 
         expanded_text_lines = [t[0] for t in output_tuples]
@@ -342,7 +347,7 @@ class TUIncludeExpander:
         for idx, (_, src_loc) in enumerate(output_tuples, 1):
             line_map[idx] = src_loc
 
-        return ExpandedTU(expanded_text=expanded_text, line_map=line_map)
+        return ExpandedTU(expanded_text=expanded_text, line_map=line_map, included_files=included_files)
 
     def _expand_text(
         self,
@@ -354,6 +359,7 @@ class TUIncludeExpander:
         state: Dict[str, int],
         output_tuples: List[Tuple[str, SourceLocation]],
         macros: Dict[str, int],
+        included_files: Set[str],
     ) -> None:
         from .ast_analyzer import eval_preprocessor_expr
 
@@ -489,6 +495,7 @@ class TUIncludeExpander:
                 continue
 
             abs_resolved = os.path.realpath(resolved)
+            included_files.add(abs_resolved)
 
             if abs_resolved in self.rejected_paths:
                 output_tuples.append((full_line, src_loc))
@@ -579,6 +586,7 @@ class TUIncludeExpander:
                 state,
                 output_tuples,
                 macros,
+                included_files,
             )
             active_stack.pop()
 

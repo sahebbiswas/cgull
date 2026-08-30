@@ -7,7 +7,7 @@ __version__ = "0.9.8"
 __author__ = "Saheb Biswas"
 
 from .logging_config import configure_logging, TRACE_LEVEL_NUM
-from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError, ParseTier, ConfigProfile, OUTPUT_SCHEMA_VERSION
+from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError, ParseTier, ConfigProfile, ScanMode, OUTPUT_SCHEMA_VERSION
 from .engine import CGullScanner
 from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander, expand_includes
@@ -42,6 +42,7 @@ __all__ = [
     "FixType",
     "ScanConfig",
     "ScanError",
+    "ScanMode",
     "ParseTier",
     "ConfigProfile",
     "CGullConfig",

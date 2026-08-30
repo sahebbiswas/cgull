@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union, Any
 from pathlib import Path
 
-from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile
+from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile, ScanMode
 from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander
 from .ast_analyzer import CASTParser, CASTContext
@@ -153,6 +153,7 @@ class CGullScanner:
                     exhaustive_threshold=self.config.exhaustive_threshold,
                     include_roots=self.config.include_roots,
                     dedup_headers=getattr(self.config, "dedup_headers", True),
+                    mode=getattr(self.config, "mode", ScanMode.FILE),
                 )
         else:
             self.config = ScanConfig.create(
@@ -180,6 +181,7 @@ class CGullScanner:
             exhaustive_threshold=self.config.exhaustive_threshold,
             include_roots=self.config.include_roots,
             dedup_headers=getattr(self.config, "dedup_headers", True),
+            mode=getattr(self.config, "mode", ScanMode.FILE),
         )
 
     def scan_path(
@@ -238,6 +240,44 @@ class CGullScanner:
                             ignored_paths.append(file_path)
                         else:
                             files_to_scan.append(file_path)
+
+        if self.config.mode == ScanMode.TU and files_to_scan:
+            source_roots: List[str] = []
+            headers: List[str] = []
+            HEADER_EXTS = {".h", ".hpp"}
+            for fpath in files_to_scan:
+                ext = os.path.splitext(fpath)[1].lower()
+                if ext in HEADER_EXTS:
+                    headers.append(fpath)
+                else:
+                    source_roots.append(fpath)
+
+            included_headers: Set[str] = set()
+            inc_roots = self.config.include_roots
+            for s_path in source_roots:
+                try:
+                    with open(s_path, "r", encoding="utf-8", errors="replace") as f:
+                        s_content = f.read()
+                    s_dir = os.path.dirname(os.path.abspath(s_path))
+                    resolver = IncludeResolver(include_roots=inc_roots, base_dir=s_dir)
+                    expander = TUIncludeExpander(resolver=resolver, defined_syms=self.config.defined_syms)
+                    expanded_tu = expander.expand(s_content, source_path=s_path)
+                    included_headers.update(expanded_tu.included_files)
+                except Exception as e:
+                    logger.warning("Failed to expand includes for TU root '%s': %s", s_path, e)
+
+            orphan_headers: List[str] = []
+            for h_path in headers:
+                real_h = os.path.realpath(h_path)
+                if real_h not in included_headers:
+                    orphan_headers.append(h_path)
+                    display_path = os.path.relpath(h_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(h_path)
+                    if not quiet:
+                        sys.stderr.write(f"Note: Scanning orphan header '{display_path}' as standalone root (not included by any scanned C source file).\n")
+                        sys.stderr.flush()
+                    logger.info("Scanning orphan header '%s' as standalone root (not included by any scanned C source file).", display_path)
+
+            files_to_scan = source_roots + orphan_headers
 
         if profiles is None and (config_strategy is not None or getattr(self.config, "config_strategy", "one-at-a-time") != "one-at-a-time"):
             strat = config_strategy if config_strategy is not None else getattr(self.config, "config_strategy", "one-at-a-time")
