@@ -589,3 +589,188 @@ def test_prelude_and_pcpp_composition_underneath_tu_map(tmp_path):
     assert issue.file_path == os.path.relpath(str(hdr.resolve()), str(tmp_path))
     assert issue.line_number == 5
     assert "unused_var" in issue.code_snippet
+
+
+def test_nested_guard_propagation_and_reuse(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver, HEADER_CACHE
+
+    HEADER_CACHE.clear()
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    nested_h = inc_dir / "nested.h"
+    nested_h.write_text("#pragma once\nint nested_val = 1;\n")
+
+    parent_h = inc_dir / "parent.h"
+    parent_h.write_text('#pragma once\n#include "nested.h"\nint parent_val = 2;\n')
+
+    # TU1: parent.h first, then nested.h
+    tu1_c = tmp_path / "tu1.c"
+    tu1_c.write_text('#include "parent.h"\n#include "nested.h"\nint main(void) { return parent_val + nested_val; }\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver)
+
+    expanded1 = expander.expand(tu1_c.read_text(), str(tu1_c))
+    assert expanded1.count("int nested_val = 1;") == 1
+    assert expanded1.count("int parent_val = 2;") == 1
+
+    # TU2: nested.h first, then parent.h
+    tu2_c = tmp_path / "tu2.c"
+    tu2_c.write_text('#include "nested.h"\n#include "parent.h"\nint main(void) { return parent_val + nested_val; }\n')
+
+    expanded2 = expander.expand(tu2_c.read_text(), str(tu2_c))
+    assert expanded2.count("int nested_val = 1;") == 1
+    assert expanded2.count("int parent_val = 2;") == 1
+
+
+def test_expansion_byte_budget_enforcement_cached_and_nested(tmp_path, caplog):
+    import logging
+    from cgull.includes import TUIncludeExpander, IncludeResolver, HEADER_CACHE
+
+    HEADER_CACHE.clear()
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    big_child = inc_dir / "big_child.h"
+    big_child.write_text("char large_buffer[500] = {0};\n")
+
+    parent = inc_dir / "parent.h"
+    parent.write_text('#include "big_child.h"\nint p_flag = 1;\n')
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "parent.h"\nint main(void) { return 0; }\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+
+    # max_total_bytes=100 will allow reading main.c and parent.h, but big_child.h (500 bytes) will exceed remaining budget
+    expander = TUIncludeExpander(resolver=resolver, max_total_bytes=100)
+    with caplog.at_level(logging.WARNING):
+        expanded = expander.expand(main_c.read_text(), str(main_c))
+
+    assert "exceeds remaining expansion budget" in caplog.text or "Max total expanded include size" in caplog.text
+    assert "large_buffer" not in expanded
+
+    # Test cache hit exceeding budget
+    caplog.clear()
+    HEADER_CACHE.clear()
+    leaf_h = inc_dir / "leaf.h"
+    leaf_h.write_text("char leaf_buf[200] = \"" + "A" * 200 + "\";\n")
+
+    # First expand with plenty of budget to populate cache
+    expander_large = TUIncludeExpander(resolver=resolver, max_total_bytes=1000)
+    expander_large.expand('#include "leaf.h"\n', str(main_c))
+
+    # Next expand with small budget: cache hit must enforce budget
+    expander_small = TUIncludeExpander(resolver=resolver, max_total_bytes=100)
+    with caplog.at_level(logging.WARNING):
+        expanded_small = expander_small.expand('#include "leaf.h"\n', str(main_c))
+
+    assert "exceeds remaining expansion budget" in caplog.text
+    assert "leaf_buf" not in expanded_small
+
+
+def test_include_depth_limit_enforced_on_cached_headers(tmp_path, caplog):
+    import logging
+    from cgull.includes import TUIncludeExpander, IncludeResolver, HEADER_CACHE
+
+    HEADER_CACHE.clear()
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    leaf = inc_dir / "leaf.h"
+    leaf.write_text("int leaf_target = 42;\n")
+
+    d2 = inc_dir / "d2.h"
+    d2.write_text('#include "leaf.h"\n')
+
+    d1 = inc_dir / "d1.h"
+    d1.write_text('#include "d2.h"\n')
+
+    main1 = tmp_path / "main1.c"
+    main1.write_text('#include "leaf.h"\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+
+    # 1. Populate cache at depth 0
+    expander_deep = TUIncludeExpander(resolver=resolver, max_depth=10)
+    exp1 = expander_deep.expand(main1.read_text(), str(main1))
+    assert "int leaf_target = 42;" in exp1
+
+    # 2. Re-include leaf.h via d1 -> d2 with max_depth=2
+    # main2 (depth 0) -> d1 (depth 1) -> d2 (depth 2) -> leaf.h (depth 3 >= max_depth 2)
+    main2 = tmp_path / "main2.c"
+    main2.write_text('#include "d1.h"\n')
+
+    caplog.clear()
+    expander_shallow = TUIncludeExpander(resolver=resolver, max_depth=2)
+    with caplog.at_level(logging.WARNING):
+        exp2 = expander_shallow.expand(main2.read_text(), str(main2))
+
+    assert "Max include depth (2) exceeded" in caplog.text
+    assert "int leaf_target = 42;" not in exp2
+
+
+def test_nested_dependency_invalidation(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver, HEADER_CACHE
+
+    HEADER_CACHE.clear()
+    inc_dir = tmp_path / "include"
+    inc_dir.mkdir()
+
+    child = inc_dir / "child.h"
+    child.write_text("int child_v1 = 1;\n")
+
+    parent = inc_dir / "parent.h"
+    parent.write_text('#include "child.h"\nint parent_val = 10;\n')
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "parent.h"\nint main(void) { return parent_val; }\n')
+
+    resolver = IncludeResolver(include_roots=[str(inc_dir)], base_dir=str(tmp_path))
+    expander = TUIncludeExpander(resolver=resolver)
+
+    # Initial expansion
+    exp1 = expander.expand(main_c.read_text(), str(main_c))
+    assert "int child_v1 = 1;" in exp1
+
+    # Invalidate child by modifying child.h on disk (parent.h remains unchanged)
+    child.write_text("int child_v2 = 2;\n")
+
+    exp2 = expander.expand(main_c.read_text(), str(main_c))
+    assert "int child_v2 = 2;" in exp2
+    assert "int child_v1 = 1;" not in exp2
+
+
+def test_resolver_roots_cache_isolation(tmp_path):
+    from cgull.includes import TUIncludeExpander, IncludeResolver, HEADER_CACHE
+
+    HEADER_CACHE.clear()
+    inc1 = tmp_path / "inc1"
+    inc2 = tmp_path / "inc2"
+    inc1.mkdir()
+    inc2.mkdir()
+
+    target1 = inc1 / "target.h"
+    target1.write_text("int from_inc1 = 100;\n")
+
+    target2 = inc2 / "target.h"
+    target2.write_text("int from_inc2 = 200;\n")
+
+    shared = tmp_path / "shared.h"
+    shared.write_text('#include "target.h"\n')
+
+    main_c = tmp_path / "main.c"
+    main_c.write_text('#include "shared.h"\n')
+
+    resolver1 = IncludeResolver(include_roots=[str(inc1)], base_dir=str(tmp_path))
+    expander1 = TUIncludeExpander(resolver=resolver1)
+    exp1 = expander1.expand(main_c.read_text(), str(main_c))
+    assert "int from_inc1 = 100;" in exp1
+
+    resolver2 = IncludeResolver(include_roots=[str(inc2)], base_dir=str(tmp_path))
+    expander2 = TUIncludeExpander(resolver=resolver2)
+    exp2 = expander2.expand(main_c.read_text(), str(main_c))
+    assert "int from_inc2 = 200;" in exp2
+    assert "int from_inc1 = 100;" not in exp2
+

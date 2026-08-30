@@ -31,12 +31,12 @@ class CachedHeaderExpansion:
 class HeaderCache:
     """
     In-process cache for expanded headers and parsed representations in TU mode.
-    Keyed on resolved file path and SHA256 content hash.
+    Keyed on resolved file path, SHA256 content hash, preprocessor macros, and resolver context.
     Invalidates automatically on content change (hash mismatch).
     """
 
     def __init__(self):
-        self._expansion_cache: Dict[Tuple[str, str, Tuple[Tuple[str, int], ...]], CachedHeaderExpansion] = {}
+        self._expansion_cache: Dict[Tuple[str, str, Tuple[Tuple[str, int], ...], Tuple[Any, ...]], CachedHeaderExpansion] = {}
         self._ast_cache: Dict[Tuple[str, str], Any] = {}
 
     def clear(self) -> None:
@@ -44,9 +44,13 @@ class HeaderCache:
         self._ast_cache.clear()
 
     def get_expansion(
-        self, file_path: str, content_hash: str, macros_key: Tuple[Tuple[str, int], ...]
+        self,
+        file_path: str,
+        content_hash: str,
+        macros_key: Tuple[Tuple[str, int], ...],
+        resolver_key: Tuple[Any, ...] = (),
     ) -> Optional[CachedHeaderExpansion]:
-        return self._expansion_cache.get((file_path, content_hash, macros_key))
+        return self._expansion_cache.get((file_path, content_hash, macros_key, resolver_key))
 
     def set_expansion(
         self,
@@ -54,8 +58,9 @@ class HeaderCache:
         content_hash: str,
         macros_key: Tuple[Tuple[str, int], ...],
         cached: CachedHeaderExpansion,
+        resolver_key: Tuple[Any, ...] = (),
     ) -> None:
-        self._expansion_cache[(file_path, content_hash, macros_key)] = cached
+        self._expansion_cache[(file_path, content_hash, macros_key, resolver_key)] = cached
 
     def get_ast(self, file_path: str, content_hash: str) -> Optional[Any]:
         return self._ast_cache.get((file_path, content_hash))
@@ -191,6 +196,10 @@ class IncludeResolver:
             if r not in roots:
                 roots.append(r)
         return roots
+
+    def get_resolution_key(self) -> Tuple[Tuple[str, ...], str, bool]:
+        """Returns a hashable tuple identifying the include resolution context."""
+        return (tuple(self.include_roots), self.base_dir, self.allow_external_includes)
 
     def resolve(
         self,
@@ -604,11 +613,18 @@ class TUIncludeExpander:
             content_bytes = child_content.encode("utf-8", errors="replace")
             content_hash = hashlib.sha256(content_bytes).hexdigest()
             macros_key = tuple(sorted(macros.items())) if macros else ()
+            resolver_key = (
+                self.resolver.get_resolution_key()
+                if hasattr(self.resolver, "get_resolution_key")
+                else (tuple(self.resolver.include_roots), self.resolver.base_dir, self.resolver.allow_external_includes)
+            )
 
-            cached = HEADER_CACHE.get_expansion(abs_resolved, content_hash, macros_key)
+            cached = HEADER_CACHE.get_expansion(abs_resolved, content_hash, macros_key, resolver_key)
             if cached is not None:
                 if cached.has_pragma_once:
-                    guarded_files.add(abs_resolved)
+                    if abs_resolved in guarded_files:
+                        output_tuples.append(("", src_loc))
+                        continue
 
                 if cached.header_guard:
                     if cached.header_guard in seen_guards:
@@ -619,6 +635,32 @@ class TUIncludeExpander:
                         seen_guards.add(cached.header_guard)
                         guarded_files.add(abs_resolved)
 
+                if cached.has_pragma_once:
+                    guarded_files.add(abs_resolved)
+
+                # Depth check
+                if len(active_stack) >= self.max_depth:
+                    logger.warning(
+                        "Max include depth (%d) exceeded at %s. Stopping expansion.",
+                        self.max_depth,
+                        abs_resolved,
+                    )
+                    output_tuples.append((full_line, src_loc))
+                    continue
+
+                # Byte budget check & accounting
+                remaining_budget = self.max_total_bytes - state["total_bytes"]
+                if cached.byte_size > remaining_budget:
+                    logger.warning(
+                        "File %s (%d bytes) exceeds remaining expansion budget (%d bytes). Skipping.",
+                        abs_resolved,
+                        cached.byte_size,
+                        remaining_budget,
+                    )
+                    self.rejected_paths.add(abs_resolved)
+                    output_tuples.append((full_line, src_loc))
+                    continue
+
                 state["total_bytes"] += cached.byte_size
                 included_files.update(cached.included_files)
                 output_tuples.extend(cached.output_tuples)
@@ -628,7 +670,9 @@ class TUIncludeExpander:
             h_guard = _detect_header_guard(child_content)
 
             if has_p_once:
-                guarded_files.add(abs_resolved)
+                if abs_resolved in guarded_files:
+                    output_tuples.append(("", src_loc))
+                    continue
 
             if h_guard:
                 if h_guard in seen_guards:
@@ -638,6 +682,9 @@ class TUIncludeExpander:
                 else:
                     seen_guards.add(h_guard)
                     guarded_files.add(abs_resolved)
+
+            if has_p_once:
+                guarded_files.add(abs_resolved)
 
             # 3. Depth check
             if len(active_stack) >= self.max_depth:
@@ -654,15 +701,13 @@ class TUIncludeExpander:
             active_stack.append(abs_resolved)
             child_output_tuples: List[Tuple[str, SourceLocation]] = []
             child_included_files: Set[str] = {abs_resolved}
-            child_seen_guards: Set[str] = set(seen_guards)
-            child_guarded_files: Set[str] = set(guarded_files)
 
             self._expand_text(
                 child_content,
                 abs_resolved,
                 active_stack,
-                child_seen_guards,
-                child_guarded_files,
+                seen_guards,
+                guarded_files,
                 state,
                 child_output_tuples,
                 macros,
@@ -670,20 +715,15 @@ class TUIncludeExpander:
             )
             active_stack.pop()
 
-            seen_guards.update(child_seen_guards)
-            guarded_files.update(child_guarded_files)
-
-            cached_entry = CachedHeaderExpansion(
-                output_tuples=child_output_tuples,
-                included_files=set(child_included_files),
-                has_pragma_once=has_p_once,
-                header_guard=h_guard,
-                byte_size=len(content_bytes),
-            )
-            HEADER_CACHE.set_expansion(abs_resolved, content_hash, macros_key, cached_entry)
-
-            # Do NOT mutate seen_guards/guarded_files in top-level state when expanding child header.
-            # Whole-file guards (#ifndef GUARD / #pragma once) are evaluated per TU expansion.
+            if child_included_files == {abs_resolved}:
+                cached_entry = CachedHeaderExpansion(
+                    output_tuples=child_output_tuples,
+                    included_files=set(child_included_files),
+                    has_pragma_once=has_p_once,
+                    header_guard=h_guard,
+                    byte_size=len(content_bytes),
+                )
+                HEADER_CACHE.set_expansion(abs_resolved, content_hash, macros_key, cached_entry, resolver_key)
 
             included_files.update(child_included_files)
             output_tuples.extend(child_output_tuples)
