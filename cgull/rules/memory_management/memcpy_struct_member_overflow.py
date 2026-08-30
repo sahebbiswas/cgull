@@ -457,26 +457,32 @@ class MemcpyStructMemberOverflowRule(BaseRule):
         upper = False
         lower = False
 
-        m_clamp = re.search(r'\bclamp\s*\(\s*' + v_esc + r'\s*,\s*(-?\d+)\s*,\s*([^)]+)\)', expr_str)
+        m_clamp = re.search(r'\bclamp\s*\(', expr_str)
         if m_clamp:
-            min_v = int(m_clamp.group(1))
-            max_expr = m_clamp.group(2).strip()
-            ub = self._resolve_upper_bound(max_expr, fn, line_no, ast_ctx)
-            if min_v >= 0:
-                lower = True
-            if ub is not None and ub <= dest_capacity:
-                upper = True
-            return upper, lower
+            inner, _ = extract_balanced_parens(expr_str, m_clamp.end() - 1)
+            if inner is not None:
+                clamp_args = split_call_args(inner)
+                if len(clamp_args) == 3:
+                    min_v = int(clamp_args[1]) if clamp_args[1].lstrip('-').isdigit() else 0
+                    max_expr = clamp_args[2]
+                    ub = self._resolve_upper_bound(max_expr, fn, line_no, ast_ctx)
+                    if min_v >= 0:
+                        lower = True
+                    if ub is not None and ub <= dest_capacity:
+                        upper = True
+                    return upper, lower
 
-        m_call = re.search(r'\bmin\s*\(([^)]+)\)', expr_str)
+        m_call = re.search(r'\bmin\s*\(', expr_str)
         if m_call:
-            args = [a.strip() for a in m_call.group(1).split(',')]
-            for arg in args:
-                if arg == var_name:
-                    continue
-                ub = self._resolve_upper_bound(arg, fn, line_no, ast_ctx)
-                if ub is not None and ub <= dest_capacity:
-                    upper = True
+            inner, _ = extract_balanced_parens(expr_str, m_call.end() - 1)
+            if inner is not None:
+                args = split_call_args(inner)
+                for arg in args:
+                    if arg == var_name:
+                        continue
+                    ub = self._resolve_upper_bound(arg, fn, line_no, ast_ctx)
+                    if ub is not None and ub <= dest_capacity:
+                        upper = True
 
         return upper, lower
 
@@ -681,7 +687,7 @@ class MemcpyStructMemberOverflowRule(BaseRule):
                     if raw_args:
                         args = BannedFunctionsRule._extract_call_args(f"{callee}({raw_args})", len(callee))
                 if not args or len(args) < req_args:
-                    args = [a.strip() for a in raw_args.split(',')] if raw_args else []
+                    args = split_call_args(raw_args) if raw_args else []
 
                 if callee in ("memcpy", "memmove") and len(args) >= 3:
                     dest_arg, src_arg, size_arg = args[0], args[1], args[2]

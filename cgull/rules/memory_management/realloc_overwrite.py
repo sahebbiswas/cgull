@@ -51,26 +51,8 @@ class ReallocOverwriteRule(BaseRule):
 
     @staticmethod
     def _extract_first_arg(raw_args: str) -> str:
-        s = raw_args.strip()
-        paren_depth = 0
-        in_quote = False
-        quote_char = None
-        for i, c in enumerate(s):
-            if in_quote:
-                if c == quote_char and (i == 0 or s[i-1] != '\\'):
-                    in_quote = False
-            elif c in ('"', "'"):
-                in_quote = True
-                quote_char = c
-            elif c in ('(', '[', '{'):
-                paren_depth += 1
-            elif c in (')', ']', '}'):
-                paren_depth -= 1
-                if paren_depth < 0:
-                    return s[:i].strip()
-            elif c == ',' and paren_depth == 0:
-                return s[:i].strip()
-        return s.strip()
+        parts = split_call_args(raw_args)
+        return parts[0].strip() if parts else raw_args.strip()
 
     @staticmethod
     def _clean_expr(expr: str) -> str:

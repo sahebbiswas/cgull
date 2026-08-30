@@ -225,18 +225,26 @@ def is_in_string_or_char_literal(line: str, index: int) -> bool:
 def extract_balanced_parens(text: str, start_paren_pos: int) -> Tuple[Optional[str], int]:
     """
     Given `text` and position of opening '(', returns `(inside_str, closing_paren_pos)`.
+    Skips optional leading whitespace if start_paren_pos points to whitespace preceding '('.
     Handles nested parentheses, string literals, character literals, and escape sequences.
     If parentheses are unclosed or start_paren_pos is invalid, returns (None, len(text)).
     """
-    if start_paren_pos < 0 or start_paren_pos >= len(text) or text[start_paren_pos] != '(':
+    if start_paren_pos < 0 or start_paren_pos >= len(text):
         return None, start_paren_pos
 
+    n = len(text)
+    j = start_paren_pos
+    while j < n and text[j].isspace():
+        j += 1
+
+    if j >= n or text[j] != '(':
+        return None, start_paren_pos
+
+    start_paren_pos = j
     paren_depth = 0
     in_string = False
     in_char = False
     escape = False
-    j = start_paren_pos
-    n = len(text)
 
     while j < n:
         c = text[j]
