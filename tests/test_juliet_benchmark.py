@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import pytest
+from unittest.mock import patch, MagicMock
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
@@ -16,9 +17,12 @@ from benchmarks.run_juliet import (
     compute_metrics,
     format_text_report,
     format_markdown_report,
+    is_issue_from_source,
+    main,
     CATEGORIES,
     CWES,
 )
+from cgull.models import ScanResult, ScanError, Issue, Severity
 
 MANIFEST_PATH = os.path.join(REPO_ROOT, "benchmarks", "juliet", "manifest.json")
 
@@ -51,6 +55,9 @@ def test_manifest_structure_and_validity():
             assert "vulnerable" in o
             assert isinstance(o["vulnerable"], bool)
             assert "expected_cwe" in o
+            if tc["category"] == "interprocedural cases":
+                assert "helper_functions" in o
+                assert len(o["helper_functions"]) > 0
 
 
 def test_compute_metrics():
@@ -70,9 +77,26 @@ def test_compute_metrics():
     assert m_zero["f1"] == 0.0
 
 
+def test_is_issue_from_source():
+    manifest_dir = os.path.join(REPO_ROOT, "benchmarks", "juliet")
+    abs_src = os.path.join(manifest_dir, "testcases", "CWE476_NULL_Pointer_Dereference__01_baseline.c")
+
+    # Match exact absolute path
+    assert is_issue_from_source(abs_src, abs_src, manifest_dir) is True
+
+    # Match relative path from manifest
+    rel_src = "testcases/CWE476_NULL_Pointer_Dereference__01_baseline.c"
+    assert is_issue_from_source(rel_src, abs_src, manifest_dir) is True
+
+    # Mismatched file name / included header
+    assert is_issue_from_source("stdio.h", abs_src, manifest_dir) is False
+    assert is_issue_from_source("other_file.c", abs_src, manifest_dir) is False
+
+
 def test_juliet_runner_full():
     res = run_juliet_benchmark(MANIFEST_PATH, ci_only=False)
     assert res["total_test_cases_evaluated"] == 36
+    assert res["failed_test_cases_count"] == 0
     ov = res["overall"]
     assert ov["tp"] + ov["fp"] + ov["tn"] + ov["fn"] > 0
     assert "precision" in ov
@@ -91,6 +115,7 @@ def test_juliet_runner_full():
 def test_juliet_runner_ci():
     res = run_juliet_benchmark(MANIFEST_PATH, ci_only=True)
     assert res["total_test_cases_evaluated"] == 12
+    assert res["failed_test_cases_count"] == 0
     ov = res["overall"]
     assert ov["tp"] + ov["fp"] + ov["tn"] + ov["fn"] > 0
 
@@ -112,6 +137,80 @@ def test_juliet_runner_filters():
     res_id = run_juliet_benchmark(MANIFEST_PATH, test_id_filter="CWE476_NULL_Pointer_Dereference__01_baseline")
     assert res_id["total_test_cases_evaluated"] == 1
     assert res_id["test_cases"][0]["id"] == "CWE476_NULL_Pointer_Dereference__01_baseline"
+
+
+def test_juliet_runner_scan_failure_handling():
+    mock_failed_res = ScanResult(
+        target_path="mock.c",
+        scanned_files_count=1,
+        total_lines_of_code=10,
+        total_issues_count=0,
+        high_severity_count=0,
+        medium_severity_count=0,
+        low_severity_count=0,
+        scan_duration_seconds=0.1,
+        timestamp="2026-01-01T00:00:00Z",
+        failed_paths=["mock.c"],
+        files_failed=1,
+        scan_errors=[ScanError("mock.c", "ParseError", "Failed to parse syntax")],
+    )
+
+    with patch("cgull.engine.CGullScanner.scan_path", return_value=mock_failed_res):
+        res = run_juliet_benchmark(MANIFEST_PATH, test_id_filter="CWE476_NULL_Pointer_Dereference__01_baseline")
+        assert res["total_test_cases_evaluated"] == 1
+        assert res["failed_test_cases_count"] == 1
+        tc_res = res["test_cases"][0]
+        assert tc_res["status"] == "failed"
+        assert len(tc_res["scan_errors"]) == 1
+        assert tc_res["scan_errors"][0]["error_type"] == "ParseError"
+
+
+def test_juliet_runner_missing_function_validation():
+    bad_manifest = {
+        "suite": "Bad Juliet Benchmark",
+        "version": "1.0",
+        "test_cases": [
+            {
+                "id": "CWE476_NULL_Pointer_Dereference__01_baseline",
+                "cwe": "CWE-476",
+                "category": "baseline",
+                "file": "testcases/CWE476_NULL_Pointer_Dereference__01_baseline.c",
+                "oracle": [
+                    {
+                        "function": "non_existent_function_name",
+                        "vulnerable": True,
+                        "expected_cwe": "CWE-476"
+                    }
+                ]
+            }
+        ]
+    }
+
+    manifest_file = os.path.join(REPO_ROOT, "benchmarks", "juliet", "test_missing_fn.json")
+    with open(manifest_file, "w", encoding="utf-8") as f:
+        json.dump(bad_manifest, f)
+
+    try:
+        with pytest.raises(ValueError) as excinfo:
+            run_juliet_benchmark(manifest_file)
+        assert "non_existent_function_name" in str(excinfo.value)
+    finally:
+        if os.path.exists(manifest_file):
+            os.remove(manifest_file)
+
+
+def test_juliet_runner_cli_thresholds():
+    # Test passing thresholds
+    test_args = ["run_juliet.py", "--ci", "--min-precision", "0.5", "--min-f1", "0.5"]
+    with patch.object(sys, "argv", test_args):
+        main()
+
+    # Test failing threshold
+    failing_args = ["run_juliet.py", "--ci", "--min-f1", "1.01"]
+    with patch.object(sys, "argv", failing_args):
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+        assert excinfo.value.code == 1
 
 
 def test_juliet_runner_formatters():

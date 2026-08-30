@@ -9,6 +9,7 @@ split by 9 control-flow categories.
 Usage:
     python benchmarks/run_juliet.py [--ci] [--cwe CWE-476] [--category baseline]
                                      [--test-id TEST_ID] [--format text|json|markdown]
+                                     [--min-precision 0.8] [--min-recall 0.8] [--min-f1 0.8]
                                      [--output report.json]
 """
 
@@ -111,6 +112,18 @@ def is_issue_cwe_match(issue: Issue, target_cwe: str, expected_rules: List[str])
     return False
 
 
+def is_issue_from_source(issue_path: str, abs_source_path: str, manifest_dir: str) -> bool:
+    if os.path.basename(issue_path) != os.path.basename(abs_source_path):
+        return False
+    real_abs = os.path.realpath(abs_source_path)
+    real_issue = os.path.realpath(issue_path) if os.path.isabs(issue_path) else os.path.realpath(os.path.join(manifest_dir, issue_path))
+    if real_issue == real_abs:
+        return True
+    if os.path.basename(real_issue) == os.path.basename(real_abs):
+        return True
+    return False
+
+
 def run_juliet_benchmark(
     manifest_path: str,
     ci_only: bool = False,
@@ -154,6 +167,7 @@ def run_juliet_benchmark(
     overall_stats = {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
 
     test_results = []
+    failed_test_cases_count = 0
 
     for tc in test_cases:
         tc_id = tc["id"]
@@ -164,6 +178,31 @@ def run_juliet_benchmark(
 
         fn_ranges = extract_function_line_ranges(abs_file)
         scan_res = scanner.scan_path(abs_file)
+
+        # Check for scanner failure on this file
+        is_scan_failed = (
+            len(scan_res.failed_paths) > 0 or
+            scan_res.files_failed > 0 or
+            scan_res.get_overall_analysis_status() == "failed"
+        )
+
+        if is_scan_failed:
+            failed_test_cases_count += 1
+            test_results.append({
+                "id": tc_id,
+                "cwe": cwe,
+                "category": category,
+                "file": rel_file,
+                "status": "failed",
+                "scan_errors": [err.to_dict() for err in scan_res.scan_errors],
+                "tp": 0,
+                "fp": 0,
+                "tn": 0,
+                "fn": 0,
+                "oracle_evaluations": [],
+            })
+            continue
+
         reported_issues: List[Issue] = scan_res.issues
 
         tc_tp = 0
@@ -178,21 +217,37 @@ def run_juliet_benchmark(
             expected_cwe = o["expected_cwe"]
             expected_rules = o.get("expected_rules", [])
 
-            fn_start, fn_end = fn_ranges.get(fn_name, (0, 999999))
+            # Get explicit helper functions from oracle
+            helpers = o.get("helper_functions", [])
+            if isinstance(o.get("helper_function"), str):
+                helpers.append(o["helper_function"])
 
-            helper_fn_name = None
-            if fn_name.endswith("_bad"):
-                helper_fn_name = fn_name.replace("_bad", "_bad_sink")
-            elif fn_name.endswith("_good"):
-                helper_fn_name = fn_name.replace("_good", "_good_sink")
+            # Validate target function and helper functions exist in C file
+            missing_fns = []
+            if fn_name not in fn_ranges:
+                missing_fns.append(fn_name)
+            for h in helpers:
+                if h not in fn_ranges:
+                    missing_fns.append(h)
 
-            helper_range = fn_ranges.get(helper_fn_name, (0, 0)) if helper_fn_name else (0, 0)
+            if missing_fns:
+                raise ValueError(
+                    f"Testcase '{tc_id}' oracle references function(s) {missing_fns} "
+                    f"that do not exist in source file '{rel_file}'."
+                )
+
+            fn_start, fn_end = fn_ranges[fn_name]
+            helper_ranges = [fn_ranges[h] for h in helpers if h in fn_ranges]
 
             matching_issues = []
             for issue in reported_issues:
+                # Require issue to originate from testcase source file
+                if not is_issue_from_source(issue.file_path, abs_file, manifest_dir):
+                    continue
+
                 if is_issue_cwe_match(issue, expected_cwe, expected_rules):
-                    in_main = (fn_start <= issue.line_number <= fn_end) if fn_start > 0 else True
-                    in_helper = (helper_range[0] <= issue.line_number <= helper_range[1]) if helper_range[0] > 0 else False
+                    in_main = (fn_start <= issue.line_number <= fn_end)
+                    in_helper = any(h_start <= issue.line_number <= h_end for h_start, h_end in helper_ranges)
                     if in_main or in_helper:
                         matching_issues.append(issue)
 
@@ -235,6 +290,7 @@ def run_juliet_benchmark(
             "cwe": cwe,
             "category": category,
             "file": rel_file,
+            "status": "success",
             "tp": tc_tp,
             "fp": tc_fp,
             "tn": tc_tn,
@@ -250,6 +306,7 @@ def run_juliet_benchmark(
         "suite": manifest.get("suite", "Juliet Benchmark"),
         "version": manifest.get("version", "1.0"),
         "total_test_cases_evaluated": len(test_cases),
+        "failed_test_cases_count": failed_test_cases_count,
         "filters": {
             "ci_only": ci_only,
             "cwe": cwe_filter,
@@ -268,7 +325,7 @@ def format_text_report(results: Dict[str, Any]) -> str:
     lines.append("=" * 78)
     lines.append(f"C-GULL Juliet Benchmark Results ({results['suite']} v{results['version']})")
     lines.append("=" * 78)
-    lines.append(f"Evaluated Test Cases: {results['total_test_cases_evaluated']}")
+    lines.append(f"Evaluated Test Cases: {results['total_test_cases_evaluated']} (Failed Scans: {results['failed_test_cases_count']})")
     ov = results["overall"]
     lines.append(f"Overall Metrics: TP={ov['tp']}, FP={ov['fp']}, TN={ov['tn']}, FN={ov['fn']} | Precision={ov['precision']:.4f}, Recall={ov['recall']:.4f}, F1={ov['f1']:.4f}")
     lines.append("-" * 78)
@@ -292,7 +349,7 @@ def format_text_report(results: Dict[str, Any]) -> str:
 def format_markdown_report(results: Dict[str, Any]) -> str:
     lines = []
     lines.append(f"# C-GULL Juliet Benchmark Results ({results['suite']} v{results['version']})\n")
-    lines.append(f"**Evaluated Test Cases**: {results['total_test_cases_evaluated']}\n")
+    lines.append(f"**Evaluated Test Cases**: {results['total_test_cases_evaluated']} (Failed Scans: {results['failed_test_cases_count']})\n")
 
     ov = results["overall"]
     lines.append("## Overall Metrics\n")
@@ -327,6 +384,9 @@ def main():
     parser.add_argument("--category", type=str, help="Filter benchmark by control-flow category (e.g., baseline, if/else)")
     parser.add_argument("--test-id", type=str, help="Filter benchmark by individual Juliet test ID")
     parser.add_argument("--format", type=str, choices=["text", "json", "markdown"], default="text", help="Output format")
+    parser.add_argument("--min-precision", type=float, default=0.0, help="Minimum required overall Precision score")
+    parser.add_argument("--min-recall", type=float, default=0.0, help="Minimum required overall Recall score")
+    parser.add_argument("--min-f1", type=float, default=0.0, help="Minimum required overall F1 score")
     parser.add_argument("--output", type=str, help="Write output report to specified file")
 
     args = parser.parse_args()
@@ -352,6 +412,34 @@ def main():
         print(f"Report written to {args.output}")
     else:
         print(report_str)
+
+    # Check for scan failures or quality threshold violations
+    failed_scans = results.get("failed_test_cases_count", 0)
+    ov = results.get("overall", {})
+    precision = ov.get("precision", 0.0)
+    recall = ov.get("recall", 0.0)
+    f1 = ov.get("f1", 0.0)
+
+    has_error = False
+
+    if failed_scans > 0:
+        print(f"ERROR: {failed_scans} test case scan(s) failed during execution.", file=sys.stderr)
+        has_error = True
+
+    if precision < args.min_precision:
+        print(f"ERROR: Precision ({precision:.4f}) is below minimum threshold ({args.min_precision:.4f}).", file=sys.stderr)
+        has_error = True
+
+    if recall < args.min_recall:
+        print(f"ERROR: Recall ({recall:.4f}) is below minimum threshold ({args.min_recall:.4f}).", file=sys.stderr)
+        has_error = True
+
+    if f1 < args.min_f1:
+        print(f"ERROR: F1 Score ({f1:.4f}) is below minimum threshold ({args.min_f1:.4f}).", file=sys.stderr)
+        has_error = True
+
+    if has_error:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
