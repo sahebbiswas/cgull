@@ -241,11 +241,26 @@ class CGullScanner:
                         else:
                             files_to_scan.append(file_path)
 
+        all_discovered_files = list(files_to_scan)
+
+        if profiles is None and (config_strategy is not None or getattr(self.config, "config_strategy", "one-at-a-time") != "one-at-a-time"):
+            strat = config_strategy if config_strategy is not None else getattr(self.config, "config_strategy", "one-at-a-time")
+            ex_thresh = exhaustive_threshold if exhaustive_threshold is not None else getattr(self.config, "exhaustive_threshold", 10)
+            target_presence_flags = _collect_files_presence_flags(all_discovered_files, quiet=quiet)
+            if target_presence_flags or strat == "baseline":
+                from .ast_analyzer import generate_config_profiles
+                profiles = generate_config_profiles(
+                    target_presence_flags,
+                    strategy=strat,
+                    exhaustive_threshold=ex_thresh,
+                    base_flags=self.config.defined_syms,
+                )
+
         if self.config.mode == ScanMode.TU and files_to_scan:
             source_roots: List[str] = []
             headers: List[str] = []
             HEADER_EXTS = {".h", ".hpp"}
-            for fpath in files_to_scan:
+            for fpath in all_discovered_files:
                 ext = os.path.splitext(fpath)[1].lower()
                 if ext in HEADER_EXTS:
                     headers.append(fpath)
@@ -254,15 +269,24 @@ class CGullScanner:
 
             included_headers: Set[str] = set()
             inc_roots = self.config.include_roots
+            active_profiles = profiles if profiles else seed_profiles
+
             for s_path in source_roots:
                 try:
                     with open(s_path, "r", encoding="utf-8", errors="replace") as f:
                         s_content = f.read()
                     s_dir = os.path.dirname(os.path.abspath(s_path))
                     resolver = IncludeResolver(include_roots=inc_roots, base_dir=s_dir)
-                    expander = TUIncludeExpander(resolver=resolver, defined_syms=self.config.defined_syms)
-                    expanded_tu = expander.expand(s_content, source_path=s_path)
-                    included_headers.update(expanded_tu.included_files)
+
+                    if active_profiles:
+                        for prof in active_profiles:
+                            expander = TUIncludeExpander(resolver=resolver, defined_syms=prof.flags)
+                            expanded_tu = expander.expand(s_content, source_path=s_path)
+                            included_headers.update(expanded_tu.included_files)
+                    else:
+                        expander = TUIncludeExpander(resolver=resolver, defined_syms=self.config.defined_syms)
+                        expanded_tu = expander.expand(s_content, source_path=s_path)
+                        included_headers.update(expanded_tu.included_files)
                 except Exception as e:
                     logger.warning("Failed to expand includes for TU root '%s': %s", s_path, e)
 
@@ -278,19 +302,6 @@ class CGullScanner:
                     logger.info("Scanning orphan header '%s' as standalone root (not included by any scanned C source file).", display_path)
 
             files_to_scan = source_roots + orphan_headers
-
-        if profiles is None and (config_strategy is not None or getattr(self.config, "config_strategy", "one-at-a-time") != "one-at-a-time"):
-            strat = config_strategy if config_strategy is not None else getattr(self.config, "config_strategy", "one-at-a-time")
-            ex_thresh = exhaustive_threshold if exhaustive_threshold is not None else getattr(self.config, "exhaustive_threshold", 10)
-            target_presence_flags = _collect_files_presence_flags(files_to_scan, quiet=quiet)
-            if target_presence_flags or strat == "baseline":
-                from .ast_analyzer import generate_config_profiles
-                profiles = generate_config_profiles(
-                    target_presence_flags,
-                    strategy=strat,
-                    exhaustive_threshold=ex_thresh,
-                    base_flags=self.config.defined_syms,
-                )
 
 
         total_files = len(files_to_scan)
@@ -964,6 +975,7 @@ def _scan_file_content_profiles(
         base_suppression_config = config.suppression_config
         base_include_roots = config.include_roots
         base_dedup_headers = getattr(config, "dedup_headers", True)
+        base_mode = getattr(config, "mode", ScanMode.FILE)
     else:
         base_rules = rules if rules is not None else get_all_rules()
         base_engine_mode = engine_mode if engine_mode is not None else AnalysisEngine.HYBRID
@@ -972,6 +984,7 @@ def _scan_file_content_profiles(
         base_suppression_config = {}
         base_include_roots = []
         base_dedup_headers = True
+        base_mode = ScanMode.FILE
 
     total_duration_ms = 0.0
     merged_issues: Dict[Tuple[str, int, str], Tuple[Issue, Set[ConfigProfile]]] = {}
@@ -994,6 +1007,7 @@ def _scan_file_content_profiles(
             defined_syms=cp.flags,
             include_roots=base_include_roots,
             dedup_headers=base_dedup_headers,
+            mode=base_mode,
         )
 
         v_issues, v_loc, v_dur, v_parser_status, v_parse_tier, v_status, v_confidence, v_err = _scan_file_content(
