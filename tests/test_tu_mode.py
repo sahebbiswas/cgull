@@ -110,6 +110,43 @@ class TestTUMode(unittest.TestCase):
             # Since opt.h is included under prof2, it is NOT an orphan header across all profiles
             self.assertNotIn("opt.h", scanned_names)
 
+    def test_header_caching_and_invalidation(self):
+        from cgull.includes import HEADER_CACHE, IncludeResolver, TUIncludeExpander
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            common_h = os.path.realpath(os.path.join(tmpdir, "common.h"))
+            with open(common_h, "w", encoding="utf-8") as f:
+                f.write("void common_func(char *b) { gets(b); }\n")
+
+            sources = []
+            for i in range(10):
+                src = os.path.join(tmpdir, f"src_{i}.c")
+                with open(src, "w", encoding="utf-8") as f:
+                    f.write(f'#include "common.h"\nint foo_{i}(void) {{ return 0; }}\n')
+                sources.append(src)
+
+            HEADER_CACHE.clear()
+            scanner = CGullScanner(config=ScanConfig.create(mode=ScanMode.TU))
+            res = scanner.scan_path(tmpdir, quiet=True)
+
+            self.assertEqual(res.scanned_files_count, 10)
+            gets_issues = [i for i in res.issues if i.rule_id == "CGULL-001"]
+            self.assertEqual(len(gets_issues), 1)
+            self.assertTrue(gets_issues[0].file_path.endswith("common.h"))
+            self.assertEqual(len(gets_issues[0].related_tus), 10)
+
+            # Verify that HEADER_CACHE was populated with common.h
+            self.assertGreaterEqual(len(HEADER_CACHE._expansion_cache), 1)
+
+            # Invalidation test: modify common.h content
+            with open(common_h, "w", encoding="utf-8") as f:
+                f.write("void common_func_v2(char *b) { gets(b); }\n")
+
+            res2 = scanner.scan_path(tmpdir, quiet=True)
+            gets_issues2 = [i for i in res2.issues if i.rule_id == "CGULL-001"]
+            self.assertEqual(len(gets_issues2), 1)
+            self.assertEqual(len(gets_issues2[0].related_tus), 10)
+
 
 if __name__ == "__main__":
     unittest.main()
