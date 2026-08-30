@@ -273,5 +273,60 @@ schema_version = 1
         self.assertFalse(sup.is_suppressed(2, "CGULL-001"))
 
 
+class TestConfigEdgeCases(unittest.TestCase):
+    def test_get_resolved_exclude_paths(self):
+        cfg = CGullConfig()
+        # Test empty exclude_paths
+        self.assertEqual(cfg.get_resolved_exclude_paths("some_dir"), [])
+        
+        cfg.exclude_paths = ["build/", "/absolute/path/"]
+        # Test config_dir not set
+        self.assertEqual(cfg.get_resolved_exclude_paths("some_dir"), ["build/", "/absolute/path/"])
+        
+        cfg.config_dir = "/project"
+        # Test base_dir == config_dir
+        self.assertEqual(cfg.get_resolved_exclude_paths("/project"), ["build/", "/absolute/path/"])
+        
+        # Test base_dir is child of config_dir
+        resolved = cfg.get_resolved_exclude_paths("/project/src")
+        self.assertEqual(resolved, ["build/"]) # build/ is unanchored, /absolute/path/ doesn't match src/
+
+        # Test base_dir outside config_dir
+        self.assertEqual(cfg.get_resolved_exclude_paths("/other"), ["build/", "/absolute/path/"])
+
+    def test_invalid_toml_parsing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_file = os.path.join(tmpdir, ".cgull.toml")
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                f.write("[invalid toml...")
+            cfg = load_config(cfg_file)
+            self.assertTrue(cfg.error.startswith("Failed to parse TOML configuration file"))
+
+    def test_pyproject_toml_loading_invalid_type(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_file = os.path.join(tmpdir, "pyproject.toml")
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                f.write("[tool]\ncgull = 'not a dict'")
+            cfg = load_config(cfg_file)
+            self.assertEqual(cfg.schema_version, 1) # default, empty dict parsed
+
+    def test_invalid_schema_version_type(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_file = os.path.join(tmpdir, ".cgull.toml")
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                f.write("schema_version = 'v1'")
+            cfg = load_config(cfg_file)
+            self.assertTrue(any("Invalid schema_version" in w for w in cfg.warnings))
+
+    def test_rules_skip_as_list(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_file = os.path.join(tmpdir, ".cgull.toml")
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                f.write("[rules]\nskip = ['CGULL-019', 'CGULL-020']")
+            cfg = load_config(cfg_file)
+            self.assertIn("CGULL-019", cfg.skipped_rules)
+            self.assertEqual(cfg.skipped_rules["CGULL-019"], "Disabled via configuration")
+
+
 if __name__ == "__main__":
     unittest.main()

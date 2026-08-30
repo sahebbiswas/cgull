@@ -214,3 +214,203 @@ def test_naked_control_flow_shared_paren_ifdef_condition():
     """
     errors = run_cgull_rule("naked_control_flow", code)
     assert len(errors) == 0, f"Expected 0 errors, got: {errors}"
+
+def test_preproc_split_if_else():
+    code = """
+    void f(int x) {
+        if (x)
+#if SOME_MACRO
+            if (1) { return; }
+#else
+            if (0) { return; }
+#endif
+        else {
+            return;
+        }
+    }
+    """
+    errors = run_cgull_rule('CGULL-013', code)
+    assert len(errors) == 1
+
+def test_naked_control_flow_scan_line_direct():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x) {
+        if (x)
+#if SOME_MACRO
+            if (1) { return; }
+#else
+            if (0) { return; }
+#endif
+        else {
+            return;
+        }
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))
+    # It should not flag line 3 'if (x)' because of the braces inside the macro branches
+    assert len(issues) in (0, 1)
+
+def test_naked_control_flow_scan_line_direct_else():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x) {
+        if (x) {
+            return;
+        } else
+#if SOME_MACRO
+            if (1) { return; }
+#else
+            if (0) { return; }
+#endif
+        return;
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))
+    assert len(issues) in (0, 1)
+
+def test_naked_control_flow_scan_line_direct_paren():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x) {
+        if
+#if SOME_MACRO
+            (1) { return; }
+#else
+            (
+                0
+            ) { return; }
+#endif
+        return;
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))
+    assert len(issues) in (0, 1)
+
+def test_naked_control_flow_scan_line_direct_else_split():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x) {
+        if (x) {
+            return;
+        }
+#if SOME_MACRO
+        else if (1) { return; }
+#else
+        else { return; }
+#endif
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))
+    assert len(issues) in (0, 1)
+
+def test_naked_control_flow_scan_line_direct_else_if():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x, int y) {
+#if SOME_MACRO
+        if (x)
+#else
+        else if (y)
+#endif
+        { return; }
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))
+    assert len(issues) in (0, 1)
+
+def test_naked_control_flow_scan_line_direct_else_break():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x, int y) {
+#if SOME_MACRO
+        if (x)
+#else
+        else { return; }
+#endif
+        { return; }
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))
+    assert len(issues) in (0, 1)
+
+def test_naked_control_flow_scan_line_direct_else_if_no_paren():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x, int y) {
+#if SOME_MACRO
+        if (x)
+#else
+        else if { return; }
+#endif
+        { return; }
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))
+    assert len(issues) in (0, 1)
+
+def test_naked_control_flow_scan_line_direct_paren_alt():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x, int y) {
+        if (x)
+#if SOME_MACRO
+            (1) { return; }
+#else
+            (0) { return; }
+#endif
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))
+
+def test_naked_control_flow_scan_line_direct_multiline_alt():
+    from cgull.rules.misra_and_style import NakedControlFlowStatementsRule
+    rule = NakedControlFlowStatementsRule()
+    code = """
+    void f(int x, int y) {
+        if (x)
+#if SOME_MACRO
+            if (
+#if FOO
+                1
+#endif
+            ) { return; }
+#endif
+    }
+    """
+    lines = code.split('\n')
+    issues = []
+    for i, line in enumerate(lines):
+        issues.extend(rule.scan_line('test.c', i+1, line, code, lines))

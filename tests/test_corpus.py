@@ -102,6 +102,38 @@ class TestSecurityRuleBehavioralCorpus(unittest.TestCase):
         success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-045", verbose=False)
         self.assertTrue(success, f"CGULL-045 Corpus Failed:\n{report}")
 
+    def test_rule_cgull_032(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-032", verbose=False)
+        self.assertTrue(success, f"CGULL-032 Corpus Failed:\n{report}")
+
+    def test_rule_cgull_034(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-034", verbose=False)
+        self.assertTrue(success, f"CGULL-034 Corpus Failed:\n{report}")
+
+    def test_rule_cgull_039(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-039", verbose=False)
+        self.assertTrue(success, f"CGULL-039 Corpus Failed:\n{report}")
+
+    def test_rule_cgull_040(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-040", verbose=False)
+        self.assertTrue(success, f"CGULL-040 Corpus Failed:\n{report}")
+
+    def test_rule_cgull_041(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-041", verbose=False)
+        self.assertTrue(success, f"CGULL-041 Corpus Failed:\n{report}")
+
+    def test_rule_cgull_042(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-042", verbose=False)
+        self.assertTrue(success, f"CGULL-042 Corpus Failed:\n{report}")
+
+    def test_rule_cgull_043(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-043", verbose=False)
+        self.assertTrue(success, f"CGULL-043 Corpus Failed:\n{report}")
+
+    def test_rule_cgull_046(self):
+        success, report = run_corpus_scan(self.rules_dir, target_rule_id="CGULL-046", verbose=False)
+        self.assertTrue(success, f"CGULL-046 Corpus Failed:\n{report}")
+
 
 if __name__ == "__main__":
     unittest.main()
