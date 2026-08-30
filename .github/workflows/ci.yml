@@ -38,3 +38,7 @@ jobs:
       - name: Run Security Rule Behavioral Corpus
         run: |
           python tests/run_corpus.py --min-coverage 40.0
+
+      - name: Run Focused Juliet Benchmark
+        run: |
+          python benchmarks/run_juliet.py --ci --min-f1 0.70
