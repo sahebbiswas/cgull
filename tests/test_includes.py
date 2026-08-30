@@ -390,7 +390,7 @@ def test_tu_include_expansion_integration_with_scanner(tmp_path):
     gets_issues = [i for i in res.issues if "gets" in i.message.lower() or i.rule_id == "CGULL-005"]
     assert len(gets_issues) >= 1
     # Check that the reported issue's file_path and line_number match the original header file
-    assert gets_issues[0].file_path == str(hdr.resolve())
+    assert gets_issues[0].file_path == os.path.relpath(str(hdr.resolve()), str(tmp_path))
     assert gets_issues[0].line_number == 1
 
 
@@ -586,6 +586,6 @@ def test_prelude_and_pcpp_composition_underneath_tu_map(tmp_path):
 
     issue = ast_issues[0]
     # Check that the AST finding maps to the header file at line 5 (int unused_var;)
-    assert issue.file_path == str(hdr.resolve())
+    assert issue.file_path == os.path.relpath(str(hdr.resolve()), str(tmp_path))
     assert issue.line_number == 5
     assert "unused_var" in issue.code_snippet

@@ -18,7 +18,7 @@ from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
-from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint, sanitize_terminal_text
+from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint, compute_issue_fingerprint_tu, sanitize_terminal_text
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +152,7 @@ class CGullScanner:
                     config_strategy=self.config.config_strategy,
                     exhaustive_threshold=self.config.exhaustive_threshold,
                     include_roots=self.config.include_roots,
+                    dedup_headers=getattr(self.config, "dedup_headers", True),
                 )
         else:
             self.config = ScanConfig.create(
@@ -178,6 +179,7 @@ class CGullScanner:
             config_strategy=self.config.config_strategy,
             exhaustive_threshold=self.config.exhaustive_threshold,
             include_roots=self.config.include_roots,
+            dedup_headers=getattr(self.config, "dedup_headers", True),
         )
 
     def scan_path(
@@ -290,6 +292,9 @@ class CGullScanner:
         failed_count = 0
 
         real_base_dir = os.path.realpath(base_dir)
+        # Global deduplication across translation units
+        dedup_issues_map: Dict[Any, Issue] = {}
+        
         for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err in results:
             display_path = os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path)
             real_file_path = os.path.realpath(file_path)
@@ -314,16 +319,71 @@ class CGullScanner:
                 if self.severity_filter:
                     file_issues = [i for i in file_issues if i.impact in self.severity_filter]
                 for issue in file_issues:
-                    if not issue.file_path or issue.file_path == file_path or os.path.realpath(issue.file_path) == real_file_path:
-                        issue.file_path = display_path
-                    elif os.path.isabs(issue.file_path):
+                    # original_path is the provenance file path (header or translation unit)
+                    original_path = issue.file_path
+                    real_origin_path = os.path.realpath(original_path)
+                    try:
+                        canonical_rel_path = os.path.relpath(real_origin_path, real_base_dir)
+                    except ValueError:
+                        canonical_rel_path = real_origin_path
+
+                    normalized_canonical_path = canonical_rel_path.replace("\\", "/")
+
+                    # Compute stable project-relative fingerprint without line numbers
+                    issue.fingerprint = compute_issue_fingerprint(
+                        issue.rule_id,
+                        normalized_canonical_path,
+                        issue.code_snippet,
+                    )
+
+                    # Determine if this issue originates from a different file (e.g., a header)
+                    is_from_header = real_origin_path != real_file_path
+
+                    # Preserve the canonical header path as the primary location in both modes
+                    if is_from_header:
                         try:
-                            if os.path.isdir(abs_target):
-                                issue.file_path = os.path.relpath(os.path.realpath(issue.file_path), real_base_dir)
+                            issue.file_path = os.path.relpath(original_path, base_dir)
                         except ValueError:
-                            pass
-                    issue.fingerprint = compute_issue_fingerprint(issue.rule_id, issue.file_path, issue.code_snippet)
-                all_issues.extend(file_issues)
+                            issue.file_path = canonical_rel_path
+                        if display_path not in issue.related_tus:
+                            issue.related_tus.append(display_path)
+                    else:
+                        issue.file_path = display_path
+
+                    # Normalize any absolute paths in related_tus
+                    norm_related: List[str] = []
+                    for related in issue.related_tus:
+                        if os.path.isabs(related):
+                            try:
+                                norm_related.append(os.path.relpath(os.path.realpath(related), real_base_dir))
+                            except ValueError:
+                                norm_related.append(related)
+                        else:
+                            norm_related.append(related)
+                    issue.related_tus = norm_related
+
+                    if getattr(config, "dedup_headers", True):
+                        # Disambiguation aggregation key across translation units
+                        dedup_key = (
+                            issue.fingerprint,
+                            normalized_canonical_path,
+                            issue.line_number,
+                            issue.column_number,
+                            issue.message,
+                        )
+                        if dedup_key not in dedup_issues_map:
+                            dedup_issues_map[dedup_key] = issue
+                            all_issues.append(issue)
+                        else:
+                            # Merge related_tus into existing deduplicated issue
+                            existing_issue = dedup_issues_map[dedup_key]
+                            for tu in issue.related_tus:
+                                if tu not in existing_issue.related_tus:
+                                    existing_issue.related_tus.append(tu)
+                    else:
+                        # No header deduplication: report each issue per translation unit,
+                        # preserving canonical header path as primary location and TU in related_tus
+                        all_issues.append(issue)
 
             total_loc += loc
 
@@ -863,6 +923,7 @@ def _scan_file_content_profiles(
         base_enable_suppressions = config.enable_inline_suppressions
         base_suppression_config = config.suppression_config
         base_include_roots = config.include_roots
+        base_dedup_headers = getattr(config, "dedup_headers", True)
     else:
         base_rules = rules if rules is not None else get_all_rules()
         base_engine_mode = engine_mode if engine_mode is not None else AnalysisEngine.HYBRID
@@ -870,6 +931,7 @@ def _scan_file_content_profiles(
         base_enable_suppressions = True
         base_suppression_config = {}
         base_include_roots = []
+        base_dedup_headers = True
 
     total_duration_ms = 0.0
     merged_issues: Dict[Tuple[str, int, str], Tuple[Issue, Set[ConfigProfile]]] = {}
@@ -891,6 +953,7 @@ def _scan_file_content_profiles(
             suppression_config=base_suppression_config,
             defined_syms=cp.flags,
             include_roots=base_include_roots,
+            dedup_headers=base_dedup_headers,
         )
 
         v_issues, v_loc, v_dur, v_parser_status, v_parse_tier, v_status, v_confidence, v_err = _scan_file_content(

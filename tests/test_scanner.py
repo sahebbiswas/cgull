@@ -507,14 +507,23 @@ class TestParallelAndSequentialEquivalence(unittest.TestCase):
             rules=[get_rule_by_id("CGULL-001")],
             engine_mode=AnalysisEngine.REGEX,
             severity_filter={Severity.HIGH},
+            dedup_headers=False,
         )
         d = cfg.to_dict()
         self.assertEqual(d["enabled_rule_ids"], ["CGULL-001"])
+        self.assertFalse(d["dedup_headers"])
         restored = ScanConfig.from_dict(d)
         self.assertEqual(restored.engine_mode, cfg.engine_mode)
         self.assertEqual(restored.severity_filter, cfg.severity_filter)
+        self.assertFalse(restored.dedup_headers)
         self.assertEqual(len(restored.get_rules()), 1)
         self.assertEqual(restored.get_rules()[0].rule_id, "CGULL-001")
+
+        # Backward compatibility when dedup_headers key is missing from dict
+        d_legacy = dict(d)
+        del d_legacy["dedup_headers"]
+        restored_legacy = ScanConfig.from_dict(d_legacy)
+        self.assertTrue(restored_legacy.dedup_headers)
 
     def test_custom_rule_instance_attributes_preserved(self):
         class ConfigurableRule(BaseRule):
