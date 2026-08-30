@@ -678,22 +678,34 @@ class UnsafeIntegerConversionsRule(BaseRule):
         match_target = masked_line_content or line_content
         from ..utils import extract_balanced_parens
         for fn in ["atoi", "atol", "atoll", "atof"]:
-            for m in re.finditer(rf'\b{fn}\s*\(', match_target):
+            for m in re.finditer(rf'\b{re.escape(fn)}\s*\(', match_target):
                 start_paren_pos = m.end() - 1
                 arg, _ = extract_balanced_parens(line_content, start_paren_pos)
                 if arg is None:
                     arg_masked, _ = extract_balanced_parens(match_target, start_paren_pos)
-                    arg = arg_masked if arg_masked is not None else ""
-                arg = arg.strip()
+                    if arg_masked is not None:
+                        arg = arg_masked
+                if arg is None and source_lines and line_number <= len(source_lines):
+                    multiline_snippet = "\n".join(source_lines[line_number - 1 : line_number + 10])
+                    m_offset = multiline_snippet.find(f"{fn}(")
+                    if m_offset != -1:
+                        p_pos = m_offset + len(fn)
+                        arg_multi, _ = extract_balanced_parens(multiline_snippet, p_pos)
+                        if arg_multi is not None:
+                            arg = arg_multi
+
+                arg_str = arg.strip() if arg is not None else ""
+                sug_fix = f"strtol({arg_str}, &endptr, 10)" if arg_str else None
+
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,
                     code_snippet=line_content,
-                    message=f"Use of insecure conversion function '{fn}({arg})'. '{fn}' does not detect numeric overflow or invalid characters.",
+                    message=f"Use of insecure conversion function '{fn}({arg_str})'. '{fn}' does not detect numeric overflow or invalid characters.",
                     column_number=m.start() + 1,
                     engine="Regex",
-                    fix_type=FixType.SUGGESTED_FIX,
-                    suggested_fix_replacement=f"strtol({arg}, &endptr, 10)"
+                    fix_type=FixType.SUGGESTED_FIX if sug_fix else FixType.MANUAL_REVIEW,
+                    suggested_fix_replacement=sug_fix
                 ))
         return issues
 

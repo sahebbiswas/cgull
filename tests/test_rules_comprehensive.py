@@ -656,6 +656,12 @@ class TestUnsafeIntegerConversions(unittest.TestCase):
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].suggested_fix_replacement, "strtol(get_str(sizeof(int)), &endptr, 10)")
 
+    def test_detects_atoi_multiline(self):
+        code = "int f(char *s) {\n    return atoi(\n        s\n    );\n}"
+        issues = scan_with_rule("CGULL-012", code)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].suggested_fix_replacement, "strtol(s, &endptr, 10)")
+
     def test_clean_strtol(self):
         code = "long f(char *s) {\n    char *endptr;\n    return strtol(s, &endptr, 10);\n}"
         issues = scan_with_rule("CGULL-012", code)
