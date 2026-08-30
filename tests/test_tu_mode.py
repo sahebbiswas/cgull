@@ -147,6 +147,57 @@ class TestTUMode(unittest.TestCase):
             self.assertEqual(len(gets_issues2), 1)
             self.assertEqual(len(gets_issues2[0].related_tus), 10)
 
+    def test_tu_mode_fixture_provenance(self):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        fixture_dir = os.path.join(repo_root, "tests", "tu_mode")
+
+        scanner = CGullScanner(config=ScanConfig.create(mode=ScanMode.TU))
+        res = scanner.scan_path(fixture_dir, quiet=True)
+
+        # Find CGULL-001 finding in vulnerable.h
+        gets_issues = [i for i in res.issues if i.rule_id == "CGULL-001"]
+        self.assertEqual(len(gets_issues), 1)
+        iss_gets = gets_issues[0]
+        # Verify file path is the header itself (vulnerable.h), not the including file1.c or file2.c
+        self.assertEqual(os.path.basename(iss_gets.file_path), "vulnerable.h")
+        self.assertEqual(iss_gets.line_number, 7)
+        self.assertIn("gets(buf)", iss_gets.code_snippet)
+        # Should be included by both file1.c and file2.c
+        related_base = {os.path.basename(t) for t in iss_gets.related_tus}
+        self.assertIn("file1.c", related_base)
+        self.assertIn("file2.c", related_base)
+
+        # Find CGULL-045 finding in no_guard.h
+        guard_issues = [i for i in res.issues if i.rule_id == "CGULL-045"]
+        self.assertEqual(len(guard_issues), 1)
+        iss_guard = guard_issues[0]
+        self.assertEqual(os.path.basename(iss_guard.file_path), "no_guard.h")
+        self.assertEqual(iss_guard.line_number, 1)
+
+    def test_tu_mode_vs_file_mode_parity_zero_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src1 = os.path.join(tmpdir, "mod1.c")
+            with open(src1, "w", encoding="utf-8") as f:
+                f.write("void test1(char *b) { gets(b); }\n")
+
+            src2 = os.path.join(tmpdir, "mod2.c")
+            with open(src2, "w", encoding="utf-8") as f:
+                f.write("void test2(char *b) { gets(b); }\n")
+
+            scanner_file = CGullScanner(config=ScanConfig.create(mode=ScanMode.FILE))
+            res_file = scanner_file.scan_path(tmpdir, quiet=True)
+
+            scanner_tu = CGullScanner(config=ScanConfig.create(mode=ScanMode.TU))
+            res_tu = scanner_tu.scan_path(tmpdir, quiet=True)
+
+            self.assertEqual(res_file.scanned_files_count, res_tu.scanned_files_count)
+            self.assertEqual(res_file.total_lines_of_code, res_tu.total_lines_of_code)
+            self.assertEqual(res_file.total_issues_count, res_tu.total_issues_count)
+
+            file_issues = [(i.rule_id, i.file_path, i.line_number, i.message) for i in res_file.issues]
+            tu_issues = [(i.rule_id, i.file_path, i.line_number, i.message) for i in res_tu.issues]
+            self.assertEqual(file_issues, tu_issues)
+
 
 if __name__ == "__main__":
     unittest.main()
