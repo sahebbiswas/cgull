@@ -8,6 +8,7 @@ from .base import BaseRule
 from .banned_functions import BannedFunctionsRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext, CFunction, get_type_byte_size
+from ..utils import extract_call_args, split_call_args
 import logging
 from ..cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
 
@@ -747,8 +748,8 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                 callee, line_no, raw_args = call[0], call[1], call[2]
                 if callee == "memset":
                     # Parse args: memset(buf, 0, len)
-                    arg_parts = [a.strip() for a in raw_args.split(',')]
-                    if len(arg_parts) >= 2 and arg_parts[1] in ('0', '0U', '0x0'):
+                    arg_parts = split_call_args(raw_args) if raw_args else []
+                    if len(arg_parts) >= 2 and arg_parts[1] in ('0', '0U', '0x0', '0x00'):
                         buf_expr = arg_parts[0]
                         buf_name = re.findall(r'\b[a-zA-Z_]\w*\b', buf_expr)[0] if re.findall(r'\b[a-zA-Z_]\w*\b', buf_expr) else buf_expr
 
@@ -804,11 +805,22 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        # memset(key, 0, len) followed within 3 lines by return or }
-        m = re.search(r'\bmemset\s*\(\s*(\w+)\s*,\s*0\s*,\s*([^)]+)\)', line_content)
-        if m:
-            buf_name = m.group(1)
-            is_sensitive_name = any(k in buf_name.lower() for k in ['key', 'secret', 'pass', 'token', 'auth', 'hash', 'iv', 'pin', 'cred', 'session'])
+        target = masked_line_content or line_content
+        if target.lstrip().startswith('#'):
+            return issues
+        sensitive_name_keywords = {'key', 'secret', 'pass', 'passwd', 'password', 'token', 'auth', 'hash', 'iv', 'pin', 'cred', 'credential', 'priv', 'cert', 'seed', 'session'}
+        for m in re.finditer(r'\bmemset\s*\(', target):
+            call_args = extract_call_args(line_content, m.end() - 1)
+            if not call_args or len(call_args) < 2:
+                continue
+            val_arg = call_args[1].strip()
+            if val_arg not in ('0', '0U', '0x0', '0x00'):
+                continue
+            buf_expr = call_args[0].strip()
+            buf_name_match = re.findall(r'\b[a-zA-Z_]\w*\b', buf_expr)
+            buf_name = buf_name_match[0] if buf_name_match else buf_expr
+            len_arg = call_args[2].strip() if len(call_args) >= 3 else f"sizeof({buf_name})"
+            is_sensitive_name = any(k in buf_name.lower() for k in sensitive_name_keywords)
             is_near_return = False
             for offset in range(1, 4):
                 if line_number - 1 + offset < len(source_lines):
@@ -826,7 +838,7 @@ class UnsafeSensitiveMemoryClearingRule(BaseRule):
                     column_number=m.start() + 1,
                     engine="Regex",
                     fix_type=FixType.SAFE_FIX,
-                    auto_fix_replacement=f"explicit_bzero({buf_name}, {m.group(2).strip()});"
+                    auto_fix_replacement=f"explicit_bzero({buf_name}, {len_arg});"
                 ))
         return issues
 

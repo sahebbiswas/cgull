@@ -516,6 +516,23 @@ class TestUnsafeSensitiveMemoryClearing(unittest.TestCase):
         code = "int process_data(void) {\n    char secret_key[128];\n    memset(secret_key, 0, sizeof(secret_key));\n    return 0;\n}"
         issues = scan_with_rule("CGULL-008", code)
         self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].auto_fix_replacement, "explicit_bzero(secret_key, sizeof(secret_key));")
+
+    def test_auto_fix_replacement_balanced_parens_regex_scan_line(self):
+        rule = get_rule_by_id("CGULL-008")
+        line = "memset(secret_key, 0, sizeof(secret_key));"
+        source_lines = [line, "return;"]
+        issues = rule.scan_line("test.c", 1, line, "\n".join(source_lines), source_lines)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].auto_fix_replacement, "explicit_bzero(secret_key, sizeof(secret_key));")
+
+    def test_regex_engine_memset_sizeof_auto_fix_balanced(self):
+        code = "void f(void) {\n    char secret_key[32];\n    memset(secret_key, 0, sizeof(secret_key));\n    return;\n}"
+        rule = get_rule_by_id("CGULL-008")
+        scanner = CGullScanner(rules=[rule], engine_mode=AnalysisEngine.REGEX)
+        issues = scanner.scan_text(code, "test.c").issues
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].auto_fix_replacement, "explicit_bzero(secret_key, sizeof(secret_key));")
 
 
 class TestStrippingVolatileQualifiers(unittest.TestCase):

@@ -222,6 +222,120 @@ def is_in_string_or_char_literal(line: str, index: int) -> bool:
     return in_string or in_char
 
 
+def extract_balanced_parens(text: str, start_paren_pos: int) -> Tuple[Optional[str], int]:
+    """
+    Given `text` and position of opening '(', returns `(inside_str, closing_paren_pos)`.
+    Handles nested parentheses, string literals, character literals, and escape sequences.
+    If parentheses are unclosed or start_paren_pos is invalid, returns (None, len(text)).
+    """
+    if start_paren_pos < 0 or start_paren_pos >= len(text) or text[start_paren_pos] != '(':
+        return None, start_paren_pos
+
+    paren_depth = 0
+    in_string = False
+    in_char = False
+    escape = False
+    j = start_paren_pos
+    n = len(text)
+
+    while j < n:
+        c = text[j]
+        if escape:
+            escape = False
+        elif c == '\\':
+            escape = True
+        elif c == '"' and not in_char:
+            in_string = not in_string
+        elif c == "'" and not in_string:
+            in_char = not in_char
+        elif not in_string and not in_char:
+            if c == '(':
+                paren_depth += 1
+            elif c == ')':
+                paren_depth -= 1
+                if paren_depth == 0:
+                    return text[start_paren_pos + 1 : j], j
+        j += 1
+
+    return None, j
+
+
+def split_call_args(raw_args: str) -> List[str]:
+    """
+    Splits top-level comma-separated arguments from a raw argument string (without enclosing parens).
+    Handles nested parentheses, brackets, braces, string/char literals, and escape sequences.
+    """
+    if not raw_args or not raw_args.strip():
+        return []
+
+    args: List[str] = []
+    curr: List[str] = []
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    in_string = False
+    in_char = False
+    escape = False
+
+    for c in raw_args:
+        if escape:
+            curr.append(c)
+            escape = False
+        elif c == '\\':
+            curr.append(c)
+            escape = True
+        elif c == '"' and not in_char:
+            in_string = not in_string
+            curr.append(c)
+        elif c == "'" and not in_string:
+            in_char = not in_char
+            curr.append(c)
+        elif not in_string and not in_char:
+            if c == '(':
+                paren_depth += 1
+                curr.append(c)
+            elif c == ')':
+                paren_depth = max(0, paren_depth - 1)
+                curr.append(c)
+            elif c == '[':
+                bracket_depth += 1
+                curr.append(c)
+            elif c == ']':
+                bracket_depth = max(0, bracket_depth - 1)
+                curr.append(c)
+            elif c == '{':
+                brace_depth += 1
+                curr.append(c)
+            elif c == '}':
+                brace_depth = max(0, brace_depth - 1)
+                curr.append(c)
+            elif c == ',' and paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
+                args.append("".join(curr).strip())
+                curr = []
+            else:
+                curr.append(c)
+        else:
+            curr.append(c)
+
+    if curr:
+        args.append("".join(curr).strip())
+
+    return args
+
+
+def extract_call_args(line_content: str, start_offset: int) -> Optional[Tuple[str, ...]]:
+    """
+    Extracts top-level arguments from a function call like `memset(dest, 0, sizeof(dest))`.
+    `start_offset` must be the index of '(' in `line_content`.
+    Returns a tuple of string arguments, or None if the parentheses are unbalanced or start_offset is invalid.
+    """
+    inner, _ = extract_balanced_parens(line_content, start_offset)
+    if inner is None:
+        return None
+    return tuple(split_call_args(inner))
+
+
+
 def extract_comments_from_raw_lines(raw_lines: List[str]) -> List[Tuple[int, str]]:
     """
     Extracts all line comments (// ...) and block comments (/* ... */)
