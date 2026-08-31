@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..base import BaseRule
 from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
-from ...ast_analyzer import CASTContext, is_unsigned_type
+from ...ast_analyzer import CASTContext, get_type_byte_size, is_unsigned_type
 
 logger = logging.getLogger(__name__)
 class ArrayIndexOutOfBoundsRule(BaseRule):
@@ -42,22 +42,13 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
         return result
 
     @staticmethod
-    def _element_size(type_name: str) -> Optional[int]:
-        """Return conservative sizes for the builtin element types we can prove."""
-        normalized = re.sub(r'\b(?:const|volatile|signed)\b', '', type_name.lower())
-        normalized = re.sub(r'\s+', ' ', normalized).strip()
-        if 'char' in normalized:
-            return 1
-        if normalized in {'short', 'short int', 'unsigned short', 'unsigned short int'}:
-            return 2
-        if normalized in {'int', 'unsigned', 'unsigned int', 'float'}:
-            return 4
-        if normalized in {'long', 'long int', 'unsigned long', 'unsigned long int', 'double', 'long long', 'long long int'}:
-            return 8
-        return None
+    def _element_size(type_name: str, ast_ctx: Optional[CASTContext] = None) -> Optional[int]:
+        """Resolve the pointee size, not the size of the pointer declaration."""
+        pointee = re.sub(r'\s*\*\s*$', '', type_name.strip())
+        return get_type_byte_size(pointee, ast_ctx)
 
     @classmethod
-    def _allocation_capacity(cls, rhs: str, element_size: Optional[int]) -> Optional[int]:
+    def _allocation_capacity(cls, rhs: str, element_size: Optional[int], ast_ctx: Optional[CASTContext] = None) -> Optional[int]:
         """Recover a constant element capacity from a direct allocation expression.
 
         Allocation APIs report bytes, while an ArrayRef is measured in elements.
@@ -73,21 +64,21 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
         if (callee == 'malloc' and len(args) != 1) or (callee == 'calloc' and len(args) != 2) or (callee == 'realloc' and len(args) != 2):
             return None
 
-        sizeof_values = {
-            'char': 1, 'signed char': 1, 'unsigned char': 1,
-            'short': 2, 'short int': 2, 'unsigned short': 2, 'unsigned short int': 2,
-            'int': 4, 'unsigned': 4, 'unsigned int': 4, 'float': 4,
-            'long': 8, 'long int': 8, 'unsigned long': 8, 'unsigned long int': 8,
-            'double': 8, 'long long': 8, 'long long int': 8,
-        }
-
         def constant(expr: str) -> Optional[int]:
             expr = expr.strip()
+            # _format_pycparser_expr() renders UnaryOp(sizeof) as
+            # ``sizeofint`` for a type name.  Restore its type boundary only
+            # when the canonical resolver recognizes the suffix.
+            def restore_formatted_sizeof(match):
+                type_name = match.group(1)
+                return f"sizeof({type_name})" if get_type_byte_size(type_name, ast_ctx) is not None else match.group(0)
+            expr = re.sub(r'\bsizeof([A-Za-z_]\w*)\b', restore_formatted_sizeof, expr)
             # sizeof(*ptr) and sizeof(ptr[0]) have the allocated pointer's element size.
             expr = re.sub(r'sizeof\s*\(\s*\*\s*\w+\s*\)', str(element_size), expr)
             expr = re.sub(r'sizeof\s*\(\s*\w+\s*\[\s*0\s*\]\s*\)', str(element_size), expr)
             def replace_sizeof(match):
-                return str(sizeof_values.get(re.sub(r'\s+', ' ', match.group(1).strip().lower()), -1))
+                size = get_type_byte_size(match.group(1).strip(), ast_ctx)
+                return str(size if size is not None else -1)
             expr = re.sub(r'sizeof\s*\(\s*([\w\s]+?)\s*\)', replace_sizeof, expr)
             expr = re.sub(r'\b(\d+)[uUlL]*\b', r'\1', expr)
             if '-1' in expr or not re.fullmatch(r'[\d\s+*/()]+', expr):
@@ -105,14 +96,14 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             byte_count = count * size if count is not None and size is not None else None
         else:
             byte_count = constant(args[1])
-        if byte_count is None or byte_count % element_size:
+        if byte_count is None:
             return None
         return byte_count // element_size
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
 
-        def get_array_declared_size(arr_name: str, fn, line_no: Optional[int] = None, visited: Optional[set] = None, node=None) -> Optional[int]:
+        def get_array_declared_size(arr_name: str, fn, line_no: Optional[int] = None, visited: Optional[set] = None, node=None, accumulated_offset: int = 0, allow_heap: bool = True) -> Optional[int]:
             if visited is None:
                 visited = set()
             if arr_name in visited:
@@ -166,7 +157,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                                 if field.is_array:
                                     dims = field.array_dims if getattr(field, 'array_dims', None) else ([field.array_size] if field.array_size is not None else [])
                                     if 1 <= num_consumed <= len(dims):
-                                        return dims[num_consumed - 1]
+                                        return max(0, dims[num_consumed - 1] - accumulated_offset)
                                 return None
                             else:
                                 if field.is_struct_or_union:
@@ -197,22 +188,23 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                     else:
                         curr_sdef = None
                 if target_field and target_field.is_array and target_field.array_size is not None:
-                    return target_field.array_size
+                    return max(0, target_field.array_size - accumulated_offset)
 
             var_obj = fn.variables.get(arr_name) or ast_ctx.global_variables.get(arr_name)
             if var_obj and var_obj.array_size_expr:
                 expr = var_obj.array_size_expr.strip()
                 if expr.isdigit():
-                    return int(expr)
+                    return max(0, int(expr) - accumulated_offset)
                 def_m = re.search(rf'#\s*define\s+{re.escape(expr)}\s+(\d+|0x[0-9a-fA-F]+)\b', ast_ctx.clean_source)
                 if def_m:
                     val_str = def_m.group(1)
-                    return int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
+                    value = int(val_str, 16) if val_str.startswith(('0x', '0X')) else int(val_str)
+                    return max(0, value - accumulated_offset)
                 m = re.search(r'\b(\d+)\b', expr)
                 if m:
-                    return int(m.group(1))
+                    return max(0, int(m.group(1)) - accumulated_offset)
 
-            element_size = self._element_size(var_obj.type_name) if var_obj else None
+            element_size = self._element_size(var_obj.type_name, ast_ctx) if var_obj else None
 
             # If arr_name is not directly an array with declared dimension, check for pointer aliasing
             body_lines = fn.body.splitlines()
@@ -223,17 +215,19 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 max_idx = min(len(body_lines), line_no - fn_start)
 
             assign_stmt_pattern = re.compile(
-                rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*=(?!=)\s*(.+?)(?:;|$)'
+                rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*((?:<<|>>|[+\-*/%&|^])?=)\s*(.+?)(?:;|$)'
             )
 
             for idx in range(max_idx - 1, -1, -1):
                 line = body_lines[idx]
                 m = assign_stmt_pattern.search(line)
                 if m:
-                    rhs = m.group(1).strip()
-                    allocation_size = self._allocation_capacity(rhs, element_size)
+                    if m.group(1) != '=':
+                        return None
+                    rhs = m.group(2).strip()
+                    allocation_size = self._allocation_capacity(rhs, element_size, ast_ctx)
                     if allocation_size is not None:
-                        return allocation_size
+                        return max(0, allocation_size - accumulated_offset) if allow_heap else None
                     # Strip leading casts e.g. (int *) or (char *)
                     rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
 
@@ -268,9 +262,15 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                                 valid_match = True
 
                     if valid_match and alias_target and alias_target != arr_name and alias_target not in ('NULL', 'nullptr'):
-                        target_size = get_array_declared_size(alias_target, fn, line_no=fn_start + idx, visited=visited)
-                        if target_size is not None:
-                            return max(0, target_size - offset)
+                        return get_array_declared_size(
+                            alias_target, fn, line_no=fn_start + idx, visited=visited,
+                            accumulated_offset=accumulated_offset + offset,
+                            allow_heap=allow_heap,
+                        )
+
+                    # The nearest definition is neither an allocator nor a
+                    # resolvable alias, so older capacity facts are dead.
+                    return None
 
             return None
 
@@ -427,6 +427,123 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
 
             return path_reached
 
+        def cfg_capacity_in_states(cfg, fn) -> Dict[int, Dict[str, int]]:
+            """Compute heap capacities reaching each CFG node conservatively.
+
+            A capacity is retained only when every incoming path has the same
+            definition.  Any unresolvable pointer assignment kills its prior
+            fact, which prevents a stale allocation from being reused.
+            """
+            from pycparser import c_ast
+            from ...ast_analyzer import _format_pycparser_expr
+
+            predecessors = {node_id: [] for node_id in cfg.nodes}
+            for node_id, cfg_node in cfg.nodes.items():
+                for successor in cfg_node.successors:
+                    if successor in predecessors:
+                        predecessors[successor].append(node_id)
+
+            def pointer_element_size(name: str) -> Optional[int]:
+                var = fn.variables.get(name) or ast_ctx.global_variables.get(name)
+                if var:
+                    return self._element_size(var.type_name, ast_ctx)
+                for param in fn.parameters:
+                    if param.name == name:
+                        return self._element_size(param.type_name, ast_ctx)
+                return None
+
+            def unwrap(expr):
+                while isinstance(expr, c_ast.Cast):
+                    expr = expr.expr
+                return expr
+
+            def integer_constant(expr) -> Optional[int]:
+                if not isinstance(expr, c_ast.Constant):
+                    return None
+                token = re.sub(r'[uUlL]+$', '', str(expr.value))
+                try:
+                    return int(token, 0)
+                except ValueError:
+                    return None
+
+            def assignment(node):
+                if isinstance(node, c_ast.Decl) and node.name and node.init is not None:
+                    return node.name, node.init
+                if isinstance(node, c_ast.Assignment) and isinstance(node.lvalue, c_ast.ID):
+                    return node.lvalue.name, node.rvalue if node.op == '=' else None
+                return None, None
+
+            def alias_source(expr) -> Tuple[Optional[str], int]:
+                expr = unwrap(expr)
+                if isinstance(expr, c_ast.ID):
+                    return expr.name, 0
+                if isinstance(expr, c_ast.UnaryOp) and expr.op == '&' and isinstance(expr.expr, c_ast.ArrayRef) and isinstance(expr.expr.name, c_ast.ID):
+                    offset = integer_constant(expr.expr.subscript)
+                    return (expr.expr.name, offset) if offset is not None else (None, 0)
+                if isinstance(expr, c_ast.BinaryOp) and expr.op == '+':
+                    if isinstance(expr.left, c_ast.ID):
+                        offset = integer_constant(expr.right)
+                        return (expr.left.name, offset) if offset is not None else (None, 0)
+                    if isinstance(expr.right, c_ast.ID):
+                        offset = integer_constant(expr.left)
+                        return (expr.right.name, offset) if offset is not None else (None, 0)
+                return None, 0
+
+            def transfer(state: Dict[str, int], cfg_node) -> Dict[str, int]:
+                result = dict(state)
+                target, rhs = assignment(getattr(cfg_node, '_ast_node', None))
+                if not target:
+                    for written in cfg_node.writes:
+                        result.pop(written, None)
+                    return result
+                # An assignment invalidates a preceding fact even when the
+                # pointer's type cannot be resolved.
+                result.pop(target, None)
+                if rhs is None:
+                    return result
+                element_size = pointer_element_size(target)
+                allocation_size = self._allocation_capacity(_format_pycparser_expr(rhs), element_size, ast_ctx)
+                if allocation_size is not None:
+                    result[target] = allocation_size
+                    return result
+                source, offset = alias_source(rhs)
+                if source and source in state:
+                    result[target] = max(0, state[source] - offset)
+                return result
+
+            def merge(states: List[Dict[str, int]]) -> Dict[str, int]:
+                if not states:
+                    return {}
+                common = set(states[0])
+                for state in states[1:]:
+                    common.intersection_update(state)
+                return {
+                    name: states[0][name]
+                    for name in common
+                    if all(state[name] == states[0][name] for state in states[1:])
+                }
+
+            if cfg.entry is None:
+                return {}
+            in_states: Dict[int, Dict[str, int]] = {cfg.entry: {}}
+            out_states: Dict[int, Dict[str, int]] = {}
+            worklist = [cfg.entry]
+            while worklist:
+                node_id = worklist.pop(0)
+                new_out = transfer(in_states[node_id], cfg.nodes[node_id])
+                if out_states.get(node_id) == new_out:
+                    continue
+                out_states[node_id] = new_out
+                for successor in cfg.nodes[node_id].successors:
+                    incoming = [out_states[pred] for pred in predecessors[successor] if pred in out_states]
+                    if not incoming:
+                        continue
+                    new_in = merge(incoming)
+                    if in_states.get(successor) != new_in:
+                        in_states[successor] = new_in
+                        worklist.append(successor)
+            return in_states
+
         for fn in ast_ctx.functions:
             funcdef = None
             cfg = None
@@ -440,6 +557,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             if funcdef is not None and cfg is not None:
                 from ...ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr
                 reported_lines = set()
+                capacity_in = cfg_capacity_in_states(cfg, fn)
 
                 class ArrayCheckVisitor(c_ast.NodeVisitor):
                     def visit_ArrayRef(v_self, node):
@@ -448,11 +566,34 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                         sub_expr = _format_pycparser_expr(node.subscript)
                         sub_ids = _extract_identifiers_from_ast(node.subscript, ignore_callees=True)
 
-                        arr_size = get_array_declared_size(arr_name, fn, line_no=line_no, node=node)
-
                         # Find corresponding CFG node
                         cfg_nodes_for_line = [nid for nid, cfg_n in cfg.nodes.items() if cfg_n.line_number == line_no]
                         target_node_id = cfg_nodes_for_line[0] if cfg_nodes_for_line else None
+                        cfg_capacity = capacity_in.get(target_node_id, {}).get(arr_name) if target_node_id is not None else None
+                        arr_size = cfg_capacity if cfg_capacity is not None else get_array_declared_size(
+                            arr_name, fn, line_no=line_no, node=node, allow_heap=False,
+                        )
+
+                        index_value = None
+                        try:
+                            index_value = int(re.sub(r'[uUlL]+$', '', sub_expr), 0)
+                        except ValueError:
+                            pass
+                        if index_value is not None and arr_size is not None and index_value >= arr_size:
+                            key = (line_no, arr_name, index_value)
+                            if key not in reported_lines:
+                                snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{arr_name}[{sub_expr}]"
+                                issues.append(self.create_issue(
+                                    file_path=file_path,
+                                    line_number=line_no,
+                                    code_snippet=snippet,
+                                    message=f"Static Array Out-of-Bounds: index [{index_value}] exceeds declared dimension of '{arr_name}[{arr_size}]'.",
+                                    column_number=1,
+                                    engine="AST",
+                                    fix_type=FixType.SUGGESTED_FIX,
+                                    suggested_fix_replacement=f"{arr_name}[{arr_size - 1}]",
+                                ))
+                                reported_lines.add(key)
 
                         for idx_var in sub_ids:
                             key = (line_no, arr_name, idx_var)
@@ -505,7 +646,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                         if re.search(r'\b(?:const\s+|static\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\s)*$', stmt_prefix):
                             continue
 
-                        arr_size = get_array_declared_size(arr_name, fn, line_no=line_no)
+                        arr_size = get_array_declared_size(arr_name, fn, line_no=line_no, allow_heap=False)
                         is_signed = is_index_var_signed(idx_var, fn)
 
                         guarded = False
@@ -558,9 +699,6 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                     fn_start_idx = idx
                     break
 
-            alias_assign_pattern = re.compile(
-                rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(arr_name)}\s*=(?!=)\s*(.+?)(?:;|$)'
-            )
             target_name = arr_name
             declared_size = None
             offset = 0
@@ -573,20 +711,16 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                     break
 
                 target_assign_pattern = re.compile(
-                    rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(target_name)}\s*=(?!=)\s*(.+?)(?:;|$)'
+                    rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(target_name)}\s*((?:<<|>>|[+\-*/%&|^])?=)\s*(.+?)(?:;|$)'
                 )
                 alias_m = target_assign_pattern.search(prev_line)
                 if alias_m:
-                    rhs = alias_m.group(1).strip()
-                    ptr_decl = re.search(
-                        rf'\b([a-zA-Z_]\w*(?:\s+[a-zA-Z_]\w*)*)\s*\*+\s*{re.escape(target_name)}\s*=',
-                        prev_line,
-                    )
-                    element_size = self._element_size(ptr_decl.group(1)) if ptr_decl else None
-                    allocation_size = self._allocation_capacity(rhs, element_size)
-                    if allocation_size is not None:
-                        declared_size = max(0, allocation_size - offset)
+                    if alias_m.group(1) != '=':
                         break
+                    rhs = alias_m.group(2).strip()
+                    # Heap capacities require CFG merging and are therefore
+                    # resolved in scan_ast.  The line scanner must not treat a
+                    # branch-local allocation as an unconditional fact.
 
                     rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
                     m_idx = re.match(r'^&\s*([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\]$', rhs_clean)
@@ -596,16 +730,19 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
 
                     if m_idx:
                         target_name = m_idx.group(1)
-                        offset = int(m_idx.group(2))
+                        offset += int(m_idx.group(2))
                     elif m_add1:
                         target_name = m_add1.group(1)
-                        offset = int(m_add1.group(2))
+                        offset += int(m_add1.group(2))
                     elif m_add2:
                         target_name = m_add2.group(2)
-                        offset = int(m_add2.group(1))
+                        offset += int(m_add2.group(1))
                     elif m_simple:
                         target_name = m_simple.group(1)
-                        offset = 0
+                    else:
+                        # This nearest definition kills any older alias or
+                        # allocation fact for the tracked pointer.
+                        break
 
             if declared_size is not None and idx_val >= declared_size:
                 issues.append(self.create_issue(
