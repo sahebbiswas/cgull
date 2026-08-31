@@ -26,6 +26,89 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
     sample_remediated_code = "int table[10];\nif (idx >= 0 && idx < 10) {\n    table[idx] = 42;\n}"
     analysis_engine = AnalysisEngine.HYBRID
 
+    @staticmethod
+    def _split_call_args(args: str) -> List[str]:
+        """Split a simple C call argument list without being confused by casts."""
+        result, start, depth = [], 0, 0
+        for pos, char in enumerate(args):
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            elif char == ',' and depth == 0:
+                result.append(args[start:pos].strip())
+                start = pos + 1
+        result.append(args[start:].strip())
+        return result
+
+    @staticmethod
+    def _element_size(type_name: str) -> Optional[int]:
+        """Return conservative sizes for the builtin element types we can prove."""
+        normalized = re.sub(r'\b(?:const|volatile|signed)\b', '', type_name.lower())
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        if 'char' in normalized:
+            return 1
+        if normalized in {'short', 'short int', 'unsigned short', 'unsigned short int'}:
+            return 2
+        if normalized in {'int', 'unsigned', 'unsigned int', 'float'}:
+            return 4
+        if normalized in {'long', 'long int', 'unsigned long', 'unsigned long int', 'double', 'long long', 'long long int'}:
+            return 8
+        return None
+
+    @classmethod
+    def _allocation_capacity(cls, rhs: str, element_size: Optional[int]) -> Optional[int]:
+        """Recover a constant element capacity from a direct allocation expression.
+
+        Allocation APIs report bytes, while an ArrayRef is measured in elements.
+        Unknown expressions deliberately stay unknown: this rule only reports a
+        heap access when it can establish the allocation capacity.
+        """
+        rhs = re.sub(r'^(?:\([^()]+\)\s*)+', '', rhs.strip())
+        call = re.match(r'^(malloc|calloc|realloc)\s*\((.*)\)$', rhs, re.DOTALL)
+        if not call or element_size is None:
+            return None
+        args = cls._split_call_args(call.group(2))
+        callee = call.group(1)
+        if (callee == 'malloc' and len(args) != 1) or (callee == 'calloc' and len(args) != 2) or (callee == 'realloc' and len(args) != 2):
+            return None
+
+        sizeof_values = {
+            'char': 1, 'signed char': 1, 'unsigned char': 1,
+            'short': 2, 'short int': 2, 'unsigned short': 2, 'unsigned short int': 2,
+            'int': 4, 'unsigned': 4, 'unsigned int': 4, 'float': 4,
+            'long': 8, 'long int': 8, 'unsigned long': 8, 'unsigned long int': 8,
+            'double': 8, 'long long': 8, 'long long int': 8,
+        }
+
+        def constant(expr: str) -> Optional[int]:
+            expr = expr.strip()
+            # sizeof(*ptr) and sizeof(ptr[0]) have the allocated pointer's element size.
+            expr = re.sub(r'sizeof\s*\(\s*\*\s*\w+\s*\)', str(element_size), expr)
+            expr = re.sub(r'sizeof\s*\(\s*\w+\s*\[\s*0\s*\]\s*\)', str(element_size), expr)
+            def replace_sizeof(match):
+                return str(sizeof_values.get(re.sub(r'\s+', ' ', match.group(1).strip().lower()), -1))
+            expr = re.sub(r'sizeof\s*\(\s*([\w\s]+?)\s*\)', replace_sizeof, expr)
+            expr = re.sub(r'\b(\d+)[uUlL]*\b', r'\1', expr)
+            if '-1' in expr or not re.fullmatch(r'[\d\s+*/()]+', expr):
+                return None
+            try:
+                value = eval(expr, {'__builtins__': {}}, {})
+            except (ArithmeticError, SyntaxError):
+                return None
+            return value if isinstance(value, int) and value >= 0 else None
+
+        if callee == 'malloc':
+            byte_count = constant(args[0])
+        elif callee == 'calloc':
+            count, size = constant(args[0]), constant(args[1])
+            byte_count = count * size if count is not None and size is not None else None
+        else:
+            byte_count = constant(args[1])
+        if byte_count is None or byte_count % element_size:
+            return None
+        return byte_count // element_size
+
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
 
@@ -129,6 +212,8 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 if m:
                     return int(m.group(1))
 
+            element_size = self._element_size(var_obj.type_name) if var_obj else None
+
             # If arr_name is not directly an array with declared dimension, check for pointer aliasing
             body_lines = fn.body.splitlines()
             fn_start = getattr(fn, "body_start_line", fn.start_line)
@@ -146,6 +231,9 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 m = assign_stmt_pattern.search(line)
                 if m:
                     rhs = m.group(1).strip()
+                    allocation_size = self._allocation_capacity(rhs, element_size)
+                    if allocation_size is not None:
+                        return allocation_size
                     # Strip leading casts e.g. (int *) or (char *)
                     rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
 
@@ -484,29 +572,40 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                     declared_size = max(0, int(decl_m.group(1)) - offset)
                     break
 
-                if target_name == arr_name:
-                    alias_m = alias_assign_pattern.search(prev_line)
-                    if alias_m:
-                        rhs = alias_m.group(1).strip()
-                        rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
+                target_assign_pattern = re.compile(
+                    rf'(?:^|[;{{}}\s])(?:(?:\w+\s+)*\*+\s*)?{re.escape(target_name)}\s*=(?!=)\s*(.+?)(?:;|$)'
+                )
+                alias_m = target_assign_pattern.search(prev_line)
+                if alias_m:
+                    rhs = alias_m.group(1).strip()
+                    ptr_decl = re.search(
+                        rf'\b([a-zA-Z_]\w*(?:\s+[a-zA-Z_]\w*)*)\s*\*+\s*{re.escape(target_name)}\s*=',
+                        prev_line,
+                    )
+                    element_size = self._element_size(ptr_decl.group(1)) if ptr_decl else None
+                    allocation_size = self._allocation_capacity(rhs, element_size)
+                    if allocation_size is not None:
+                        declared_size = max(0, allocation_size - offset)
+                        break
 
-                        m_idx = re.match(r'^&\s*([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\]$', rhs_clean)
-                        m_add1 = re.match(r'^([a-zA-Z_]\w*)\s*\+\s*(\d+)$', rhs_clean)
-                        m_add2 = re.match(r'^(\d+)\s*\+\s*([a-zA-Z_]\w*)$', rhs_clean)
-                        m_simple = re.match(r'^(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?$', rhs_clean)
+                    rhs_clean = re.sub(r'^(?:\([^\)]+\)\s*)+', '', rhs).strip()
+                    m_idx = re.match(r'^&\s*([a-zA-Z_]\w*)\s*\[\s*(\d+)\s*\]$', rhs_clean)
+                    m_add1 = re.match(r'^([a-zA-Z_]\w*)\s*\+\s*(\d+)$', rhs_clean)
+                    m_add2 = re.match(r'^(\d+)\s*\+\s*([a-zA-Z_]\w*)$', rhs_clean)
+                    m_simple = re.match(r'^(?:&\s*)?([a-zA-Z_]\w*)(?:\s*\[\s*0\s*\])?$', rhs_clean)
 
-                        if m_idx:
-                            target_name = m_idx.group(1)
-                            offset = int(m_idx.group(2))
-                        elif m_add1:
-                            target_name = m_add1.group(1)
-                            offset = int(m_add1.group(2))
-                        elif m_add2:
-                            target_name = m_add2.group(2)
-                            offset = int(m_add2.group(1))
-                        elif m_simple:
-                            target_name = m_simple.group(1)
-                            offset = 0
+                    if m_idx:
+                        target_name = m_idx.group(1)
+                        offset = int(m_idx.group(2))
+                    elif m_add1:
+                        target_name = m_add1.group(1)
+                        offset = int(m_add1.group(2))
+                    elif m_add2:
+                        target_name = m_add2.group(2)
+                        offset = int(m_add2.group(1))
+                    elif m_simple:
+                        target_name = m_simple.group(1)
+                        offset = 0
 
             if declared_size is not None and idx_val >= declared_size:
                 issues.append(self.create_issue(

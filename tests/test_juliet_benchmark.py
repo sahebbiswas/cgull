@@ -128,9 +128,9 @@ def test_juliet_runner_full():
         assert rule_id in by_rule
         assert by_rule[rule_id]["tp"] + by_rule[rule_id]["fp"] + by_rule[rule_id]["tn"] + by_rule[rule_id]["fn"] > 0
 
-    # These variants deliberately quantify two current precision/recall gaps.
+    # This variant deliberately quantifies a current precision gap.
     assert by_rule["CGULL-002"]["fp"] >= 1  # Juliet GoodSource/BadSink
-    assert by_rule["CGULL-007"]["fn"] >= 1  # Heap allocation capacity
+    assert by_rule["CGULL-007"]["fn"] == 0  # Heap allocation capacity
 
     # Direct-NULL fixtures exercise CGULL-004 only. They must not inflate the
     # allocation-specific CGULL-003 denominator.

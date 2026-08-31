@@ -1,7 +1,6 @@
 /*
  * Reduced, self-contained Juliet 1.3 CWE-122/CWE-129 bounds fixture.
- * CGULL-007 does not currently infer the capacity of heap allocations; this
- * case records that limitation as a benchmark false negative.
+ * CGULL-007 tracks constant heap allocation capacity for this bounds check.
  */
 #include <stdlib.h>
 
