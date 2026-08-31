@@ -1,7 +1,7 @@
 {
   "suite": "Juliet C Security Benchmark for C-GULL",
   "version": "1.0",
-  "description": "NIST Juliet-based detection quality benchmark covering CWE-476, CWE-690, CWE-416, and CWE-457 across 9 control-flow categories.",
+  "description": "NIST Juliet-based detection quality benchmark covering CWE-134, CWE-190, CWE-121, CWE-122, CWE-369, CWE-476, CWE-690, CWE-416, and CWE-457 across 9 control-flow categories.",
   "test_cases": [
     {
       "id": "CWE476_NULL_Pointer_Dereference__01_baseline",
@@ -960,6 +960,117 @@
           "helper_functions": [
             "CWE457_09_good_sink"
           ]
+        }
+      ]
+    },
+    {
+      "id": "CWE134_Uncontrolled_Format_String__printf_01_baseline",
+      "cwe": "CWE-134",
+      "category": "baseline",
+      "file": "testcases/CWE134_Uncontrolled_Format_String__printf_01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE134_Uncontrolled_Format_String__printf_01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-134",
+          "expected_rules": ["CGULL-002"]
+        },
+        {
+          "function": "CWE134_Uncontrolled_Format_String__printf_01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-134",
+          "expected_rules": ["CGULL-002"]
+        },
+        {
+          "function": "CWE134_Uncontrolled_Format_String__printf_01_baseline_goodG2B",
+          "vulnerable": false,
+          "expected_cwe": "CWE-134",
+          "expected_rules": ["CGULL-002"]
+        }
+      ]
+    },
+    {
+      "id": "CWE190_Integer_Overflow__malloc_01_baseline",
+      "cwe": "CWE-190",
+      "category": "baseline",
+      "file": "testcases/CWE190_Integer_Overflow__malloc_01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE190_Integer_Overflow__malloc_01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-190",
+          "expected_rules": ["CGULL-006"]
+        },
+        {
+          "function": "CWE190_Integer_Overflow__malloc_01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-190",
+          "expected_rules": ["CGULL-006"]
+        }
+      ]
+    },
+    {
+      "id": "CWE121_Stack_Based_Buffer_Overflow__CWE129_01_baseline",
+      "cwe": "CWE-121",
+      "category": "baseline",
+      "file": "testcases/CWE121_Stack_Based_Buffer_Overflow__CWE129_01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE121_Stack_Based_Buffer_Overflow__CWE129_01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-121",
+          "expected_rules": ["CGULL-007"]
+        },
+        {
+          "function": "CWE121_Stack_Based_Buffer_Overflow__CWE129_01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-121",
+          "expected_rules": ["CGULL-007"]
+        }
+      ]
+    },
+    {
+      "id": "CWE122_Heap_Based_Buffer_Overflow__CWE129_01_baseline",
+      "cwe": "CWE-122",
+      "category": "baseline",
+      "file": "testcases/CWE122_Heap_Based_Buffer_Overflow__CWE129_01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE122_Heap_Based_Buffer_Overflow__CWE129_01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-122",
+          "expected_rules": ["CGULL-007"]
+        },
+        {
+          "function": "CWE122_Heap_Based_Buffer_Overflow__CWE129_01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-122",
+          "expected_rules": ["CGULL-007"]
+        }
+      ]
+    },
+    {
+      "id": "CWE369_Divide_by_Zero__int_01_baseline",
+      "cwe": "CWE-369",
+      "category": "baseline",
+      "file": "testcases/CWE369_Divide_by_Zero__int_01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {
+          "function": "CWE369_Divide_by_Zero__int_01_baseline_bad",
+          "vulnerable": true,
+          "expected_cwe": "CWE-369",
+          "expected_rules": ["CGULL-034"]
+        },
+        {
+          "function": "CWE369_Divide_by_Zero__int_01_baseline_good",
+          "vulnerable": false,
+          "expected_cwe": "CWE-369",
+          "expected_rules": ["CGULL-034"]
         }
       ]
     }

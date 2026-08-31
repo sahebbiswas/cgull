@@ -402,12 +402,12 @@ Coverage thresholds are maintained as minimum baselines and are increased delibe
 
 ## 🎯 NIST Juliet Detection-Quality Benchmark
 
-C-GULL includes an automated, manifest-driven NIST Juliet static analysis detection quality benchmark suite (`benchmarks/run_juliet.py`) to measure vulnerability detection precision, recall, and F1 score against an independent ground-truth oracle across 4 core CWE scope areas (CWE-476, CWE-690, CWE-416, CWE-457) and 9 control-flow categories (`baseline`, `if/else`, `nested conditionals`, `loops`, `switch`, `fallthrough`, `break / continue`, `goto`, `interprocedural cases`).
+C-GULL includes an automated, manifest-driven NIST Juliet static analysis detection quality benchmark suite (`benchmarks/run_juliet.py`) to measure vulnerability detection precision, recall, and F1 score against an independent ground-truth oracle. The vendored subset covers CWE-134, CWE-190, CWE-121, CWE-122, CWE-369, CWE-476, CWE-690, CWE-416, and CWE-457 across 9 control-flow categories (`baseline`, `if/else`, `nested conditionals`, `loops`, `switch`, `fallthrough`, `break / continue`, `goto`, `interprocedural cases`). Results include per-CWE and per-rule metrics, so a regression in one rule is visible even when another rule for the same CWE still detects the test case.
 
 ### Running the Benchmark
 
 ```bash
-# Run full Juliet benchmark suite (36 test cases)
+# Run full Juliet benchmark suite (41 test cases)
 python3 benchmarks/run_juliet.py
 
 # Run focused subset in CI
