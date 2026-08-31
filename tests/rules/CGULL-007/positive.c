@@ -77,3 +77,32 @@ void test_scope_isolated_small_buf(void) {
     char *ptr = buf;
     ptr[15] = 'Y'; // expect: CGULL-007
 }
+
+/* Heap capacities are tracked in element units, including through aliases. */
+void test_tp_malloc_capacity(void) {
+    char *data = (char *)malloc(10);
+    data[10] = 'X'; // expect: CGULL-007
+}
+
+void test_tp_calloc_capacity(void) {
+    char *data = (char *)calloc(2, 5);
+    data[10] = 'X'; // expect: CGULL-007
+}
+
+void test_tp_realloc_capacity(char *old_data) {
+    char *data = (char *)realloc(old_data, 10);
+    data[10] = 'X'; // expect: CGULL-007
+}
+
+void test_tp_malloc_alias_capacity(void) {
+    char *data = (char *)malloc(10);
+    char *alias = data;
+    alias[10] = 'X'; // expect: CGULL-007
+}
+
+void test_tp_malloc_incorrect_guard(int idx) {
+    char *data = (char *)malloc(10);
+    if (idx >= 0 && idx < 11) {
+        data[idx] = 'X'; // expect: CGULL-007
+    }
+}

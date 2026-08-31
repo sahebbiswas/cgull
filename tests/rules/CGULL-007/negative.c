@@ -63,3 +63,16 @@ void test_fp_declaration_with_initializer_and_prior_decl(void) {
     char dataBuffer[100] = "";
     (void)dataBuffer;
 }
+
+/* Allocation capacity remains unknown when its size expression is unknown. */
+void test_tn_unknown_malloc_capacity(size_t n) {
+    char *data = (char *)malloc(n);
+    data[10] = 'X';
+}
+
+void test_tn_malloc_checked_index(int idx) {
+    char *data = (char *)malloc(10);
+    if (idx >= 0 && idx < 10) {
+        data[idx] = 'X';
+    }
+}

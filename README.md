@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![Security Standards](https://img.shields.io/badge/standards-MISRA--C%20%7C%20CWE%20%7C%20CERT--C-orange.svg)](https://cwe.mitre.org/)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)]()
+[![Tests](https://github.com/sahebbiswas/cgull/actions/workflows/ci.yml/badge.svg)](https://github.com/sahebbiswas/cgull/actions/workflows/ci.yml)
 
 **C-GULL** (*Code Guardian for Unchecked Logic & Leaks*) is a lightweight, modular C source code static security analyzer designed to assist with identifying common C memory vulnerabilities, buffer overflow risks, format string flaws, timing side-channel patterns, and select MISRA-C compliance guidelines.
 
