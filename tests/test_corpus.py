@@ -5,7 +5,11 @@ Invokes the standalone corpus runner to verify behavioral security rules.
 
 import os
 import unittest
-from .run_corpus import run_corpus_scan, REPO_ROOT
+
+if __package__:
+    from .run_corpus import run_corpus_scan, REPO_ROOT
+else:  # unittest discovery imports test modules as top-level modules.
+    from run_corpus import run_corpus_scan, REPO_ROOT
 
 
 class TestSecurityRuleBehavioralCorpus(unittest.TestCase):

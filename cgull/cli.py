@@ -20,6 +20,19 @@ from .config import load_config
 logger = logging.getLogger(__name__)
 
 
+def print(*values, file=None, sep=" ", end="\n", flush=False) -> None:
+    """Print text without failing when a Windows console uses a legacy encoding."""
+    stream = sys.stdout if file is None else file
+    text = sep.join(str(value) for value in values) + end
+    try:
+        stream.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(text.encode(encoding, errors="replace").decode(encoding))
+    if flush:
+        stream.flush()
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     from . import __version__

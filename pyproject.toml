@@ -2,6 +2,46 @@
 requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "cgull"
+dynamic = ["version"]
+description = "C-GULL: Code Guardian for Unchecked Logic & Leaks (C Code Security Static Analyzer)"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Saheb Biswas", email = "s.b9@yahoo.com" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: C",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/sahebbiswas/cgull"
+
+[project.optional-dependencies]
+ast = ["pycparser>=2.21", "pcpp>=1.30"]
+preprocess = ["pcpp>=1.30"]
+dev = ["pytest>=7.0.0", "jsonschema>=4.0.0"]
+
+[project.scripts]
+cgull = "cgull.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "cgull.__version__" }
+
 [tool.coverage.run]
 source = ["cgull"]
 
