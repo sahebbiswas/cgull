@@ -41,6 +41,16 @@ Built for both lightweight regex scans and AST-assisted analysis (using a built-
 
 In all cases, files that rely on external header definitions, project-specific typedefs, or complex macro expansion patterns may still fail the AST parse and fall back to the regex extractor. Each file's result surfaces its exact parse tier (`pcpp+pycparser`, `directive-stripped`, or `regex-fallback`) in `file_summaries`. CI pipelines can enforce full AST parsing by passing `--warn-on-fallback` (or setting `warn_on_fallback = true` in config) to fail the build whenever a file falls back to `regex-fallback` mode.
 
+### Analysis Core Layout
+
+The analysis core is organized as backward-compatible packages. Existing imports such as `cgull.ast_analyzer` and `cgull.cfg` remain supported through their package initializers.
+
+- `cgull.ast_analyzer.configuration` — configuration profiles and compile-command ingestion.
+- `cgull.ast_analyzer.preprocessor` — conditional evaluation and source normalization.
+- `cgull.ast_analyzer.types` — C declarations, type resolution, and structure models.
+- `cgull.ast_analyzer.visitor` — pycparser traversal and lexical parser orchestration.
+- `cgull.cfg.model`, `dataflow`, `construction`, and `summaries` — CFG state, propagation, graph building, and interprocedural summaries.
+
 ---
 
 ## 📦 Installation
@@ -366,6 +376,7 @@ CI enforces a minimum code line coverage threshold of **88.0%** across the `cgul
 
 ```bash
 # Run unit test suite with coverage enforcement
+pip install -e ".[dev]" pytest-cov
 pytest -v --cov=cgull --cov-report=term-missing --cov-fail-under=88
 
 # Or run specific test modules
