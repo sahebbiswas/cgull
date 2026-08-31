@@ -15,7 +15,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         },
@@ -24,7 +23,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         }
@@ -42,7 +40,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         },
@@ -51,7 +48,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         }
@@ -69,7 +65,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         },
@@ -78,7 +73,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         }
@@ -96,7 +90,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         },
@@ -105,7 +98,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         }
@@ -123,7 +115,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         },
@@ -132,7 +123,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         }
@@ -150,7 +140,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         },
@@ -159,7 +148,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         }
@@ -177,7 +165,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         },
@@ -186,7 +173,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         }
@@ -204,7 +190,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         },
@@ -213,7 +198,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ]
         }
@@ -231,7 +215,6 @@
           "vulnerable": true,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ],
           "helper_functions": [
@@ -243,7 +226,6 @@
           "vulnerable": false,
           "expected_cwe": "CWE-476",
           "expected_rules": [
-            "CGULL-003",
             "CGULL-004"
           ],
           "helper_functions": [

@@ -250,7 +250,12 @@ def run_juliet_benchmark(
 
             matching_issues = []
             matching_issues_by_rule: Dict[str, List[Issue]] = {}
-            rules_to_evaluate = o.get("expected_rules") or sorted(CWE_RULE_MAP.get(expected_cwe, set()))
+            # ``expected_rules`` is the oracle's rule-specific applicability
+            # set. A CWE can map to several rules, but a fixture should only
+            # contribute to the denominator of rules it actually exercises.
+            # Oracles without this explicit metadata remain in the aggregate
+            # CWE result, but do not create unverifiable per-rule outcomes.
+            rules_to_evaluate = list(dict.fromkeys(o.get("expected_rules", [])))
             for issue in reported_issues:
                 # Require issue to originate from testcase source file
                 if not is_issue_from_source(issue.file_path, abs_file, manifest_dir):
@@ -291,9 +296,9 @@ def run_juliet_benchmark(
                 "by_rule": {},
             })
 
-            # A CWE may be implemented by more than one rule. Evaluate each
-            # rule independently, rather than treating a finding from any
-            # sibling rule as a detection for all of them.
+            # Evaluate only the rules explicitly applicable to this oracle;
+            # do not turn every rule associated with its CWE into a required
+            # finding.
             for rule_id in rules_to_evaluate:
                 rule_detected = bool(matching_issues_by_rule.get(rule_id))
                 if vulnerable:

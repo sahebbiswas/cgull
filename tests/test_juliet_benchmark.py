@@ -62,9 +62,18 @@ def test_manifest_structure_and_validity():
             assert "vulnerable" in o
             assert isinstance(o["vulnerable"], bool)
             assert "expected_cwe" in o
+            assert "expected_rules" in o
+            assert o["expected_rules"], "Every oracle needs at least one applicable rule for per-rule metrics"
             if tc["category"] == "interprocedural cases":
                 assert "helper_functions" in o
                 assert len(o["helper_functions"]) > 0
+
+    cwe476_oracles = [
+        oracle
+        for tc in test_cases if tc["cwe"] == "CWE-476"
+        for oracle in tc["oracle"]
+    ]
+    assert all(oracle["expected_rules"] == ["CGULL-004"] for oracle in cwe476_oracles)
 
 
 def test_compute_metrics():
@@ -122,6 +131,12 @@ def test_juliet_runner_full():
     # These variants deliberately quantify two current precision/recall gaps.
     assert by_rule["CGULL-002"]["fp"] >= 1  # Juliet GoodSource/BadSink
     assert by_rule["CGULL-007"]["fn"] >= 1  # Heap allocation capacity
+
+    # Direct-NULL fixtures exercise CGULL-004 only. They must not inflate the
+    # allocation-specific CGULL-003 denominator.
+    direct_null = next(tc for tc in res["test_cases"] if tc["id"] == "CWE476_NULL_Pointer_Dereference__01_baseline")
+    for oracle in direct_null["oracle_evaluations"]:
+        assert set(oracle["by_rule"]) == {"CGULL-004"}
 
     by_cat = res["by_category"]
     for cat in CATEGORIES:
