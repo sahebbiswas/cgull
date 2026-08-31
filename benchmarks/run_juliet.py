@@ -3,8 +3,9 @@
 Automated NIST Juliet Security Benchmark Runner for C-GULL.
 
 Evaluates C-GULL detection quality (TP, FP, TN, FN, Precision, Recall, F1)
-against Juliet test cases across CWE-476, CWE-690, CWE-416, and CWE-457
-split by 9 control-flow categories.
+against vendored Juliet test-case subsets. Results are reported by CWE and by
+rule so a regression in one rule cannot be hidden by another rule for the same
+CWE.
 
 Usage:
     python benchmarks/run_juliet.py [--ci] [--cwe CWE-476] [--category baseline]
@@ -29,6 +30,11 @@ from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine, Issue
 
 CWE_RULE_MAP = {
+    "CWE-134": {"CGULL-002"},
+    "CWE-190": {"CGULL-006"},
+    "CWE-121": {"CGULL-007"},
+    "CWE-122": {"CGULL-007"},
+    "CWE-369": {"CGULL-034"},
     "CWE-476": {"CGULL-003", "CGULL-004"},
     "CWE-690": {"CGULL-003"},
     "CWE-416": {"CGULL-022"},
@@ -47,7 +53,7 @@ CATEGORIES = [
     "interprocedural cases",
 ]
 
-CWES = ["CWE-476", "CWE-690", "CWE-416", "CWE-457"]
+CWES = list(CWE_RULE_MAP)
 
 
 def extract_function_line_ranges(file_path: str) -> Dict[str, Tuple[int, int]]:
@@ -163,6 +169,9 @@ def run_juliet_benchmark(
         test_cases = [tc for tc in test_cases if tc.get("id", "").strip() == test_id_filter_norm]
 
     cwe_stats = {cwe: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for cwe in CWES}
+    # Populated from the selected oracle entries so filtered reports only show
+    # rules that were actually evaluated.
+    rule_stats: Dict[str, Dict[str, int]] = {}
     cat_stats = {cat: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for cat in CATEGORIES}
     overall_stats = {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
 
@@ -240,6 +249,13 @@ def run_juliet_benchmark(
             helper_ranges = [fn_ranges[h] for h in helpers if h in fn_ranges]
 
             matching_issues = []
+            matching_issues_by_rule: Dict[str, List[Issue]] = {}
+            # ``expected_rules`` is the oracle's rule-specific applicability
+            # set. A CWE can map to several rules, but a fixture should only
+            # contribute to the denominator of rules it actually exercises.
+            # Oracles without this explicit metadata remain in the aggregate
+            # CWE result, but do not create unverifiable per-rule outcomes.
+            rules_to_evaluate = list(dict.fromkeys(o.get("expected_rules", [])))
             for issue in reported_issues:
                 # Require issue to originate from testcase source file
                 if not is_issue_from_source(issue.file_path, abs_file, manifest_dir):
@@ -250,6 +266,8 @@ def run_juliet_benchmark(
                     in_helper = any(h_start <= issue.line_number <= h_end for h_start, h_end in helper_ranges)
                     if in_main or in_helper:
                         matching_issues.append(issue)
+                        if issue.rule_id in rules_to_evaluate:
+                            matching_issues_by_rule.setdefault(issue.rule_id, []).append(issue)
 
             detected = len(matching_issues) > 0
 
@@ -275,7 +293,26 @@ def run_juliet_benchmark(
                 "detected": detected,
                 "outcome": outcome,
                 "matching_issues_count": len(matching_issues),
+                "by_rule": {},
             })
+
+            # Evaluate only the rules explicitly applicable to this oracle;
+            # do not turn every rule associated with its CWE into a required
+            # finding.
+            for rule_id in rules_to_evaluate:
+                rule_detected = bool(matching_issues_by_rule.get(rule_id))
+                if vulnerable:
+                    rule_outcome = "TP" if rule_detected else "FN"
+                else:
+                    rule_outcome = "FP" if rule_detected else "TN"
+
+                rule_stats.setdefault(rule_id, {"tp": 0, "fp": 0, "tn": 0, "fn": 0})
+                rule_stats[rule_id][rule_outcome.lower()] += 1
+                oracle_evals[-1]["by_rule"][rule_id] = {
+                    "detected": rule_detected,
+                    "outcome": rule_outcome,
+                    "matching_issues_count": len(matching_issues_by_rule.get(rule_id, [])),
+                }
 
         cwe_entry = cwe_stats.setdefault(cwe, {"tp": 0, "fp": 0, "tn": 0, "fn": 0})
         cat_entry = cat_stats.setdefault(category, {"tp": 0, "fp": 0, "tn": 0, "fn": 0})
@@ -299,6 +336,7 @@ def run_juliet_benchmark(
         })
 
     cwe_metrics = {cwe: compute_metrics(s["tp"], s["fp"], s["tn"], s["fn"]) for cwe, s in cwe_stats.items()}
+    rule_metrics = {rule_id: compute_metrics(s["tp"], s["fp"], s["tn"], s["fn"]) for rule_id, s in rule_stats.items()}
     cat_metrics = {cat: compute_metrics(s["tp"], s["fp"], s["tn"], s["fn"]) for cat, s in cat_stats.items()}
     overall_metrics = compute_metrics(overall_stats["tp"], overall_stats["fp"], overall_stats["tn"], overall_stats["fn"])
 
@@ -315,6 +353,7 @@ def run_juliet_benchmark(
         },
         "overall": overall_metrics,
         "by_cwe": cwe_metrics,
+        "by_rule": rule_metrics,
         "by_category": cat_metrics,
         "test_cases": test_results,
     }
@@ -335,6 +374,12 @@ def format_text_report(results: Dict[str, Any]) -> str:
     lines.append("-" * 78)
     for cwe, m in results["by_cwe"].items():
         lines.append(f"{cwe:<12} {m['tp']:<6} {m['fp']:<6} {m['tn']:<6} {m['fn']:<6} {m['precision']:<11.4f} {m['recall']:<11.4f} {m['f1']:<11.4f}")
+
+    lines.append("\nResults by Rule:")
+    lines.append(f"{'Rule ID':<12} {'TP':<6} {'FP':<6} {'TN':<6} {'FN':<6} {'Precision':<11} {'Recall':<11} {'F1':<11}")
+    lines.append("-" * 78)
+    for rule_id, m in results["by_rule"].items():
+        lines.append(f"{rule_id:<12} {m['tp']:<6} {m['fp']:<6} {m['tn']:<6} {m['fn']:<6} {m['precision']:<11.4f} {m['recall']:<11.4f} {m['f1']:<11.4f}")
 
     lines.append("\nResults by Control-Flow Category:")
     lines.append(f"{'Category':<24} {'TP':<6} {'FP':<6} {'TN':<6} {'FN':<6} {'Precision':<11} {'Recall':<11} {'F1':<11}")
@@ -366,6 +411,12 @@ def format_markdown_report(results: Dict[str, Any]) -> str:
     lines.append("|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|")
     for cwe, m in results["by_cwe"].items():
         lines.append(f"| {cwe} | {m['tp']} | {m['fp']} | {m['tn']} | {m['fn']} | {m['precision']:.4f} | {m['recall']:.4f} | {m['f1']:.4f} |")
+
+    lines.append("\n## Results by Rule\n")
+    lines.append("| Rule ID | TP | FP | TN | FN | Precision | Recall | F1 Score |")
+    lines.append("|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|")
+    for rule_id, m in results["by_rule"].items():
+        lines.append(f"| {rule_id} | {m['tp']} | {m['fp']} | {m['tn']} | {m['fn']} | {m['precision']:.4f} | {m['recall']:.4f} | {m['f1']:.4f} |")
 
     lines.append("\n## Results by Control-Flow Category\n")
     lines.append("| Category | TP | FP | TN | FN | Precision | Recall | F1 Score |")

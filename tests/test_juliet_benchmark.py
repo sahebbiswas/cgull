@@ -20,6 +20,7 @@ from benchmarks.run_juliet import (
     is_issue_from_source,
     main,
     CATEGORIES,
+    CWE_RULE_MAP,
     CWES,
 )
 from cgull.models import ScanResult, ScanError, Issue, Severity
@@ -34,7 +35,13 @@ def test_manifest_structure_and_validity():
 
     assert "test_cases" in manifest
     test_cases = manifest["test_cases"]
-    assert len(test_cases) == 36
+    assert len(test_cases) == 41
+
+    assert CWE_RULE_MAP["CWE-134"] == {"CGULL-002"}
+    assert CWE_RULE_MAP["CWE-190"] == {"CGULL-006"}
+    assert CWE_RULE_MAP["CWE-121"] == {"CGULL-007"}
+    assert CWE_RULE_MAP["CWE-122"] == {"CGULL-007"}
+    assert CWE_RULE_MAP["CWE-369"] == {"CGULL-034"}
 
     seen_ids = set()
     for tc in test_cases:
@@ -55,9 +62,18 @@ def test_manifest_structure_and_validity():
             assert "vulnerable" in o
             assert isinstance(o["vulnerable"], bool)
             assert "expected_cwe" in o
+            assert "expected_rules" in o
+            assert o["expected_rules"], "Every oracle needs at least one applicable rule for per-rule metrics"
             if tc["category"] == "interprocedural cases":
                 assert "helper_functions" in o
                 assert len(o["helper_functions"]) > 0
+
+    cwe476_oracles = [
+        oracle
+        for tc in test_cases if tc["cwe"] == "CWE-476"
+        for oracle in tc["oracle"]
+    ]
+    assert all(oracle["expected_rules"] == ["CGULL-004"] for oracle in cwe476_oracles)
 
 
 def test_compute_metrics():
@@ -95,7 +111,7 @@ def test_is_issue_from_source():
 
 def test_juliet_runner_full():
     res = run_juliet_benchmark(MANIFEST_PATH, ci_only=False)
-    assert res["total_test_cases_evaluated"] == 36
+    assert res["total_test_cases_evaluated"] == 41
     assert res["failed_test_cases_count"] == 0
     ov = res["overall"]
     assert ov["tp"] + ov["fp"] + ov["tn"] + ov["fn"] > 0
@@ -107,6 +123,21 @@ def test_juliet_runner_full():
     for cwe in CWES:
         assert cwe in by_cwe
 
+    by_rule = res["by_rule"]
+    for rule_id in {"CGULL-002", "CGULL-006", "CGULL-007", "CGULL-034"}:
+        assert rule_id in by_rule
+        assert by_rule[rule_id]["tp"] + by_rule[rule_id]["fp"] + by_rule[rule_id]["tn"] + by_rule[rule_id]["fn"] > 0
+
+    # These variants deliberately quantify two current precision/recall gaps.
+    assert by_rule["CGULL-002"]["fp"] >= 1  # Juliet GoodSource/BadSink
+    assert by_rule["CGULL-007"]["fn"] >= 1  # Heap allocation capacity
+
+    # Direct-NULL fixtures exercise CGULL-004 only. They must not inflate the
+    # allocation-specific CGULL-003 denominator.
+    direct_null = next(tc for tc in res["test_cases"] if tc["id"] == "CWE476_NULL_Pointer_Dereference__01_baseline")
+    for oracle in direct_null["oracle_evaluations"]:
+        assert set(oracle["by_rule"]) == {"CGULL-004"}
+
     by_cat = res["by_category"]
     for cat in CATEGORIES:
         assert cat in by_cat
@@ -114,7 +145,7 @@ def test_juliet_runner_full():
 
 def test_juliet_runner_ci():
     res = run_juliet_benchmark(MANIFEST_PATH, ci_only=True)
-    assert res["total_test_cases_evaluated"] == 12
+    assert res["total_test_cases_evaluated"] == 17
     assert res["failed_test_cases_count"] == 0
     ov = res["overall"]
     assert ov["tp"] + ov["fp"] + ov["tn"] + ov["fn"] > 0
@@ -129,7 +160,7 @@ def test_juliet_runner_filters():
 
     # Filter by Category
     res_cat = run_juliet_benchmark(MANIFEST_PATH, category_filter="baseline")
-    assert res_cat["total_test_cases_evaluated"] == 4
+    assert res_cat["total_test_cases_evaluated"] == 9
     for tc in res_cat["test_cases"]:
         assert tc["category"] == "baseline"
 
@@ -219,10 +250,12 @@ def test_juliet_runner_formatters():
     assert "C-GULL Juliet Benchmark Results" in text_rep
     assert "Overall Metrics:" in text_rep
     assert "Results by CWE:" in text_rep
+    assert "Results by Rule:" in text_rep
     assert "Results by Control-Flow Category:" in text_rep
 
     md_rep = format_markdown_report(res)
     assert "# C-GULL Juliet Benchmark Results" in md_rep
     assert "## Overall Metrics" in md_rep
     assert "## Results by CWE" in md_rep
+    assert "## Results by Rule" in md_rep
     assert "## Results by Control-Flow Category" in md_rep
