@@ -293,7 +293,7 @@ C-GULL implements the security audit rules listed below:
 | **CGULL-036** | Memory Leak | **High** | Memory | CWE-401 | Hybrid | Detects dynamically allocated memory (malloc, calloc, realloc, strdup, aligned_alloc) assigned to local pointers that is not freed or transferred before function exit paths. |
 | **CGULL-037** | Improper Null Termination (strncpy) | **High** | Strings | CWE-170 | Regex | strncpy() does not guarantee null termination if the source string is larger than or equal to the specified length. This causes out-of-bounds reads/writes. |
 | **CGULL-038** | Return Stack Variable | **High** | Memory | CWE-562 | AST | Detects return statements that expose the address of an automatic-storage local variable or function parameter after the function returns. |
-| **CGULL-039** | Improper chroot() Jail | **High** | Crypto | CWE-243 | AST | Flags `chroot()` calls missing subsequent `chdir("/")` checks. |
+| **CGULL-039** | Improper chroot() Jail | **High** | Control Flow | CWE-243 | AST | Flags `chroot()` calls missing subsequent `chdir("/")` checks. |
 | **CGULL-040** | Incorrect Pointer Scaling | **High** | Arithmetic | CWE-468 | AST | Detects pointer offsets explicitly scaled by `sizeof()` (double scaling). |
 | **CGULL-041** | Unused Local Variables | **Low** | Code Quality | CWE-563 | AST | Detects local variables declared in function body or nested block scopes that are never referenced anywhere in their scope. |
 | **CGULL-042** | Dead Stores | **Low** | Code Quality | CWE-563 | AST | Detects local variables assigned but never read afterward before reassignment or scope exit (-Wunused-but-set-variable). |
