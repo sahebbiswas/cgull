@@ -29,6 +29,20 @@ class TestProjectMetadata(unittest.TestCase):
         self.assertIn("package-ecosystem: \"github-actions\"", content)
         self.assertIn("interval: \"weekly\"", content)
 
+    def test_ci_uses_spawn_safe_pytest_invocation_and_bounded_jobs(self):
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"
+        content = workflow_path.read_text(encoding="utf-8")
+
+        self.assertIn("python -m pytest -v --cov=cgull", content)
+        self.assertIn("timeout-minutes: 15", content)
+        self.assertIn("cancel-in-progress: true", content)
+
+    def test_gemini_review_skips_dependabot_pull_requests(self):
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "gemini-code-review.yml"
+        content = workflow_path.read_text(encoding="utf-8")
+
+        self.assertIn("github.actor != 'dependabot[bot]'", content)
+
     def test_pre_commit_hooks_config(self):
         hooks_path = Path(__file__).parent.parent / ".pre-commit-hooks.yaml"
         self.assertTrue(hooks_path.exists(), ".pre-commit-hooks.yaml should exist")
