@@ -293,9 +293,14 @@ C-GULL implements the security audit rules listed below:
 | **CGULL-036** | Memory Leak | **High** | Memory | CWE-401 | Hybrid | Detects dynamically allocated memory (malloc, calloc, realloc, strdup, aligned_alloc) assigned to local pointers that is not freed or transferred before function exit paths. |
 | **CGULL-037** | Improper Null Termination (strncpy) | **High** | Strings | CWE-170 | Regex | strncpy() does not guarantee null termination if the source string is larger than or equal to the specified length. This causes out-of-bounds reads/writes. |
 | **CGULL-038** | Return Stack Variable | **High** | Memory | CWE-562 | AST | Detects return statements that expose the address of an automatic-storage local variable or function parameter after the function returns. |
+| **CGULL-039** | Improper chroot() Jail | **High** | Control Flow | CWE-243 | AST | Flags `chroot()` calls missing subsequent `chdir("/")` checks. |
+| **CGULL-040** | Incorrect Pointer Scaling | **High** | Arithmetic | CWE-468 | AST | Detects pointer offsets explicitly scaled by `sizeof()` (double scaling). |
 | **CGULL-041** | Unused Local Variables | **Low** | Code Quality | CWE-563 | AST | Detects local variables declared in function body or nested block scopes that are never referenced anywhere in their scope. |
 | **CGULL-042** | Dead Stores | **Low** | Code Quality | CWE-563 | AST | Detects local variables assigned but never read afterward before reassignment or scope exit (-Wunused-but-set-variable). |
 | **CGULL-043** | Variable Shadowing Across Nested Scopes | **Low** | Code Quality | CWE-398 / MISRA Rule 5.3 | AST | Detects variable declarations in inner scopes (parameters, nested blocks, or local variables) that shadow identifiers in outer scopes (MISRA C:2012 Rule 5.3). |
+| **CGULL-044** | Struct-Member / Array Buffer Overflow | **High** | Memory | CWE-787 / 120 | Hybrid | Detects buffer overflows in `memcpy()`, `memmove()`, and `memset()` calls using byte capacity resolution and path-sensitive bounds checks. |
+| **CGULL-045** | Missing Inclusion Guard | **Medium** | MISRA | CWE-424 | Regex | Detects header files lacking inclusion guards (`#ifndef`/`#define` or `#pragma once`). |
+| **CGULL-046** | Unscaled Pointer Subtraction | **High** | Arithmetic | CWE-469 | AST | Detects unscaled pointer subtraction used directly as size arguments in allocation/copy calls. |
 
 ---
 
@@ -476,7 +481,7 @@ C-GULL maintains clear stability boundaries by separating the **Package Version*
     "high_severity_count": 3,
     "medium_severity_count": 1,
     "low_severity_count": 1,
-    "rules_applied_count": 25,
+    "rules_applied_count": 46,
     "ignored_paths_count": 2,
     "failed_paths_count": 0
   },

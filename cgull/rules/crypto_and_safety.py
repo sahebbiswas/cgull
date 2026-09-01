@@ -1133,7 +1133,7 @@ class ImproperChrootJailRule(BaseRule):
     rule_id = "CGULL-039"
     name = "Improper chroot() Jail"
     impact = Severity.HIGH
-    category = RuleCategory.CRYPTO
+    category = RuleCategory.CONTROL_FLOW
     description = "Detect calls to chroot() that are not immediately followed by chdir() to restrict the working directory. A missing chdir(\"/\") allows attackers to escape the chroot jail using relative paths."
     implementation_method = "AST traversal to find chroot() and ensure chdir() is called within the same function"
     implementation_complexity = "Low"
