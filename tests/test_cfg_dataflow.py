@@ -1098,6 +1098,77 @@ class TestReallocSemantics(unittest.TestCase):
 
 class TestInterproceduralCFGSummaries(unittest.TestCase):
 
+    def test_unchecked_allocation_passed_to_one_hop_sink(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UncheckedDynamicAllocationsRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+
+        void sink(char *p) {
+            *p = 'x';
+        }
+
+        void bad(void) {
+            char *p = malloc(1);
+            sink(p);
+        }
+        """
+        ast_ctx = CASTParser().parse(code)
+        issues = UncheckedDynamicAllocationsRule().scan_ast("test.c", ast_ctx)
+
+        self.assertEqual(len(issues), 1)
+        self.assertIn("p", issues[0].message)
+
+    def test_unchecked_allocation_summary_respects_each_call_site_guard(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UncheckedDynamicAllocationsRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+
+        void sink(char *p) {
+            *p = 'x';
+        }
+
+        void bad(void) {
+            char *p = malloc(1);
+            sink(p);
+        }
+
+        void good(void) {
+            char *p = malloc(1);
+            if (p == 0) return;
+            sink(p);
+        }
+        """
+        ast_ctx = CASTParser().parse(code)
+        issues = UncheckedDynamicAllocationsRule().scan_ast("test.c", ast_ctx)
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].line_number, 10)
+
+    def test_unknown_external_callee_does_not_create_allocation_finding(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UncheckedDynamicAllocationsRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void external_log(char *p);
+
+        void f(void) {
+            char *p = malloc(1);
+            external_log(p);
+        }
+        """
+        ast_ctx = CASTParser().parse(code)
+        issues = UncheckedDynamicAllocationsRule().scan_ast("test.c", ast_ctx)
+
+        self.assertEqual(issues, [])
+
     def test_interprocedural_release_uaf(self):
         from cgull.ast_analyzer import CASTParser
         from cgull.rules.memory_management import UseAfterFreeRule

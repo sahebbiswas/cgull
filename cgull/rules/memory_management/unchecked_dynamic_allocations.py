@@ -80,7 +80,7 @@ class UncheckedDynamicAllocationsRule(BaseRule):
                     if not node.allocated:
                         continue
                     for ptr_name in node.allocated:
-                        unsafe = _find_unsafe_allocation_use(cfg, node.node_id, ptr_name)
+                        unsafe = _find_unsafe_allocation_use(cfg, node.node_id, ptr_name, summaries=summaries)
                         if unsafe is None:
                             continue
                         line_no = node.line_number

@@ -7,6 +7,25 @@ from .construction import _is_nullish, build_cfg, find_function_def
 from .dataflow import meet_nullness
 from .model import Allocation, FunctionSummary, Nullness
 
+
+def _unwrap_cast(node):
+    while node is not None and type(node).__name__ in {"Cast", "ExprList"}:
+        if type(node).__name__ == "Cast":
+            node = node.expr
+        else:
+            node = node.exprs[-1] if getattr(node, "exprs", None) else None
+    return node
+
+
+def _direct_calls(node):
+    """Yield direct named calls below an executable statement."""
+    if node is None:
+        return
+    if type(node).__name__ == "FuncCall":
+        yield _format_pycparser_expr(node.name), list(getattr(node.args, "exprs", []) or [])
+    for _, child in node.children():
+        yield from _direct_calls(child)
+
 def _get_builtin_summaries(alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None) -> Dict[str, FunctionSummary]:
     alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc", "strdup", "strndup", "valloc", "pvalloc", "memalign"}
     dealloc_set = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
@@ -60,6 +79,7 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
                     cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
 
             freed_params: Set[int] = set()
+            unsafe_deref_params: Set[int] = set()
             return_nullness_set: Set[Nullness] = set()
             returns_alloc: bool = False
 
@@ -72,6 +92,33 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
                     for node in cfg.nodes.values():
                         if p_name in node.freed:
                             freed_params.add(i)
+                            break
+
+                # A callee can require an allocation result to be checked by
+                # its caller.  Record direct dereferences and propagate the
+                # same requirement through direct calls to known functions.
+                # Unknown/external callees intentionally produce no fact.
+                for i, p_name in enumerate(param_names):
+                    for node in cfg.nodes.values():
+                        if p_name in node.derefs and cfg.query_nullness(p_name, node.node_id) != Nullness.NON_NULL:
+                            unsafe_deref_params.add(i)
+                            break
+                        ast_node = getattr(node, "_ast_node", None)
+                        for callee, args in _direct_calls(ast_node):
+                            callee_summary = summaries.get(callee)
+                            if not callee_summary:
+                                continue
+                            for arg_index in callee_summary.unsafe_deref_params:
+                                if arg_index >= len(args):
+                                    continue
+                                arg = _unwrap_cast(args[arg_index])
+                                if type(arg).__name__ == "ID" and str(arg.name) == p_name and \
+                                   cfg.query_nullness(p_name, node.node_id) != Nullness.NON_NULL:
+                                    unsafe_deref_params.add(i)
+                                    break
+                            if i in unsafe_deref_params:
+                                break
+                        if i in unsafe_deref_params:
                             break
 
                 # Inspect return statements
@@ -117,6 +164,7 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
 
             new_summary = FunctionSummary(
                 freed_params=freed_params,
+                unsafe_deref_params=unsafe_deref_params,
                 return_nullness=final_ret_nullness if final_ret_nullness is not None else Nullness.UNKNOWN,
                 returns_allocation=returns_alloc,
                 is_unknown=False,

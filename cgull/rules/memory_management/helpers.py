@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from ..base import BaseRule
 from ..banned_functions import BannedFunctionsRule
 from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
-from ...ast_analyzer import CASTContext, CFunction, get_type_byte_size, is_unsigned_type
+from ...ast_analyzer import CASTContext, CFunction, _format_pycparser_expr, get_type_byte_size, is_unsigned_type
 from ...utils import extract_call_args, split_call_args, extract_balanced_parens
 from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
 
@@ -58,7 +58,46 @@ def _ast_cfg_for_function(
     return cfg
 
 
-def _find_unsafe_allocation_use(cfg: StructuredCFG, alloc_node_id: int, ptr_name: str):
+def _unwrap_call_arg(node):
+    while node is not None and type(node).__name__ in {"Cast", "ExprList"}:
+        if type(node).__name__ == "Cast":
+            node = node.expr
+        else:
+            node = node.exprs[-1] if getattr(node, "exprs", None) else None
+    return node
+
+
+def _passes_to_unchecked_callee_param(node: CFGEvent, ptr_name: str, summaries: Optional[Dict[str, FunctionSummary]]) -> bool:
+    """Whether this statement passes ptr to a known callee that dereferences it unchecked."""
+    if not summaries:
+        return False
+    ast_node = getattr(node, "_ast_node", None)
+    if ast_node is None:
+        return False
+
+    def visit(current):
+        if current is None:
+            return False
+        if type(current).__name__ == "FuncCall":
+            summary = summaries.get(_format_pycparser_expr(current.name))
+            args = list(getattr(current.args, "exprs", []) or []) if current.args else []
+            if summary:
+                for index in summary.unsafe_deref_params:
+                    if index < len(args):
+                        arg = _unwrap_call_arg(args[index])
+                        if type(arg).__name__ == "ID" and str(arg.name) == ptr_name:
+                            return True
+        return any(visit(child) for _, child in current.children())
+
+    return visit(ast_node)
+
+
+def _find_unsafe_allocation_use(
+    cfg: StructuredCFG,
+    alloc_node_id: int,
+    ptr_name: str,
+    summaries: Optional[Dict[str, FunctionSummary]] = None,
+):
     """Return the first reachable unsafe use of ptr_name allocated at alloc_node_id, or None."""
     work = list(cfg.nodes[alloc_node_id].successors)
     visited = set()
@@ -70,10 +109,19 @@ def _find_unsafe_allocation_use(cfg: StructuredCFG, alloc_node_id: int, ptr_name
         node = cfg.nodes[nid]
 
         if not node.kind.endswith('_cond'):
-            if ptr_name in node.derefs or (ptr_name in node.reads and ptr_name not in node.freed and ptr_name not in node.asserted):
+            if ptr_name in node.derefs:
                 if cfg.query_allocation(ptr_name, nid) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED):
                     if cfg.query_nullness(ptr_name, nid) != Nullness.NON_NULL:
                         return node
+
+            # A known direct callee summary is a use of the caller's
+            # allocation.  Keep the caller-side path facts: a guard before
+            # this call suppresses the report, while any reaching NULL path
+            # remains reportable.
+            if _passes_to_unchecked_callee_param(node, ptr_name, summaries):
+                if cfg.query_allocation(ptr_name, nid) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED) and \
+                   cfg.query_nullness(ptr_name, nid) != Nullness.NON_NULL:
+                    return node
 
         if ptr_name in node.writes:
             # Variable reassigned; ends scope of this allocation
