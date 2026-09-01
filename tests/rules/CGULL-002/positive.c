@@ -56,3 +56,16 @@ void test_tp_external_write_after_literal_initializer(void) {
     fgets(format, sizeof(format), stdin);
     printf(format); // expect: CGULL-002
 }
+
+void test_tp_unknown_call_after_literal_initializer(void) {
+    char format[32] = "fixed string";
+    parse(format);
+    printf(format); // expect: CGULL-002
+}
+
+void test_tp_alias_after_literal_initializer(char *input) {
+    char format[32] = "fixed string";
+    char *alias = format;
+    strcpy(alias, input);
+    printf(format); // expect: CGULL-002
+}

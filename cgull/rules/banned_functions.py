@@ -530,6 +530,15 @@ class FormatStringRule(BaseRule):
         "sscanf": 2,
     }
 
+    def __init__(self):
+        super().__init__()
+        # A scanner invokes scan_line once per source line. Retain boundaries
+        # for only the active file so format sinks do not repeatedly parse the
+        # preceding file contents and the cache cannot grow with a directory
+        # scan.
+        self._function_range_cache_key: Optional[Tuple[str, str]] = None
+        self._function_ranges: List[Tuple[int, int]] = []
+
     @staticmethod
     def _is_literal_format(arg: str) -> bool:
         s = arg.strip()
@@ -570,17 +579,16 @@ class FormatStringRule(BaseRule):
         match = re.fullmatch(r'\s*([A-Za-z_]\w*)\s*', expression)
         return match.group(1) if match else None
 
-    @classmethod
-    def _enclosing_function_start(
-        cls, source_lines: List[str], line_number: int, call_offset: int
-    ) -> Optional[int]:
-        """Find the start line of the function containing ``line_number``."""
-        prefix_lines = source_lines[:line_number - 1]
-        prefix_lines.append(source_lines[line_number - 1][:call_offset])
-        source = "\n".join(prefix_lines)
-        masked_source = "\n".join(mask_string_and_char_literals(line) for line in prefix_lines)
-        sink_offset = len(masked_source)
-        candidates = []
+    def _get_function_ranges(
+        self, file_path: str, full_code: str, source_lines: List[str]
+    ) -> List[Tuple[int, int]]:
+        """Return cached ``(start_line, end_line)`` ranges for one file."""
+        cache_key = (file_path, full_code)
+        if self._function_range_cache_key == cache_key:
+            return self._function_ranges
+
+        masked_source = "\n".join(mask_string_and_char_literals(line) for line in source_lines)
+        ranges = []
         header_pattern = re.compile(r'\b([A-Za-z_]\w*)\s*\([^{};]*\)\s*\{', re.DOTALL)
 
         for match in header_pattern.finditer(masked_source):
@@ -589,25 +597,41 @@ class FormatStringRule(BaseRule):
 
             open_brace = match.end() - 1
             depth = 0
-            closes_before_sink = False
-            for index in range(open_brace, sink_offset):
+            end_brace = None
+            for index in range(open_brace, len(masked_source)):
                 token = masked_source[index]
                 if token == '{':
                     depth += 1
                 elif token == '}':
                     depth -= 1
                     if depth == 0:
-                        closes_before_sink = True
+                        end_brace = index
                         break
-            if not closes_before_sink:
-                candidates.append(source.count("\n", 0, open_brace) + 1)
 
-        return candidates[-1] if candidates else None
+            if end_brace is not None:
+                ranges.append((
+                    masked_source.count("\n", 0, open_brace) + 1,
+                    masked_source.count("\n", 0, end_brace) + 1,
+                ))
 
-    @classmethod
+        self._function_range_cache_key = cache_key
+        self._function_ranges = ranges
+        return ranges
+
+    def _enclosing_function_start(
+        self, file_path: str, full_code: str, source_lines: List[str], line_number: int
+    ) -> Optional[int]:
+        """Find the start line of the cached function containing ``line_number``."""
+        for start_line, end_line in reversed(self._get_function_ranges(file_path, full_code, source_lines)):
+            if start_line <= line_number <= end_line:
+                return start_line
+        return None
+
     def _has_literal_local_provenance(
-        cls,
+        self,
         arg: str,
+        file_path: str,
+        full_code: str,
         line_number: int,
         call_offset: int,
         line_content: str,
@@ -617,17 +641,17 @@ class FormatStringRule(BaseRule):
 
         This is intentionally a small intra-procedural analysis. It accepts a
         local ``char``-like variable only after a literal initializer or
-        assignment without format directives, and rejects any non-literal
-        write before the sink.
-        Parameters, globals, aliases, expressions, and long functions stay
+        assignment without format directives. Any alias, buffer write, or call
+        that receives the variable (other than an output-format call) invalidates
+        the proof. Parameters, globals, expressions, and long functions stay
         unknown and continue to be reported.
         """
-        variable = cls._simple_identifier(arg)
+        variable = self._simple_identifier(arg)
         if variable is None:
             return False
 
-        function_start = cls._enclosing_function_start(source_lines, line_number, call_offset)
-        if function_start is None or line_number - function_start > cls.MAX_PROVENANCE_LINES:
+        function_start = self._enclosing_function_start(file_path, full_code, source_lines, line_number)
+        if function_start is None or line_number - function_start > self.MAX_PROVENANCE_LINES:
             return False
 
         prefix_lines = source_lines[function_start - 1:line_number - 1]
@@ -659,7 +683,7 @@ class FormatStringRule(BaseRule):
                 local_declared = True
                 rhs = declaration.group('rhs')
                 if rhs is not None:
-                    if cls._is_safe_literal_format_expression(rhs):
+                    if self._is_safe_literal_format_expression(rhs):
                         literal_write_seen = True
                     else:
                         nonliteral_write_seen = True
@@ -670,18 +694,37 @@ class FormatStringRule(BaseRule):
                 rhs = assignment.group('rhs')
                 # Element writes can change a literal buffer's contents, so
                 # do not infer the resulting format string.
-                if assignment.group('subscript') is None and cls._is_safe_literal_format_expression(rhs):
+                if assignment.group('subscript') is None and self._is_safe_literal_format_expression(rhs):
                     literal_write_seen = True
                 else:
                     nonliteral_write_seen = True
 
-            for writer, target_index in cls._BUFFER_WRITE_ARG_INDEX.items():
+            # Assigning the buffer or its address to another local creates an
+            # alias whose writes cannot be tracked by this bounded analysis.
+            for alias in re.finditer(
+                rf'(?<![=!<>])\b(?P<name>[A-Za-z_]\w*)\s*=\s*&?\s*{escaped_variable}\b', statement
+            ):
+                if alias.group('name') != variable:
+                    nonliteral_write_seen = True
+
+            for writer, target_index in self._BUFFER_WRITE_ARG_INDEX.items():
                 for call in re.finditer(rf'\b{writer}\s*\(', statement):
-                    args = cls._split_call_args(statement, call.end() - 1)
+                    args = self._split_call_args(statement, call.end() - 1)
                     if len(args) > target_index and re.fullmatch(
                         rf'\s*&?{escaped_variable}\s*(?:\[[^\]]+\])?\s*', args[target_index]
                     ):
                         nonliteral_write_seen = True
+
+            # Unknown callees may retain and mutate a buffer through either
+            # its pointer value or address. Treat such escapes as unknown
+            # provenance rather than relying on a brittle writer whitelist.
+            for call in re.finditer(r'\b([A-Za-z_]\w*)\s*\(', statement):
+                callee = call.group(1)
+                if callee in self.PRINT_FUNC_ARG_INDEX or callee in {"if", "for", "while", "switch", "sizeof"}:
+                    continue
+                args = self._split_call_args(statement, call.end() - 1)
+                if any(re.search(rf'\b{escaped_variable}\b', call_arg) for call_arg in args):
+                    nonliteral_write_seen = True
 
         return local_declared and literal_write_seen and not nonliteral_write_seen
 
@@ -769,7 +812,7 @@ class FormatStringRule(BaseRule):
                 if len(args) > target_idx:
                     arg = args[target_idx]
                     if not self._is_literal_format(arg) and not self._has_literal_local_provenance(
-                        arg, line_number, m.start(), line_content, source_lines
+                        arg, file_path, full_code, line_number, m.start(), line_content, source_lines
                     ):
                         msg = (
                             f"Non-literal format string passed to {fn}({arg}). An attacker can inject %x, %n, or %s to leak or overwrite memory."
