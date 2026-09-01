@@ -34,7 +34,7 @@ class TestProjectMetadata(unittest.TestCase):
         self.assertTrue(hooks_path.exists(), ".pre-commit-hooks.yaml should exist")
         content = hooks_path.read_text(encoding="utf-8")
         self.assertIn("id: cgull", content)
-        self.assertIn("entry: cgull scan", content)
+        self.assertIn("entry: cgull scan --fail-on high", content)
         self.assertIn("language: python", content)
         self.assertIn("types_or: [c, c++]", content)
         self.assertIn(r"files: \.(c|h|hpp)$", content)

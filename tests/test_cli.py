@@ -26,13 +26,19 @@ class TestArgumentParsing(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["scan", "."])
         self.assertEqual(args.command, "scan")
-        self.assertEqual(args.target, ".")
+        self.assertEqual(args.target, ["."])
 
     def test_bare_path_implies_scan_subcommand(self):
         # main() should rewrite `cgull somefile.c` to `cgull scan somefile.c`
         parser = build_parser()
         args = parser.parse_args(["scan", "somefile.c"])
-        self.assertEqual(args.target, "somefile.c")
+        self.assertEqual(args.target, ["somefile.c"])
+
+    def test_multiple_targets_parsed(self):
+        parser = build_parser()
+        args = parser.parse_args(["scan", "file1.c", "file2.c", "dir3/"])
+        self.assertEqual(args.command, "scan")
+        self.assertEqual(args.target, ["file1.c", "file2.c", "dir3/"])
 
     def test_jobs_defaults_to_one(self):
         parser = build_parser()
@@ -71,6 +77,18 @@ class TestScanCommand(unittest.TestCase):
     def test_scan_missing_target_returns_error(self):
         code, out = self._run(["scan", "/nonexistent/path/xyz"])
         self.assertEqual(code, 1)
+
+    def test_scan_multiple_targets_success(self):
+        f1 = os.path.join(self.temp_dir, "f1.c")
+        f2 = os.path.join(self.temp_dir, "f2.c")
+        with open(f1, "w") as f:
+            f.write("void f1(char *b) { gets(b); }\n")
+        with open(f2, "w") as f:
+            f.write("void f2(char *b) { gets(b); }\n")
+        code, out = self._run(["scan", f1, f2, "--format", "json"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(out)
+        self.assertEqual(parsed["summary"]["scanned_files_count"], 2)
 
     def test_scan_text_format_prints_findings(self):
         code, out = self._run(["scan", self.c_file, "--format", "text"])

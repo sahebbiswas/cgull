@@ -75,7 +75,7 @@ Suppressing findings inline:
     scan_parser.add_argument("-v", "--verbose", action="count", default=argparse.SUPPRESS, help="Increase output verbosity (-v for INFO, -vv for DEBUG, -vvv for TRACE)")
     scan_parser.add_argument("--log-level", choices=["error", "warning", "info", "debug", "trace"], default=argparse.SUPPRESS, help="Set logging verbosity level")
     scan_parser.add_argument("--log-file", metavar="PATH", default=argparse.SUPPRESS, help="Write diagnostic log messages to file")
-    scan_parser.add_argument("target", nargs="?", default=".", help="Target file or directory to scan (default: current directory)")
+    scan_parser.add_argument("target", nargs="*", default=["."], help="Target file(s) or directory to scan (default: current directory)")
     scan_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
     scan_parser.add_argument("-o", "--output", help="Path to write the report file (defaults to stdout)")
     scan_parser.add_argument("-f", "--format", choices=["text", "json", "sarif", "markdown"], default=None, help="Report format (default: text or config default_format)")
@@ -102,7 +102,7 @@ Suppressing findings inline:
 
     # FLAGS subcommand
     flags_parser = subparsers.add_parser("flags", help="Discover and enumerate tested preprocessor flags in target C source files")
-    flags_parser.add_argument("target", nargs="?", default=".", help="Target file or directory to inspect (default: current directory)")
+    flags_parser.add_argument("target", nargs="*", default=["."], help="Target file(s) or directory to inspect (default: current directory)")
     flags_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
     flags_parser.add_argument("-o", "--output", help="Path to write output (defaults to stdout)")
     flags_parser.add_argument("-f", "--format", choices=["text", "json"], default="text", help="Output format (default: text)")
@@ -120,10 +120,14 @@ Suppressing findings inline:
 
 
 def handle_flags(args) -> int:
-    target = getattr(args, "target", ".")
-    if not os.path.exists(target):
-        print(f"Error: Target path '{target}' does not exist.", file=sys.stderr)
-        return 1
+    targets = getattr(args, "target", ["."])
+    if isinstance(targets, str):
+        targets = [targets]
+    for t in targets:
+        if not os.path.exists(t):
+            print(f"Error: Target path '{t}' does not exist.", file=sys.stderr)
+            return 1
+    target = targets[0] if len(targets) == 1 else (os.path.commonpath([os.path.abspath(t) for t in targets]) if targets else ".")
 
     from .utils import strip_comments_keep_lines
     from .ast_analyzer import ConditionalFlagCollector, CollectedFlags
@@ -234,13 +238,18 @@ def handle_scan(args) -> int:
     if getattr(args, "list_flags", False):
         return handle_flags(args)
 
-    target = args.target
-    if not os.path.exists(target):
-        print(f"Error: Target path '{target}' does not exist.", file=sys.stderr)
-        return 1
+    targets = args.target
+    if isinstance(targets, str):
+        targets = [targets]
+    for t in targets:
+        if not os.path.exists(t):
+            print(f"Error: Target path '{t}' does not exist.", file=sys.stderr)
+            return 1
+
+    primary_target = targets[0] if len(targets) == 1 else (os.path.commonpath([os.path.abspath(t) for t in targets]) if targets else ".")
 
     # Load configuration file
-    config = load_config(config_path=args.config, target_path=target)
+    config = load_config(config_path=args.config, target_path=primary_target)
     if config.error:
         print(f"Error: {config.error}", file=sys.stderr)
         return 1
@@ -253,7 +262,7 @@ def handle_scan(args) -> int:
 
     # Merge custom ignore patterns from config [paths] exclude
     custom_ignores = list(args.ignore_pattern or [])
-    resolved_excludes = config.get_resolved_exclude_paths(target)
+    resolved_excludes = config.get_resolved_exclude_paths(primary_target)
     if resolved_excludes:
         custom_ignores.extend(resolved_excludes)
 
@@ -282,9 +291,9 @@ def handle_scan(args) -> int:
     # Compile commands ingestion (lowest priority seed source)
     cc_arg = getattr(args, "compile_commands", None)
     compile_commands_path = cc_arg
-    if not compile_commands_path and target:
+    if not compile_commands_path and primary_target:
         from .ast_analyzer import find_compile_commands
-        compile_commands_path = find_compile_commands(target, config_dir=config.config_dir)
+        compile_commands_path = find_compile_commands(primary_target, config_dir=config.config_dir)
 
     if compile_commands_path:
         from .ast_analyzer import parse_compile_commands
@@ -374,7 +383,7 @@ def handle_scan(args) -> int:
     progress = ProgressIndicator(quiet=args.quiet)
     try:
         result = scanner.scan_path(
-            target_path=target,
+            target_path=targets if len(targets) > 1 else targets[0],
             ignore_file=args.ignore_file,
             custom_ignore_patterns=custom_ignores,
             jobs=jobs,

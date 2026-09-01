@@ -94,8 +94,9 @@ cgull scan .
 # Scan specific source directory with an explicit config file
 cgull scan src/ --config .cgull.toml
 
-# Scan a single C file
+# Scan a single C file or multiple target files
 cgull scan main.c
+cgull scan src/main.c src/utils.c include/header.h
 ```
 
 ### Generating JSON Reports
@@ -258,6 +259,7 @@ repos:
     hooks:
       - id: cgull
 ```
+By default, the hook runs `cgull scan --fail-on high` against all staged C/H/HPP files.
 
 ---
 
