@@ -9,7 +9,7 @@ C-GULL is a lightweight, modular C source code static security analyzer designed
 - **⚡ Dual Analysis Engine**:
   - **Lightweight Regex Pattern Matching**: Fast first-pass scanning for banned API calls, format strings, and unsafe casts.
   - **AST & CFG-Assisted Structural Analysis**: Structural and control-flow aware pattern checks for unchecked `malloc` returns, missing pointer NULL checks, and use-after-free, powered by `pycparser` and `pcpp`.
-- **🛡️ 25 Security Audit Rules**: Comprehensive rule coverage spanning memory safety, cryptography, control flow, arithmetic, and code quality.
+- **🛡️ 46 Security Audit Rules**: Comprehensive rule coverage (CGULL-001 through CGULL-046) spanning memory safety, cryptography, control flow, arithmetic, struct/array buffer overflows, dead-store detection, variable shadowing, pointer scaling, missing inclusion guards, and MISRA-C compliance.
 - **🔇 Inline Suppression**: Silence specific findings using inline comments (e.g., `// cgull-ignore: CGULL-001`).
 - **⚙️ Parallel Scanning**: Multi-core scanning support for large codebases (`-j/--jobs`).
 - **📏 Baseline / Diff Mode**: CI enforcement for "no *new* issues" on an existing codebase (`--baseline` and `--update-baseline`).

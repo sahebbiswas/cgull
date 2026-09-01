@@ -1,5 +1,5 @@
 """
-Comprehensive per-rule coverage for C-GULL's 25 security rules.
+Comprehensive per-rule coverage for C-GULL's security rules.
 
 Each rule gets:
   - a "detects" test: a minimal snippet that should trigger it
