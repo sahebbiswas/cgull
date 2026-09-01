@@ -535,8 +535,7 @@ class FormatStringRule(BaseRule):
     _READ_ONLY_CALLEES = frozenset({
         "atoi", "atol", "atoll", "strtol", "strtoul", "strtoll", "strtoull",
         "strtod", "strtof", "strtold", "strlen", "strnlen", "strcmp", "strncmp",
-        "strcasecmp", "strncasecmp", "strchr", "strrchr", "strstr", "memchr",
-        "memcmp", "puts", "fputs", "fwrite",
+        "strcasecmp", "strncasecmp", "memcmp", "puts", "fputs", "fwrite",
     })
 
     def __init__(self):

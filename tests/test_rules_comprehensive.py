@@ -321,6 +321,18 @@ class TestFormatString(unittest.TestCase):
         issues = scan_with_rule("CGULL-002", code)
         self.assertEqual(len(issues), 0)
 
+    def test_search_result_alias_invalidates_literal_format_provenance(self):
+        code = """
+        void f(void) {
+            char format[32] = "fixed string";
+            char *interior = strchr(format, 'x');
+            *interior = '%';
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 1)
+
     def test_function_boundaries_are_cached_for_multiple_sinks(self):
         code = """void f(void) {
     char format[] = "fixed string";

@@ -69,3 +69,10 @@ void test_tp_alias_after_literal_initializer(char *input) {
     strcpy(alias, input);
     printf(format); // expect: CGULL-002
 }
+
+void test_tp_search_result_alias_mutates_literal_buffer(void) {
+    char format[32] = "fixed string";
+    char *interior = strchr(format, 'x');
+    *interior = '%';
+    printf(format); // expect: CGULL-002
+}
