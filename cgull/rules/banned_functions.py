@@ -529,6 +529,15 @@ class FormatStringRule(BaseRule):
         "fscanf": 2,
         "sscanf": 2,
     }
+    # These standard-library callees only inspect their string/buffer
+    # arguments. Keeping this list explicit preserves conservative handling
+    # for unknown callees, which may retain or mutate the pointer.
+    _READ_ONLY_CALLEES = frozenset({
+        "atoi", "atol", "atoll", "strtol", "strtoul", "strtoll", "strtoull",
+        "strtod", "strtof", "strtold", "strlen", "strnlen", "strcmp", "strncmp",
+        "strcasecmp", "strncasecmp", "strchr", "strrchr", "strstr", "memchr",
+        "memcmp", "puts", "fputs", "fwrite",
+    })
 
     def __init__(self):
         super().__init__()
@@ -641,10 +650,11 @@ class FormatStringRule(BaseRule):
 
         This is intentionally a small intra-procedural analysis. It accepts a
         local ``char``-like variable only after a literal initializer or
-        assignment without format directives. Any alias, buffer write, or call
-        that receives the variable (other than an output-format call) invalidates
-        the proof. Parameters, globals, expressions, and long functions stay
-        unknown and continue to be reported.
+        assignment without format directives. Any alias, buffer write, or
+        unknown call that receives the variable invalidates the proof; an
+        explicit allowlist covers standard read-only callees. Parameters,
+        globals, expressions, and long functions stay unknown and continue to
+        be reported.
         """
         variable = self._simple_identifier(arg)
         if variable is None:
@@ -720,7 +730,11 @@ class FormatStringRule(BaseRule):
             # provenance rather than relying on a brittle writer whitelist.
             for call in re.finditer(r'\b([A-Za-z_]\w*)\s*\(', statement):
                 callee = call.group(1)
-                if callee in self.PRINT_FUNC_ARG_INDEX or callee in {"if", "for", "while", "switch", "sizeof"}:
+                if (
+                    callee in self.PRINT_FUNC_ARG_INDEX
+                    or callee in self._READ_ONLY_CALLEES
+                    or callee in {"if", "for", "while", "switch", "sizeof"}
+                ):
                     continue
                 args = self._split_call_args(statement, call.end() - 1)
                 if any(re.search(rf'\b{escaped_variable}\b', call_arg) for call_arg in args):
