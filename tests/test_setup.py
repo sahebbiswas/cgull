@@ -20,5 +20,14 @@ class TestProjectMetadata(unittest.TestCase):
         self.assertIn('[project.optional-dependencies]', content)
         self.assertNotIn("flake8", content)
 
+    def test_dependabot_config(self):
+        dependabot_path = Path(__file__).parent.parent / ".github" / "dependabot.yml"
+        self.assertTrue(dependabot_path.exists(), "dependabot.yml should exist")
+        content = dependabot_path.read_text(encoding="utf-8")
+        self.assertIn("version: 2", content)
+        self.assertIn("package-ecosystem: \"pip\"", content)
+        self.assertIn("package-ecosystem: \"github-actions\"", content)
+        self.assertIn("interval: \"weekly\"", content)
+
 if __name__ == "__main__":
     unittest.main()
