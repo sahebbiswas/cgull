@@ -61,7 +61,7 @@ void process_client_request(const char *user_input, size_t packet_len) {
     }
 
     // Safe bounded string copy
-    char local_buffer[BUFFER_MAX_LEN];
+    char local_buffer[BUFFER_MAX_LEN] = {0};
     snprintf(local_buffer, sizeof(local_buffer), "%s", user_input);
 
     // Literal format string
@@ -92,7 +92,7 @@ void process_client_request(const char *user_input, size_t packet_len) {
 
 int main(int argc, char *argv[]) {
     assert(argc >= 1);
-    if (argc > 1) {
+    if (argv != NULL && argc > 1) {
         process_client_request(argv[1], 128);
     }
     return 0;

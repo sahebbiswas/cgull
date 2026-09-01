@@ -255,11 +255,59 @@ Add C-GULL to your `.pre-commit-config.yaml` to run static security checks autom
 ```yaml
 repos:
   - repo: https://github.com/sahebbiswas/cgull
-    rev: v0.9.17  # Use the latest released tag
+    rev: v0.9.18  # Use the latest released tag
     hooks:
       - id: cgull
 ```
 By default, the hook runs `cgull scan --fail-on high` against all staged C/H/HPP files.
+
+### Integration with GitHub Actions
+
+Add C-GULL directly to your GitHub Actions workflow using the official composite action:
+
+```yaml
+name: C-GULL Security Scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # Required for uploading SARIF to GitHub Security tab
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Run C-GULL Security Scan
+        uses: sahebbiswas/cgull@v0.9.18
+        with:
+          path: '.'
+          fail-on: 'high'
+          upload-sarif: 'true'
+```
+
+#### Action Inputs
+
+| Input | Description | Default |
+| :--- | :--- | :--- |
+| `path` | Target file(s) or directory to scan | `.` |
+| `severity` | Severity filter threshold (`high`, `medium`, `low`, `all`) | `all` |
+| `fail-on` | Exit threshold for build failure (`high`, `medium`, `low`, `all`, `none`) | `high` |
+| `format` | Output report format (`sarif`, `text`, `json`, `markdown`) | `sarif` |
+| `sarif-file` | Path to output SARIF report file | `results.sarif` |
+| `upload-sarif` | Upload SARIF report to GitHub Advanced Security / Code Scanning | `false` |
 
 ---
 

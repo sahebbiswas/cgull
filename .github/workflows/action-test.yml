@@ -1,0 +1,52 @@
+name: Action Self-Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-action:
+    name: Test Composite Action
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Test Action against Vulnerable Sample (Expect Failure)
+        id: test_vulnerable
+        continue-on-error: true
+        uses: ./
+        with:
+          path: 'examples/vulnerable_sample.c'
+          fail-on: 'high'
+
+      - name: Assert Vulnerable Sample Failed
+        run: |
+          if [ "${{ steps.test_vulnerable.outcome }}" != "failure" ]; then
+            echo "Error: Action should have failed on examples/vulnerable_sample.c but passed!"
+            exit 1
+          fi
+          echo "✅ Verified action fails as expected on vulnerable code."
+
+      - name: Test Action against Clean Secure Code (Expect Success)
+        id: test_clean
+        uses: ./
+        with:
+          path: 'examples/clean_secure_code.c'
+          fail-on: 'high'
+
+      - name: Assert Clean Sample Passed
+        run: |
+          if [ "${{ steps.test_clean.outcome }}" != "success" ]; then
+            echo "Error: Action should have passed on examples/clean_secure_code.c but failed!"
+            exit 1
+          fi
+          echo "✅ Verified action passes as expected on clean code."
