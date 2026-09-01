@@ -186,7 +186,7 @@ class CGullScanner:
 
     def scan_path(
         self,
-        target_path: str,
+        target_path: Union[str, List[str]],
         ignore_file: Optional[str] = None,
         custom_ignore_patterns: Optional[List[str]] = None,
         jobs: int = 1,
@@ -198,7 +198,7 @@ class CGullScanner:
         seed_profiles: Optional[List[ConfigProfile]] = None,
     ) -> ScanResult:
         """
-        Recursively scans a directory or single file for security vulnerabilities.
+        Recursively scans directories or files for security vulnerabilities.
 
         `jobs` controls parallelism across files:
         - 1 (default): sequential in-process scanning
@@ -213,10 +213,26 @@ class CGullScanner:
 
         HEADER_CACHE.clear()
         start_time = time.time()
-        abs_target = os.path.abspath(target_path)
 
-        # Set up ignore filter
-        base_dir = abs_target if os.path.isdir(abs_target) else os.path.dirname(abs_target)
+        if isinstance(target_path, (list, tuple)):
+            raw_targets = list(target_path)
+            report_target_str = " ".join(raw_targets) if len(raw_targets) > 1 else (raw_targets[0] if raw_targets else ".")
+        else:
+            raw_targets = [target_path]
+            report_target_str = target_path
+
+        abs_targets = [os.path.abspath(t) for t in raw_targets]
+
+        # Determine base directory for relative display and ignore rules
+        if len(abs_targets) == 1:
+            base_dir = abs_targets[0] if os.path.isdir(abs_targets[0]) else (os.path.dirname(abs_targets[0]) or ".")
+        else:
+            try:
+                common_p = os.path.commonpath(abs_targets)
+                base_dir = common_p if os.path.isdir(common_p) else os.path.dirname(common_p)
+            except ValueError:
+                base_dir = os.getcwd()
+
         if self.ignore_filter is None:
             self.ignore_filter = CGullIgnoreFilter(base_dir=base_dir, custom_patterns=custom_ignore_patterns)
         if ignore_file and os.path.exists(ignore_file):
@@ -225,22 +241,24 @@ class CGullScanner:
         files_to_scan: List[str] = []
         ignored_paths: List[str] = []
 
-        if os.path.isfile(abs_target):
-            if self.ignore_filter.should_ignore(abs_target):
-                ignored_paths.append(abs_target)
-            else:
-                files_to_scan.append(abs_target)
-        elif os.path.isdir(abs_target):
-            for root, dirs, files in os.walk(abs_target):
-                dirs[:] = [d for d in dirs if not self.ignore_filter.should_prune_dir(os.path.join(root, d))]
-                for f in files:
-                    file_path = os.path.join(root, f)
-                    ext = os.path.splitext(f)[1].lower()
-                    if ext in self.C_EXTENSIONS:
-                        if self.ignore_filter.should_ignore(file_path):
-                            ignored_paths.append(file_path)
-                        else:
-                            files_to_scan.append(file_path)
+        for abs_t in abs_targets:
+            if os.path.isfile(abs_t):
+                if self.ignore_filter.should_ignore(abs_t):
+                    ignored_paths.append(abs_t)
+                elif abs_t not in files_to_scan:
+                    files_to_scan.append(abs_t)
+            elif os.path.isdir(abs_t):
+                for root, dirs, files in os.walk(abs_t):
+                    dirs[:] = [d for d in dirs if not self.ignore_filter.should_prune_dir(os.path.join(root, d))]
+                    for f in files:
+                        file_path = os.path.join(root, f)
+                        ext = os.path.splitext(f)[1].lower()
+                        if ext in self.C_EXTENSIONS:
+                            if self.ignore_filter.should_ignore(file_path):
+                                if file_path not in ignored_paths:
+                                    ignored_paths.append(file_path)
+                            elif file_path not in files_to_scan:
+                                files_to_scan.append(file_path)
 
         all_discovered_files = list(files_to_scan)
 
@@ -296,7 +314,7 @@ class CGullScanner:
                 real_h = os.path.realpath(h_path)
                 if real_h not in included_headers:
                     orphan_headers.append(h_path)
-                    display_path = os.path.relpath(h_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(h_path)
+                    display_path = os.path.relpath(h_path, base_dir) if os.path.exists(base_dir) else os.path.basename(h_path)
                     if not quiet:
                         sys.stderr.write(f"Note: Scanning orphan header '{display_path}' as standalone root (not included by any scanned C source file).\n")
                         sys.stderr.flush()
@@ -309,7 +327,7 @@ class CGullScanner:
         if total_files > 0:
             resolved_jobs = min(resolved_jobs, total_files)
 
-        logger.info("Starting scan of target path '%s' (jobs=%d, strategy=%s)", target_path, resolved_jobs, config_strategy or getattr(self.config, "config_strategy", "one-at-a-time"))
+        logger.info("Starting scan of target path '%s' (jobs=%d, strategy=%s)", report_target_str, resolved_jobs, config_strategy or getattr(self.config, "config_strategy", "one-at-a-time"))
         logger.debug("Discovered %d total files to scan (%d ignored)", len(files_to_scan), len(ignored_paths))
 
         if seed_profiles and not quiet:
@@ -348,7 +366,7 @@ class CGullScanner:
         dedup_issues_map: Dict[Any, Issue] = {}
         
         for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err in results:
-            display_path = os.path.relpath(file_path, base_dir) if os.path.isdir(abs_target) else os.path.basename(file_path)
+            display_path = os.path.relpath(file_path, base_dir) if os.path.exists(base_dir) else os.path.basename(file_path)
             real_file_path = os.path.realpath(file_path)
 
             analysis_status_counts[parser_status] = analysis_status_counts.get(parser_status, 0) + 1
@@ -458,7 +476,7 @@ class CGullScanner:
             ))
 
         duration = time.time() - start_time
-        logger.info("Scan completed for '%s' in %.2fs: %d files analyzed, %d issues, %d failed", target_path, duration, analyzed_count, len(all_issues), failed_count)
+        logger.info("Scan completed for '%s' in %.2fs: %d files analyzed, %d issues, %d failed", report_target_str, duration, analyzed_count, len(all_issues), failed_count)
         high_total = sum(1 for i in all_issues if i.impact == Severity.HIGH)
         med_total = sum(1 for i in all_issues if i.impact == Severity.MEDIUM)
         low_total = sum(1 for i in all_issues if i.impact == Severity.LOW)
@@ -470,12 +488,12 @@ class CGullScanner:
         failed_paths.sort()
         scan_errors.sort(key=lambda e: (e.file_path, e.error_type, e.message))
 
-        rel_ignored = [os.path.relpath(p, base_dir) if os.path.isdir(abs_target) else os.path.basename(p) for p in ignored_paths]
+        rel_ignored = [os.path.relpath(p, base_dir) if os.path.exists(base_dir) else os.path.basename(p) for p in ignored_paths]
         rel_ignored.sort()
         files_discovered = len(files_to_scan) + len(ignored_paths)
 
         return ScanResult(
-            target_path=target_path,
+            target_path=report_target_str,
             scanned_files_count=analyzed_count,
             total_lines_of_code=total_loc,
             total_issues_count=len(all_issues),

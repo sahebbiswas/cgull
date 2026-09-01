@@ -29,5 +29,15 @@ class TestProjectMetadata(unittest.TestCase):
         self.assertIn("package-ecosystem: \"github-actions\"", content)
         self.assertIn("interval: \"weekly\"", content)
 
+    def test_pre_commit_hooks_config(self):
+        hooks_path = Path(__file__).parent.parent / ".pre-commit-hooks.yaml"
+        self.assertTrue(hooks_path.exists(), ".pre-commit-hooks.yaml should exist")
+        content = hooks_path.read_text(encoding="utf-8")
+        self.assertIn("id: cgull", content)
+        self.assertIn("entry: cgull scan --fail-on high", content)
+        self.assertIn("language: python", content)
+        self.assertIn("types_or: [c, c++]", content)
+        self.assertIn(r"files: \.(c|h|hpp)$", content)
+
 if __name__ == "__main__":
     unittest.main()

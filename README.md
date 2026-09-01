@@ -94,8 +94,9 @@ cgull scan .
 # Scan specific source directory with an explicit config file
 cgull scan src/ --config .cgull.toml
 
-# Scan a single C file
+# Scan a single C file or multiple target files
 cgull scan main.c
+cgull scan src/main.c src/utils.c include/header.h
 ```
 
 ### Generating JSON Reports
@@ -246,6 +247,19 @@ cgull rules
 ```bash
 cgull init-ignore
 ```
+
+### Integration with pre-commit
+
+Add C-GULL to your `.pre-commit-config.yaml` to run static security checks automatically on git commit:
+
+```yaml
+repos:
+  - repo: https://github.com/sahebbiswas/cgull
+    rev: v0.9.17  # Use the latest released tag
+    hooks:
+      - id: cgull
+```
+By default, the hook runs `cgull scan --fail-on high` against all staged C/H/HPP files.
 
 ---
 
