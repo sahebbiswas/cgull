@@ -41,24 +41,31 @@ runs:
 
     - name: Run C-GULL Scan
       shell: bash
+      env:
+        IN_PATH: ${{ inputs.path }}
+        IN_SEVERITY: ${{ inputs.severity }}
+        IN_FAIL_ON: ${{ inputs.fail-on }}
+        IN_FORMAT: ${{ inputs.format }}
+        IN_SARIF_FILE: ${{ inputs.sarif-file }}
+        IN_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
       run: |
         ARGS=()
 
-        if [ -n "${{ inputs.severity }}" ]; then
-          ARGS+=("--severity" "${{ inputs.severity }}")
+        if [ -n "$IN_SEVERITY" ]; then
+          ARGS+=("--severity" "$IN_SEVERITY")
         fi
 
-        if [ -n "${{ inputs.fail-on }}" ] && [ "${{ inputs.fail-on }}" != "none" ]; then
-          ARGS+=("--fail-on" "${{ inputs.fail-on }}")
+        if [ -n "$IN_FAIL_ON" ] && [ "$IN_FAIL_ON" != "none" ]; then
+          ARGS+=("--fail-on" "$IN_FAIL_ON")
         fi
 
-        if [ "${{ inputs.format }}" = "sarif" ] || [ "${{ inputs.upload-sarif }}" = "true" ]; then
-          ARGS+=("--format" "sarif" "-o" "${{ inputs.sarif-file }}")
-        elif [ -n "${{ inputs.format }}" ]; then
-          ARGS+=("--format" "${{ inputs.format }}")
+        if [ "$IN_FORMAT" = "sarif" ] || [ "$IN_UPLOAD_SARIF" = "true" ]; then
+          ARGS+=("--format" "sarif" "-o" "$IN_SARIF_FILE")
+        elif [ -n "$IN_FORMAT" ]; then
+          ARGS+=("--format" "$IN_FORMAT")
         fi
 
-        read -r -a PATH_ARGS <<< "${{ inputs.path }}"
+        read -r -a PATH_ARGS <<< "$IN_PATH"
         ARGS+=("${PATH_ARGS[@]}")
 
         echo "Running: cgull scan ${ARGS[*]}"
