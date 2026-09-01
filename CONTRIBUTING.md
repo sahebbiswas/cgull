@@ -1,10 +1,12 @@
 # Contributing to C-GULL
 
-Thank you for your interest in contributing to **C-GULL** (*Code Guardian for Unchecked Logic & Leaks*)! This guide documents our architecture, rule-authoring patterns, inline suppression & baseline diffing mechanisms, and the verification checks required for Pull Requests.
+Thank you for your interest in contributing to **C-GULL** (*Code Guardian for Unchecked Logic & Leaks*)! This guide documents our architecture, workflow expectations, rule-authoring patterns, inline suppression & baseline diffing mechanisms, and the verification checks required for Pull Requests.
 
 ---
 
-## 🛠️ Development Environment Setup
+## 🛠️ Development Environment Setup & Workflow Expectations
+
+### 1. Environment Setup
 
 C-GULL supports zero-dependency scanning with standard Python 3.10+, but running tests and developing AST/CFG rules requires optional AST dependencies (`pycparser`, `pcpp`) and development packages (`pytest`, `pytest-cov`, `jsonschema`).
 
@@ -18,6 +20,15 @@ cd cgull
 pip install -e ".[ast,dev]"
 ```
 
+### 2. Disciplined Internal Workflow & PR / Patch Format
+
+To maintain repository quality and streamline code reviews, please follow these guidelines when submitting Pull Requests or patches:
+
+- **Synced to Upstream Tip**: Always rebase your feature or bugfix branch on top of the latest `main`/`master` tip before submitting a PR or generating a patch file (`git rebase main`).
+- **Atomic Commits & Descriptive Messages**: Break work into logical, atomic commits. Write clear, concise commit summary lines (under 50 characters) followed by detailed body explanations when necessary.
+- **Clean Patch-File PRs**: Ensure patches do not include temporary files, untracked artifacts, or unrelated formatting changes.
+- **CI Gate Enforcement**: PRs will only be merged if all automated tests, corpus behavioral gates, and benchmark quality thresholds pass cleanly.
+
 ---
 
 ## 🧩 Authoring New Security & Compliance Rules
@@ -28,6 +39,8 @@ C-GULL rules inherit from `BaseRule` (defined in `cgull/rules/base.py`). Rules a
 - `crypto_and_safety.py` (Cryptography, privilege, and race condition rules)
 - `types_and_arrays.py` (Array bounds, overflow, pointer arithmetic rules)
 - `misra_and_style.py` (MISRA guidelines, variable shadowing, code quality)
+
+For a quick-start summary of extending the ruleset, see the [Extending Ruleset: Creating Custom Rules](README.md#%EF%B8%8F-extending-ruleset-creating-custom-rules) section in `README.md`.
 
 ### 1. Rule Base Classes & Execution Engines
 
@@ -183,9 +196,9 @@ Baseline reports (`--baseline baseline.json`) represent previously accepted find
 
 ---
 
-## 🏁 Local PR Verification Checklist
+## 🏁 Local PR Verification Checklist & CI Gates
 
-Before submitting a Pull Request, verify that your changes pass all local CI verification checks.
+Before submitting a Pull Request, verify that your changes pass all local CI verification checks. CI runs these three verification gates on every push and PR:
 
 ```bash
 # 1. Run full unit test suite with raw code coverage enforcement (must be >= 88.0%)

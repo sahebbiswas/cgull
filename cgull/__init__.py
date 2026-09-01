@@ -3,7 +3,7 @@ C-GULL: Code Guardian for Unchecked Logic & Leaks
 A lightweight & AST-capable C Static Code Security Analyzer.
 """
 
-__version__ = "0.9.14"
+__version__ = "0.9.15"
 __author__ = "Saheb Biswas"
 
 from .logging_config import configure_logging, TRACE_LEVEL_NUM
