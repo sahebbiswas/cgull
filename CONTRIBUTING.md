@@ -27,6 +27,7 @@ To maintain repository quality and streamline code reviews, please follow these 
 - **Synced to Upstream Tip**: Always rebase your feature or bugfix branch on top of the latest `main`/`master` tip before submitting a PR or generating a patch file (`git rebase main`).
 - **Atomic Commits & Descriptive Messages**: Break work into logical, atomic commits. Write clear, concise commit summary lines (under 50 characters) followed by detailed body explanations when necessary.
 - **Clean Patch-File PRs**: Ensure patches do not include temporary files, untracked artifacts, or unrelated formatting changes.
+- **CHANGELOG Maintenance & Version Bumps**: Keep `CHANGELOG.md` updated following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) standards. New features, rules, fixes, and CLI options should be listed under the `[Unreleased]` section. When bumping `__version__` in `cgull/__init__.py`, move `[Unreleased]` entries into a new version section header with the release date.
 - **CI Gate Enforcement**: PRs will only be merged if all automated tests, corpus behavioral gates, and benchmark quality thresholds pass cleanly.
 
 ---
