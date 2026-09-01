@@ -127,7 +127,8 @@ def handle_flags(args) -> int:
         if not os.path.exists(t):
             print(f"Error: Target path '{t}' does not exist.", file=sys.stderr)
             return 1
-    target = targets[0] if len(targets) == 1 else (os.path.commonpath([os.path.abspath(t) for t in targets]) if targets else ".")
+    report_target_str = " ".join(targets) if len(targets) > 1 else targets[0]
+    primary_target = targets[0] if len(targets) == 1 else (os.path.commonpath([os.path.abspath(t) for t in targets]) if targets else ".")
 
     from .utils import strip_comments_keep_lines
     from .ast_analyzer import ConditionalFlagCollector, CollectedFlags
@@ -135,35 +136,37 @@ def handle_flags(args) -> int:
     ignore_file = getattr(args, "ignore_file", None)
     ignore_patterns = list(getattr(args, "ignore_pattern", []) or [])
     config_path = getattr(args, "config", None)
-    config = load_config(config_path=config_path, target_path=target)
+    config = load_config(config_path=config_path, target_path=primary_target)
     if config.error:
         print(f"Error: {config.error}", file=sys.stderr)
         return 1
     for warning in config.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
-    resolved_excludes = config.get_resolved_exclude_paths(target)
+    resolved_excludes = config.get_resolved_exclude_paths(primary_target)
     if resolved_excludes:
         ignore_patterns.extend(resolved_excludes)
 
-    base_dir = target if os.path.isdir(target) else (os.path.dirname(target) or ".")
+    base_dir = primary_target if os.path.isdir(primary_target) else (os.path.dirname(primary_target) or ".")
     filter_obj = CGullIgnoreFilter(base_dir=base_dir, custom_patterns=ignore_patterns)
     if ignore_file and os.path.exists(ignore_file):
         filter_obj.load_from_file(ignore_file)
 
     files_to_inspect: List[str] = []
-    if os.path.isfile(target):
-        if not filter_obj.should_ignore(target):
-            files_to_inspect.append(target)
-    else:
-        for root, dirs, files in os.walk(target):
-            dirs[:] = [d for d in dirs if not filter_obj.should_prune_dir(os.path.join(root, d))]
-            for file in files:
-                ext = os.path.splitext(file)[1].lower()
-                if ext in (".c", ".h", ".i"):
-                    full_path = os.path.join(root, file)
-                    if not filter_obj.should_ignore(full_path):
-                        files_to_inspect.append(full_path)
+    for t in targets:
+        abs_t = os.path.abspath(t)
+        if os.path.isfile(abs_t):
+            if not filter_obj.should_ignore(abs_t) and abs_t not in files_to_inspect:
+                files_to_inspect.append(abs_t)
+        elif os.path.isdir(abs_t):
+            for root, dirs, files in os.walk(abs_t):
+                dirs[:] = [d for d in dirs if not filter_obj.should_prune_dir(os.path.join(root, d))]
+                for file in files:
+                    ext = os.path.splitext(file)[1].lower()
+                    if ext in (".c", ".h", ".i", ".hpp"):
+                        full_path = os.path.join(root, file)
+                        if not filter_obj.should_ignore(full_path) and full_path not in files_to_inspect:
+                            files_to_inspect.append(full_path)
 
     all_presence: Set[str] = set()
     all_value: Set[str] = set()
@@ -188,7 +191,7 @@ def handle_flags(args) -> int:
     if fmt == "json":
         import json
         data = {
-            "target_path": target,
+            "target_path": report_target_str,
             "presence_flags": sorted(collected.presence_flags),
             "value_flags": sorted(collected.value_flags),
             "all_flags": sorted(collected.all_flags),
@@ -197,7 +200,7 @@ def handle_flags(args) -> int:
     else:
         lines = [
             "=" * 80,
-            f" 🚩 Discovered Preprocessor Flags for: {target}",
+            f" 🚩 Discovered Preprocessor Flags for: {report_target_str}",
             "=" * 80,
             " Presence Flags (Boolean Toggles):",
         ]
