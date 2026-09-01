@@ -8,12 +8,25 @@ AST-only engine mode, and the module-level parallel worker function.
 import os
 import shutil
 import tempfile
+import time
 import unittest
 
 from cgull.engine import CGullScanner, _scan_file_worker
 from cgull.models import AnalysisEngine, Severity, ScanError
 
 VULNERABLE_CODE = "void f(char *b) {\n    gets(b);\n}\n"
+
+
+def _blocking_scan_worker(
+    file_path,
+    config,
+    profiles=None,
+    quiet=False,
+    progress_active=False,
+):
+    """Spawn-safe worker used to verify prompt process-pool interruption."""
+    time.sleep(10)
+    return [], 0, 0.0, "fallback-parser", "regex-fallback", "success", "LIMITED", None
 
 
 class TestScanPathSingleFile(unittest.TestCase):
@@ -413,7 +426,6 @@ class TestParallelWorkerFunction(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_parallel_interrupt_terminates_running_workers_promptly(self):
-        import time
         from unittest.mock import patch
         temp_dir = tempfile.mkdtemp()
         try:
@@ -424,13 +436,12 @@ class TestParallelWorkerFunction(unittest.TestCase):
             with open(f2, "w") as f:
                 f.write(VULNERABLE_CODE)
 
-            def _blocking_worker(file_path, config):
-                time.sleep(10)
-                return [], 0, 0.0, "regex", "success", "LIMITED", None
-
             scanner = CGullScanner()
             t0 = time.time()
-            with patch("cgull.engine._scan_file_worker", side_effect=_blocking_worker):
+            # Patch with a module-level function, not a MagicMock side effect.
+            # ProcessPoolExecutor uses spawn on Windows, so submitted callables
+            # must be importable and picklable in the child process.
+            with patch("cgull.engine._scan_file_worker", new=_blocking_scan_worker):
                 with patch("cgull.engine.as_completed", side_effect=KeyboardInterrupt):
                     with self.assertRaises(KeyboardInterrupt):
                         scanner.scan_path(temp_dir, jobs=2)

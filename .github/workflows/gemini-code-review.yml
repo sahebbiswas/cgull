@@ -12,10 +12,13 @@ permissions:
 
 jobs:
   review:
-    # Only run on pull_request events OR when a comment starts with /gemini review
+    # Dependabot pull requests cannot access GEMINI_API_KEY and receive a
+    # read-only GITHUB_TOKEN, so automated review must be skipped for them.
     if: |
-      github.event_name == 'pull_request' ||
-      (github.event.issue.pull_request && contains(github.event.comment.body, '/gemini review'))
+      (github.event_name == 'pull_request' && github.actor != 'dependabot[bot]') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/gemini review'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code

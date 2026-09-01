@@ -569,6 +569,7 @@ class CGullScanner:
         total_files = len(files_to_scan)
         completed_count = 0
         pool = ProcessPoolExecutor(max_workers=jobs)
+        futures = {}
         try:
             futures = {
                 pool.submit(_scan_file_worker, file_path, config, profiles, quiet, progress_active): file_path
@@ -593,11 +594,28 @@ class CGullScanner:
             pool.shutdown(wait=True)
         except BaseException:
             procs = list((getattr(pool, "_processes", {}) or {}).values())
+            for future in futures:
+                future.cancel()
             pool.shutdown(wait=False, cancel_futures=True)
             for p in procs:
                 if p and p.is_alive():
                     p.terminate()
-            pool.shutdown(wait=False, cancel_futures=True)
+
+            # Reap terminated children so Windows does not retain worker
+            # handles or a queue-management thread until interpreter exit.
+            join_deadline = time.monotonic() + 1.0
+            for p in procs:
+                if p:
+                    p.join(timeout=max(0.0, join_deadline - time.monotonic()))
+
+            # terminate() should be sufficient, but use kill() where available
+            # for a worker that did not exit within the bounded grace period.
+            for p in procs:
+                if p and p.is_alive() and hasattr(p, "kill"):
+                    p.kill()
+            for p in procs:
+                if p and p.is_alive():
+                    p.join(timeout=0.5)
             raise
         return results
 
