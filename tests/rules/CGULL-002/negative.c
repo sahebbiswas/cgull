@@ -26,3 +26,15 @@ void test_tn_syslog(int priority, char *input) {
 void test_tn_vsnprintf(char *buf, size_t sz, va_list args) {
     vsnprintf(buf, sz, "%s", args);
 }
+
+/* Local buffers initialized exclusively from literals are safe formats. */
+void test_tn_literal_buffer_initializer(void) {
+    char format[32] = "fixed string";
+    printf(format);
+}
+
+void test_tn_literal_pointer_assignment(void) {
+    char *format;
+    format = "fixed string";
+    printf(format);
+}

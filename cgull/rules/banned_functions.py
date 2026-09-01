@@ -8,6 +8,7 @@ from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 import logging
 from ..ast_analyzer import CASTContext
+from ..utils import mask_string_and_char_literals
 
 logger = logging.getLogger(__name__)
 
@@ -484,8 +485,8 @@ class FormatStringRule(BaseRule):
     name = "Format String Vulnerabilities"
     impact = Severity.HIGH
     category = RuleCategory.STRINGS
-    description = "Detect when printing functions do not use a string literal as the format argument (e.g. printf(buffer) instead of printf(\"%s\", buffer))."
-    implementation_method = "Regex matching to check if format arg is a variable"
+    description = "Detect when printing functions use a non-literal or untrusted format argument (e.g. printf(buffer) instead of printf(\"%s\", buffer))."
+    implementation_method = "Regex matching with bounded local literal provenance"
     implementation_complexity = "Low"
     chances_of_false_positives = "Low"
     cwe_id = "CWE-134"
@@ -508,6 +509,26 @@ class FormatStringRule(BaseRule):
         "vsnprintf": 2,
     }
     PRINT_FUNCS = list(PRINT_FUNC_ARG_INDEX.keys())
+    MAX_PROVENANCE_LINES = 200
+    _STRING_LITERAL = r'(?:L|u8|u|U)?"(?:\\.|[^"\\])*"'
+    _BUFFER_WRITE_ARG_INDEX = {
+        "gets": 0,
+        "fgets": 0,
+        "read": 1,
+        "recv": 1,
+        "recvfrom": 1,
+        "strcpy": 0,
+        "strncpy": 0,
+        "strcat": 0,
+        "strncat": 0,
+        "memcpy": 0,
+        "memmove": 0,
+        "sprintf": 0,
+        "snprintf": 0,
+        "scanf": 1,
+        "fscanf": 2,
+        "sscanf": 2,
+    }
 
     @staticmethod
     def _is_literal_format(arg: str) -> bool:
@@ -519,6 +540,150 @@ class FormatStringRule(BaseRule):
             s.startswith('u"') or
             s.startswith('U"')
         )
+
+    @classmethod
+    def _is_literal_only_expression(cls, expression: str) -> bool:
+        """Return whether an expression consists exclusively of C string literals."""
+        return bool(re.fullmatch(rf'\s*{cls._STRING_LITERAL}(?:\s*{cls._STRING_LITERAL})*\s*', expression))
+
+    @classmethod
+    def _is_safe_literal_format_expression(cls, expression: str) -> bool:
+        """Return whether literal text contains no unescaped format directive."""
+        if not cls._is_literal_only_expression(expression):
+            return False
+
+        for literal in re.finditer(cls._STRING_LITERAL, expression):
+            content = literal.group(0)[literal.group(0).find('"') + 1:-1]
+            index = 0
+            while index < len(content):
+                if content[index] != '%':
+                    index += 1
+                elif index + 1 < len(content) and content[index + 1] == '%':
+                    index += 2
+                else:
+                    return False
+        return True
+
+    @staticmethod
+    def _simple_identifier(expression: str) -> Optional[str]:
+        """Return a bare identifier, excluding casts, members, and expressions."""
+        match = re.fullmatch(r'\s*([A-Za-z_]\w*)\s*', expression)
+        return match.group(1) if match else None
+
+    @classmethod
+    def _enclosing_function_start(
+        cls, source_lines: List[str], line_number: int, call_offset: int
+    ) -> Optional[int]:
+        """Find the start line of the function containing ``line_number``."""
+        prefix_lines = source_lines[:line_number - 1]
+        prefix_lines.append(source_lines[line_number - 1][:call_offset])
+        source = "\n".join(prefix_lines)
+        masked_source = "\n".join(mask_string_and_char_literals(line) for line in prefix_lines)
+        sink_offset = len(masked_source)
+        candidates = []
+        header_pattern = re.compile(r'\b([A-Za-z_]\w*)\s*\([^{};]*\)\s*\{', re.DOTALL)
+
+        for match in header_pattern.finditer(masked_source):
+            if match.group(1) in {"if", "for", "while", "switch"}:
+                continue
+
+            open_brace = match.end() - 1
+            depth = 0
+            closes_before_sink = False
+            for index in range(open_brace, sink_offset):
+                token = masked_source[index]
+                if token == '{':
+                    depth += 1
+                elif token == '}':
+                    depth -= 1
+                    if depth == 0:
+                        closes_before_sink = True
+                        break
+            if not closes_before_sink:
+                candidates.append(source.count("\n", 0, open_brace) + 1)
+
+        return candidates[-1] if candidates else None
+
+    @classmethod
+    def _has_literal_local_provenance(
+        cls,
+        arg: str,
+        line_number: int,
+        call_offset: int,
+        line_content: str,
+        source_lines: List[str],
+    ) -> bool:
+        """Prove a bare local format variable receives only string literals.
+
+        This is intentionally a small intra-procedural analysis. It accepts a
+        local ``char``-like variable only after a literal initializer or
+        assignment without format directives, and rejects any non-literal
+        write before the sink.
+        Parameters, globals, aliases, expressions, and long functions stay
+        unknown and continue to be reported.
+        """
+        variable = cls._simple_identifier(arg)
+        if variable is None:
+            return False
+
+        function_start = cls._enclosing_function_start(source_lines, line_number, call_offset)
+        if function_start is None or line_number - function_start > cls.MAX_PROVENANCE_LINES:
+            return False
+
+        prefix_lines = source_lines[function_start - 1:line_number - 1]
+        prefix_lines.append(line_content[:call_offset])
+        statements = "\n".join(prefix_lines).split(';')
+
+        local_declared = False
+        literal_write_seen = False
+        nonliteral_write_seen = False
+        escaped_variable = re.escape(variable)
+        declaration_pattern = re.compile(
+            rf'\b(?:(?:const|volatile|static|register)\s+)*(?:unsigned\s+|signed\s+)?'
+            rf'(?:char|wchar_t)\s*(?:\*+\s*)?{escaped_variable}\s*'
+            rf'(?:\[[^\]]*\])?\s*(?:=\s*(?P<rhs>.+))?\s*$',
+            re.DOTALL,
+        )
+        assignment_pattern = re.compile(
+            rf'(?<![=!<>])\b{escaped_variable}\s*(?P<subscript>\[[^\]]+\])?\s*='
+            rf'(?!=)\s*(?P<rhs>.+?)\s*$',
+            re.DOTALL,
+        )
+
+        for statement in statements:
+            if not statement.strip():
+                continue
+
+            declaration = declaration_pattern.search(statement)
+            if declaration:
+                local_declared = True
+                rhs = declaration.group('rhs')
+                if rhs is not None:
+                    if cls._is_safe_literal_format_expression(rhs):
+                        literal_write_seen = True
+                    else:
+                        nonliteral_write_seen = True
+                continue
+
+            assignment = assignment_pattern.search(statement)
+            if assignment:
+                rhs = assignment.group('rhs')
+                # Element writes can change a literal buffer's contents, so
+                # do not infer the resulting format string.
+                if assignment.group('subscript') is None and cls._is_safe_literal_format_expression(rhs):
+                    literal_write_seen = True
+                else:
+                    nonliteral_write_seen = True
+
+            for writer, target_index in cls._BUFFER_WRITE_ARG_INDEX.items():
+                for call in re.finditer(rf'\b{writer}\s*\(', statement):
+                    args = cls._split_call_args(statement, call.end() - 1)
+                    if len(args) > target_index and re.fullmatch(
+                        rf'\s*&?{escaped_variable}\s*(?:\[[^\]]+\])?\s*', args[target_index]
+                    ):
+                        nonliteral_write_seen = True
+
+        return local_declared and literal_write_seen and not nonliteral_write_seen
 
     @staticmethod
     def _split_call_args(line_content: str, start_paren_offset: int) -> List[str]:
@@ -603,7 +768,9 @@ class FormatStringRule(BaseRule):
                 args = self._split_call_args(line_content, paren_pos)
                 if len(args) > target_idx:
                     arg = args[target_idx]
-                    if not self._is_literal_format(arg):
+                    if not self._is_literal_format(arg) and not self._has_literal_local_provenance(
+                        arg, line_number, m.start(), line_content, source_lines
+                    ):
                         msg = (
                             f"Non-literal format string passed to {fn}({arg}). An attacker can inject %x, %n, or %s to leak or overwrite memory."
                             if target_idx == 0 else

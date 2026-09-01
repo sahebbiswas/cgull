@@ -252,6 +252,46 @@ class TestFormatString(unittest.TestCase):
         issues = scan_with_rule("CGULL-002", code)
         self.assertEqual(len(issues), 0)
 
+    def test_literal_local_format_provenance(self):
+        code = """
+        void f(void) {
+            char buffer[32] = "fixed string";
+            char *format;
+            format = "another fixed string";
+            printf(buffer);
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_literal_local_format_provenance_on_single_line(self):
+        code = 'void f(void) { char format[] = "fixed string"; printf(format); }'
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_unknown_assignment_is_not_literal_provenance(self):
+        code = """
+        void f(char *input) {
+            char *format = "fixed string";
+            format = input;
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_external_write_invalidates_literal_format_provenance(self):
+        code = """
+        void f(void) {
+            char format[32] = "fixed string";
+            fgets(format, sizeof(format), stdin);
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 1)
+
     def test_string_literal_containing_printf_pattern_not_flagged(self):
         code = 'void f(void) {\n    log_debug("call printf(user_input) -- insecure pattern, do not do this");\n}'
         issues = scan_with_rule("CGULL-002", code)
