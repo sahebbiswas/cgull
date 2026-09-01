@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.18] - 2026-03-30
+
 ### Added
+- Composite GitHub Action (`action.yml`) wrapping `cgull scan` with SARIF upload support and usage documentation in `README.md`.
+- Action self-test GitHub Actions workflow (`.github/workflows/action-test.yml`).
 - Pre-commit hook configuration (`.pre-commit-hooks.yaml`) with `--fail-on high` failure threshold and usage documentation in `README.md`.
 - Support for scanning multiple target file paths or directories in `cgull scan`.
 
