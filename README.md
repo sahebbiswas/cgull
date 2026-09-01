@@ -247,6 +247,18 @@ cgull rules
 cgull init-ignore
 ```
 
+### Integration with pre-commit
+
+Add C-GULL to your `.pre-commit-config.yaml` to run static security checks automatically on git commit:
+
+```yaml
+repos:
+  - repo: https://github.com/sahebbiswas/cgull
+    rev: v0.9.17  # Use the latest released tag
+    hooks:
+      - id: cgull
+```
+
 ---
 
 ## 🛡️ Supported Security Rules Matrix

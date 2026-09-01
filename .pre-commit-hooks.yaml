@@ -1,0 +1,7 @@
+- id: cgull
+  name: cgull
+  description: Static security analyzer for C source code (Code Guardian for Unchecked Logic & Leaks)
+  entry: cgull scan
+  language: python
+  types_or: [c, c++]
+  files: \.(c|h|hpp)$
