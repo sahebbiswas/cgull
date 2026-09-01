@@ -12,6 +12,7 @@ from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext, CFunction, _format_pycparser_expr, get_type_byte_size, is_unsigned_type
 from ...utils import extract_call_args, split_call_args, extract_balanced_parens
 from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
+from ...cfg.construction import _guarded_expression_uses
 
 logger = logging.getLogger(__name__)
 def _brace_depths(body_lines: List[str]) -> List[int]:
@@ -67,29 +68,42 @@ def _unwrap_call_arg(node):
     return node
 
 
-def _passes_to_unchecked_callee_param(node: CFGEvent, ptr_name: str, summaries: Optional[Dict[str, FunctionSummary]]) -> bool:
-    """Whether this statement passes ptr to a known callee that dereferences it unchecked."""
+def _passes_to_unchecked_callee_param(
+    cfg: StructuredCFG,
+    node: CFGEvent,
+    allocation_locations: Set[str],
+    summaries: Optional[Dict[str, FunctionSummary]],
+) -> bool:
+    """Whether this statement passes an allocated location to an unsafe known callee."""
     if not summaries:
         return False
     ast_node = getattr(node, "_ast_node", None)
     if ast_node is None:
         return False
 
-    def visit(current):
-        if current is None:
-            return False
-        if type(current).__name__ == "FuncCall":
-            summary = summaries.get(_format_pycparser_expr(current.name))
-            args = list(getattr(current.args, "exprs", []) or []) if current.args else []
-            if summary:
-                for index in summary.unsafe_deref_params:
-                    if index < len(args):
-                        arg = _unwrap_call_arg(args[index])
-                        if type(arg).__name__ == "ID" and str(arg.name) == ptr_name:
-                            return True
-        return any(visit(child) for _, child in current.children())
-
-    return visit(ast_node)
+    loc_map = cfg.get_loc_map_at_node(node.node_id)
+    for use_kind, call, guarded_nonnull in _guarded_expression_uses(ast_node):
+        if use_kind != "call":
+            continue
+        summary = summaries.get(_format_pycparser_expr(call.name))
+        args = list(getattr(call.args, "exprs", []) or []) if call.args else []
+        if not summary:
+            continue
+        for index in summary.unsafe_deref_params:
+            if index >= len(args):
+                continue
+            arg = _unwrap_call_arg(args[index])
+            if type(arg).__name__ != "ID":
+                continue
+            arg_name = str(arg.name)
+            if not (allocation_locations & loc_map.get(arg_name, set())):
+                continue
+            if arg_name in guarded_nonnull:
+                continue
+            if cfg.query_allocation(arg_name, node.node_id) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED) and \
+               cfg.query_nullness(arg_name, node.node_id) != Nullness.NON_NULL:
+                return True
+    return False
 
 
 def _find_unsafe_allocation_use(
@@ -101,31 +115,34 @@ def _find_unsafe_allocation_use(
     """Return the first reachable unsafe use of ptr_name allocated at alloc_node_id, or None."""
     work = list(cfg.nodes[alloc_node_id].successors)
     visited = set()
+    allocation_locations: Optional[Set[str]] = None
     while work:
         nid = work.pop(0)
         if nid in visited:
             continue
         visited.add(nid)
         node = cfg.nodes[nid]
+        if allocation_locations is None:
+            allocation_locations = set(cfg.get_loc_map_at_node(nid).get(ptr_name, set()))
+            if not allocation_locations:
+                allocation_locations = {f"alloc_{alloc_node_id}_{ptr_name}"}
 
         if not node.kind.endswith('_cond'):
-            if ptr_name in node.derefs:
-                if cfg.query_allocation(ptr_name, nid) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED):
-                    if cfg.query_nullness(ptr_name, nid) != Nullness.NON_NULL:
+            loc_map = cfg.get_loc_map_at_node(nid)
+            for deref_var in node.derefs:
+                if allocation_locations & loc_map.get(deref_var, set()):
+                    if cfg.query_allocation(deref_var, nid) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED) and \
+                       cfg.query_nullness(deref_var, nid) != Nullness.NON_NULL:
                         return node
 
             # A known direct callee summary is a use of the caller's
             # allocation.  Keep the caller-side path facts: a guard before
             # this call suppresses the report, while any reaching NULL path
             # remains reportable.
-            if _passes_to_unchecked_callee_param(node, ptr_name, summaries):
-                if cfg.query_allocation(ptr_name, nid) in (Allocation.ALLOCATED, Allocation.MAYBE_ALLOCATED) and \
-                   cfg.query_nullness(ptr_name, nid) != Nullness.NON_NULL:
-                    return node
-
-        if ptr_name in node.writes:
-            # Variable reassigned; ends scope of this allocation
-            continue
+        # Calls inside conditions still execute. The summary-specific check
+        # intentionally stays outside the legacy condition-node exclusion.
+        if _passes_to_unchecked_callee_param(cfg, node, allocation_locations, summaries):
+            return node
 
         for succ in node.successors:
             if succ not in visited:

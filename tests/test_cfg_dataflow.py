@@ -1098,6 +1098,119 @@ class TestReallocSemantics(unittest.TestCase):
 
 class TestInterproceduralCFGSummaries(unittest.TestCase):
 
+    def test_unsafe_deref_summary_tracks_incoming_parameter_location(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.cfg import analyze_function_summaries
+        from cgull.rules.memory_management import UncheckedDynamicAllocationsRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+
+        void reassigned(int *p, int *q) {
+            p = q;
+            *p = 1;
+        }
+
+        void f(void) {
+            int *p = malloc(sizeof(*p));
+            int local = 0;
+            reassigned(p, &local);
+        }
+        """
+        ast_ctx = CASTParser().parse(code)
+        summaries = analyze_function_summaries(ast_ctx)
+        issues = UncheckedDynamicAllocationsRule().scan_ast("test.c", ast_ctx)
+
+        self.assertEqual(summaries["reassigned"].unsafe_deref_params, {1})
+        self.assertEqual(issues, [])
+
+    def test_unsafe_summary_call_in_condition_is_reported(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UncheckedDynamicAllocationsRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+
+        int sink(char *p) {
+            *p = 'x';
+            return 1;
+        }
+
+        void f(void) {
+            char *p = malloc(1);
+            if (sink(p)) return;
+        }
+        """
+        ast_ctx = CASTParser().parse(code)
+        issues = UncheckedDynamicAllocationsRule().scan_ast("test.c", ast_ctx)
+
+        self.assertEqual(len(issues), 1)
+
+    def test_unsafe_summary_call_through_allocation_alias_is_reported(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.rules.memory_management import UncheckedDynamicAllocationsRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+
+        void sink(char *p) {
+            *p = 'x';
+        }
+
+        void f(void) {
+            char *p = malloc(1);
+            char *alias = p;
+            sink(alias);
+        }
+        """
+        ast_ctx = CASTParser().parse(code)
+        issues = UncheckedDynamicAllocationsRule().scan_ast("test.c", ast_ctx)
+
+        self.assertEqual(len(issues), 1)
+
+    def test_short_circuit_and_ternary_guards_protect_summary_calls(self):
+        from cgull.ast_analyzer import CASTParser
+        from cgull.cfg import analyze_function_summaries
+        from cgull.rules.memory_management import UncheckedDynamicAllocationsRule
+
+        code = """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+
+        int sink(char *p) {
+            *p = 'x';
+            return 1;
+        }
+
+        void short_guard(char *p) {
+            p && sink(p);
+        }
+
+        void ternary_guard(char *p) {
+            p ? sink(p) : 0;
+        }
+
+        void f(void) {
+            char *p = malloc(1);
+            short_guard(p);
+        }
+
+        void g(void) {
+            char *p = malloc(1);
+            ternary_guard(p);
+        }
+        """
+        ast_ctx = CASTParser().parse(code)
+        summaries = analyze_function_summaries(ast_ctx)
+        issues = UncheckedDynamicAllocationsRule().scan_ast("test.c", ast_ctx)
+
+        self.assertEqual(summaries["short_guard"].unsafe_deref_params, set())
+        self.assertEqual(summaries["ternary_guard"].unsafe_deref_params, set())
+        self.assertEqual(issues, [])
+
     def test_unchecked_allocation_passed_to_one_hop_sink(self):
         from cgull.ast_analyzer import CASTParser
         from cgull.rules.memory_management import UncheckedDynamicAllocationsRule
