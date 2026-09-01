@@ -34,3 +34,45 @@ void test_tp_vfprintf(FILE *f, char *fmt, va_list args) {
 void test_tp_vsnprintf(char *buf, size_t sz, char *fmt, va_list args) {
     vsnprintf(buf, sz, fmt, args); // expect: CGULL-002
 }
+
+void test_tp_unknown_uninitialized_format(void) {
+    char format[32];
+    printf(format); // expect: CGULL-002
+}
+
+void test_tp_unknown_assignment_overrides_literal(char *input) {
+    char *format = "fixed string";
+    format = input;
+    printf(format); // expect: CGULL-002
+}
+
+void test_tp_literal_format_directive(void) {
+    char format[] = "%x";
+    printf(format); // expect: CGULL-002
+}
+
+void test_tp_external_write_after_literal_initializer(void) {
+    char format[32] = "fixed string";
+    fgets(format, sizeof(format), stdin);
+    printf(format); // expect: CGULL-002
+}
+
+void test_tp_unknown_call_after_literal_initializer(void) {
+    char format[32] = "fixed string";
+    parse(format);
+    printf(format); // expect: CGULL-002
+}
+
+void test_tp_alias_after_literal_initializer(char *input) {
+    char format[32] = "fixed string";
+    char *alias = format;
+    strcpy(alias, input);
+    printf(format); // expect: CGULL-002
+}
+
+void test_tp_search_result_alias_mutates_literal_buffer(void) {
+    char format[32] = "fixed string";
+    char *interior = strchr(format, 'x');
+    *interior = '%';
+    printf(format); // expect: CGULL-002
+}

@@ -11,10 +11,12 @@ points at exactly one rule's logic, not at cross-rule interference.
 """
 
 import unittest
+from unittest.mock import patch
 
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine, FixType, Severity
 from cgull.rules import get_rule_by_id, get_all_rules, ALL_RULES, RULE_REGISTRY, ReallocOverwriteRule
+from cgull.rules.banned_functions import FormatStringRule
 
 
 def scan_with_rule(rule_id: str, code: str):
@@ -251,6 +253,103 @@ class TestFormatString(unittest.TestCase):
         code = "void f(char *user_input) {\n    printf(\"%s\", user_input);\n}"
         issues = scan_with_rule("CGULL-002", code)
         self.assertEqual(len(issues), 0)
+
+    def test_literal_local_format_provenance(self):
+        code = """
+        void f(void) {
+            char buffer[32] = "fixed string";
+            char *format;
+            format = "another fixed string";
+            printf(buffer);
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_literal_local_format_provenance_on_single_line(self):
+        code = 'void f(void) { char format[] = "fixed string"; printf(format); }'
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_unknown_assignment_is_not_literal_provenance(self):
+        code = """
+        void f(char *input) {
+            char *format = "fixed string";
+            format = input;
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_external_write_invalidates_literal_format_provenance(self):
+        code = """
+        void f(void) {
+            char format[32] = "fixed string";
+            fgets(format, sizeof(format), stdin);
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_unknown_call_and_alias_invalidate_literal_format_provenance(self):
+        code = """
+        void f(char *input) {
+            char format[32] = "fixed string";
+            parse(format);
+            printf(format);
+            char *alias = format;
+            strcpy(alias, input);
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 2)
+
+    def test_read_only_calls_preserve_literal_format_provenance(self):
+        code = """
+        void f(void) {
+            char format[] = "fixed string";
+            strlen(format);
+            puts(format);
+            atoi(format);
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 0)
+
+    def test_search_result_alias_invalidates_literal_format_provenance(self):
+        code = """
+        void f(void) {
+            char format[32] = "fixed string";
+            char *interior = strchr(format, 'x');
+            *interior = '%';
+            printf(format);
+        }
+        """
+        issues = scan_with_rule("CGULL-002", code)
+        self.assertEqual(len(issues), 1)
+
+    def test_function_boundaries_are_cached_for_multiple_sinks(self):
+        code = """void f(void) {
+    char format[] = "fixed string";
+    printf(format);
+    printf(format);
+}"""
+        source_lines = code.splitlines()
+        rule = FormatStringRule()
+
+        with patch(
+            "cgull.rules.banned_functions.mask_string_and_char_literals",
+            side_effect=lambda line: line,
+        ) as mask_literals:
+            for line_number, line in enumerate(source_lines, 1):
+                rule.scan_line("multiple_sinks.c", line_number, line, code, source_lines)
+
+        self.assertEqual(mask_literals.call_count, len(source_lines))
 
     def test_string_literal_containing_printf_pattern_not_flagged(self):
         code = 'void f(void) {\n    log_debug("call printf(user_input) -- insecure pattern, do not do this");\n}'

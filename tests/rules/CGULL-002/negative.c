@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <syslog.h>
+#include <stdlib.h>
+#include <string.h>
 
 void test_tn_printf(char *input) {
     printf("%s\n", input);
@@ -25,4 +27,24 @@ void test_tn_syslog(int priority, char *input) {
 
 void test_tn_vsnprintf(char *buf, size_t sz, va_list args) {
     vsnprintf(buf, sz, "%s", args);
+}
+
+/* Local buffers initialized exclusively from literals are safe formats. */
+void test_tn_literal_buffer_initializer(void) {
+    char format[32] = "fixed string";
+    printf(format);
+}
+
+void test_tn_literal_pointer_assignment(void) {
+    char *format;
+    format = "fixed string";
+    printf(format);
+}
+
+void test_tn_literal_format_read_only_calls(void) {
+    char format[] = "fixed string";
+    strlen(format);
+    puts(format);
+    atoi(format);
+    printf(format);
 }
