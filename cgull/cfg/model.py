@@ -34,6 +34,11 @@ class Allocation(Enum):
 @dataclass
 class FunctionSummary:
     freed_params: Set[int] = field(default_factory=set)
+    # Parameter positions whose incoming argument value can be dereferenced
+    # before the callee establishes it is non-NULL.  This follows the
+    # parameter's initial location, not a variable of the same name after an
+    # assignment in the callee.
+    unsafe_deref_params: Set[int] = field(default_factory=set)
     return_nullness: Nullness = Nullness.UNKNOWN
     returns_allocation: bool = False
     is_unknown: bool = False

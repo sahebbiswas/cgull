@@ -185,6 +185,68 @@ def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
     return set(), set()
 
 
+def _direct_deref_var(node) -> Optional[str]:
+    """Return the pointer directly dereferenced by one AST node, if any."""
+    if node is None:
+        return None
+    kind = type(node).__name__
+    if kind == "UnaryOp" and getattr(node, "op", None) == "*":
+        inner = _unwrap_cast(node.expr)
+    elif kind in {"ArrayRef", "StructRef"}:
+        inner = _unwrap_cast(node.name)
+    else:
+        return None
+    return str(inner.name) if inner is not None and type(inner).__name__ == "ID" else None
+
+
+def _guarded_expression_uses(node, known_nonnull: Optional[Set[str]] = None):
+    """Yield ``(kind, payload, known_nonnull)`` for expression uses.
+
+    The CFG models a full expression as one event.  Preserve simple
+    short-circuit and ternary proofs for a use in a later operand so clients
+    do not have to treat the event's pre-state as the use's state.
+    """
+    if node is None:
+        return
+    known = set(known_nonnull or ())
+    kind = type(node).__name__
+
+    # CFG condition nodes hold the entire statement as their AST node.  The
+    # body has independent CFG events, so only inspect the condition here.
+    if kind in {"If", "While", "DoWhile", "Switch"}:
+        yield from _guarded_expression_uses(getattr(node, "cond", None), known)
+        return
+    if kind == "For":
+        yield from _guarded_expression_uses(getattr(node, "cond", None), known)
+        return
+
+    if kind == "FuncCall":
+        yield "call", node, known
+        for arg in list(getattr(node.args, "exprs", []) or []) if node.args else []:
+            yield from _guarded_expression_uses(arg, known)
+        return
+
+    if kind == "BinaryOp" and getattr(node, "op", None) in {"&&", "||"}:
+        yield from _guarded_expression_uses(node.left, known)
+        true_nonnull, false_nonnull = _simple_null_facts(node.left)
+        right_known = known | (true_nonnull if node.op == "&&" else false_nonnull)
+        yield from _guarded_expression_uses(node.right, right_known)
+        return
+
+    if kind == "TernaryOp":
+        yield from _guarded_expression_uses(node.cond, known)
+        true_nonnull, false_nonnull = _simple_null_facts(node.cond)
+        yield from _guarded_expression_uses(node.iftrue, known | true_nonnull)
+        yield from _guarded_expression_uses(node.iffalse, known | false_nonnull)
+        return
+
+    deref_var = _direct_deref_var(node)
+    if deref_var:
+        yield "deref", deref_var, known
+    for _, child in node.children():
+        yield from _guarded_expression_uses(child, known)
+
+
 def _process_call_effects(call_node, target_var: Optional[str], summaries: Optional[Dict[str, FunctionSummary]], alloc_set: Set[str], realloc_set: Set[str], freed: Set[str], allocated: Set[str], null_writes: Set[str], maybe_null_writes: Set[str], realloc_inputs: Set[str], realloc_bindings: Dict[str, str], is_value_producing: bool = False):
     """Applies summary effects for a single FuncCall node."""
     callee = _format_pycparser_expr(call_node.name)

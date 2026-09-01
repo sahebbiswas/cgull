@@ -3,9 +3,19 @@
 from typing import Dict, Optional, Set
 
 from ..ast_analyzer import _format_pycparser_expr
-from .construction import _is_nullish, build_cfg, find_function_def
+from .construction import _guarded_expression_uses, _is_nullish, build_cfg, find_function_def
 from .dataflow import meet_nullness
 from .model import Allocation, FunctionSummary, Nullness
+
+
+def _unwrap_cast(node):
+    while node is not None and type(node).__name__ in {"Cast", "ExprList"}:
+        if type(node).__name__ == "Cast":
+            node = node.expr
+        else:
+            node = node.exprs[-1] if getattr(node, "exprs", None) else None
+    return node
+
 
 def _get_builtin_summaries(alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None) -> Dict[str, FunctionSummary]:
     alloc_set = alloc_funcs if alloc_funcs is not None else {"malloc", "calloc", "realloc", "aligned_alloc", "strdup", "strndup", "valloc", "pvalloc", "memalign"}
@@ -60,6 +70,7 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
                     cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
 
             freed_params: Set[int] = set()
+            unsafe_deref_params: Set[int] = set()
             return_nullness_set: Set[Nullness] = set()
             returns_alloc: bool = False
 
@@ -72,6 +83,47 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
                     for node in cfg.nodes.values():
                         if p_name in node.freed:
                             freed_params.add(i)
+                            break
+
+                # A callee can require an allocation result to be checked by
+                # its caller. Track the parameter's incoming location rather
+                # than its variable name so ``p = q; *p`` is attributed to q,
+                # not to p. Unknown/external callees intentionally produce no
+                # fact.
+                for i, p_name in enumerate(param_names):
+                    param_location = f"var_{p_name}"
+                    for node in cfg.nodes.values():
+                        loc_map = cfg.get_loc_map_at_node(node.node_id)
+                        for use_kind, payload, guarded_nonnull in _guarded_expression_uses(getattr(node, "_ast_node", None)):
+                            if use_kind == "deref":
+                                deref_var = payload
+                                if param_location in loc_map.get(deref_var, set()) and \
+                                   deref_var not in guarded_nonnull and \
+                                   cfg.query_nullness(deref_var, node.node_id) != Nullness.NON_NULL:
+                                    unsafe_deref_params.add(i)
+                                    break
+                                continue
+
+                            callee = _format_pycparser_expr(payload.name)
+                            callee_summary = summaries.get(callee)
+                            args = list(getattr(payload.args, "exprs", []) or []) if payload.args else []
+                            if not callee_summary:
+                                continue
+                            for arg_index in callee_summary.unsafe_deref_params:
+                                if arg_index >= len(args):
+                                    continue
+                                arg = _unwrap_cast(args[arg_index])
+                                if type(arg).__name__ != "ID":
+                                    continue
+                                arg_name = str(arg.name)
+                                if param_location in loc_map.get(arg_name, set()) and \
+                                   arg_name not in guarded_nonnull and \
+                                   cfg.query_nullness(arg_name, node.node_id) != Nullness.NON_NULL:
+                                    unsafe_deref_params.add(i)
+                                    break
+                            if i in unsafe_deref_params:
+                                break
+                        if i in unsafe_deref_params:
                             break
 
                 # Inspect return statements
@@ -117,6 +169,7 @@ def analyze_function_summaries(ast_ctx, alloc_funcs: Optional[Set[str]] = None, 
 
             new_summary = FunctionSummary(
                 freed_params=freed_params,
+                unsafe_deref_params=unsafe_deref_params,
                 return_nullness=final_ret_nullness if final_ret_nullness is not None else Nullness.UNKNOWN,
                 returns_allocation=returns_alloc,
                 is_unknown=False,
