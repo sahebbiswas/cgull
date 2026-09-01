@@ -34,7 +34,7 @@ Homepage = "https://github.com/sahebbiswas/cgull"
 [project.optional-dependencies]
 ast = ["pycparser>=2.21", "pcpp>=1.30"]
 preprocess = ["pcpp>=1.30"]
-dev = ["pytest>=7.0.0", "jsonschema>=4.0.0"]
+dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0", "jsonschema>=4.0.0"]
 
 [project.scripts]
 cgull = "cgull.cli:main"

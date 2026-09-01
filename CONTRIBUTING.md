@@ -15,7 +15,7 @@ git clone https://github.com/sahebbiswas/cgull.git
 cd cgull
 
 # Install in editable mode with AST parsing & dev dependencies
-pip install -e ".[ast,dev]" pytest-cov jsonschema
+pip install -e ".[ast,dev]"
 ```
 
 ---
@@ -194,8 +194,8 @@ pytest -v --cov=cgull --cov-report=term-missing
 # 2. Run Security Rule Behavioral Corpus runner (must achieve >= 40.0% coverage)
 python tests/run_corpus.py --min-coverage 40.0
 
-# 3. Run Focused NIST Juliet Benchmark runner (must meet >= 0.70 F1 score threshold)
-python benchmarks/run_juliet.py --ci --min-f1 0.70
+# 3. Run Focused NIST Juliet Benchmark runner (must meet >= 0.90 F1 score threshold)
+python benchmarks/run_juliet.py --ci --min-f1 0.90
 ```
 
 ### Summary of Coverage & Quality Thresholds
@@ -203,6 +203,6 @@ python benchmarks/run_juliet.py --ci --min-f1 0.70
 | :--- | :--- | :--- | :--- |
 | **Unit Test Coverage** | `pytest -v --cov=cgull` | **>= 88.0%** | Raw line coverage across `cgull` package. |
 | **Behavioral Corpus** | `python tests/run_corpus.py` | **>= 40.0%** | Percentage of registered rules verified against annotated `.c` test files. |
-| **Juliet Benchmark** | `python benchmarks/run_juliet.py` | **>= 0.70** | F1 detection score against Juliet test oracle suite (`--ci` runner). |
+| **Juliet Benchmark** | `python benchmarks/run_juliet.py` | **>= 0.90** | F1 detection score against Juliet test oracle suite (`--ci` runner). |
 
 If all three checks pass locally, your Pull Request is ready for submission!
