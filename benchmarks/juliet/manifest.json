@@ -2,6 +2,44 @@
   "suite": "Juliet C Security Benchmark for C-GULL",
   "version": "1.0",
   "description": "NIST Juliet-based detection quality benchmark covering CWE-134, CWE-190, CWE-121, CWE-122, CWE-369, CWE-476, CWE-690, CWE-416, and CWE-457 across 9 control-flow categories.",
+  "rule_contracts": {
+    "CGULL-002": {
+      "rationale": "The oracle calls printf with either a variable format string or an explicit format string.",
+      "source_pattern": "printf\\s*\\("
+    },
+    "CGULL-003": {
+      "rationale": "The oracle dereferences a heap-allocation result with or without a dominating NULL check.",
+      "source_pattern": "malloc\\s*\\("
+    },
+    "CGULL-004": {
+      "rationale": "The oracle dereferences a pointer whose NULL guard determines whether the use is safe.",
+      "source_pattern": "\\*ptr"
+    },
+    "CGULL-006": {
+      "rationale": "The oracle uses count in an allocation-size multiplication with or without an overflow guard.",
+      "source_pattern": "count\\s*\\*\\s*sizeof"
+    },
+    "CGULL-007": {
+      "rationale": "The oracle indexes a fixed-capacity stack or heap buffer at an in-bounds or out-of-bounds constant index.",
+      "source_pattern": "data\\s*\\[\\s*[0-9]+\\s*\\]"
+    },
+    "CGULL-021": {
+      "rationale": "The oracle declares a local pointer with or without an initializer before using it.",
+      "source_pattern": "int\\s+\\*ptr"
+    },
+    "CGULL-022": {
+      "rationale": "The oracle frees ptr before or after its final dereference.",
+      "source_pattern": "free\\s*\\(\\s*ptr\\s*\\)"
+    },
+    "CGULL-023": {
+      "rationale": "The interprocedural oracle reads the local pointer as a call argument before or after initialization.",
+      "source_pattern": "sink\\s*\\(\\s*ptr\\s*\\)"
+    },
+    "CGULL-034": {
+      "rationale": "The oracle divides by divisor with or without a dominating nonzero check.",
+      "source_pattern": "/\\s*divisor"
+    }
+  },
   "test_cases": [
     {
       "id": "CWE476_NULL_Pointer_Dereference__01_baseline",
@@ -708,8 +746,7 @@
           "vulnerable": true,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         },
         {
@@ -717,8 +754,7 @@
           "vulnerable": false,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         }
       ]
@@ -735,8 +771,7 @@
           "vulnerable": true,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         },
         {
@@ -744,8 +779,7 @@
           "vulnerable": false,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         }
       ]
@@ -762,8 +796,7 @@
           "vulnerable": true,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         },
         {
@@ -771,8 +804,7 @@
           "vulnerable": false,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         }
       ]
@@ -789,8 +821,7 @@
           "vulnerable": true,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         },
         {
@@ -798,8 +829,7 @@
           "vulnerable": false,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         }
       ]
@@ -816,8 +846,7 @@
           "vulnerable": true,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         },
         {
@@ -825,8 +854,7 @@
           "vulnerable": false,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         }
       ]
@@ -843,8 +871,7 @@
           "vulnerable": true,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         },
         {
@@ -852,8 +879,7 @@
           "vulnerable": false,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         }
       ]
@@ -870,8 +896,7 @@
           "vulnerable": true,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         },
         {
@@ -879,8 +904,7 @@
           "vulnerable": false,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         }
       ]
@@ -897,8 +921,7 @@
           "vulnerable": true,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         },
         {
@@ -906,8 +929,7 @@
           "vulnerable": false,
           "expected_cwe": "CWE-457",
           "expected_rules": [
-            "CGULL-021",
-            "CGULL-023"
+            "CGULL-021"
           ]
         }
       ]
