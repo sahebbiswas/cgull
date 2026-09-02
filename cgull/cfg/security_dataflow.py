@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, FrozenSet, Mapping, Optional, Sequence, Set, Tuple
+from typing import Dict, FrozenSet, Mapping, Optional, Set, Tuple
 
 from ..semantic_models import (
     EMPTY_SEMANTIC_MODELS,
@@ -313,8 +313,6 @@ def _transfer_event(node, provenance, validations, registry, summaries) -> None:
                 target = _canonical_location(call.result_target)
                 provenance[target] = Provenance.UNKNOWN
                 validations.pop(target, None)
-            # Unknown calls may mutate referenced storage.  Never preserve a
-            # validation proof across a passed address.
             for actual in call.actual_arguments:
                 if actual.lstrip().startswith("&"):
                     validations.pop(_canonical_location(actual.lstrip("& ")), None)
@@ -491,6 +489,30 @@ def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFu
             return deps
         return set()
 
+    def returned_validator_effects(expr) -> Set[SecurityValidatorEffect]:
+        effects: Set[SecurityValidatorEffect] = set()
+        if type(expr).__name__ != "FuncCall":
+            return effects
+        callee = _direct_callee(expr)
+        if not callee:
+            return effects
+        args = list(getattr(getattr(expr, "args", None), "exprs", ()) or ())
+        model = registry.for_function(callee)
+        if model.validator is not None and model.validator.target.argument_index is not None:
+            idx = model.validator.target.argument_index
+            if idx < len(args):
+                for p in param_deps(args[idx]):
+                    effects.add(
+                        SecurityValidatorEffect(p, model.validator.property, model.validator.success)
+                    )
+        summary = summaries.get(callee)
+        if summary is not None:
+            for effect in summary.validator_effects:
+                if effect.parameter_index < len(args):
+                    for p in param_deps(args[effect.parameter_index]):
+                        effects.add(SecurityValidatorEffect(p, effect.property, effect.success))
+        return effects
+
     class Visitor:
         def visit(self, node):
             nonlocal external_return
@@ -498,8 +520,9 @@ def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFu
                 return
             kind = type(node).__name__
             if kind == "Return":
-                return_deps.update(param_deps(getattr(node, "expr", None)))
                 expr = getattr(node, "expr", None)
+                return_deps.update(param_deps(expr))
+                validator_effects.update(returned_validator_effects(expr))
                 if type(expr).__name__ == "FuncCall":
                     callee = _direct_callee(expr)
                     if callee:
@@ -511,6 +534,14 @@ def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFu
                             external_return = True
                         if summary is not None and summary.external_return:
                             external_return = True
+            elif kind == "Assignment":
+                lvalue = getattr(node, "lvalue", None)
+                if type(lvalue).__name__ == "UnaryOp" and getattr(lvalue, "op", None) == "*":
+                    targets = param_deps(lvalue.expr)
+                    deps = param_deps(getattr(node, "rvalue", None))
+                    for target_param in targets:
+                        if deps:
+                            output_deps.setdefault(target_param, set()).update(deps)
             if kind == "FuncCall":
                 self.visit_call(node)
             for _, child in node.children():
@@ -531,13 +562,6 @@ def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFu
                         if idx < len(args):
                             for p in param_deps(args[idx]):
                                 external_outputs.add(p)
-            if model.validator is not None and model.validator.target.argument_index is not None:
-                idx = model.validator.target.argument_index
-                if idx < len(args):
-                    for p in param_deps(args[idx]):
-                        validator_effects.add(
-                            SecurityValidatorEffect(p, model.validator.property, model.validator.success)
-                        )
             if model.sink is not None:
                 for req in model.sink.requirements:
                     idx = req.location.argument_index
@@ -547,10 +571,6 @@ def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFu
 
             if summary is None:
                 return
-            for effect in summary.validator_effects:
-                if effect.parameter_index < len(args):
-                    for p in param_deps(args[effect.parameter_index]):
-                        validator_effects.add(SecurityValidatorEffect(p, effect.property, effect.success))
             for req in summary.sink_requirements:
                 if req.parameter_index < len(args):
                     for p in param_deps(args[req.parameter_index]):
