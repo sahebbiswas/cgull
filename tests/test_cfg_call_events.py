@@ -42,7 +42,7 @@ def test_call_shapes_preserve_arguments_and_result_bindings():
     assert make_calls[("a", "b")].result_target == "declared"
     assert make_calls[("b", "a")].result_target == "declared"
     assert make_calls[("declared", "b")].result_target == "return"
-    assert all(not call.is_unresolved for call in calls)
+    assert all(not call.is_indirect for call in calls)
 
     declaration_event = next(node for node in cfg.nodes.values() if "declared = make(a, b)" in node.expr_str)
     assert declaration_event.direct_callee == "make"
@@ -90,7 +90,23 @@ def test_indirect_function_pointer_call_is_retained_as_unresolved():
     assert call.actual_arguments == ("value",)
     assert call.result_target == "return"
     assert call.is_indirect is True
-    assert call.is_unresolved is True
+
+
+def test_non_identifier_assignment_targets_retain_result_binding():
+    cfg = _build(
+        """
+        int make(void);
+
+        void f(int *pointer, int values[], int index) {
+            *pointer = make();
+            values[index] = make();
+        }
+        """
+    )
+
+    calls = sorted(_calls(cfg), key=lambda call: call.result_target)
+    assert [call.result_target for call in calls] == ["*pointer", "values[index]"]
+    assert all(call.direct_callee == "make" for call in calls)
 
 
 def test_header_call_source_location_uses_original_line_map(tmp_path):

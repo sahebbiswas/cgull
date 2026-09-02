@@ -46,8 +46,8 @@ class CFGCall:
 
     ``direct_callee`` is populated only for syntactically direct calls.  For
     function pointers and other indirect call expressions, ``callee_expression``
-    retains the source spelling and ``is_unresolved`` is true so later call-graph
-    construction can degrade the call explicitly instead of dropping it.
+    retains the source spelling and ``is_indirect`` is true so later call-graph
+    construction can record an unresolved edge instead of dropping the call.
     """
 
     direct_callee: Optional[str]
@@ -56,7 +56,6 @@ class CFGCall:
     result_target: Optional[str] = None
     source_location: Optional[CFGSourceLocation] = None
     is_indirect: bool = False
-    is_unresolved: bool = False
 
 
 @dataclass

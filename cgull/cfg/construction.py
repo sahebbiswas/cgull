@@ -383,8 +383,7 @@ def _value_call_and_target(ast_node):
         result_target = str(ast_node.name) if ast_node.name else None
     elif kind == "Assignment":
         value_expr = ast_node.rvalue
-        targets = sorted(_assignment_target(ast_node.lvalue))
-        result_target = targets[0] if targets else None
+        result_target = _format_pycparser_expr(ast_node.lvalue)
     elif kind == "Return" and getattr(ast_node, "expr", None) is not None:
         value_expr = ast_node.expr
         result_target = "return"
@@ -420,7 +419,6 @@ def _call_events(ast_node, line_map: Optional[Dict[int, Any]], function_pointers
                 result_target=result_target if node is value_call else None,
                 source_location=_call_source_location(node, line_map),
                 is_indirect=not syntactic_direct,
-                is_unresolved=not syntactic_direct,
             ))
         for _, child in node.children():
             visit(child)
