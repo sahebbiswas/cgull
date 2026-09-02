@@ -47,7 +47,7 @@ jobs:
 
       - name: Run Security Rule Behavioral Corpus
         run: |
-          python tests/run_corpus.py --min-coverage 40.0
+          python tests/run_corpus.py --min-coverage 100.0
 
       - name: Run Interprocedural Regression Corpus
         run: |
