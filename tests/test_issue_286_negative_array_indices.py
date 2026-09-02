@@ -24,6 +24,33 @@ def test_negative_constant_array_indices_are_reported():
     assert sum("index [-1] is below zero" in message for message in messages) == 3
 
 
+def test_multiple_negative_subscripts_on_one_line_are_reported_separately():
+    code = """
+    int f(void) {
+        int a[4] = {0};
+        int b[4] = {0};
+        return a[-1] + b[-2];
+    }
+    """
+    issues = _scan(code)
+    messages = [issue.message for issue in issues]
+    assert len(issues) == 2
+    assert any("index [-1] is below zero" in message and "'a[4]'" in message for message in messages)
+    assert any("index [-2] is below zero" in message and "'b[4]'" in message for message in messages)
+    assert len({issue.column_number for issue in issues}) == 2
+
+
+def test_unsigned_cast_of_negative_constant_is_not_mislabeled_as_negative():
+    code = """
+    int f(void) {
+        int a[4] = {0};
+        return a[(unsigned)-1];
+    }
+    """
+    issues = _scan(code)
+    assert all("below zero" not in issue.message for issue in issues)
+
+
 def test_nonnegative_constant_boundaries_remain_clean():
     code = """
     int f(void) {
