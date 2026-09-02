@@ -5,16 +5,21 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
-from typing import Optional
+from typing import List, Optional
 
 from . import cli_base as _base
 from .fixes import FixResult, apply_safe_fixes
-from .models import FixType
 
 
 _ORIGINAL_BUILD_PARSER = _base.build_parser
 _ORIGINAL_HANDLE_SCAN = _base.handle_scan
 _ORIGINAL_REPORTER = _base.ReportGenerator
+
+# Public symbols historically exposed from cgull.cli.  Keep these aliases so
+# callers/tests can monkey-patch cgull.cli without knowing about the internal
+# compatibility module used by the fix facade.
+CGullScanner = _base.CGullScanner
+ReportGenerator = _base.ReportGenerator
 
 
 def _scan_subparser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -38,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="With --fix, write SAFE_FIX replacements to source files and re-scan",
     )
     return parser
+
+
+def _sync_base_symbols() -> None:
+    """Propagate public monkey-patch points into the established CLI module."""
+    _base.CGullScanner = CGullScanner
+    _base.ReportGenerator = ReportGenerator
 
 
 def _run_scan_and_capture(args, *, suppress_output: bool):
@@ -77,6 +88,7 @@ def _run_scan_and_capture(args, *, suppress_output: bool):
         internal.fail_on_error = False
         internal.warn_on_fallback = False
 
+    _sync_base_symbols()
     previous = _base.ReportGenerator
     _base.ReportGenerator = CapturingReporter
     try:
@@ -116,6 +128,7 @@ def handle_scan(args) -> int:
         _base.print("Error: --write requires --fix.", file=_base.sys.stderr)
         return 2
     if not getattr(args, "fix", False):
+        _sync_base_symbols()
         return _ORIGINAL_HANDLE_SCAN(args)
 
     if not getattr(args, "write", False):
@@ -137,16 +150,18 @@ def handle_scan(args) -> int:
     return rc
 
 
-# The original ``main`` resolves these functions from its module globals.
-_base.build_parser = build_parser
-_base.handle_scan = handle_scan
-
-
-def main() -> int:
-    return _base.main()
+def main(argv: Optional[List[str]] = None) -> int:
+    """Run the CLI while preserving the established injectable argv API."""
+    # _base.main resolves build_parser/handle_scan from its own globals. Sync
+    # them on every call so monkey-patching cgull.cli.handle_scan keeps working.
+    _base.build_parser = build_parser
+    _base.handle_scan = handle_scan
+    _sync_base_symbols()
+    return _base.main(argv)
 
 
 # Re-export established CLI helpers for compatibility with direct imports.
 handle_flags = _base.handle_flags
 handle_rules = _base.handle_rules
+handle_init_ignore = _base.handle_init_ignore
 print = _base.print
