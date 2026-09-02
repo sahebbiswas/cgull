@@ -110,11 +110,7 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
         from ...ast_analyzer import _format_pycparser_expr
         from ...cfg import _PRELUDE_LINE_COUNT, find_function_def
 
-        reported = {
-            (issue.line_number, issue.code_snippet, issue.message)
-            for issue in issues
-            if issue.rule_id == self.rule_id
-        }
+        reported = set()
 
         for fn in ast_ctx.functions:
             funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
@@ -141,27 +137,16 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
                                 else f"{arr_name}[{_format_pycparser_expr(node.subscript)}]"
                             )
                             column = node.coord.column if node.coord else 1
-                            message = (
-                                f"Static Array Out-of-Bounds: index [{value}] is below zero "
-                                f"for declared dimension of '{arr_name}[{arr_size}]'."
-                            )
                             key = (line_no, arr_name, value, column)
-                            existing_keys = {
-                                (
-                                    issue.line_number,
-                                    issue.message,
-                                    getattr(issue, "column_number", None),
-                                )
-                                for issue in issues
-                                if issue.rule_id == rule.rule_id
-                            }
-                            compatibility_key = (line_no, message, column)
-                            if key not in reported and compatibility_key not in existing_keys:
+                            if key not in reported:
                                 issues.append(rule.create_issue(
                                     file_path=file_path,
                                     line_number=line_no,
                                     code_snippet=snippet,
-                                    message=message,
+                                    message=(
+                                        f"Static Array Out-of-Bounds: index [{value}] is below zero "
+                                        f"for declared dimension of '{arr_name}[{arr_size}]'."
+                                    ),
                                     column_number=column,
                                     engine="AST",
                                     fix_type=FixType.SUGGESTED_FIX,
