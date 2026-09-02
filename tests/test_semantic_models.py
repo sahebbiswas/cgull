@@ -139,6 +139,34 @@ class TestSemanticModelParsing(unittest.TestCase):
                 }
             )
 
+    def test_duplicate_normalized_source_outputs_fail(self):
+        cases = [
+            ["return", "return"],
+            ["out:0", "out:00"],
+        ]
+        for outputs in cases:
+            with self.subTest(outputs=outputs):
+                with self.assertRaisesRegex(ValueError, "duplicate output location"):
+                    parse_semantic_models(
+                        {"sources": [{"function": "uart_read", "outputs": outputs}]}
+                    )
+
+    def test_duplicate_normalized_sink_requirements_fail(self):
+        with self.assertRaisesRegex(ValueError, "duplicate requirement for location"):
+            parse_semantic_models(
+                {
+                    "sinks": [
+                        {
+                            "function": "flash_write",
+                            "requirements": {
+                                "arg:0": ["authorized"],
+                                "arg:00": ["bounds_checked"],
+                            },
+                        }
+                    ]
+                }
+            )
+
 
 class TestSemanticModelLookup(unittest.TestCase):
     def setUp(self):
