@@ -1,0 +1,294 @@
+{
+  "suite": "C-GULL Interprocedural Regression Corpus",
+  "version": "1.0",
+  "milestone": "../../docs/interprocedural-analysis.md",
+  "required_scenarios": [
+    "direct_wrappers",
+    "multiple_callers",
+    "return_propagation",
+    "output_parameters",
+    "globals",
+    "aliases",
+    "header_defined_helpers",
+    "recursion",
+    "unresolved_calls"
+  ],
+  "required_families": [
+    "format_strings",
+    "command_execution",
+    "memory_copy_bounds",
+    "allocation_lifecycle"
+  ],
+  "baseline": {
+    "overall": {"cases": 22, "expected_positives": 9, "expected_negatives": 13, "tp": 6, "fp": 7, "tn": 6, "fn": 3, "known_gaps": 10},
+    "by_rule": {
+      "CGULL-002": {"cases": 8, "expected_positives": 3, "expected_negatives": 5, "tp": 3, "fp": 4, "tn": 1, "fn": 0, "known_gaps": 4},
+      "CGULL-003": {"cases": 4, "expected_positives": 2, "expected_negatives": 2, "tp": 0, "fp": 0, "tn": 2, "fn": 2, "known_gaps": 2},
+      "CGULL-022": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 0, "tn": 1, "fn": 0, "known_gaps": 0},
+      "CGULL-030": {"cases": 6, "expected_positives": 2, "expected_negatives": 4, "tp": 2, "fp": 3, "tn": 1, "fn": 0, "known_gaps": 3},
+      "CGULL-044": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 0, "fp": 0, "tn": 1, "fn": 1, "known_gaps": 1}
+    },
+    "by_family": {
+      "allocation_lifecycle": {"cases": 6, "expected_positives": 3, "expected_negatives": 3, "tp": 1, "fp": 0, "tn": 3, "fn": 2, "known_gaps": 2},
+      "command_execution": {"cases": 6, "expected_positives": 2, "expected_negatives": 4, "tp": 2, "fp": 3, "tn": 1, "fn": 0, "known_gaps": 3},
+      "format_strings": {"cases": 8, "expected_positives": 3, "expected_negatives": 5, "tp": 3, "fp": 4, "tn": 1, "fn": 0, "known_gaps": 4},
+      "memory_copy_bounds": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 0, "fp": 0, "tn": 1, "fn": 1, "known_gaps": 1}
+    },
+    "by_scenario": {
+      "aliases": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 0, "fp": 0, "tn": 1, "fn": 1, "known_gaps": 1},
+      "direct_wrappers": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 1, "tn": 0, "fn": 0, "known_gaps": 1},
+      "globals": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 1, "tn": 0, "fn": 0, "known_gaps": 1},
+      "header_defined_helpers": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 1, "tn": 0, "fn": 0, "known_gaps": 1},
+      "juliet_variants": {"cases": 4, "expected_positives": 0, "expected_negatives": 4, "tp": 0, "fp": 2, "tn": 2, "fn": 0, "known_gaps": 2},
+      "multiple_callers": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 1, "tn": 0, "fn": 0, "known_gaps": 1},
+      "output_parameters": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 0, "fp": 0, "tn": 1, "fn": 1, "known_gaps": 1},
+      "recursion": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 0, "tn": 1, "fn": 0, "known_gaps": 0},
+      "return_propagation": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 1, "tn": 0, "fn": 0, "known_gaps": 1},
+      "unresolved_calls": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 0, "fp": 0, "tn": 1, "fn": 1, "known_gaps": 1}
+    }
+  },
+  "cases": [
+    {
+      "id": "direct_wrapper_unsafe",
+      "file": "fixtures/direct_wrapper_unsafe.c",
+      "scenario": "direct_wrappers",
+      "family": "format_strings",
+      "rule_id": "CGULL-002",
+      "vulnerable": true,
+      "baseline_detected": true
+    },
+    {
+      "id": "direct_wrapper_safe",
+      "file": "fixtures/direct_wrapper_safe.c",
+      "scenario": "direct_wrappers",
+      "family": "format_strings",
+      "rule_id": "CGULL-002",
+      "vulnerable": false,
+      "baseline_detected": true,
+      "known_gap": {
+        "reason": "The wrapper summary does not preserve that every caller supplies a trusted literal format.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "multiple_callers_unsafe",
+      "file": "fixtures/multiple_callers_unsafe.c",
+      "scenario": "multiple_callers",
+      "family": "command_execution",
+      "rule_id": "CGULL-030",
+      "vulnerable": true,
+      "baseline_detected": true
+    },
+    {
+      "id": "multiple_callers_safe",
+      "file": "fixtures/multiple_callers_safe.c",
+      "scenario": "multiple_callers",
+      "family": "command_execution",
+      "rule_id": "CGULL-030",
+      "vulnerable": false,
+      "baseline_detected": true,
+      "known_gap": {
+        "reason": "The shared wrapper is flagged even though all callers pass fixed commands.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "return_propagation_unsafe",
+      "file": "fixtures/return_propagation_unsafe.c",
+      "scenario": "return_propagation",
+      "family": "format_strings",
+      "rule_id": "CGULL-002",
+      "vulnerable": true,
+      "baseline_detected": true
+    },
+    {
+      "id": "return_propagation_safe",
+      "file": "fixtures/return_propagation_safe.c",
+      "scenario": "return_propagation",
+      "family": "format_strings",
+      "rule_id": "CGULL-002",
+      "vulnerable": false,
+      "baseline_detected": true,
+      "known_gap": {
+        "reason": "Literalness is not propagated through helper return values.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "output_parameter_unsafe",
+      "file": "fixtures/output_parameter_unsafe.c",
+      "scenario": "output_parameters",
+      "family": "allocation_lifecycle",
+      "rule_id": "CGULL-003",
+      "vulnerable": true,
+      "baseline_detected": false,
+      "known_gap": {
+        "reason": "Allocation and nullness facts are not propagated through output parameters.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "output_parameter_safe",
+      "file": "fixtures/output_parameter_safe.c",
+      "scenario": "output_parameters",
+      "family": "allocation_lifecycle",
+      "rule_id": "CGULL-003",
+      "vulnerable": false,
+      "baseline_detected": false
+    },
+    {
+      "id": "global_flow_unsafe",
+      "file": "fixtures/global_flow_unsafe.c",
+      "scenario": "globals",
+      "family": "command_execution",
+      "rule_id": "CGULL-030",
+      "vulnerable": true,
+      "baseline_detected": true
+    },
+    {
+      "id": "global_flow_safe",
+      "file": "fixtures/global_flow_safe.c",
+      "scenario": "globals",
+      "family": "command_execution",
+      "rule_id": "CGULL-030",
+      "vulnerable": false,
+      "baseline_detected": true,
+      "known_gap": {
+        "reason": "Trusted global initialization is not propagated to the command sink.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "alias_bounds_unsafe",
+      "file": "fixtures/alias_bounds_unsafe.c",
+      "scenario": "aliases",
+      "family": "memory_copy_bounds",
+      "rule_id": "CGULL-044",
+      "vulnerable": true,
+      "baseline_detected": false,
+      "known_gap": {
+        "reason": "Destination capacity is not propagated through an alias passed to a copy wrapper.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "alias_bounds_safe",
+      "file": "fixtures/alias_bounds_safe.c",
+      "scenario": "aliases",
+      "family": "memory_copy_bounds",
+      "rule_id": "CGULL-044",
+      "vulnerable": false,
+      "baseline_detected": false
+    },
+    {
+      "id": "header_helper_unsafe",
+      "file": "fixtures/header_helper_unsafe.c",
+      "scenario": "header_defined_helpers",
+      "family": "format_strings",
+      "rule_id": "CGULL-002",
+      "vulnerable": true,
+      "baseline_detected": true
+    },
+    {
+      "id": "header_helper_safe",
+      "file": "fixtures/header_helper_safe.c",
+      "scenario": "header_defined_helpers",
+      "family": "format_strings",
+      "rule_id": "CGULL-002",
+      "vulnerable": false,
+      "baseline_detected": true,
+      "known_gap": {
+        "reason": "The expanded header helper is flagged without caller literalness context.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "recursion_unsafe",
+      "file": "fixtures/recursion_unsafe.c",
+      "scenario": "recursion",
+      "family": "allocation_lifecycle",
+      "rule_id": "CGULL-022",
+      "vulnerable": true,
+      "baseline_detected": true
+    },
+    {
+      "id": "recursion_safe",
+      "file": "fixtures/recursion_safe.c",
+      "scenario": "recursion",
+      "family": "allocation_lifecycle",
+      "rule_id": "CGULL-022",
+      "vulnerable": false,
+      "baseline_detected": false
+    },
+    {
+      "id": "unresolved_call_unsafe",
+      "file": "fixtures/unresolved_call_unsafe.c",
+      "scenario": "unresolved_calls",
+      "family": "allocation_lifecycle",
+      "rule_id": "CGULL-003",
+      "vulnerable": true,
+      "baseline_detected": false,
+      "known_gap": {
+        "reason": "An unresolved consumer does not conservatively retain the unchecked-allocation use.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "unresolved_call_safe",
+      "file": "fixtures/unresolved_call_safe.c",
+      "scenario": "unresolved_calls",
+      "family": "allocation_lifecycle",
+      "rule_id": "CGULL-003",
+      "vulnerable": false,
+      "baseline_detected": false
+    },
+    {
+      "id": "juliet_format_good_source_bad_sink",
+      "file": "fixtures/juliet_format_good_source_bad_sink.c",
+      "scenario": "juliet_variants",
+      "family": "format_strings",
+      "rule_id": "CGULL-002",
+      "variant": "GoodSource/BadSink",
+      "vulnerable": false,
+      "baseline_detected": true,
+      "known_gap": {
+        "reason": "The trusted return source is lost before the non-literal format sink.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "juliet_format_bad_source_good_sink",
+      "file": "fixtures/juliet_format_bad_source_good_sink.c",
+      "scenario": "juliet_variants",
+      "family": "format_strings",
+      "rule_id": "CGULL-002",
+      "variant": "BadSource/GoodSink",
+      "vulnerable": false,
+      "baseline_detected": false
+    },
+    {
+      "id": "juliet_command_good_source_bad_sink",
+      "file": "fixtures/juliet_command_good_source_bad_sink.c",
+      "scenario": "juliet_variants",
+      "family": "command_execution",
+      "rule_id": "CGULL-030",
+      "variant": "GoodSource/BadSink",
+      "vulnerable": false,
+      "baseline_detected": true,
+      "known_gap": {
+        "reason": "The trusted command returned by the source is lost before the shell sink.",
+        "tracking": "../../docs/interprocedural-analysis.md#rule-adoption-priorities"
+      }
+    },
+    {
+      "id": "juliet_command_bad_source_good_sink",
+      "file": "fixtures/juliet_command_bad_source_good_sink.c",
+      "scenario": "juliet_variants",
+      "family": "command_execution",
+      "rule_id": "CGULL-030",
+      "variant": "BadSource/GoodSink",
+      "vulnerable": false,
+      "baseline_detected": false
+    }
+  ]
+}
