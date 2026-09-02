@@ -3,8 +3,8 @@
 Automated NIST Juliet Security Benchmark Runner for C-GULL.
 
 Evaluates C-GULL detection quality (TP, FP, TN, FN, Precision, Recall, F1)
-against vendored Juliet test-case subsets. Results are reported by CWE and by
-rule so a regression in one rule cannot be hidden by another rule for the same
+against vendored Juliet test-case subsets. Results are reported by rule and by
+CWE so a regression in one rule cannot be hidden by another rule for the same
 CWE.
 
 Usage:
@@ -352,8 +352,8 @@ def run_juliet_benchmark(
             "test_id": test_id_filter,
         },
         "overall": overall_metrics,
-        "by_cwe": cwe_metrics,
         "by_rule": rule_metrics,
+        "by_cwe": cwe_metrics,
         "by_category": cat_metrics,
         "test_cases": test_results,
     }
@@ -369,17 +369,17 @@ def format_text_report(results: Dict[str, Any]) -> str:
     lines.append(f"Overall Metrics: TP={ov['tp']}, FP={ov['fp']}, TN={ov['tn']}, FN={ov['fn']} | Precision={ov['precision']:.4f}, Recall={ov['recall']:.4f}, F1={ov['f1']:.4f}")
     lines.append("-" * 78)
 
-    lines.append("\nResults by CWE:")
-    lines.append(f"{'CWE ID':<12} {'TP':<6} {'FP':<6} {'TN':<6} {'FN':<6} {'Precision':<11} {'Recall':<11} {'F1':<11}")
-    lines.append("-" * 78)
-    for cwe, m in results["by_cwe"].items():
-        lines.append(f"{cwe:<12} {m['tp']:<6} {m['fp']:<6} {m['tn']:<6} {m['fn']:<6} {m['precision']:<11.4f} {m['recall']:<11.4f} {m['f1']:<11.4f}")
-
     lines.append("\nResults by Rule:")
     lines.append(f"{'Rule ID':<12} {'TP':<6} {'FP':<6} {'TN':<6} {'FN':<6} {'Precision':<11} {'Recall':<11} {'F1':<11}")
     lines.append("-" * 78)
     for rule_id, m in results["by_rule"].items():
         lines.append(f"{rule_id:<12} {m['tp']:<6} {m['fp']:<6} {m['tn']:<6} {m['fn']:<6} {m['precision']:<11.4f} {m['recall']:<11.4f} {m['f1']:<11.4f}")
+
+    lines.append("\nResults by CWE:")
+    lines.append(f"{'CWE ID':<12} {'TP':<6} {'FP':<6} {'TN':<6} {'FN':<6} {'Precision':<11} {'Recall':<11} {'F1':<11}")
+    lines.append("-" * 78)
+    for cwe, m in results["by_cwe"].items():
+        lines.append(f"{cwe:<12} {m['tp']:<6} {m['fp']:<6} {m['tn']:<6} {m['fn']:<6} {m['precision']:<11.4f} {m['recall']:<11.4f} {m['f1']:<11.4f}")
 
     lines.append("\nResults by Control-Flow Category:")
     lines.append(f"{'Category':<24} {'TP':<6} {'FP':<6} {'TN':<6} {'FN':<6} {'Precision':<11} {'Recall':<11} {'F1':<11}")
@@ -406,17 +406,17 @@ def format_markdown_report(results: Dict[str, Any]) -> str:
     lines.append(f"- **Recall**: {ov['recall']:.4f}")
     lines.append(f"- **F1 Score**: {ov['f1']:.4f}\n")
 
-    lines.append("## Results by CWE\n")
-    lines.append("| CWE ID | TP | FP | TN | FN | Precision | Recall | F1 Score |")
-    lines.append("|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|")
-    for cwe, m in results["by_cwe"].items():
-        lines.append(f"| {cwe} | {m['tp']} | {m['fp']} | {m['tn']} | {m['fn']} | {m['precision']:.4f} | {m['recall']:.4f} | {m['f1']:.4f} |")
-
-    lines.append("\n## Results by Rule\n")
+    lines.append("## Results by Rule\n")
     lines.append("| Rule ID | TP | FP | TN | FN | Precision | Recall | F1 Score |")
     lines.append("|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|")
     for rule_id, m in results["by_rule"].items():
         lines.append(f"| {rule_id} | {m['tp']} | {m['fp']} | {m['tn']} | {m['fn']} | {m['precision']:.4f} | {m['recall']:.4f} | {m['f1']:.4f} |")
+
+    lines.append("\n## Results by CWE\n")
+    lines.append("| CWE ID | TP | FP | TN | FN | Precision | Recall | F1 Score |")
+    lines.append("|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|")
+    for cwe, m in results["by_cwe"].items():
+        lines.append(f"| {cwe} | {m['tp']} | {m['fp']} | {m['tn']} | {m['fn']} | {m['precision']:.4f} | {m['recall']:.4f} | {m['f1']:.4f} |")
 
     lines.append("\n## Results by Control-Flow Category\n")
     lines.append("| Category | TP | FP | TN | FN | Precision | Recall | F1 Score |")
