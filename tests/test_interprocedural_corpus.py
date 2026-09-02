@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from benchmarks.run_interprocedural import (
     DEFAULT_MANIFEST,
+    SECURITY_FACT_MANIFEST,
     format_text_report,
     run_interprocedural_corpus,
 )
@@ -43,13 +44,21 @@ def test_manifest_covers_required_scenarios_families_and_juliet_variants():
     cases = manifest["cases"]
     assert len(cases) == 22
     assert len({case["id"] for case in cases}) == len(cases)
-    fixture_dir = os.path.join(os.path.dirname(DEFAULT_MANIFEST), "fixtures")
+    manifest_dir = os.path.dirname(DEFAULT_MANIFEST)
+    fixture_dir = os.path.join(manifest_dir, "fixtures")
     fixture_sources = {
         f"fixtures/{filename}"
         for filename in os.listdir(fixture_dir)
         if filename.endswith(".c")
     }
-    assert {case["file"] for case in cases} == fixture_sources
+    legacy_sources = {case["file"] for case in cases}
+    security_manifest_path = os.path.join(manifest_dir, SECURITY_FACT_MANIFEST)
+    with open(security_manifest_path, "r", encoding="utf-8") as security_file:
+        security_cases = json.load(security_file)["cases"]
+    security_sources = {case["file"] for case in security_cases}
+
+    assert legacy_sources.isdisjoint(security_sources)
+    assert legacy_sources | security_sources == fixture_sources
 
     for scenario in manifest["required_scenarios"]:
         labels = {
@@ -75,7 +84,6 @@ def test_manifest_covers_required_scenarios_families_and_juliet_variants():
         ("CGULL-030", "BadSource/GoodSink"),
     }
 
-    manifest_dir = os.path.dirname(DEFAULT_MANIFEST)
     for case in cases:
         is_gap = case["baseline_detected"] != case["vulnerable"]
         assert ("known_gap" in case) is is_gap
