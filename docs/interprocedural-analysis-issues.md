@@ -37,6 +37,9 @@ incompatible notions of safe, tainted, or unknown.
 This is documentation-only and can land without runtime changes. It gives all
 subsequent implementation issues a stable compatibility target.
 
+The resulting normative specification is maintained in
+[interprocedural-fact-query-contract.md](interprocedural-fact-query-contract.md).
+
 ## Add an interprocedural regression corpus and baseline metrics
 Labels: enhancement, security, priority-p1
 

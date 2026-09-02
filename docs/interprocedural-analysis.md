@@ -12,6 +12,9 @@ a sink in another.
 
 The proposed implementation issues are available as a schema-compatible batch
 in [interprocedural-analysis-issues.md](interprocedural-analysis-issues.md).
+The normative fact domains, joins, transfer behavior, symbolic locations, and
+rule-facing API are specified in the
+[interprocedural fact and query contract](interprocedural-fact-query-contract.md).
 
 The milestone should generalize the existing summary mechanism rather than add
 a second interprocedural engine. The first useful boundary is one expanded C
@@ -139,8 +142,9 @@ taint merely because the infrastructure exists.
 
 ### 1. Semantics and fixtures
 
-- Specify lattices, joins, unknown behavior, alias limits, and rule-facing
-  queries.
+- Implement the documented lattices, joins, unknown behavior, alias limits,
+  and rule-facing queries from the
+  [fact and query contract](interprocedural-fact-query-contract.md).
 - Add small C fixtures for source/callee/sink combinations, wrappers, multiple
   callers, recursion, globals, aliases, and unresolved calls.
 - Record current Juliet GoodSource/BadSink and BadSource/GoodSink results as a
