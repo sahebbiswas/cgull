@@ -64,7 +64,11 @@ def _collect_metrics(
     for case in cases:
         vulnerable = case["vulnerable"]
         detected = case[detected_field]
-        known_gap = "known_gap" in case
+        known_gap = (
+            case.get("status") == "known_gap"
+            if detected_field == "detected"
+            else "known_gap" in case
+        )
         _record_case(overall, vulnerable, detected, known_gap)
         _record_case(
             by_rule.setdefault(case["rule_id"], _empty_metrics()),

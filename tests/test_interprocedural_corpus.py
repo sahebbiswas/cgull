@@ -45,7 +45,7 @@ def test_manifest_covers_required_scenarios_families_and_juliet_variants():
     assert len({case["id"] for case in cases}) == len(cases)
     fixture_dir = os.path.join(os.path.dirname(DEFAULT_MANIFEST), "fixtures")
     fixture_sources = {
-        os.path.join("fixtures", filename)
+        f"fixtures/{filename}"
         for filename in os.listdir(fixture_dir)
         if filename.endswith(".c")
     }
@@ -125,6 +125,10 @@ def test_resolving_known_gap_is_non_blocking():
     assert resolved["status"] == "resolved_known_gap"
     assert results["current"]["overall"]["fp"] == 6
     assert results["current"]["overall"]["tn"] == 7
+    assert results["current"]["overall"]["known_gaps"] == 9
+    assert results["current"]["by_rule"]["CGULL-002"]["known_gaps"] == 3
+    assert results["current"]["by_family"]["format_strings"]["known_gaps"] == 3
+    assert results["current"]["by_scenario"]["direct_wrappers"]["known_gaps"] == 0
 
 
 def test_non_gap_regression_is_blocking():
