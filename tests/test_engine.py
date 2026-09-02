@@ -426,6 +426,7 @@ class TestParallelWorkerFunction(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_parallel_interrupt_terminates_running_workers_promptly(self):
+        import threading
         from unittest.mock import patch
         temp_dir = tempfile.mkdtemp()
         try:
@@ -447,6 +448,12 @@ class TestParallelWorkerFunction(unittest.TestCase):
                         scanner.scan_path(temp_dir, jobs=2)
             elapsed = time.time() - t0
             self.assertLess(elapsed, 2.0, f"Interrupt took {elapsed:.2f}s; workers were not terminated promptly")
+            lingering_managers = [
+                thread
+                for thread in threading.enumerate()
+                if type(thread).__name__ == "_ExecutorManagerThread" and thread.is_alive()
+            ]
+            self.assertEqual(lingering_managers, [], "Process-pool manager thread was not joined")
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

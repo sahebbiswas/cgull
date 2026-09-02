@@ -596,7 +596,6 @@ class CGullScanner:
             procs = list((getattr(pool, "_processes", {}) or {}).values())
             for future in futures:
                 future.cancel()
-            pool.shutdown(wait=False, cancel_futures=True)
             for p in procs:
                 if p and p.is_alive():
                     p.terminate()
@@ -616,6 +615,11 @@ class CGullScanner:
             for p in procs:
                 if p and p.is_alive():
                     p.join(timeout=0.5)
+
+            # Join the executor manager thread after its workers have been
+            # reaped. shutdown(wait=False) leaves that non-daemon thread alive
+            # on Windows/Python 3.10 and prevents the interpreter from exiting.
+            pool.shutdown(wait=True, cancel_futures=True)
             raise
         return results
 
