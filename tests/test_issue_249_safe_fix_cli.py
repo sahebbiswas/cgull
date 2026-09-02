@@ -1,6 +1,7 @@
 from pathlib import Path
+from unittest.mock import patch
 
-from cgull.cli import build_parser
+from cgull.cli import build_parser, main
 from cgull.fixes import apply_safe_fixes
 from cgull.models import FixType, Issue, Severity
 
@@ -22,6 +23,12 @@ def test_parser_exposes_fix_and_write_flags():
     args = build_parser().parse_args(["scan", "sample.c", "--fix", "--write"])
     assert args.fix is True
     assert args.write is True
+
+
+def test_main_preserves_injectable_argv_and_patchable_handle_scan():
+    with patch("cgull.cli.handle_scan", return_value=17) as mocked:
+        assert main(["scan", "."]) == 17
+    mocked.assert_called_once()
 
 
 def test_noop_without_safe_fixes(tmp_path):
