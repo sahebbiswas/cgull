@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Structured CFG call metadata with ordered arguments, result bindings, unresolved indirect-call markers, and original source provenance (#241).
 
+## [0.9.20] - 2026-09-02
+
+### Added
+- Behavioral corpus coverage for all 46 registered rules, including positive, negative, and edge-case fixtures for the 18 previously uncovered rules (#247).
+
+### Changed
+- Raised the enforced rule behavioral coverage threshold from 40% to 100%.
+
 ## [0.9.18] - 2026-03-30
 
 ### Added

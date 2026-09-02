@@ -460,11 +460,11 @@ python3 -m unittest tests/test_scanner.py
 ### 2. Security Rule Behavioral Coverage
 While raw line coverage ensures execution paths are exercised, **rule behavioral coverage** is the primary quality metric for analyzer correctness. Behavioral tests verify that each rule correctly detects true positives and avoids false positives on real C code samples annotated with exact line expectations (`// expect: CGULL-xxx`).
 
-CI enforces a minimum **Rule Behavioral Coverage threshold of 40.0%** across all registered rules (with rule suites in `tests/rules/`).
+CI enforces a **Rule Behavioral Coverage threshold of 100.0%** across all registered rules (with rule suites in `tests/rules/`).
 
 ```bash
 # Run standalone Security Rule Behavioral Corpus runner with coverage threshold
-python3 tests/run_corpus.py --min-coverage 40.0
+python3 tests/run_corpus.py --min-coverage 100.0
 
 # Verify a single rule in isolation
 python3 tests/run_corpus.py --rule CGULL-003

@@ -27,7 +27,7 @@ class TestSecurityRuleBehavioralCorpus(unittest.TestCase):
         self.assertTrue(success, f"CGULL-037 Corpus Failed:\n{report}")
 
     def test_full_corpus_suite(self):
-        success, report = run_corpus_scan(self.rules_dir, verbose=False, min_behavioral_coverage=40.0)
+        success, report = run_corpus_scan(self.rules_dir, verbose=False, min_behavioral_coverage=100.0)
         self.assertTrue(success, f"Behavioral Corpus Verification Failed:\n{report}")
 
     def test_rule_cgull_002_format_string(self):
