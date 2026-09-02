@@ -12,6 +12,12 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from benchmarks.security_fact_support import (
+    build_security_context,
+    build_security_models,
+)
+from cgull.cfg import build_cfg, find_function_def
+from cgull.cfg.security_dataflow import analyze_security_dataflow, analyze_security_summaries
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine
 from cgull.rules import RULE_REGISTRY, get_rule_by_id
@@ -20,6 +26,7 @@ from cgull.rules import RULE_REGISTRY, get_rule_by_id
 DEFAULT_MANIFEST = os.path.join(
     REPO_ROOT, "benchmarks", "interprocedural", "manifest.json"
 )
+SECURITY_FACT_MANIFEST = "security_facts.json"
 METRIC_KEYS = (
     "cases",
     "expected_positives",
@@ -185,6 +192,88 @@ def _validate_manifest(manifest: Dict[str, Any], manifest_path: str) -> None:
         raise ValueError("Recorded baseline metrics do not match manifest cases")
 
 
+def _security_models():
+    return build_security_models()
+
+
+def _security_context(source: str):
+    return build_security_context(source)
+
+
+def _run_security_fact_cases(manifest_dir: str) -> Dict[str, Any]:
+    path = os.path.join(manifest_dir, SECURITY_FACT_MANIFEST)
+    with open(path, "r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    models = _security_models()
+    results: List[Dict[str, Any]] = []
+    failures: List[str] = []
+
+    for case in manifest.get("cases", []):
+        fixture_path = os.path.join(manifest_dir, case["file"])
+        with open(fixture_path, "r", encoding="utf-8") as fixture:
+            ctx = _security_context(fixture.read())
+        summaries = analyze_security_summaries(ctx, models)
+        actual: Dict[str, Any] = {}
+
+        if "summary_function" in case:
+            summary = summaries[case["summary_function"]]
+            actual["return_params"] = sorted(summary.return_from_params)
+            passed = actual["return_params"] == case.get("expected_return_params", [])
+        else:
+            function = case["function"]
+            funcdef = find_function_def(ctx.pycparser_ast, function)
+            if funcdef is None:
+                failures.append(f"{case['id']}: function '{function}' not found")
+                results.append({**case, "actual": actual, "status": "regression"})
+                continue
+            cfg = build_cfg(funcdef)
+            facts = analyze_security_dataflow(cfg, models, summaries)
+            sink_node = next(
+                (
+                    node
+                    for node in cfg.nodes.values()
+                    if any(call.direct_callee == case["sink"] for call in node.calls)
+                ),
+                None,
+            )
+            if sink_node is None:
+                failures.append(
+                    f"{case['id']}: sink '{case['sink']}' not found in function '{function}'"
+                )
+                results.append({**case, "actual": actual, "status": "regression"})
+                continue
+            actual["provenance"] = facts.query_provenance(
+                case["location"], sink_node.node_id
+            ).value
+            actual["validations"] = sorted(
+                prop.value
+                for prop in facts.query_validation_properties(
+                    case["location"], sink_node.node_id
+                )
+            )
+            passed = (
+                actual["provenance"] == case["expected_provenance"]
+                and actual["validations"] == sorted(case.get("expected_validations", []))
+            )
+
+        status = "pass" if passed else "regression"
+        if not passed:
+            failures.append(f"{case['id']}: expected security facts did not match")
+        results.append({**case, "actual": actual, "status": status})
+
+    passed_count = sum(case["status"] == "pass" for case in results)
+    return {
+        "version": manifest.get("version", "1.0"),
+        "metrics": {
+            "cases": len(results),
+            "passed": passed_count,
+            "failed": len(results) - passed_count,
+        },
+        "failures": failures,
+        "cases": results,
+    }
+
+
 def run_interprocedural_corpus(
     manifest_path: str = DEFAULT_MANIFEST,
 ) -> Dict[str, Any]:
@@ -244,6 +333,8 @@ def run_interprocedural_corpus(
         )
 
     current_metrics = _collect_metrics(results, "detected")
+    security_facts = _run_security_fact_cases(manifest_dir)
+    failures.extend(security_facts["failures"])
     return {
         "suite": manifest["suite"],
         "version": manifest["version"],
@@ -251,6 +342,7 @@ def run_interprocedural_corpus(
         "failures": failures,
         "recorded_baseline": manifest["baseline"],
         "current": current_metrics,
+        "security_facts": security_facts,
         "cases": results,
     }
 
@@ -308,9 +400,23 @@ def format_text_report(results: Dict[str, Any]) -> str:
             f"({case['known_gap']['tracking']})"
         )
 
+    security_metrics = results["security_facts"]["metrics"]
+    lines.extend(
+        [
+            "",
+            "Security fact propagation:",
+            f"- cases: {security_metrics['cases']}",
+            f"- passed: {security_metrics['passed']}",
+            f"- failed: {security_metrics['failed']}",
+        ]
+    )
+
     lines.append("")
     if results["success"]:
-        lines.append("SUCCESS: Stable expectations passed; known gaps are non-blocking.")
+        lines.append(
+            "SUCCESS: Stable expectations and security fact propagation passed; "
+            "known gaps are non-blocking."
+        )
     else:
         lines.append("FAILURE: " + "; ".join(results["failures"]))
     return "\n".join(lines)
