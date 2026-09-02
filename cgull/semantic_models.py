@@ -225,24 +225,7 @@ class SemanticModelConfigError(ValueError):
 
 
 def parse_semantic_models(raw: object) -> SemanticModelRegistry:
-    """Parse the ``[semantic_models]`` TOML section.
-
-    Expected shape::
-
-        [[semantic_models.sources]]
-        function = "uart_read"
-        outputs = ["return", "out:1"]
-
-        [[semantic_models.validators]]
-        function = "verify_signature"
-        target = "arg:0"
-        property = "signature_verified"
-        success = "return_zero"
-
-        [[semantic_models.sinks]]
-        function = "flash_write"
-        requirements = { "arg:1" = ["bounds_checked", "authorized"] }
-    """
+    """Parse the ``[semantic_models]`` TOML section."""
 
     if raw in (None, {}):
         return EMPTY_SEMANTIC_MODELS
@@ -266,8 +249,15 @@ def parse_semantic_models(raw: object) -> SemanticModelRegistry:
         if not isinstance(outputs_raw, list) or not outputs_raw:
             raise SemanticModelConfigError(f"source '{function}' outputs must be a non-empty list")
         try:
-            outputs = tuple(SemanticLocation.parse(v) for v in outputs_raw)
-            model = SourceModel(function, outputs)
+            outputs = []
+            seen_locations = set()
+            for output_raw in outputs_raw:
+                location = SemanticLocation.parse(output_raw)
+                if location in seen_locations:
+                    raise ValueError(f"duplicate output location '{output_raw}'")
+                seen_locations.add(location)
+                outputs.append(location)
+            model = SourceModel(function, tuple(outputs))
         except ValueError as exc:
             raise SemanticModelConfigError(f"source '{function}': {exc}") from exc
         _insert_unique(sources, function, model, "source")
@@ -297,6 +287,7 @@ def parse_semantic_models(raw: object) -> SemanticModelRegistry:
                 f"sink '{function}' requirements must be a non-empty location-to-properties table"
             )
         requirements = []
+        seen_locations = set()
         for location_raw, properties_raw in req_raw.items():
             if not isinstance(properties_raw, list) or not properties_raw:
                 raise SemanticModelConfigError(
@@ -304,6 +295,9 @@ def parse_semantic_models(raw: object) -> SemanticModelRegistry:
                 )
             try:
                 location = SemanticLocation.parse(str(location_raw))
+                if location in seen_locations:
+                    raise ValueError(f"duplicate requirement for location '{location_raw}'")
+                seen_locations.add(location)
                 properties = frozenset(
                     ValidationProperty(str(prop).strip().lower()) for prop in properties_raw
                 )
