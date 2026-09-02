@@ -1,0 +1,87 @@
+{
+  "suite": "Juliet C Security Benchmark for C-GULL - expanded coverage",
+  "version": "1.0",
+  "description": "Issue #246 expansion covering CWE-415, CWE-401, and CWE-562 across baseline and if/else control-flow variants.",
+  "rule_contracts": {
+    "CGULL-027": {
+      "rationale": "The oracle frees the same pointer once or more than once.",
+      "source_pattern": "free\\s*\\(\\s*ptr\\s*\\)"
+    },
+    "CGULL-036": {
+      "rationale": "The oracle allocates heap memory and either releases it or leaks it before function exit.",
+      "source_pattern": "malloc\\s*\\("
+    },
+    "CGULL-038": {
+      "rationale": "The oracle contains a return path that either exposes an automatic local address or returns safely.",
+      "source_pattern": "return"
+    }
+  },
+  "test_cases": [
+    {
+      "id": "CWE415_Double_Free__01_baseline",
+      "cwe": "CWE-415",
+      "category": "baseline",
+      "file": "testcases/CWE415_Double_Free__01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {"function": "CWE415_Double_Free__01_baseline_bad", "vulnerable": true, "expected_cwe": "CWE-415", "expected_rules": ["CGULL-027"]},
+        {"function": "CWE415_Double_Free__01_baseline_good", "vulnerable": false, "expected_cwe": "CWE-415", "expected_rules": ["CGULL-027"]}
+      ]
+    },
+    {
+      "id": "CWE415_Double_Free__02_ifelse",
+      "cwe": "CWE-415",
+      "category": "if/else",
+      "file": "testcases/CWE415_Double_Free__02_ifelse.c",
+      "ci_subset": true,
+      "oracle": [
+        {"function": "CWE415_Double_Free__02_ifelse_bad", "vulnerable": true, "expected_cwe": "CWE-415", "expected_rules": ["CGULL-027"]},
+        {"function": "CWE415_Double_Free__02_ifelse_good", "vulnerable": false, "expected_cwe": "CWE-415", "expected_rules": ["CGULL-027"]}
+      ]
+    },
+    {
+      "id": "CWE401_Memory_Leak__01_baseline",
+      "cwe": "CWE-401",
+      "category": "baseline",
+      "file": "testcases/CWE401_Memory_Leak__01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {"function": "CWE401_Memory_Leak__01_baseline_bad", "vulnerable": true, "expected_cwe": "CWE-401", "expected_rules": ["CGULL-036"]},
+        {"function": "CWE401_Memory_Leak__01_baseline_good", "vulnerable": false, "expected_cwe": "CWE-401", "expected_rules": ["CGULL-036"]}
+      ]
+    },
+    {
+      "id": "CWE401_Memory_Leak__02_ifelse",
+      "cwe": "CWE-401",
+      "category": "if/else",
+      "file": "testcases/CWE401_Memory_Leak__02_ifelse.c",
+      "ci_subset": true,
+      "oracle": [
+        {"function": "CWE401_Memory_Leak__02_ifelse_bad", "vulnerable": true, "expected_cwe": "CWE-401", "expected_rules": ["CGULL-036"]},
+        {"function": "CWE401_Memory_Leak__02_ifelse_good", "vulnerable": false, "expected_cwe": "CWE-401", "expected_rules": ["CGULL-036"]}
+      ]
+    },
+    {
+      "id": "CWE562_Return_of_Stack_Variable_Address__01_baseline",
+      "cwe": "CWE-562",
+      "category": "baseline",
+      "file": "testcases/CWE562_Return_of_Stack_Variable_Address__01_baseline.c",
+      "ci_subset": true,
+      "oracle": [
+        {"function": "CWE562_Return_of_Stack_Variable_Address__01_baseline_bad", "vulnerable": true, "expected_cwe": "CWE-562", "expected_rules": ["CGULL-038"]},
+        {"function": "CWE562_Return_of_Stack_Variable_Address__01_baseline_good", "vulnerable": false, "expected_cwe": "CWE-562", "expected_rules": ["CGULL-038"]}
+      ]
+    },
+    {
+      "id": "CWE562_Return_of_Stack_Variable_Address__02_ifelse",
+      "cwe": "CWE-562",
+      "category": "if/else",
+      "file": "testcases/CWE562_Return_of_Stack_Variable_Address__02_ifelse.c",
+      "ci_subset": true,
+      "oracle": [
+        {"function": "CWE562_Return_of_Stack_Variable_Address__02_ifelse_bad", "vulnerable": true, "expected_cwe": "CWE-562", "expected_rules": ["CGULL-038"]},
+        {"function": "CWE562_Return_of_Stack_Variable_Address__02_ifelse_good", "vulnerable": false, "expected_cwe": "CWE-562", "expected_rules": ["CGULL-038"]}
+      ]
+    }
+  ]
+}

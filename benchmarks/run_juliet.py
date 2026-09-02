@@ -39,6 +39,9 @@ CWE_RULE_MAP = {
     "CWE-690": {"CGULL-003"},
     "CWE-416": {"CGULL-022"},
     "CWE-457": {"CGULL-021", "CGULL-023"},
+    "CWE-415": {"CGULL-027"},
+    "CWE-401": {"CGULL-036"},
+    "CWE-562": {"CGULL-038"},
 }
 
 CATEGORIES = [
@@ -57,7 +60,7 @@ CWES = list(CWE_RULE_MAP)
 
 
 def extract_function_line_ranges(file_path: str) -> Dict[str, Tuple[int, int]]:
-    """Extracts start and end 1-based line numbers for functions defined in file_path."""
+    """Extract start/end lines for simple C function definitions in a fixture."""
     ranges: Dict[str, Tuple[int, int]] = {}
     if not os.path.exists(file_path):
         return ranges
@@ -68,7 +71,13 @@ def extract_function_line_ranges(file_path: str) -> Dict[str, Tuple[int, int]]:
     current_fn = None
     start_line = 0
     brace_depth = 0
-    fn_header_regex = re.compile(r'(?:static\s+)?void\s+([A-Za-z0-9_]+)\s*\(')
+    # Require at least one return-type token before the function identifier so
+    # control statements such as ``if (...)`` are not mistaken for functions.
+    # ``[\s*]+`` accepts ordinary scalar/multi-token return types and pointer
+    # spellings such as ``int *foo`` and ``static const char *foo``.
+    fn_header_regex = re.compile(
+        r'^\s*(?:static\s+)?(?:[A-Za-z_]\w*[\s*]+)+([A-Za-z_]\w*)\s*\('
+    )
 
     for idx, line in enumerate(lines, 1):
         if not current_fn:
