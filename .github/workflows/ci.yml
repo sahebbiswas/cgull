@@ -44,6 +44,10 @@ jobs:
         run: |
           python tests/run_corpus.py --min-coverage 40.0
 
+      - name: Run Interprocedural Regression Corpus
+        run: |
+          python benchmarks/run_interprocedural.py
+
       - name: Run Focused Juliet Benchmark
         run: |
           python benchmarks/run_juliet.py --ci --min-f1 0.90

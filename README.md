@@ -467,6 +467,23 @@ Coverage thresholds are maintained as minimum baselines and are increased delibe
 
 ---
 
+## 🔗 Interprocedural Regression Corpus
+
+The focused interprocedural corpus provides 22 isolated safe/unsafe cases for
+wrappers, multiple callers, returns, output parameters, globals, aliases,
+header helpers, recursion, unresolved calls, and Juliet source/sink variants.
+It reports deterministic overall, per-rule, and per-family baseline metrics;
+known analyzer gaps remain visible without blocking CI.
+
+```bash
+python3 benchmarks/run_interprocedural.py
+```
+
+See the [corpus documentation](benchmarks/interprocedural/README.md) for the
+recorded baseline and manifest contract.
+
+---
+
 ## 🎯 NIST Juliet Detection-Quality Benchmark
 
 C-GULL includes an automated, manifest-driven NIST Juliet static analysis detection quality benchmark suite (`benchmarks/run_juliet.py`) to measure vulnerability detection precision, recall, and F1 score against an independent ground-truth oracle. The vendored subset covers CWE-134, CWE-190, CWE-121, CWE-122, CWE-369, CWE-476, CWE-690, CWE-416, and CWE-457 across 9 control-flow categories (`baseline`, `if/else`, `nested conditionals`, `loops`, `switch`, `fallthrough`, `break / continue`, `goto`, `interprocedural cases`). Results include per-CWE and per-rule metrics, so a regression in one rule is visible even when another rule for the same CWE still detects the test case.
