@@ -29,13 +29,18 @@ class Provenance(str, Enum):
 
 
 def join_provenance(left: Provenance, right: Provenance) -> Provenance:
-    """Join provenance according to the interprocedural fact contract."""
-    if left is Provenance.UNKNOWN or right is Provenance.UNKNOWN:
-        return Provenance.UNKNOWN
+    """Join provenance for the intraprocedural may-taint domain.
+
+    ``UNKNOWN`` represents an unclassified contribution here, so it must not
+    erase a classified taint fact contributed by another reachable path.
+    """
+    if left is Provenance.UNKNOWN:
+        return right
+    if right is Provenance.UNKNOWN:
+        return left
     if left is right:
         return left
-    if left is Provenance.MIXED or right is Provenance.MIXED:
-        return Provenance.MIXED
+    # Any remaining disagreement between classified values is MIXED.
     return Provenance.MIXED
 
 
@@ -172,7 +177,8 @@ def _merge_provenance_maps(
 ) -> Dict[str, Provenance]:
     merged: Dict[str, Provenance] = {}
     for location in set(left) | set(right):
-        # Missing on one reachable path means the origin is not classified.
+        # Missing on one reachable path is an unclassified contribution.  For
+        # may-taint joins, that must not erase a classified fact from another path.
         lval = left.get(location, Provenance.UNKNOWN)
         rval = right.get(location, Provenance.UNKNOWN)
         merged[location] = join_provenance(lval, rval)
