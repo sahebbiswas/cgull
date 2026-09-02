@@ -205,18 +205,18 @@ Before submitting a Pull Request, verify that your changes pass all local CI ver
 # 1. Run full unit test suite with raw code coverage enforcement (must be >= 88.0%)
 pytest -v --cov=cgull --cov-report=term-missing
 
-# 2. Run Security Rule Behavioral Corpus runner (must achieve >= 40.0% coverage)
-python tests/run_corpus.py --min-coverage 40.0
+# 2. Run Security Rule Behavioral Corpus runner (must achieve 100.0% coverage)
+python tests/run_corpus.py --min-coverage 100.0
 
 # 3. Run Focused NIST Juliet Benchmark runner (must meet >= 0.90 F1 score threshold)
 python benchmarks/run_juliet.py --ci --min-f1 0.90
 ```
 
+The corpus runner prints the current **Rule Behavioral Coverage** and the **Required Min Coverage** on every full-corpus run, so contributors and CI logs can see the measured percentage alongside the enforced gate.
+
 ### Summary of Coverage & Quality Thresholds
 | Verification Gate | Command | Threshold | Description |
 | :--- | :--- | :--- | :--- |
 | **Unit Test Coverage** | `pytest -v --cov=cgull` | **>= 88.0%** | Raw line coverage across `cgull` package. |
-| **Behavioral Corpus** | `python tests/run_corpus.py` | **>= 40.0%** | Percentage of registered rules verified against annotated `.c` test files. |
+| **Behavioral Corpus** | `python tests/run_corpus.py --min-coverage 100.0` | **100.0%** | Percentage of registered rules verified against annotated `.c` test files; current and required percentages are printed by the runner. |
 | **Juliet Benchmark** | `python benchmarks/run_juliet.py` | **>= 0.90** | F1 detection score against Juliet test oracle suite (`--ci` runner). |
-
-If all three checks pass locally, your Pull Request is ready for submission!
