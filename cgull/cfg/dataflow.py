@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from .model import Allocation, BasicBlock, CFGEvent, Initialization, Nullness, VariableFacts
+from .model import Allocation, BasicBlock, CFGEvent, CFGSourceLocation, Initialization, Nullness, VariableFacts
 from . import model
 from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
 
@@ -32,10 +32,26 @@ class StructuredCFG:
     def new_node(self, kind: str, ast_node=None, line_map: Optional[Dict[int, Any]] = None, **kwargs) -> int:
         self._next_id += 1
         line = 1
+        source_path = None
+        column = 0
         if ast_node is not None and getattr(ast_node, "coord", None):
             exp_line = max(1, ast_node.coord.line - _PRELUDE_LINE_COUNT)
             line = _map_line(exp_line, line_map)
-        node = CFGEvent(node_id=self._next_id, kind=kind, line_number=line, **kwargs)
+            mapped = line_map.get(exp_line) if line_map else None
+            source_path = getattr(mapped, "file_path", None) if mapped is not None else getattr(ast_node.coord, "file", None)
+            column = getattr(ast_node.coord, "column", 0) or 0
+        source_location = CFGSourceLocation(
+            file_path=source_path,
+            line_number=line,
+            column_number=column,
+        )
+        node = CFGEvent(
+            node_id=self._next_id,
+            kind=kind,
+            line_number=line,
+            source_location=source_location,
+            **kwargs,
+        )
         setattr(node, "_ast_node", ast_node)
         return self.add_node(node)
 
