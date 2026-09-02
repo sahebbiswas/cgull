@@ -6,4 +6,4 @@ The baseline is intentionally strict: established cases must remain at **8 TP / 
 
 Coverage includes mailbox-to-flash, DMA, firmware update activation, MMIO/register access, and debug enablement; typed validation, multi-property sinks, early-return guards, conditional/loop/switch paths, validation after a sink, and an interprocedural source wrapper. The corpus tests the configured semantic contracts, not vendor-name inference. Unknown or unmodeled HAL calls remain outside the supported boundary until explicitly mapped.
 
-`tests/test_trust_boundary_benchmark.py` validates the manifest and runs each fixture twice to guard deterministic results. Regressions from the recorded baseline fail the normal pytest CI job.
+`tests/test_trust_boundary_benchmark.py` validates the manifest and scans every fixture in fresh Python interpreters using distinct `PYTHONHASHSEED` values. Detection and finding text must match across seeds, so hash-order-dependent regressions fail alongside changes from the recorded baseline in the normal pytest CI job.
