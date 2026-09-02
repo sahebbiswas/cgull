@@ -5,6 +5,7 @@ Unit tests for NIST Juliet Security Benchmark suite and runner.
 import os
 import sys
 import json
+import re
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -15,6 +16,7 @@ if REPO_ROOT not in sys.path:
 from benchmarks.run_juliet import (
     run_juliet_benchmark,
     compute_metrics,
+    extract_function_line_ranges,
     format_text_report,
     format_markdown_report,
     is_issue_from_source,
@@ -36,6 +38,7 @@ def test_manifest_structure_and_validity():
     assert "test_cases" in manifest
     test_cases = manifest["test_cases"]
     assert len(test_cases) == 41
+    rule_contracts = manifest["rule_contracts"]
 
     assert CWE_RULE_MAP["CWE-134"] == {"CGULL-002"}
     assert CWE_RULE_MAP["CWE-190"] == {"CGULL-006"}
@@ -57,16 +60,50 @@ def test_manifest_structure_and_validity():
 
         assert "oracle" in tc
         assert len(tc["oracle"]) >= 2
+        abs_file = os.path.join(os.path.dirname(MANIFEST_PATH), tc["file"])
+        function_ranges = extract_function_line_ranges(abs_file)
+        with open(abs_file, "r", encoding="utf-8") as source_file:
+            source_lines = source_file.readlines()
+
         for o in tc["oracle"]:
             assert "function" in o
             assert "vulnerable" in o
             assert isinstance(o["vulnerable"], bool)
             assert "expected_cwe" in o
+            assert o["expected_cwe"] == tc["cwe"]
             assert "expected_rules" in o
             assert o["expected_rules"], "Every oracle needs at least one applicable rule for per-rule metrics"
+            assert len(o["expected_rules"]) == len(set(o["expected_rules"]))
+            assert set(o["expected_rules"]) <= CWE_RULE_MAP[o["expected_cwe"]]
             if tc["category"] == "interprocedural cases":
                 assert "helper_functions" in o
                 assert len(o["helper_functions"]) > 0
+
+            oracle_functions = [o["function"], *o.get("helper_functions", [])]
+            for function in oracle_functions:
+                assert function in function_ranges, (
+                    f"{tc['id']}: no parsed range for {function}"
+                )
+            oracle_source = "".join(
+                line
+                for function in oracle_functions
+                for start, end in [function_ranges[function]]
+                for line in source_lines[start - 1:end]
+            )
+            for rule_id in o["expected_rules"]:
+                contract = rule_contracts[rule_id]
+                assert contract["rationale"].strip()
+                assert re.search(contract["source_pattern"], oracle_source), (
+                    f"{tc['id']}:{o['function']} has no source pattern for {rule_id}"
+                )
+
+    expected_rules = {
+        rule_id
+        for tc in test_cases
+        for oracle in tc["oracle"]
+        for rule_id in oracle["expected_rules"]
+    }
+    assert set(rule_contracts) == expected_rules
 
     cwe476_oracles = [
         oracle
@@ -74,6 +111,11 @@ def test_manifest_structure_and_validity():
         for oracle in tc["oracle"]
     ]
     assert all(oracle["expected_rules"] == ["CGULL-004"] for oracle in cwe476_oracles)
+
+    cwe457_cases = [tc for tc in test_cases if tc["cwe"] == "CWE-457"]
+    for tc in cwe457_cases:
+        expected = ["CGULL-021", "CGULL-023"] if tc["category"] == "interprocedural cases" else ["CGULL-021"]
+        assert all(oracle["expected_rules"] == expected for oracle in tc["oracle"])
 
 
 def test_compute_metrics():
@@ -133,9 +175,21 @@ def test_juliet_runner_full():
 
     # Direct-NULL fixtures exercise CGULL-004 only. They must not inflate the
     # allocation-specific CGULL-003 denominator.
-    direct_null = next(tc for tc in res["test_cases"] if tc["id"] == "CWE476_NULL_Pointer_Dereference__01_baseline")
-    for oracle in direct_null["oracle_evaluations"]:
-        assert set(oracle["by_rule"]) == {"CGULL-004"}
+    direct_null_cases = [tc for tc in res["test_cases"] if tc["cwe"] == "CWE-476"]
+    for tc in direct_null_cases:
+        for oracle in tc["oracle_evaluations"]:
+            assert set(oracle["by_rule"]) == {"CGULL-004"}
+
+    # Only the interprocedural CWE-457 fixture reads the uninitialized pointer
+    # as a call argument, so the other pointer fixtures are not CGULL-023 FNs.
+    cwe457_cases = [tc for tc in res["test_cases"] if tc["cwe"] == "CWE-457"]
+    for tc in cwe457_cases:
+        expected = {"CGULL-021", "CGULL-023"} if tc["category"] == "interprocedural cases" else {"CGULL-021"}
+        for oracle in tc["oracle_evaluations"]:
+            assert set(oracle["by_rule"]) == expected
+    assert by_rule["CGULL-023"]["tp"] == 1
+    assert by_rule["CGULL-023"]["tn"] == 1
+    assert by_rule["CGULL-023"]["fn"] == 0
 
     by_cat = res["by_category"]
     for cat in CATEGORIES:
@@ -154,6 +208,7 @@ def test_juliet_runner_filters():
     # Filter by CWE
     res_cwe = run_juliet_benchmark(MANIFEST_PATH, cwe_filter="CWE-476")
     assert res_cwe["total_test_cases_evaluated"] == 9
+    assert set(res_cwe["by_rule"]) == {"CGULL-004"}
     for tc in res_cwe["test_cases"]:
         assert tc["cwe"] == "CWE-476"
 
