@@ -21,6 +21,7 @@ class ValidationProperty(str, Enum):
     SIGNATURE_VERIFIED = "signature_verified"
     AUTHORIZED = "authorized"
     VERSION_CHECKED = "version_checked"
+    ALLOWLISTED = "allowlisted"
 
 
 class SemanticLocationKind(str, Enum):
@@ -225,14 +226,14 @@ class SemanticModelConfigError(ValueError):
 
 
 def parse_semantic_models(raw: object) -> SemanticModelRegistry:
-    """Parse the ``[semantic_models]`` TOML section."""
+    """Parse the ``[semantic_models]`` TOML section, including opt-in profiles."""
 
     if raw in (None, {}):
         return EMPTY_SEMANTIC_MODELS
     if not isinstance(raw, Mapping):
         raise SemanticModelConfigError("[semantic_models] must be a table")
 
-    unknown = set(raw) - {"sources", "validators", "sinks"}
+    unknown = set(raw) - {"profiles", "sources", "validators", "sinks"}
     if unknown:
         raise SemanticModelConfigError(
             f"unknown [semantic_models] key(s): {', '.join(sorted(str(k) for k in unknown))}"
@@ -241,6 +242,31 @@ def parse_semantic_models(raw: object) -> SemanticModelRegistry:
     sources: Dict[str, SourceModel] = {}
     validators: Dict[str, ValidatorModel] = {}
     sinks: Dict[str, SinkModel] = {}
+
+    profiles = raw.get("profiles", [])
+    if not isinstance(profiles, list):
+        raise SemanticModelConfigError("[semantic_models].profiles must be a list")
+    seen_profiles = set()
+    if profiles:
+        from .semantic_model_profiles import get_builtin_semantic_model_profile
+
+        for raw_name in profiles:
+            name = str(raw_name).strip()
+            if not name:
+                raise SemanticModelConfigError("semantic model profile name cannot be empty")
+            if name in seen_profiles:
+                raise SemanticModelConfigError(f"duplicate semantic model profile '{name}'")
+            seen_profiles.add(name)
+            try:
+                profile = parse_semantic_models(get_builtin_semantic_model_profile(name))
+            except ValueError as exc:
+                raise SemanticModelConfigError(str(exc)) from exc
+            for function, model in profile.sources.items():
+                _insert_unique(sources, function, model, "source")
+            for function, model in profile.validators.items():
+                _insert_unique(validators, function, model, "validator")
+            for function, model in profile.sinks.items():
+                _insert_unique(sinks, function, model, "sink")
 
     for entry in _model_entries(raw, "sources"):
         _require_keys(entry, "source", required={"function", "outputs"})
