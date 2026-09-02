@@ -3,7 +3,7 @@
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..ast_analyzer import _PRELUDE_LINE_COUNT, _extract_identifiers_from_ast, _format_pycparser_expr, _map_line
-from .model import Allocation, CFGEvent, FunctionSummary, Initialization, Nullness
+from .model import Allocation, CFGCall, CFGEvent, CFGSourceLocation, FunctionSummary, Initialization, Nullness
 from .dataflow import StructuredCFG
 
 from .dataflow import meet_allocation, meet_initialization, meet_nullness
@@ -329,6 +329,104 @@ def _find_value_producing_call(node) -> Optional[Tuple[str, list]]:
     return None
 
 
+def _is_function_pointer_type(type_node) -> bool:
+    """Whether a pycparser declaration type denotes a function pointer."""
+    node = type_node
+    while node is not None:
+        if type(node).__name__ == "PtrDecl" and type(getattr(node, "type", None)).__name__ == "FuncDecl":
+            return True
+        node = getattr(node, "type", None)
+    return False
+
+
+def _function_pointer_names(funcdef) -> Set[str]:
+    """Collect parameter/local identifiers that are known function pointers."""
+    names: Set[str] = set()
+    if funcdef is None:
+        return names
+
+    from pycparser import c_ast
+
+    class Visitor(c_ast.NodeVisitor):
+        def visit_Decl(self, node):
+            if getattr(node, "name", None) and _is_function_pointer_type(getattr(node, "type", None)):
+                names.add(str(node.name))
+            self.generic_visit(node)
+
+    Visitor().visit(funcdef)
+    return names
+
+
+def _call_source_location(call_node, line_map: Optional[Dict[int, Any]]) -> CFGSourceLocation:
+    coord = getattr(call_node, "coord", None)
+    if coord is None:
+        return CFGSourceLocation(file_path=None, line_number=1)
+
+    exp_line = max(1, coord.line - _PRELUDE_LINE_COUNT)
+    mapped = line_map.get(exp_line) if line_map else None
+    file_path = getattr(mapped, "file_path", None) if mapped is not None else getattr(coord, "file", None)
+    line_number = _map_line(exp_line, line_map)
+    return CFGSourceLocation(
+        file_path=file_path,
+        line_number=line_number,
+        column_number=getattr(coord, "column", 0) or 0,
+    )
+
+
+def _value_call_and_target(ast_node):
+    """Return the outer value-producing call and its binding, if supported."""
+    kind = type(ast_node).__name__
+    value_expr = None
+    result_target: Optional[str] = None
+    if kind == "Decl" and getattr(ast_node, "init", None) is not None:
+        value_expr = ast_node.init
+        result_target = str(ast_node.name) if ast_node.name else None
+    elif kind == "Assignment":
+        value_expr = ast_node.rvalue
+        result_target = _format_pycparser_expr(ast_node.lvalue)
+    elif kind == "Return" and getattr(ast_node, "expr", None) is not None:
+        value_expr = ast_node.expr
+        result_target = "return"
+
+    value_call = _unwrap_cast(value_expr)
+    if value_call is not None and type(value_call).__name__ == "FuncCall":
+        return value_call, result_target
+    return None, None
+
+
+def _call_events(ast_node, line_map: Optional[Dict[int, Any]], function_pointers: Set[str]) -> Tuple[CFGCall, ...]:
+    """Extract deterministic, structured call metadata from one CFG event AST."""
+    if ast_node is None:
+        return ()
+
+    value_call, result_target = _value_call_and_target(ast_node)
+    calls: List[CFGCall] = []
+
+    def visit(node) -> None:
+        if node is None:
+            return
+        if type(node).__name__ == "FuncCall":
+            callee_expr = _format_pycparser_expr(node.name)
+            syntactic_direct = type(node.name).__name__ == "ID" and callee_expr not in function_pointers
+            args = tuple(
+                _format_pycparser_expr(arg)
+                for arg in (list(getattr(node.args, "exprs", []) or []) if node.args else [])
+            )
+            calls.append(CFGCall(
+                direct_callee=callee_expr if syntactic_direct else None,
+                callee_expression=callee_expr,
+                actual_arguments=args,
+                result_target=result_target if node is value_call else None,
+                source_location=_call_source_location(node, line_map),
+                is_indirect=not syntactic_direct,
+            ))
+        for _, child in node.children():
+            visit(child)
+
+    visit(ast_node)
+    return tuple(calls)
+
+
 def _event_payload(ast_node, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Optional[Set[str]] = None, realloc_funcs: Optional[Set[str]] = None, summaries: Optional[Dict[str, FunctionSummary]] = None, line_map: Optional[Dict[int, Any]] = None) -> Tuple[str, Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Set[str], Dict[str, int], Set[str], Dict[str, str], Set[str], Dict[str, str]]:
     """kind, reads, writes, null_writes, maybe_null_writes, freed, allocated, derefs, deref_lines, asserted, alias_writes, realloc_inputs, realloc_bindings for an executable AST node."""
     kind = type(ast_node).__name__
@@ -475,6 +573,7 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
     from pycparser import c_ast
 
     cfg = StructuredCFG()
+    function_pointers = _function_pointer_names(funcdef)
     labels_map: Dict[str, int] = {}
     pending_gotos: List[Tuple[int, str]] = []
 
@@ -486,7 +585,8 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
         else:
             expr_str = _format_pycparser_expr(stmt)
         return cfg.new_node(node_kind, stmt, line_map=line_map, expr_str=expr_str, reads=reads, writes=writes, null_writes=null_writes, maybe_null_writes=maybe_null_writes,
-                            freed=freed, allocated=allocated, derefs=derefs, deref_lines=deref_lines, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs, realloc_bindings=realloc_bindings)
+                            freed=freed, allocated=allocated, derefs=derefs, deref_lines=deref_lines, asserted=asserted, alias_writes=alias_writes, realloc_inputs=realloc_inputs, realloc_bindings=realloc_bindings,
+                            calls=_call_events(stmt, line_map, function_pointers))
 
     def build_compound(items, next_entry, break_target, continue_target):
         current = next_entry
@@ -542,7 +642,8 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
             return node
 
         if kind == "If":
-            cond = cfg.new_node("if_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
+            cond = cfg.new_node("if_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond),
+                                calls=_call_events(stmt.cond, line_map, function_pointers))
             true_add, true_remove = _simple_null_facts(stmt.cond)
             false_add, false_remove = true_remove, true_add
             # _simple_null_facts returns the nonnull fact for each branch; the
@@ -558,14 +659,16 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
 
         if kind in {"While", "DoWhile"}:
             if kind == "While":
-                cond = cfg.new_node("while_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
+                cond = cfg.new_node("while_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond),
+                                    calls=_call_events(stmt.cond, line_map, function_pointers))
                 body = build_stmt(stmt.stmt, cond, next_entry, cond)
                 true_add, true_remove = _simple_null_facts(stmt.cond)
                 false_add, false_remove = true_remove, true_add
                 cfg.connect(cond, body, add=true_add, remove=true_remove)
                 cfg.connect(cond, next_entry, add=false_add, remove=false_remove)
                 return cond
-            cond = cfg.new_node("do_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
+            cond = cfg.new_node("do_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond),
+                                calls=_call_events(stmt.cond, line_map, function_pointers))
             body = build_stmt(stmt.stmt, cond, next_entry, cond)
             true_add, true_remove = _simple_null_facts(stmt.cond)
             false_add, false_remove = true_remove, true_add
@@ -576,7 +679,8 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
         if kind == "For":
             cond_expr = stmt.cond
             cond = cfg.new_node("for_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(cond_expr) if cond_expr else "1",
-                                reads=_ids(cond_expr) if cond_expr is not None else set())
+                                reads=_ids(cond_expr) if cond_expr is not None else set(),
+                                calls=_call_events(cond_expr, line_map, function_pointers))
             iter_node = None
             if stmt.next is not None:
                 iter_node = make_event(stmt.next)
@@ -593,7 +697,8 @@ def build_cfg(funcdef, alloc_funcs: Optional[Set[str]] = None, dealloc_funcs: Op
             return cond
 
         if kind == "Switch":
-            switch_node = cfg.new_node("switch_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond))
+            switch_node = cfg.new_node("switch_cond", stmt, line_map=line_map, expr_str=_format_pycparser_expr(stmt.cond), reads=_ids(stmt.cond),
+                                       calls=_call_events(stmt.cond, line_map, function_pointers))
             body = stmt.stmt
             cases = list(getattr(body, "block_items", []) or []) if type(body).__name__ == "Compound" else []
             case_entries = [None] * len(cases)

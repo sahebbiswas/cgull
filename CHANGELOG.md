@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Structured CFG call metadata with ordered arguments, result bindings, unresolved indirect-call markers, and original source provenance (#241).
+
 ## [0.9.18] - 2026-03-30
 
 ### Added
