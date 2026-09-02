@@ -57,6 +57,13 @@ The analysis core is organized as backward-compatible packages. Existing imports
 
 ### Option 1: Direct Python Execution (Zero External Dependencies)
 C-GULL's core engine runs on standard Python 3.10+ with **no third-party dependencies required**:
+
+> **Windows/Python 3.10 multiprocessing note:** The CI matrix excludes Python 3.10 on
+> `windows-latest` because Python's `ProcessPoolExecutor` can hang during shutdown
+> after an interrupted parallel scan, leaving its manager or queue thread alive.
+> Use `--jobs 1` to avoid multiprocessing on that combination. Python 3.10 remains
+> tested on Linux and macOS, while Windows multiprocessing is tested on Python 3.11+.
+
 ```bash
 # Clone the repository
 git clone https://github.com/sahebbiswas/cgull.git

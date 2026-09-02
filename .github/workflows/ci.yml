@@ -20,6 +20,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        exclude:
+          # ProcessPoolExecutor teardown can deadlock on Windows/Python 3.10.
+          # Python 3.10 remains covered on Linux/macOS; Windows is covered on 3.11+.
+          - os: windows-latest
+            python-version: "3.10"
 
     steps:
       - name: Checkout code

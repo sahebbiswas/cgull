@@ -36,6 +36,9 @@ class TestProjectMetadata(unittest.TestCase):
         self.assertIn("python -m pytest -v --cov=cgull", content)
         self.assertIn("timeout-minutes: 15", content)
         self.assertIn("cancel-in-progress: true", content)
+        self.assertIn("exclude:", content)
+        self.assertIn("- os: windows-latest", content)
+        self.assertIn('python-version: "3.10"', content)
 
     def test_gemini_review_skips_dependabot_pull_requests(self):
         workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "gemini-code-review.yml"
