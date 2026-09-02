@@ -23,6 +23,8 @@ class SecuritySinkViolation:
     provenance: Provenance
     required: FrozenSet[ValidationProperty]
     missing: FrozenSet[ValidationProperty]
+    known_sources: Tuple[str, ...] = ()
+    observed_validators: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,10 @@ class SecuritySinkFinding:
     @property
     def degraded(self) -> bool:
         return any(v.provenance is Provenance.UNKNOWN for v in self.violations)
+
+
+def _location(value: str) -> str:
+    return value.strip().lstrip("&").strip()
 
 
 def query_unvalidated_sink_flows(
@@ -70,8 +76,49 @@ def query_unvalidated_sink_flows(
 
         cfg = build_cfg(funcdef, line_map=getattr(ast_context, "line_map", None))
         facts = analyze_security_dataflow(cfg, semantic_models, summaries)
+        source_events = []
+        validator_events = []
+
+        for event_node in cfg.nodes.values():
+            event_line = getattr(event_node, "line_number", 1) or 1
+            for event_call in getattr(event_node, "calls", ()):
+                source = semantic_models.source_for(event_call)
+                if source is not None:
+                    for output in source.outputs:
+                        destination = None
+                        if output.kind is SemanticLocationKind.RETURN:
+                            destination = event_call.result_binding
+                        elif (
+                            output.kind is SemanticLocationKind.OUTPUT_ARGUMENT
+                            and output.argument_index is not None
+                            and output.argument_index < len(event_call.actual_arguments)
+                        ):
+                            destination = event_call.actual_arguments[output.argument_index]
+                        if destination:
+                            source_events.append(
+                                (event_line, _location(destination), source.function)
+                            )
+
+                validator = semantic_models.validator_for(event_call)
+                if validator is not None:
+                    index = validator.target.argument_index
+                    if (
+                        validator.target.kind
+                        in {SemanticLocationKind.ARGUMENT, SemanticLocationKind.OUTPUT_ARGUMENT}
+                        and index is not None
+                        and index < len(event_call.actual_arguments)
+                    ):
+                        validator_events.append(
+                            (
+                                event_line,
+                                _location(event_call.actual_arguments[index]),
+                                validator.function,
+                                validator.property,
+                            )
+                        )
 
         for node in cfg.nodes.values():
+            sink_line = getattr(node, "line_number", 1) or 1
             for call in getattr(node, "calls", ()):
                 sink = semantic_models.sink_for(call)
                 if sink is None:
@@ -87,13 +134,33 @@ def query_unvalidated_sink_flows(
                         continue
 
                     argument = call.actual_arguments[index]
-                    location = argument.lstrip("& ")
+                    location = _location(argument)
                     provenance = facts.query_provenance(location, node.node_id)
                     validations = facts.query_validation_properties(location, node.node_id)
                     missing = frozenset(requirement.properties - validations)
                     if not missing or provenance is Provenance.TRUSTED:
                         continue
 
+                    known_sources = tuple(
+                        sorted(
+                            {
+                                source_name
+                                for line, event_location, source_name in source_events
+                                if line <= sink_line and event_location == location
+                            }
+                        )
+                    )
+                    observed_validators = tuple(
+                        sorted(
+                            {
+                                validator_name
+                                for line, event_location, validator_name, prop in validator_events
+                                if line <= sink_line
+                                and event_location == location
+                                and prop in requirement.properties
+                            }
+                        )
+                    )
                     violations.append(
                         SecuritySinkViolation(
                             argument_index=index,
@@ -101,6 +168,8 @@ def query_unvalidated_sink_flows(
                             provenance=provenance,
                             required=requirement.properties,
                             missing=missing,
+                            known_sources=known_sources,
+                            observed_validators=observed_validators,
                         )
                     )
 
@@ -111,7 +180,7 @@ def query_unvalidated_sink_flows(
                             sink_name=call.direct_callee
                             or call.callee_expression
                             or "sensitive sink",
-                            line_number=getattr(node, "line_number", 1) or 1,
+                            line_number=sink_line,
                             expression=getattr(node, "expr_str", ""),
                             violations=tuple(violations),
                         )
