@@ -12,6 +12,12 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore
 
 from .models import Severity, ScanMode
+from .semantic_models import (
+    EMPTY_SEMANTIC_MODELS,
+    SemanticModelConfigError,
+    SemanticModelRegistry,
+    parse_semantic_models,
+)
 import logging
 from .rules import BaseRule
 
@@ -28,6 +34,7 @@ class CGullConfig:
     realloc_funcs: List[str] = field(default_factory=list)
     dealloc_funcs: List[str] = field(default_factory=list)
     banned_funcs: Dict[str, Dict[str, str]] = field(default_factory=dict)  # fn_name -> {"reason": ..., "remediation": ...}
+    semantic_models: SemanticModelRegistry = field(default_factory=lambda: EMPTY_SEMANTIC_MODELS)
     exclude_paths: List[str] = field(default_factory=list)
     include_roots: List[str] = field(default_factory=list)
     mode: Optional[ScanMode] = None
@@ -227,10 +234,18 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 cfg.warnings.append(f"Invalid schema_version in {config_path}: expected integer")
 
         # Check top-level keys for unknown keys
-        known_top_keys = {"schema_version", "rules", "functions", "paths", "output", "includes", "scan", "mode"}
+        known_top_keys = {"schema_version", "rules", "functions", "paths", "output", "includes", "scan", "mode", "semantic_models"}
         for key in raw_toml.keys():
             if key not in known_top_keys:
                 cfg.warnings.append(f"Unknown key/section '[{key}]' in configuration file {config_path}")
+
+        # Semantic trust-boundary models fail closed: a malformed security model
+        # is a configuration error, never a warning that silently disables it.
+        try:
+            cfg.semantic_models = parse_semantic_models(raw_toml.get("semantic_models", {}))
+        except SemanticModelConfigError as exc:
+            cfg.error = f"Invalid [semantic_models] configuration in {config_path}: {exc}"
+            return cfg
 
         # Top-level mode or section [scan]
         if "mode" in raw_toml:
