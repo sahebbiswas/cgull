@@ -4,17 +4,18 @@ from benchmarks.security_fact_support import build_security_context, build_secur
 from cgull.config import CGullConfig
 from cgull.models import Confidence
 from cgull.rules.trust_boundary import UnvalidatedExternalDataSinkRule
+from cgull.semantic_models import parse_semantic_models
 
 
 class TestUnvalidatedExternalDataSinkRule(unittest.TestCase):
     def setUp(self):
         self.models = build_security_models()
 
-    def _scan(self, source: str):
+    def _scan(self, source: str, models=None):
         ctx = build_security_context(source)
         ctx.source_lines = source.splitlines()
         rule = UnvalidatedExternalDataSinkRule()
-        CGullConfig(semantic_models=self.models).apply_to_rules([rule])
+        CGullConfig(semantic_models=models or self.models).apply_to_rules([rule])
         return rule.scan_ast("test.c", ctx)
 
     def test_detects_straight_line_use_before_validation(self):
@@ -81,6 +82,85 @@ void caller(int gate) {
 """
         )
         self.assertEqual(len(issues), 1)
+
+    def test_validation_inside_optional_loop_is_not_guaranteed(self):
+        issues = self._scan(
+            """
+int external_read(void);
+int validate(int);
+void sink(int);
+void caller(int gate) {
+    int value = external_read();
+    while (gate) {
+        if (!validate(value))
+            return;
+        break;
+    }
+    sink(value);
+}
+"""
+        )
+        self.assertEqual(len(issues), 1)
+
+    def test_validation_in_only_one_switch_case_is_not_guaranteed(self):
+        issues = self._scan(
+            """
+int external_read(void);
+int validate(int);
+void sink(int);
+void caller(int mode) {
+    int value = external_read();
+    switch (mode) {
+    case 1:
+        if (!validate(value))
+            return;
+        break;
+    default:
+        break;
+    }
+    sink(value);
+}
+"""
+        )
+        self.assertEqual(len(issues), 1)
+
+    def test_validation_properties_are_typed(self):
+        models = parse_semantic_models(
+            {
+                "sources": [{"function": "external_read", "outputs": ["return"]}],
+                "validators": [
+                    {
+                        "function": "authorize",
+                        "target": "arg:0",
+                        "property": "authorized",
+                        "success": "return_nonzero",
+                    }
+                ],
+                "sinks": [
+                    {
+                        "function": "sink",
+                        "requirements": {"arg:0": ["bounds_checked"]},
+                    }
+                ],
+            }
+        )
+        issues = self._scan(
+            """
+int external_read(void);
+int authorize(int);
+void sink(int);
+void caller(void) {
+    int value = external_read();
+    if (!authorize(value))
+        return;
+    sink(value);
+}
+""",
+            models=models,
+        )
+        self.assertEqual(len(issues), 1)
+        self.assertIn("bounds_checked", issues[0].message)
+        self.assertNotIn("missing [authorized]", issues[0].message)
 
     def test_multihop_source_wrapper_is_detected(self):
         issues = self._scan(
