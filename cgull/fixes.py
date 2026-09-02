@@ -41,7 +41,20 @@ def _render_replacement(original_line: str, replacement: str) -> str:
     body = original_line[:-len(newline)] if newline else original_line
     indent = body[: len(body) - len(body.lstrip())]
     replacement_lines = replacement.splitlines() or [""]
-    rendered = newline.join(indent + part for part in replacement_lines)
+
+    # Regex-based SAFE_FIX producers may already return the complete source
+    # line, including its indentation. Treat those replacements verbatim so
+    # applying a fix does not double-indent the line.
+    if replacement_lines[0][:1] in (" ", "\t"):
+        rendered_lines = replacement_lines
+    else:
+        rendered_lines = [indent + part for part in replacement_lines]
+
+    # Preserve the source file's newline convention when one is available.
+    # An unterminated final line has no newline to preserve, but multi-line
+    # replacement text still needs separators between its logical lines.
+    separator = newline or "\n"
+    rendered = separator.join(rendered_lines)
     return rendered + newline
 
 
