@@ -89,7 +89,7 @@ def query_unvalidated_sink_flows(
                     for output in source.outputs:
                         destination = None
                         if output.kind is SemanticLocationKind.RETURN:
-                            destination = event_call.result_binding
+                            destination = event_call.result_target
                         elif (
                             output.kind is SemanticLocationKind.OUTPUT_ARGUMENT
                             and output.argument_index is not None
