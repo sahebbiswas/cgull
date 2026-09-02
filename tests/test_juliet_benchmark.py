@@ -80,6 +80,10 @@ def test_manifest_structure_and_validity():
                 assert len(o["helper_functions"]) > 0
 
             oracle_functions = [o["function"], *o.get("helper_functions", [])]
+            for function in oracle_functions:
+                assert function in function_ranges, (
+                    f"{tc['id']}: no parsed range for {function}"
+                )
             oracle_source = "".join(
                 line
                 for function in oracle_functions
