@@ -71,7 +71,9 @@ def extract_function_line_ranges(file_path: str) -> Dict[str, Tuple[int, int]]:
     current_fn = None
     start_line = 0
     brace_depth = 0
-    fn_header_regex = re.compile(r'(?:static\s+)?void\s+([A-Za-z0-9_]+)\s*\(')
+    fn_header_regex = re.compile(
+        r'^\s*(?:static\s+)?(?:[A-Za-z_]\w*[\s*]+)+([A-Za-z_]\w*)\s*\('
+    )
 
     for idx, line in enumerate(lines, 1):
         if not current_fn:
