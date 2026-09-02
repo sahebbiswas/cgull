@@ -1,0 +1,13 @@
+[[semantic_models.sources]]
+function = "external_read"
+outputs = ["return"]
+
+[[semantic_models.validators]]
+function = "validate"
+target = "arg:0"
+property = "bounds_checked"
+success = "return_nonzero"
+
+[[semantic_models.sinks]]
+function = "sink"
+requirements = { "arg:0" = ["bounds_checked"] }
