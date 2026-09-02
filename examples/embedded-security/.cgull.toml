@@ -1,0 +1,20 @@
+schema_version = 1
+
+[semantic_models]
+profiles = ["embedded-security"]
+
+# Example project-specific HAL overlays. These are explicit declarations, not
+# name-based inference by CGULL.
+[[semantic_models.sources]]
+function = "soc_mailbox_read"
+outputs = ["out:0"]
+
+[[semantic_models.validators]]
+function = "soc_authorize"
+target = "arg:0"
+property = "authorized"
+success = "return_nonzero"
+
+[[semantic_models.sinks]]
+function = "soc_flash_program"
+requirements = { "arg:0" = ["bounds_checked", "authorized"] }
