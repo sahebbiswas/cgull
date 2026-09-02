@@ -1,0 +1,19 @@
+{
+  "suite": "CGULL-047 Embedded Trust-Boundary Regression Corpus",
+  "version": "1.0",
+  "baseline": {"cases": 12, "expected_positives": 8, "expected_negatives": 4, "tp": 8, "fp": 0, "tn": 4, "fn": 0, "known_gaps": 0},
+  "cases": [
+    {"id":"mailbox_flash_unsafe","file":"mailbox_flash_unsafe.c","vulnerable":true,"family":"mailbox_flash","scenario":"straight_line","evidence":{"source":"mailbox_receive","sink":"flash_write","missing":["bounds_checked","authorized"]}},
+    {"id":"mailbox_flash_safe","file":"mailbox_flash_safe.c","vulnerable":false,"family":"mailbox_flash","scenario":"early_return_guard","evidence":{"source":"mailbox_receive","validators":["validate_bounds","authorize_request"],"sink":"flash_write"}},
+    {"id":"typed_validation_mismatch","file":"typed_validation_mismatch.c","vulnerable":true,"family":"mailbox_flash","scenario":"typed_validation","evidence":{"source":"mailbox_receive","validators":["authenticate_request"],"sink":"flash_write","missing":["bounds_checked","authorized"]}},
+    {"id":"branch_only_validation","file":"branch_only_validation.c","vulnerable":true,"family":"mailbox_flash","scenario":"if_else","evidence":{"source":"mailbox_receive","validators":["validate_bounds","authorize_request"],"sink":"flash_write","missing":["bounds_checked","authorized"]}},
+    {"id":"loop_only_validation","file":"loop_only_validation.c","vulnerable":true,"family":"dma","scenario":"loop","evidence":{"source":"dma_descriptor_receive","validators":["validate_bounds","authorize_request"],"sink":"dma_start","missing":["bounds_checked","authorized"]}},
+    {"id":"switch_only_validation","file":"switch_only_validation.c","vulnerable":true,"family":"mmio","scenario":"switch","evidence":{"source":"uart_receive","validators":["validate_bounds","check_allowlist"],"sink":"mmio_write","missing":["bounds_checked","allowlisted"]}},
+    {"id":"validation_after_sink","file":"validation_after_sink.c","vulnerable":true,"family":"mailbox_flash","scenario":"validation_after_sink","evidence":{"source":"mailbox_receive","sink":"flash_write","missing":["bounds_checked","authorized"]}},
+    {"id":"update_missing_version","file":"update_missing_version.c","vulnerable":true,"family":"firmware_update","scenario":"typed_validation","evidence":{"source":"update_manifest_receive","validators":["verify_signature","authorize_request"],"sink":"update_activate","missing":["version_checked"]}},
+    {"id":"update_safe","file":"update_safe.c","vulnerable":false,"family":"firmware_update","scenario":"multiple_properties","evidence":{"source":"update_manifest_receive","validators":["verify_signature","check_version","authorize_request"],"sink":"update_activate"}},
+    {"id":"debug_missing_authorization","file":"debug_missing_authorization.c","vulnerable":true,"family":"debug","scenario":"typed_validation","evidence":{"source":"mailbox_receive","validators":["authenticate_request"],"sink":"debug_enable","missing":["authorized"]}},
+    {"id":"debug_safe","file":"debug_safe.c","vulnerable":false,"family":"debug","scenario":"multiple_properties","evidence":{"source":"mailbox_receive","validators":["authenticate_request","authorize_request"],"sink":"debug_enable"}},
+    {"id":"source_wrapper_safe","file":"source_wrapper_safe.c","vulnerable":false,"family":"mailbox_flash","scenario":"interprocedural_source_wrapper","evidence":{"source":"mailbox_receive","validators":["validate_bounds","authorize_request"],"sink":"flash_write"}}
+  ]
+}
