@@ -5,21 +5,39 @@ import argparse
 import json
 import os
 import sys
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List
+
+from pycparser import c_parser
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from cgull.cfg import build_cfg, find_function_def
+from cgull.cfg.security_dataflow import analyze_security_dataflow, analyze_security_summaries
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine
 from cgull.rules import RULE_REGISTRY, get_rule_by_id
+from cgull.semantic_models import (
+    SemanticLocation,
+    SemanticLocationKind,
+    SemanticModelRegistry,
+    SinkModel,
+    SinkRequirement,
+    SourceModel,
+    SuccessCondition,
+    SuccessConditionKind,
+    ValidationProperty,
+    ValidatorModel,
+)
 
 
 DEFAULT_MANIFEST = os.path.join(
     REPO_ROOT, "benchmarks", "interprocedural", "manifest.json"
 )
+SECURITY_FACT_MANIFEST = "security_facts.json"
 METRIC_KEYS = (
     "cases",
     "expected_positives",
@@ -185,6 +203,124 @@ def _validate_manifest(manifest: Dict[str, Any], manifest_path: str) -> None:
         raise ValueError("Recorded baseline metrics do not match manifest cases")
 
 
+def _security_models() -> SemanticModelRegistry:
+    arg0 = SemanticLocation(SemanticLocationKind.ARGUMENT, 0)
+    return SemanticModelRegistry(
+        sources={
+            "external_read": SourceModel(
+                "external_read", (SemanticLocation(SemanticLocationKind.RETURN),)
+            ),
+            "external_out": SourceModel(
+                "external_out",
+                (SemanticLocation(SemanticLocationKind.OUTPUT_ARGUMENT, 0),),
+            ),
+        },
+        validators={
+            "validate": ValidatorModel(
+                "validate",
+                arg0,
+                ValidationProperty.BOUNDS_CHECKED,
+                SuccessCondition(SuccessConditionKind.RETURN_NONZERO),
+            )
+        },
+        sinks={
+            "sink": SinkModel(
+                "sink",
+                (
+                    SinkRequirement(
+                        arg0, frozenset({ValidationProperty.BOUNDS_CHECKED})
+                    ),
+                ),
+            )
+        },
+    )
+
+
+def _security_context(source: str):
+    ast = c_parser.CParser().parse(source)
+    functions = []
+    globals_: Dict[str, Any] = {}
+    for ext in ast.ext:
+        if type(ext).__name__ == "FuncDef":
+            params = []
+            decl_args = getattr(getattr(ext.decl, "type", None), "args", None)
+            for param in list(getattr(decl_args, "params", ()) or ()):
+                name = getattr(param, "name", None)
+                if name:
+                    params.append(SimpleNamespace(name=name))
+            functions.append(SimpleNamespace(name=ext.decl.name, parameters=params))
+        elif type(ext).__name__ == "Decl" and type(getattr(ext, "type", None)).__name__ != "FuncDecl":
+            if getattr(ext, "name", None):
+                globals_[ext.name] = SimpleNamespace(name=ext.name)
+    return SimpleNamespace(
+        has_pycparser=True,
+        pycparser_ast=ast,
+        functions=functions,
+        global_variables=globals_,
+        line_map=None,
+    )
+
+
+def _run_security_fact_cases(manifest_dir: str) -> Dict[str, Any]:
+    path = os.path.join(manifest_dir, SECURITY_FACT_MANIFEST)
+    with open(path, "r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    models = _security_models()
+    results: List[Dict[str, Any]] = []
+    failures: List[str] = []
+
+    for case in manifest.get("cases", []):
+        fixture_path = os.path.join(manifest_dir, case["file"])
+        with open(fixture_path, "r", encoding="utf-8") as fixture:
+            ctx = _security_context(fixture.read())
+        summaries = analyze_security_summaries(ctx, models)
+        actual: Dict[str, Any] = {}
+
+        if "summary_function" in case:
+            summary = summaries[case["summary_function"]]
+            actual["return_params"] = sorted(summary.return_from_params)
+            passed = actual["return_params"] == case.get("expected_return_params", [])
+        else:
+            function = case["function"]
+            cfg = build_cfg(find_function_def(ctx.pycparser_ast, function))
+            facts = analyze_security_dataflow(cfg, models, summaries)
+            sink_node = next(
+                node
+                for node in cfg.nodes.values()
+                if any(call.direct_callee == case["sink"] for call in node.calls)
+            )
+            actual["provenance"] = facts.query_provenance(
+                case["location"], sink_node.node_id
+            ).value
+            actual["validations"] = sorted(
+                prop.value
+                for prop in facts.query_validation_properties(
+                    case["location"], sink_node.node_id
+                )
+            )
+            passed = (
+                actual["provenance"] == case["expected_provenance"]
+                and actual["validations"] == sorted(case.get("expected_validations", []))
+            )
+
+        status = "pass" if passed else "regression"
+        if not passed:
+            failures.append(f"{case['id']}: expected security facts did not match")
+        results.append({**case, "actual": actual, "status": status})
+
+    passed_count = sum(case["status"] == "pass" for case in results)
+    return {
+        "version": manifest.get("version", "1.0"),
+        "metrics": {
+            "cases": len(results),
+            "passed": passed_count,
+            "failed": len(results) - passed_count,
+        },
+        "failures": failures,
+        "cases": results,
+    }
+
+
 def run_interprocedural_corpus(
     manifest_path: str = DEFAULT_MANIFEST,
 ) -> Dict[str, Any]:
@@ -244,6 +380,8 @@ def run_interprocedural_corpus(
         )
 
     current_metrics = _collect_metrics(results, "detected")
+    security_facts = _run_security_fact_cases(manifest_dir)
+    failures.extend(security_facts["failures"])
     return {
         "suite": manifest["suite"],
         "version": manifest["version"],
@@ -251,6 +389,7 @@ def run_interprocedural_corpus(
         "failures": failures,
         "recorded_baseline": manifest["baseline"],
         "current": current_metrics,
+        "security_facts": security_facts,
         "cases": results,
     }
 
@@ -308,9 +447,20 @@ def format_text_report(results: Dict[str, Any]) -> str:
             f"({case['known_gap']['tracking']})"
         )
 
+    security_metrics = results["security_facts"]["metrics"]
+    lines.extend(
+        [
+            "",
+            "Security fact propagation:",
+            f"- cases: {security_metrics['cases']}",
+            f"- passed: {security_metrics['passed']}",
+            f"- failed: {security_metrics['failed']}",
+        ]
+    )
+
     lines.append("")
     if results["success"]:
-        lines.append("SUCCESS: Stable expectations passed; known gaps are non-blocking.")
+        lines.append("SUCCESS: Stable expectations and security fact propagation passed; known gaps are non-blocking.")
     else:
         lines.append("FAILURE: " + "; ".join(results["failures"]))
     return "\n".join(lines)
