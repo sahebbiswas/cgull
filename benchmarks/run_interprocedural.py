@@ -5,33 +5,22 @@ import argparse
 import json
 import os
 import sys
-from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List
-
-from pycparser import c_parser
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from benchmarks.security_fact_support import (
+    build_security_context,
+    build_security_models,
+)
 from cgull.cfg import build_cfg, find_function_def
 from cgull.cfg.security_dataflow import analyze_security_dataflow, analyze_security_summaries
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine
 from cgull.rules import RULE_REGISTRY, get_rule_by_id
-from cgull.semantic_models import (
-    SemanticLocation,
-    SemanticLocationKind,
-    SemanticModelRegistry,
-    SinkModel,
-    SinkRequirement,
-    SourceModel,
-    SuccessCondition,
-    SuccessConditionKind,
-    ValidationProperty,
-    ValidatorModel,
-)
 
 
 DEFAULT_MANIFEST = os.path.join(
@@ -203,62 +192,12 @@ def _validate_manifest(manifest: Dict[str, Any], manifest_path: str) -> None:
         raise ValueError("Recorded baseline metrics do not match manifest cases")
 
 
-def _security_models() -> SemanticModelRegistry:
-    arg0 = SemanticLocation(SemanticLocationKind.ARGUMENT, 0)
-    return SemanticModelRegistry(
-        sources={
-            "external_read": SourceModel(
-                "external_read", (SemanticLocation(SemanticLocationKind.RETURN),)
-            ),
-            "external_out": SourceModel(
-                "external_out",
-                (SemanticLocation(SemanticLocationKind.OUTPUT_ARGUMENT, 0),),
-            ),
-        },
-        validators={
-            "validate": ValidatorModel(
-                "validate",
-                arg0,
-                ValidationProperty.BOUNDS_CHECKED,
-                SuccessCondition(SuccessConditionKind.RETURN_NONZERO),
-            )
-        },
-        sinks={
-            "sink": SinkModel(
-                "sink",
-                (
-                    SinkRequirement(
-                        arg0, frozenset({ValidationProperty.BOUNDS_CHECKED})
-                    ),
-                ),
-            )
-        },
-    )
+def _security_models():
+    return build_security_models()
 
 
 def _security_context(source: str):
-    ast = c_parser.CParser().parse(source)
-    functions = []
-    globals_: Dict[str, Any] = {}
-    for ext in ast.ext:
-        if type(ext).__name__ == "FuncDef":
-            params = []
-            decl_args = getattr(getattr(ext.decl, "type", None), "args", None)
-            for param in list(getattr(decl_args, "params", ()) or ()):
-                name = getattr(param, "name", None)
-                if name:
-                    params.append(SimpleNamespace(name=name))
-            functions.append(SimpleNamespace(name=ext.decl.name, parameters=params))
-        elif type(ext).__name__ == "Decl" and type(getattr(ext, "type", None)).__name__ != "FuncDecl":
-            if getattr(ext, "name", None):
-                globals_[ext.name] = SimpleNamespace(name=ext.name)
-    return SimpleNamespace(
-        has_pycparser=True,
-        pycparser_ast=ast,
-        functions=functions,
-        global_variables=globals_,
-        line_map=None,
-    )
+    return build_security_context(source)
 
 
 def _run_security_fact_cases(manifest_dir: str) -> Dict[str, Any]:
@@ -282,13 +221,27 @@ def _run_security_fact_cases(manifest_dir: str) -> Dict[str, Any]:
             passed = actual["return_params"] == case.get("expected_return_params", [])
         else:
             function = case["function"]
-            cfg = build_cfg(find_function_def(ctx.pycparser_ast, function))
+            funcdef = find_function_def(ctx.pycparser_ast, function)
+            if funcdef is None:
+                failures.append(f"{case['id']}: function '{function}' not found")
+                results.append({**case, "actual": actual, "status": "regression"})
+                continue
+            cfg = build_cfg(funcdef)
             facts = analyze_security_dataflow(cfg, models, summaries)
             sink_node = next(
-                node
-                for node in cfg.nodes.values()
-                if any(call.direct_callee == case["sink"] for call in node.calls)
+                (
+                    node
+                    for node in cfg.nodes.values()
+                    if any(call.direct_callee == case["sink"] for call in node.calls)
+                ),
+                None,
             )
+            if sink_node is None:
+                failures.append(
+                    f"{case['id']}: sink '{case['sink']}' not found in function '{function}'"
+                )
+                results.append({**case, "actual": actual, "status": "regression"})
+                continue
             actual["provenance"] = facts.query_provenance(
                 case["location"], sink_node.node_id
             ).value
@@ -460,7 +413,10 @@ def format_text_report(results: Dict[str, Any]) -> str:
 
     lines.append("")
     if results["success"]:
-        lines.append("SUCCESS: Stable expectations and security fact propagation passed; known gaps are non-blocking.")
+        lines.append(
+            "SUCCESS: Stable expectations and security fact propagation passed; "
+            "known gaps are non-blocking."
+        )
     else:
         lines.append("FAILURE: " + "; ".join(results["failures"]))
     return "\n".join(lines)
