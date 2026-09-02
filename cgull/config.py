@@ -135,10 +135,12 @@ def find_config_file(target_path: str) -> Optional[str]:
     curr_dir = abs_target if os.path.isdir(abs_target) else os.path.dirname(abs_target)
 
     while True:
+        # Check .cgull.toml
         standalone = os.path.join(curr_dir, ".cgull.toml")
         if os.path.isfile(standalone):
             return standalone
 
+        # Check pyproject.toml with [tool.cgull]
         pyproject = os.path.join(curr_dir, "pyproject.toml")
         if os.path.isfile(pyproject):
             try:
@@ -214,6 +216,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
             cfg.error = f"Failed to parse TOML configuration file {config_path}: {e}"
             return cfg
 
+        # If pyproject.toml, extract [tool.cgull]
         if os.path.basename(config_path) == "pyproject.toml":
             raw_toml = raw_toml.get("tool", {}).get("cgull", {})
             if not isinstance(raw_toml, dict):
@@ -226,23 +229,28 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
     inc_resolver = IncludeResolver(base_dir=base_search_dir, load_cgullincludes=False)
 
     if raw_toml:
+        # Validate schema version
         if "schema_version" in raw_toml:
             try:
                 cfg.schema_version = int(raw_toml["schema_version"])
             except (ValueError, TypeError):
                 cfg.warnings.append(f"Invalid schema_version in {config_path}: expected integer")
 
+        # Check top-level keys for unknown keys
         known_top_keys = {"schema_version", "rules", "functions", "paths", "output", "includes", "scan", "mode", "semantic_models"}
         for key in raw_toml.keys():
             if key not in known_top_keys:
                 cfg.warnings.append(f"Unknown key/section '[{key}]' in configuration file {config_path}")
 
+        # Semantic trust-boundary models fail closed: a malformed security model
+        # is a configuration error, never a warning that silently disables it.
         try:
             cfg.semantic_models = parse_semantic_models(raw_toml.get("semantic_models", {}))
         except SemanticModelConfigError as exc:
             cfg.error = f"Invalid [semantic_models] configuration in {config_path}: {exc}"
             return cfg
 
+        # Top-level mode or section [scan]
         if "mode" in raw_toml:
             m_val = str(raw_toml["mode"]).strip().lower()
             if m_val in ("file", "tu"):
@@ -258,8 +266,10 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
             else:
                 cfg.warnings.append(f"Invalid [scan].mode '{m_val}' in {config_path}. Expected 'file' or 'tu'.")
 
+        # Section [rules]
         rules_sec = raw_toml.get("rules", {})
         if isinstance(rules_sec, dict):
+            # rules.skip
             skip_raw = rules_sec.get("skip", {})
             if isinstance(skip_raw, dict):
                 for r_id, reason in skip_raw.items():
@@ -268,6 +278,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 for r_id in skip_raw:
                     cfg.skipped_rules[str(r_id).strip().upper()] = "Disabled via configuration"
 
+            # rules.severity
             sev_raw = rules_sec.get("severity", {})
             if isinstance(sev_raw, dict):
                 for r_id, val in sev_raw.items():
@@ -277,8 +288,10 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                     else:
                         cfg.warnings.append(f"Invalid severity value '{val}' for rule {r_id} in {config_path}")
 
+        # Section [functions]
         funcs_sec = raw_toml.get("functions", {})
         if isinstance(funcs_sec, dict):
+            # functions.memory
             mem_sec = funcs_sec.get("memory", {})
             if isinstance(mem_sec, dict):
                 for key_name, target_attr in [("alloc", "alloc_funcs"), ("realloc", "realloc_funcs"), ("dealloc", "dealloc_funcs")]:
@@ -293,6 +306,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                             cleaned_funcs.append(fn_str)
                         setattr(cfg, target_attr, cleaned_funcs)
 
+            # functions.banned
             banned_sec = funcs_sec.get("banned", {})
             if isinstance(banned_sec, dict):
                 for fn_name, details in banned_sec.items():
@@ -313,6 +327,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                             "remediation": f"Avoid using {fn_str}()",
                         }
 
+        # Section [paths]
         paths_sec = raw_toml.get("paths", {})
         if isinstance(paths_sec, dict):
             exclude_list = paths_sec.get("exclude", [])
@@ -323,6 +338,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 for x in inc_list:
                     inc_resolver.add_include_root(str(x), relative_to=base_search_dir)
 
+        # Section [includes]
         includes_sec = raw_toml.get("includes", {})
         if isinstance(includes_sec, dict):
             inc_list = includes_sec.get("include_roots", includes_sec.get("roots", []))
@@ -330,12 +346,14 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 for x in inc_list:
                     inc_resolver.add_include_root(str(x), relative_to=base_search_dir)
 
+    # Load .cgullincludes if present in base_search_dir
     cgullinc_path = os.path.join(base_search_dir, ".cgullincludes")
     if os.path.isfile(cgullinc_path):
         inc_resolver.load_from_file(cgullinc_path)
 
     cfg.include_roots = list(inc_resolver.include_roots)
 
+    # Section [output]
     output_sec = raw_toml.get("output", {})
     if isinstance(output_sec, dict):
         if "default_format" in output_sec:
