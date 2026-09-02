@@ -39,7 +39,9 @@ class SecuritySinkFinding:
 
     @property
     def degraded(self) -> bool:
-        return any(v.provenance is Provenance.UNKNOWN for v in self.violations)
+        return bool(self.violations) and all(
+            v.provenance is Provenance.UNKNOWN for v in self.violations
+        )
 
 
 def _location(value: str) -> str:
