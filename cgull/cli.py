@@ -15,7 +15,7 @@ _ORIGINAL_BUILD_PARSER = _base.build_parser
 _ORIGINAL_HANDLE_SCAN = _base.handle_scan
 _ORIGINAL_REPORTER = _base.ReportGenerator
 
-# Public symbols historically exposed from cgull.cli.  Keep these aliases so
+# Public symbols historically exposed from cgull.cli. Keep these aliases so
 # callers/tests can monkey-patch cgull.cli without knowing about the internal
 # compatibility module used by the fix facade.
 CGullScanner = _base.CGullScanner
