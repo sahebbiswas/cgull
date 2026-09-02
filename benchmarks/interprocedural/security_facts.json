@@ -1,0 +1,47 @@
+{
+  "version": "1.0",
+  "cases": [
+    {
+      "id": "security_source_multihop",
+      "file": "fixtures/security_source_multihop.c",
+      "function": "caller",
+      "location": "value",
+      "sink": "sink",
+      "expected_provenance": "untrusted",
+      "expected_validations": []
+    },
+    {
+      "id": "security_output_parameter",
+      "file": "fixtures/security_output_parameter.c",
+      "function": "caller",
+      "location": "value",
+      "sink": "sink",
+      "expected_provenance": "untrusted",
+      "expected_validations": []
+    },
+    {
+      "id": "security_validator_checked",
+      "file": "fixtures/security_validator_checked.c",
+      "function": "caller",
+      "location": "value",
+      "sink": "sink",
+      "expected_provenance": "untrusted",
+      "expected_validations": ["bounds_checked"]
+    },
+    {
+      "id": "security_validator_ignored",
+      "file": "fixtures/security_validator_ignored.c",
+      "function": "caller",
+      "location": "value",
+      "sink": "sink",
+      "expected_provenance": "untrusted",
+      "expected_validations": []
+    },
+    {
+      "id": "security_recursive_summary",
+      "file": "fixtures/security_recursive_summary.c",
+      "summary_function": "first",
+      "expected_return_params": [0]
+    }
+  ]
+}
