@@ -12,11 +12,25 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
 
     pycparser represents ``-1`` as ``UnaryOp('-', Constant('1'))`` and folds
     parentheses into the expression tree, so string-to-int conversion misses
-    both unary-negative and arithmetic constant expressions.  This evaluator
+    both unary-negative and arithmetic constant expressions. This evaluator
     handles integer constants plus unary ``+``/``-`` and a conservative set of
-    integer binary operators.  Only negative values are added here; existing
-    CGULL-007 logic remains authoritative for non-negative constant bounds.
+    integer binary operators. Unsigned casts deliberately return unknown here
+    so a wrapped value such as ``(unsigned)-1`` is not mislabeled as negative.
+    Only negative values are added here; existing CGULL-007 logic remains
+    authoritative for non-negative constant bounds.
     """
+
+    @staticmethod
+    def _cast_is_unsigned(node) -> bool:
+        from pycparser import c_ast
+
+        type_node = getattr(node, "to_type", None)
+        if not isinstance(type_node, c_ast.Typename):
+            return False
+        type_decl = getattr(type_node, "type", None)
+        while hasattr(type_decl, "type") and not isinstance(type_decl, c_ast.IdentifierType):
+            type_decl = type_decl.type
+        return isinstance(type_decl, c_ast.IdentifierType) and "unsigned" in type_decl.names
 
     @staticmethod
     def _constant_integer_value(node) -> Optional[int]:
@@ -30,6 +44,8 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
                 return None
 
         if isinstance(node, c_ast.Cast):
+            if ArrayIndexOutOfBoundsRule._cast_is_unsigned(node):
+                return None
             return ArrayIndexOutOfBoundsRule._constant_integer_value(node.expr)
 
         if isinstance(node, c_ast.UnaryOp) and node.op in {"+", "-"}:
@@ -95,7 +111,7 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
         from ...cfg import _PRELUDE_LINE_COUNT, find_function_def
 
         reported = {
-            (issue.line_number, issue.code_snippet)
+            (issue.line_number, issue.code_snippet, issue.message)
             for issue in issues
             if issue.rule_id == self.rule_id
         }
@@ -124,17 +140,29 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
                                 if 0 < line_no <= len(ast_ctx.source_lines)
                                 else f"{arr_name}[{_format_pycparser_expr(node.subscript)}]"
                             )
-                            key = (line_no, snippet)
-                            if key not in reported:
+                            column = node.coord.column if node.coord else 1
+                            message = (
+                                f"Static Array Out-of-Bounds: index [{value}] is below zero "
+                                f"for declared dimension of '{arr_name}[{arr_size}]'."
+                            )
+                            key = (line_no, arr_name, value, column)
+                            existing_keys = {
+                                (
+                                    issue.line_number,
+                                    issue.message,
+                                    getattr(issue, "column_number", None),
+                                )
+                                for issue in issues
+                                if issue.rule_id == rule.rule_id
+                            }
+                            compatibility_key = (line_no, message, column)
+                            if key not in reported and compatibility_key not in existing_keys:
                                 issues.append(rule.create_issue(
                                     file_path=file_path,
                                     line_number=line_no,
                                     code_snippet=snippet,
-                                    message=(
-                                        f"Static Array Out-of-Bounds: index [{value}] is below zero "
-                                        f"for declared dimension of '{arr_name}[{arr_size}]'."
-                                    ),
-                                    column_number=1,
+                                    message=message,
+                                    column_number=column,
                                     engine="AST",
                                     fix_type=FixType.SUGGESTED_FIX,
                                     suggested_fix_replacement=f"{arr_name}[0]",
