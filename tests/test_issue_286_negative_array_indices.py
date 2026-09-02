@@ -13,7 +13,10 @@ def test_negative_constant_array_indices_are_reported():
     code = """
     int f(void) {
         int a[4] = {0};
-        return a[-1] + a[-(1)] + a[0 - 1];
+        int x = a[-1];
+        x += a[-(1)];
+        x += a[0 - 1];
+        return x;
     }
     """
     issues = _scan(code)
