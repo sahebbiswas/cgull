@@ -1,7 +1,11 @@
 from pycparser import c_parser
 
 from cgull.cfg import build_cfg, find_function_def
-from cgull.cfg.security_dataflow import Provenance, analyze_security_dataflow
+from cgull.cfg.security_dataflow import (
+    Provenance,
+    analyze_security_dataflow,
+    join_provenance,
+)
 from cgull.semantic_models import (
     SemanticLocation,
     SemanticLocationKind,
@@ -56,6 +60,16 @@ def _sink_node(cfg):
     )
 
 
+def test_join_provenance_preserves_classified_taint_against_unknown():
+    assert join_provenance(Provenance.UNTRUSTED, Provenance.UNKNOWN) is Provenance.UNTRUSTED
+    assert join_provenance(Provenance.UNKNOWN, Provenance.UNTRUSTED) is Provenance.UNTRUSTED
+
+
+def test_join_provenance_disagreement_between_classified_values_is_mixed():
+    assert join_provenance(Provenance.TRUSTED, Provenance.UNTRUSTED) is Provenance.MIXED
+    assert join_provenance(Provenance.MIXED, Provenance.TRUSTED) is Provenance.MIXED
+
+
 def test_external_assignment_alias_reaches_sink():
     code = r"""
         int external_read(void);
@@ -69,6 +83,25 @@ def test_external_assignment_alias_reaches_sink():
     cfg, facts = _build(code, _models())
     sink = _sink_node(cfg)
     assert facts.query_provenance("y", sink.node_id) is Provenance.UNTRUSTED
+
+
+def test_untrusted_path_survives_merge_with_unclassified_path():
+    code = r"""
+        int external_read(void);
+        int unknown_read(void);
+        void sink(int);
+        void f(int choose) {
+            int x;
+            if (choose) {
+                x = external_read();
+            } else {
+                x = unknown_read();
+            }
+            sink(x);
+        }
+    """
+    cfg, facts = _build(code, _models())
+    assert facts.query_provenance("x", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
 
 
 def test_constant_is_trusted():
