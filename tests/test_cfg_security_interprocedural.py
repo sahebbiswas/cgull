@@ -25,20 +25,24 @@ from cgull.semantic_models import (
 def _ctx(code):
     ast = c_parser.CParser().parse(code)
     functions = []
+    globals_ = {}
     for ext in ast.ext:
-        if type(ext).__name__ != "FuncDef":
-            continue
-        params = []
-        decl_args = getattr(getattr(ext.decl, "type", None), "args", None)
-        for param in list(getattr(decl_args, "params", ()) or ()):
-            name = getattr(param, "name", None)
-            if name:
-                params.append(SimpleNamespace(name=name))
-        functions.append(SimpleNamespace(name=ext.decl.name, parameters=params))
+        if type(ext).__name__ == "FuncDef":
+            params = []
+            decl_args = getattr(getattr(ext.decl, "type", None), "args", None)
+            for param in list(getattr(decl_args, "params", ()) or ()):
+                name = getattr(param, "name", None)
+                if name:
+                    params.append(SimpleNamespace(name=name))
+            functions.append(SimpleNamespace(name=ext.decl.name, parameters=params))
+        elif type(ext).__name__ == "Decl" and type(getattr(ext, "type", None)).__name__ != "FuncDecl":
+            if getattr(ext, "name", None):
+                globals_[ext.name] = SimpleNamespace(name=ext.name)
     return SimpleNamespace(
         has_pycparser=True,
         pycparser_ast=ast,
         functions=functions,
+        global_variables=globals_,
         line_map=None,
     )
 
@@ -139,6 +143,25 @@ def test_direct_output_parameter_dependency_is_substituted_at_call_site():
     cfg, facts, summaries = _facts(ctx, "caller", _models())
     assert summaries["copy_out"].output_dependencies(0) == frozenset({1})
     assert facts.query_provenance("y", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
+
+
+def test_global_provenance_is_preserved_through_return_wrapper():
+    ctx = _ctx(
+        r"""
+        int global_value;
+        int external_read(void);
+        void sink(int);
+        int read_global(void) { return global_value; }
+        void caller(void) {
+            global_value = external_read();
+            int x = read_global();
+            sink(x);
+        }
+        """
+    )
+    cfg, facts, summaries = _facts(ctx, "caller", _models())
+    assert summaries["read_global"].return_from_globals == frozenset({"global_value"})
+    assert facts.query_provenance("x", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
 
 
 def test_checked_validator_helper_establishes_validation():
@@ -247,3 +270,23 @@ def test_unknown_call_does_not_erase_existing_external_provenance():
     )
     cfg, facts, _ = _facts(ctx, "caller", _models())
     assert facts.query_provenance("x", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
+
+
+def test_unknown_direct_call_invalidates_validation_on_referenced_storage():
+    ctx = _ctx(
+        r"""
+        int external_read(void);
+        int validate(int);
+        void unknown(int *);
+        void sink(int);
+        void caller(void) {
+            int x = external_read();
+            if (!validate(x)) return;
+            unknown(&x);
+            sink(x);
+        }
+        """
+    )
+    cfg, facts, _ = _facts(ctx, "caller", _models())
+    assert facts.query_provenance("x", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
+    assert facts.query_validation_properties("x", _sink_node(cfg).node_id) == frozenset()
