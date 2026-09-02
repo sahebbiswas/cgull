@@ -68,11 +68,20 @@ class UnvalidatedExternalDataSinkRule(BaseRule):
             for violation in finding.violations:
                 required_names = ", ".join(sorted(prop.value for prop in violation.required))
                 missing_names = ", ".join(sorted(prop.value for prop in violation.missing))
-                evidence.append(
+                parts = [
                     f"arg:{violation.argument_index} '{violation.argument}' has provenance "
-                    f"{violation.provenance.value}; requires [{required_names}], "
-                    f"missing [{missing_names}]"
-                )
+                    f"{violation.provenance.value}",
+                    f"requires [{required_names}]",
+                    f"missing [{missing_names}]",
+                ]
+                if violation.known_sources:
+                    parts.append(f"source [{', '.join(violation.known_sources)}]")
+                if violation.observed_validators:
+                    parts.append(
+                        "validator observed but not guaranteed successful on every sink-reaching "
+                        f"path [{', '.join(violation.observed_validators)}]"
+                    )
+                evidence.append("; ".join(parts))
 
             snippet = (
                 source_lines[finding.line_number - 1]
