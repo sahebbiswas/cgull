@@ -40,6 +40,16 @@ class TestProjectMetadata(unittest.TestCase):
         self.assertIn("- os: windows-latest", content)
         self.assertIn('python-version: "3.10"', content)
 
+    def test_ci_corpus_coverage_gate_is_a_full_ratchet(self):
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"
+        content = workflow_path.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "# Coverage ratchet: keep this at achieved coverage and raise it whenever coverage grows.",
+            content,
+        )
+        self.assertIn("python tests/run_corpus.py --min-coverage 100.0", content)
+
     def test_gemini_review_skips_dependabot_pull_requests(self):
         workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "gemini-code-review.yml"
         content = workflow_path.read_text(encoding="utf-8")

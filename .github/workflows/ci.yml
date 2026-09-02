@@ -47,6 +47,7 @@ jobs:
 
       - name: Run Security Rule Behavioral Corpus
         run: |
+          # Coverage ratchet: keep this at achieved coverage and raise it whenever coverage grows.
           python tests/run_corpus.py --min-coverage 100.0
 
       - name: Run Interprocedural Regression Corpus
