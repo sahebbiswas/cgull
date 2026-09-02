@@ -34,6 +34,45 @@ def test_expanded_juliet_manifest_structure():
             assert set(oracle["expected_rules"]) <= CWE_RULE_MAP[tc["cwe"]]
 
 
+def test_extract_function_ranges_supports_non_void_return_types(tmp_path):
+    source = tmp_path / "returns.c"
+    source.write_text(
+        "int *pointer_return(void)\n"
+        "{\n"
+        "    return 0;\n"
+        "}\n"
+        "\n"
+        "static const char *qualified_pointer(void)\n"
+        "{\n"
+        "    return 0;\n"
+        "}\n"
+        "\n"
+        "unsigned long scalar_return(void)\n"
+        "{\n"
+        "    return 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    assert extract_function_line_ranges(str(source)) == {
+        "pointer_return": (1, 4),
+        "qualified_pointer": (6, 9),
+        "scalar_return": (11, 14),
+    }
+
+
+def test_cwe562_fixtures_use_pointer_return_types():
+    with open(MANIFEST_PATH, "r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+
+    for tc in (case for case in manifest["test_cases"] if case["cwe"] == "CWE-562"):
+        source_path = os.path.join(os.path.dirname(MANIFEST_PATH), tc["file"])
+        with open(source_path, "r", encoding="utf-8") as source_file:
+            source = source_file.read()
+        for oracle in tc["oracle"]:
+            assert f"int *{oracle['function']}(void)" in source
+
+
 def test_expanded_juliet_quality_gate():
     results = run_juliet_benchmark(MANIFEST_PATH, ci_only=True)
 
