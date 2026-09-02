@@ -69,7 +69,9 @@ class SecurityFunctionSummary:
     """Context-insensitive trust-boundary relationships for one function."""
 
     return_from_params: FrozenSet[int] = frozenset()
+    return_from_globals: FrozenSet[str] = frozenset()
     output_from_params: Tuple[Tuple[int, FrozenSet[int]], ...] = ()
+    output_from_globals: Tuple[Tuple[int, FrozenSet[str]], ...] = ()
     external_return: bool = False
     external_outputs: FrozenSet[int] = frozenset()
     validator_effects: Tuple[SecurityValidatorEffect, ...] = ()
@@ -77,6 +79,12 @@ class SecurityFunctionSummary:
 
     def output_dependencies(self, index: int) -> FrozenSet[int]:
         for output_index, deps in self.output_from_params:
+            if output_index == index:
+                return deps
+        return frozenset()
+
+    def output_global_dependencies(self, index: int) -> FrozenSet[str]:
+        for output_index, deps in self.output_from_globals:
             if output_index == index:
                 return deps
         return frozenset()
@@ -202,6 +210,7 @@ def analyze_security_summaries(
         for fn in getattr(ast_ctx, "functions", ())
         if getattr(fn, "name", None)
     }
+    global_names = frozenset(getattr(ast_ctx, "global_variables", {}).keys())
     summaries: Dict[str, SecurityFunctionSummary] = {
         name: SecurityFunctionSummary() for name in fn_map
     }
@@ -214,7 +223,7 @@ def analyze_security_summaries(
                 continue
             param_names = tuple(p.name for p in fn.parameters if p.name)
             new_summary = _summarize_function(
-                funcdef, param_names, summaries, semantic_models
+                funcdef, param_names, global_names, summaries, semantic_models
             )
             if new_summary != summaries[name]:
                 summaries[name] = new_summary
@@ -308,7 +317,7 @@ def _transfer_event(node, provenance, validations, registry, summaries) -> None:
             _apply_summary_call(call, summary, provenance, validations)
             continue
 
-        if not model.is_modeled and (call.is_indirect or not call.direct_callee):
+        if not model.is_modeled:
             if call.result_target:
                 target = _canonical_location(call.result_target)
                 provenance[target] = Provenance.UNKNOWN
@@ -324,11 +333,16 @@ def _apply_summary_call(call, summary, provenance, validations) -> None:
         value = Provenance.UNTRUSTED if summary.external_return else Provenance.UNKNOWN
         for index in summary.return_from_params:
             value = join_provenance(value, _actual_provenance(call, index, provenance))
+        for global_name in summary.return_from_globals:
+            value = join_provenance(
+                value, provenance.get(_canonical_location(global_name), Provenance.UNKNOWN)
+            )
         provenance[target] = value
         validations.pop(target, None)
 
     output_indexes = set(summary.external_outputs)
     output_indexes.update(index for index, _ in summary.output_from_params)
+    output_indexes.update(index for index, _ in summary.output_from_globals)
     for output_index in output_indexes:
         target = _actual_output_location(call, output_index)
         if target is None:
@@ -336,6 +350,10 @@ def _apply_summary_call(call, summary, provenance, validations) -> None:
         value = Provenance.UNTRUSTED if output_index in summary.external_outputs else Provenance.UNKNOWN
         for param_index in summary.output_dependencies(output_index):
             value = join_provenance(value, _actual_provenance(call, param_index, provenance))
+        for global_name in summary.output_global_dependencies(output_index):
+            value = join_provenance(
+                value, provenance.get(_canonical_location(global_name), Provenance.UNKNOWN)
+            )
         provenance[target] = value
         validations.pop(target, None)
 
@@ -410,6 +428,10 @@ def _expression_provenance(node, provenance, registry, summaries) -> Provenance:
                             value,
                             _expression_provenance(args[index], provenance, registry, summaries),
                         )
+                for global_name in summary.return_from_globals:
+                    value = join_provenance(
+                        value, provenance.get(_canonical_location(global_name), Provenance.UNKNOWN)
+                    )
                 return value
         return Provenance.UNKNOWN
     return Provenance.UNKNOWN
@@ -450,44 +472,58 @@ def _apply_validator_edge(node, successor_index, validations, registry, summarie
                 validations[target] = frozenset(props)
 
 
-def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFunctionSummary:
+def _summarize_function(funcdef, param_names, global_names, summaries, registry) -> SecurityFunctionSummary:
     return_deps: Set[int] = set()
+    return_globals: Set[str] = set()
     output_deps: Dict[int, Set[int]] = {}
+    output_globals: Dict[int, Set[str]] = {}
     external_return = False
     external_outputs: Set[int] = set()
     validator_effects: Set[SecurityValidatorEffect] = set()
     sink_requirements: Set[SecuritySinkRequirement] = set()
 
-    def param_deps(node) -> Set[int]:
+    def dependencies(node) -> Tuple[Set[int], Set[str]]:
         if node is None:
-            return set()
+            return set(), set()
         kind = type(node).__name__
         if kind == "ID":
+            name = str(node.name)
             try:
-                return {param_names.index(str(node.name))}
+                return {param_names.index(name)}, set()
             except ValueError:
-                return set()
+                return set(), ({name} if name in global_names else set())
         if kind == "Cast":
-            return param_deps(node.expr)
+            return dependencies(node.expr)
         if kind == "UnaryOp":
-            return param_deps(node.expr)
+            return dependencies(node.expr)
         if kind == "BinaryOp":
-            return param_deps(node.left) | param_deps(node.right)
+            lp, lg = dependencies(node.left)
+            rp, rg = dependencies(node.right)
+            return lp | rp, lg | rg
         if kind == "TernaryOp":
-            return param_deps(node.iftrue) | param_deps(node.iffalse)
+            tp, tg = dependencies(node.iftrue)
+            fp, fg = dependencies(node.iffalse)
+            return tp | fp, tg | fg
         if kind in {"StructRef", "ArrayRef"}:
-            return param_deps(node.name)
+            return dependencies(node.name)
         if kind == "FuncCall":
             callee = _direct_callee(node)
             summary = summaries.get(callee) if callee else None
             args = list(getattr(getattr(node, "args", None), "exprs", ()) or ())
-            deps: Set[int] = set()
+            params: Set[int] = set()
+            globals_: Set[str] = set()
             if summary is not None:
                 for index in summary.return_from_params:
                     if index < len(args):
-                        deps.update(param_deps(args[index]))
-            return deps
-        return set()
+                        p, g = dependencies(args[index])
+                        params.update(p)
+                        globals_.update(g)
+                globals_.update(summary.return_from_globals)
+            return params, globals_
+        return set(), set()
+
+    def param_deps(node) -> Set[int]:
+        return dependencies(node)[0]
 
     def returned_validator_effects(expr) -> Set[SecurityValidatorEffect]:
         effects: Set[SecurityValidatorEffect] = set()
@@ -521,7 +557,9 @@ def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFu
             kind = type(node).__name__
             if kind == "Return":
                 expr = getattr(node, "expr", None)
-                return_deps.update(param_deps(expr))
+                params, globals_ = dependencies(expr)
+                return_deps.update(params)
+                return_globals.update(globals_)
                 validator_effects.update(returned_validator_effects(expr))
                 if type(expr).__name__ == "FuncCall":
                     callee = _direct_callee(expr)
@@ -538,10 +576,12 @@ def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFu
                 lvalue = getattr(node, "lvalue", None)
                 if type(lvalue).__name__ == "UnaryOp" and getattr(lvalue, "op", None) == "*":
                     targets = param_deps(lvalue.expr)
-                    deps = param_deps(getattr(node, "rvalue", None))
+                    params, globals_ = dependencies(getattr(node, "rvalue", None))
                     for target_param in targets:
-                        if deps:
-                            output_deps.setdefault(target_param, set()).update(deps)
+                        if params:
+                            output_deps.setdefault(target_param, set()).update(params)
+                        if globals_:
+                            output_globals.setdefault(target_param, set()).update(globals_)
             if kind == "FuncCall":
                 self.visit_call(node)
             for _, child in node.children():
@@ -584,18 +624,31 @@ def _summarize_function(funcdef, param_names, summaries, registry) -> SecurityFu
                     continue
                 targets = param_deps(args[out_index])
                 for target_param in targets:
-                    mapped: Set[int] = set()
+                    mapped_params: Set[int] = set()
+                    mapped_globals: Set[str] = set()
                     for dep_index in deps:
                         if dep_index < len(args):
-                            mapped.update(param_deps(args[dep_index]))
-                    if mapped:
-                        output_deps.setdefault(target_param, set()).update(mapped)
+                            p, g = dependencies(args[dep_index])
+                            mapped_params.update(p)
+                            mapped_globals.update(g)
+                    if mapped_params:
+                        output_deps.setdefault(target_param, set()).update(mapped_params)
+                    if mapped_globals:
+                        output_globals.setdefault(target_param, set()).update(mapped_globals)
+            for out_index, globals_ in summary.output_from_globals:
+                if out_index < len(args):
+                    for target_param in param_deps(args[out_index]):
+                        output_globals.setdefault(target_param, set()).update(globals_)
 
     Visitor().visit(funcdef.body)
     return SecurityFunctionSummary(
         return_from_params=frozenset(return_deps),
+        return_from_globals=frozenset(return_globals),
         output_from_params=tuple(
             sorted((index, frozenset(deps)) for index, deps in output_deps.items())
+        ),
+        output_from_globals=tuple(
+            sorted((index, frozenset(deps)) for index, deps in output_globals.items())
         ),
         external_return=external_return,
         external_outputs=frozenset(external_outputs),
