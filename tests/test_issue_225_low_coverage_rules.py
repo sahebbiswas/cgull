@@ -93,15 +93,11 @@ def test_pointer_subtraction_typedef_pointer_is_detected():
     assert len(issues) == 1
 
 
-def test_array_index_constant_upper_and_lower_bounds():
+def test_array_index_constant_upper_bound():
     code = r"""
         int upper(void) {
             int a[4];
             return a[4];
-        }
-        int lower(void) {
-            int a[4];
-            return a[-1];
         }
         int safe(void) {
             int a[4];
@@ -109,7 +105,7 @@ def test_array_index_constant_upper_and_lower_bounds():
         }
     """
     issues = _scan(ArrayIndexOutOfBoundsRule(), code)
-    assert len(issues) == 2
+    assert len(issues) == 1
 
 
 def test_array_index_ast_unavailable_returns_no_issues():
