@@ -1,78 +1,18 @@
-from types import SimpleNamespace
-
-from pycparser import c_parser
-
+from benchmarks.security_fact_support import (
+    build_security_context,
+    build_security_models,
+)
 from cgull.cfg import build_cfg, find_function_def
 from cgull.cfg.security_dataflow import (
     Provenance,
     analyze_security_dataflow,
     analyze_security_summaries,
 )
-from cgull.semantic_models import (
-    SemanticLocation,
-    SemanticLocationKind,
-    SemanticModelRegistry,
-    SinkModel,
-    SinkRequirement,
-    SourceModel,
-    SuccessCondition,
-    SuccessConditionKind,
-    ValidationProperty,
-    ValidatorModel,
-)
+from cgull.semantic_models import ValidationProperty
 
 
-def _ctx(code):
-    ast = c_parser.CParser().parse(code)
-    functions = []
-    globals_ = {}
-    for ext in ast.ext:
-        if type(ext).__name__ == "FuncDef":
-            params = []
-            decl_args = getattr(getattr(ext.decl, "type", None), "args", None)
-            for param in list(getattr(decl_args, "params", ()) or ()):
-                name = getattr(param, "name", None)
-                if name:
-                    params.append(SimpleNamespace(name=name))
-            functions.append(SimpleNamespace(name=ext.decl.name, parameters=params))
-        elif type(ext).__name__ == "Decl" and type(getattr(ext, "type", None)).__name__ != "FuncDecl":
-            if getattr(ext, "name", None):
-                globals_[ext.name] = SimpleNamespace(name=ext.name)
-    return SimpleNamespace(
-        has_pycparser=True,
-        pycparser_ast=ast,
-        functions=functions,
-        global_variables=globals_,
-        line_map=None,
-    )
-
-
-def _models():
-    arg0 = SemanticLocation(SemanticLocationKind.ARGUMENT, 0)
-    return SemanticModelRegistry(
-        sources={
-            "external_read": SourceModel(
-                "external_read", (SemanticLocation(SemanticLocationKind.RETURN),)
-            ),
-            "external_out": SourceModel(
-                "external_out", (SemanticLocation(SemanticLocationKind.OUTPUT_ARGUMENT, 0),)
-            ),
-        },
-        validators={
-            "validate": ValidatorModel(
-                "validate",
-                arg0,
-                ValidationProperty.BOUNDS_CHECKED,
-                SuccessCondition(SuccessConditionKind.RETURN_NONZERO),
-            )
-        },
-        sinks={
-            "sink": SinkModel(
-                "sink",
-                (SinkRequirement(arg0, frozenset({ValidationProperty.BOUNDS_CHECKED})),),
-            )
-        },
-    )
+_ctx = build_security_context
+_models = build_security_models
 
 
 def _facts(ctx, function, models):
@@ -162,6 +102,27 @@ def test_global_provenance_is_preserved_through_return_wrapper():
     cfg, facts, summaries = _facts(ctx, "caller", _models())
     assert summaries["read_global"].return_from_globals == frozenset({"global_value"})
     assert facts.query_provenance("x", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
+
+
+def test_direct_global_write_from_parameter_is_propagated_to_caller():
+    ctx = _ctx(
+        r"""
+        int global_value;
+        int external_read(void);
+        void sink(int);
+        void store_global(int value) { global_value = value; }
+        void store_wrapper(int value) { store_global(value); }
+        void caller(void) {
+            int x = external_read();
+            store_wrapper(x);
+            sink(global_value);
+        }
+        """
+    )
+    cfg, facts, summaries = _facts(ctx, "caller", _models())
+    assert summaries["store_global"].global_dependencies("global_value") == frozenset({0})
+    assert summaries["store_wrapper"].global_dependencies("global_value") == frozenset({0})
+    assert facts.query_provenance("global_value", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
 
 
 def test_checked_validator_helper_establishes_validation():
