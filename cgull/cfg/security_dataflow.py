@@ -72,8 +72,11 @@ class SecurityFunctionSummary:
     return_from_globals: FrozenSet[str] = frozenset()
     output_from_params: Tuple[Tuple[int, FrozenSet[int]], ...] = ()
     output_from_globals: Tuple[Tuple[int, FrozenSet[str]], ...] = ()
+    global_from_params: Tuple[Tuple[str, FrozenSet[int]], ...] = ()
+    global_from_globals: Tuple[Tuple[str, FrozenSet[str]], ...] = ()
     external_return: bool = False
     external_outputs: FrozenSet[int] = frozenset()
+    external_globals: FrozenSet[str] = frozenset()
     validator_effects: Tuple[SecurityValidatorEffect, ...] = ()
     sink_requirements: Tuple[SecuritySinkRequirement, ...] = ()
 
@@ -86,6 +89,18 @@ class SecurityFunctionSummary:
     def output_global_dependencies(self, index: int) -> FrozenSet[str]:
         for output_index, deps in self.output_from_globals:
             if output_index == index:
+                return deps
+        return frozenset()
+
+    def global_dependencies(self, name: str) -> FrozenSet[int]:
+        for global_name, deps in self.global_from_params:
+            if global_name == name:
+                return deps
+        return frozenset()
+
+    def global_global_dependencies(self, name: str) -> FrozenSet[str]:
+        for global_name, deps in self.global_from_globals:
+            if global_name == name:
                 return deps
         return frozenset()
 
@@ -210,6 +225,9 @@ def analyze_security_summaries(
         for fn in getattr(ast_ctx, "functions", ())
         if getattr(fn, "name", None)
     }
+    funcdef_map = {
+        name: find_function_def(ast_ctx.pycparser_ast, name) for name in fn_map
+    }
     global_names = frozenset(getattr(ast_ctx, "global_variables", {}).keys())
     summaries: Dict[str, SecurityFunctionSummary] = {
         name: SecurityFunctionSummary() for name in fn_map
@@ -218,7 +236,7 @@ def analyze_security_summaries(
     for _ in range(max_iters):
         changed = False
         for name, fn in fn_map.items():
-            funcdef = find_function_def(ast_ctx.pycparser_ast, name)
+            funcdef = funcdef_map.get(name)
             if funcdef is None:
                 continue
             param_names = tuple(p.name for p in fn.parameters if p.name)
@@ -357,6 +375,25 @@ def _apply_summary_call(call, summary, provenance, validations) -> None:
         provenance[target] = value
         validations.pop(target, None)
 
+    global_targets = set(summary.external_globals)
+    global_targets.update(name for name, _ in summary.global_from_params)
+    global_targets.update(name for name, _ in summary.global_from_globals)
+    for global_name in global_targets:
+        target = _canonical_location(global_name)
+        value = (
+            Provenance.UNTRUSTED
+            if global_name in summary.external_globals
+            else Provenance.UNKNOWN
+        )
+        for param_index in summary.global_dependencies(global_name):
+            value = join_provenance(value, _actual_provenance(call, param_index, provenance))
+        for dependency in summary.global_global_dependencies(global_name):
+            value = join_provenance(
+                value, provenance.get(_canonical_location(dependency), Provenance.UNKNOWN)
+            )
+        provenance[target] = value
+        validations.pop(target, None)
+
 
 def _actual_provenance(call, index, provenance) -> Provenance:
     if index >= len(call.actual_arguments):
@@ -477,8 +514,11 @@ def _summarize_function(funcdef, param_names, global_names, summaries, registry)
     return_globals: Set[str] = set()
     output_deps: Dict[int, Set[int]] = {}
     output_globals: Dict[int, Set[str]] = {}
+    global_deps: Dict[str, Set[int]] = {}
+    global_globals: Dict[str, Set[str]] = {}
     external_return = False
     external_outputs: Set[int] = set()
+    external_globals: Set[str] = set()
     validator_effects: Set[SecurityValidatorEffect] = set()
     sink_requirements: Set[SecuritySinkRequirement] = set()
 
@@ -525,6 +565,31 @@ def _summarize_function(funcdef, param_names, global_names, summaries, registry)
     def param_deps(node) -> Set[int]:
         return dependencies(node)[0]
 
+    def is_external_expression(node) -> bool:
+        if node is None:
+            return False
+        kind = type(node).__name__
+        if kind == "Cast":
+            return is_external_expression(node.expr)
+        if kind == "FuncCall":
+            callee = _direct_callee(node)
+            if not callee:
+                return False
+            model = registry.for_function(callee)
+            if model.source is not None and any(
+                loc.kind is SemanticLocationKind.RETURN for loc in model.source.outputs
+            ):
+                return True
+            summary = summaries.get(callee)
+            return bool(summary and summary.external_return)
+        if kind == "BinaryOp":
+            return is_external_expression(node.left) or is_external_expression(node.right)
+        if kind == "TernaryOp":
+            return is_external_expression(node.iftrue) or is_external_expression(node.iffalse)
+        if kind == "UnaryOp":
+            return is_external_expression(node.expr)
+        return False
+
     def returned_validator_effects(expr) -> Set[SecurityValidatorEffect]:
         effects: Set[SecurityValidatorEffect] = set()
         if type(expr).__name__ != "FuncCall":
@@ -561,27 +626,28 @@ def _summarize_function(funcdef, param_names, global_names, summaries, registry)
                 return_deps.update(params)
                 return_globals.update(globals_)
                 validator_effects.update(returned_validator_effects(expr))
-                if type(expr).__name__ == "FuncCall":
-                    callee = _direct_callee(expr)
-                    if callee:
-                        model = registry.for_function(callee)
-                        summary = summaries.get(callee)
-                        if model.source is not None and any(
-                            loc.kind is SemanticLocationKind.RETURN for loc in model.source.outputs
-                        ):
-                            external_return = True
-                        if summary is not None and summary.external_return:
-                            external_return = True
+                if is_external_expression(expr):
+                    external_return = True
             elif kind == "Assignment":
                 lvalue = getattr(node, "lvalue", None)
+                rvalue = getattr(node, "rvalue", None)
                 if type(lvalue).__name__ == "UnaryOp" and getattr(lvalue, "op", None) == "*":
                     targets = param_deps(lvalue.expr)
-                    params, globals_ = dependencies(getattr(node, "rvalue", None))
+                    params, globals_ = dependencies(rvalue)
                     for target_param in targets:
                         if params:
                             output_deps.setdefault(target_param, set()).update(params)
                         if globals_:
                             output_globals.setdefault(target_param, set()).update(globals_)
+                elif type(lvalue).__name__ == "ID" and str(lvalue.name) in global_names:
+                    target_global = str(lvalue.name)
+                    params, globals_ = dependencies(rvalue)
+                    if params:
+                        global_deps.setdefault(target_global, set()).update(params)
+                    if globals_:
+                        global_globals.setdefault(target_global, set()).update(globals_)
+                    if is_external_expression(rvalue):
+                        external_globals.add(target_global)
             if kind == "FuncCall":
                 self.visit_call(node)
             for _, child in node.children():
@@ -640,6 +706,22 @@ def _summarize_function(funcdef, param_names, global_names, summaries, registry)
                     for target_param in param_deps(args[out_index]):
                         output_globals.setdefault(target_param, set()).update(globals_)
 
+            external_globals.update(summary.external_globals)
+            for target_global, deps in summary.global_from_params:
+                mapped_params: Set[int] = set()
+                mapped_globals: Set[str] = set()
+                for dep_index in deps:
+                    if dep_index < len(args):
+                        p, g = dependencies(args[dep_index])
+                        mapped_params.update(p)
+                        mapped_globals.update(g)
+                if mapped_params:
+                    global_deps.setdefault(target_global, set()).update(mapped_params)
+                if mapped_globals:
+                    global_globals.setdefault(target_global, set()).update(mapped_globals)
+            for target_global, globals_ in summary.global_from_globals:
+                global_globals.setdefault(target_global, set()).update(globals_)
+
     Visitor().visit(funcdef.body)
     return SecurityFunctionSummary(
         return_from_params=frozenset(return_deps),
@@ -650,10 +732,35 @@ def _summarize_function(funcdef, param_names, global_names, summaries, registry)
         output_from_globals=tuple(
             sorted((index, frozenset(deps)) for index, deps in output_globals.items())
         ),
+        global_from_params=tuple(
+            sorted((name, frozenset(deps)) for name, deps in global_deps.items())
+        ),
+        global_from_globals=tuple(
+            sorted((name, frozenset(deps)) for name, deps in global_globals.items())
+        ),
         external_return=external_return,
         external_outputs=frozenset(external_outputs),
-        validator_effects=tuple(sorted(validator_effects, key=lambda e: (e.parameter_index, e.property.value, e.success.kind.value, e.success.value or 0))),
-        sink_requirements=tuple(sorted(sink_requirements, key=lambda r: (r.parameter_index, tuple(sorted(p.value for p in r.properties))))),
+        external_globals=frozenset(external_globals),
+        validator_effects=tuple(
+            sorted(
+                validator_effects,
+                key=lambda e: (
+                    e.parameter_index,
+                    e.property.value,
+                    e.success.kind.value,
+                    e.success.value or 0,
+                ),
+            )
+        ),
+        sink_requirements=tuple(
+            sorted(
+                sink_requirements,
+                key=lambda r: (
+                    r.parameter_index,
+                    tuple(sorted(p.value for p in r.properties)),
+                ),
+            )
+        ),
     )
 
 
