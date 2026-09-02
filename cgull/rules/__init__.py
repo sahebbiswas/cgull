@@ -60,6 +60,7 @@ from .misra_and_style import (
     VariableShadowingRule,
     MissingInclusionGuardRule,
 )
+from .trust_boundary import UnvalidatedExternalDataSinkRule
 
 ALL_RULES: List[Type[BaseRule]] = [
     # High Impact
@@ -91,6 +92,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     MemcpyStructMemberOverflowRule,
     ToctouFileAccessRule,
     StrncpyNullTerminationRule,
+    UnvalidatedExternalDataSinkRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     NakedControlFlowStatementsRule,

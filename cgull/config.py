@@ -48,7 +48,7 @@ class CGullConfig:
 
     def apply_to_rules(self, rules: List[BaseRule]) -> List[BaseRule]:
         """
-        Filters skipped rules, applies severity overrides, and sets extra function synonyms.
+        Filters skipped rules, applies severity overrides, and sets configured rule inputs.
         """
         filtered_rules: List[BaseRule] = []
 
@@ -72,6 +72,9 @@ class CGullConfig:
 
             if hasattr(rule, "add_extra_dealloc_funcs") and self.dealloc_funcs:
                 rule.add_extra_dealloc_funcs(self.dealloc_funcs)
+
+            if hasattr(rule, "set_semantic_models"):
+                rule.set_semantic_models(self.semantic_models)
 
             filtered_rules.append(rule)
 

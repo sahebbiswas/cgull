@@ -3,7 +3,8 @@
 Independent Security Rule Behavioral Corpus Runner.
 
 Scans C files in `tests/rules/CGULL-xxx/` and verifies that scanner findings
-match exact line annotations (`// expect: CGULL-xxx`).
+match exact line annotations (`// expect: CGULL-xxx`). A rule directory may
+include a `.cgull.toml` file when its behavior depends on project configuration.
 
 Usage:
     python3 tests/run_corpus.py [--rule CGULL-003] [--verbose]
@@ -20,6 +21,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from cgull.config import load_config
 from cgull.engine import CGullScanner
 from cgull.rules import get_rule_by_id, RULE_REGISTRY
 from cgull.models import AnalysisEngine, Issue
@@ -92,6 +94,22 @@ def run_corpus_scan(
             continue
 
         rule_instance = get_rule_by_id(rule_id)
+        rule_config_path = os.path.join(rule_dir, ".cgull.toml")
+        if os.path.isfile(rule_config_path):
+            rule_config = load_config(config_path=rule_config_path, target_path=rule_dir)
+            if rule_config.error:
+                msg = f"  FAIL: {rule_id} corpus configuration is invalid: {rule_config.error}"
+                failures.append(msg)
+                log_lines.append(msg)
+                continue
+            configured_rules = rule_config.apply_to_rules([rule_instance])
+            if not configured_rules:
+                msg = f"  FAIL: {rule_id} corpus configuration disables the rule under test."
+                failures.append(msg)
+                log_lines.append(msg)
+                continue
+            rule_instance = configured_rules[0]
+
         scanner = CGullScanner(rules=[rule_instance], engine_mode=AnalysisEngine.HYBRID)
 
         c_files = [
