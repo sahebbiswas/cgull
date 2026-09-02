@@ -6,16 +6,10 @@ from typing import List
 
 from .base import BaseRule
 from ..ast_analyzer import CASTContext
-from ..cfg import build_cfg, find_function_def
-from ..cfg.security_dataflow import (
-    Provenance,
-    analyze_security_dataflow,
-    analyze_security_summaries,
-)
+from ..cfg.security_queries import query_unvalidated_sink_flows
 from ..models import AnalysisEngine, Confidence, Issue, RuleCategory, Severity
 from ..semantic_models import (
     EMPTY_SEMANTIC_MODELS,
-    SemanticLocationKind,
     SemanticModelRegistry,
     TUAnalysisSession,
 )
@@ -65,86 +59,40 @@ class UnvalidatedExternalDataSinkRule(BaseRule):
             return []
 
         session = TUAnalysisSession(ast_ctx, self._semantic_models)
-        registry = session.semantic_models
-        if not registry.sinks:
-            return []
-
-        summaries = analyze_security_summaries(ast_ctx, registry)
+        findings = query_unvalidated_sink_flows(ast_ctx, session.semantic_models)
+        source_lines = getattr(ast_ctx, "source_lines", ())
         issues: List[Issue] = []
 
-        for fn in getattr(ast_ctx, "functions", ()):
-            function_name = getattr(fn, "name", None)
-            if not function_name:
-                continue
-            funcdef = find_function_def(ast_ctx.pycparser_ast, function_name)
-            if funcdef is None:
-                continue
+        for finding in findings:
+            evidence = []
+            for violation in finding.violations:
+                required_names = ", ".join(sorted(prop.value for prop in violation.required))
+                missing_names = ", ".join(sorted(prop.value for prop in violation.missing))
+                evidence.append(
+                    f"arg:{violation.argument_index} '{violation.argument}' has provenance "
+                    f"{violation.provenance.value}; requires [{required_names}], "
+                    f"missing [{missing_names}]"
+                )
 
-            cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
-            facts = analyze_security_dataflow(cfg, registry, summaries)
-
-            for node in cfg.nodes.values():
-                for call in getattr(node, "calls", ()):
-                    sink = registry.sink_for(call)
-                    if sink is None:
-                        continue
-
-                    missing_evidence = []
-                    has_unknown = False
-                    for requirement in sink.requirements:
-                        index = requirement.location.argument_index
-                        if requirement.location.kind not in {
-                            SemanticLocationKind.ARGUMENT,
-                            SemanticLocationKind.OUTPUT_ARGUMENT,
-                        } or index is None or index >= len(call.actual_arguments):
-                            continue
-
-                        location = call.actual_arguments[index].lstrip("& ")
-                        provenance = facts.query_provenance(location, node.node_id)
-                        validations = facts.query_validation_properties(location, node.node_id)
-                        missing = frozenset(requirement.properties - validations)
-                        if not missing:
-                            continue
-                        if provenance is Provenance.TRUSTED:
-                            continue
-                        if provenance is Provenance.UNKNOWN:
-                            has_unknown = True
-
-                        missing_names = ", ".join(sorted(prop.value for prop in missing))
-                        required_names = ", ".join(
-                            sorted(prop.value for prop in requirement.properties)
-                        )
-                        missing_evidence.append(
-                            f"arg:{index} '{call.actual_arguments[index]}' has provenance "
-                            f"{provenance.value}; requires [{required_names}], missing [{missing_names}]"
-                        )
-
-                    if not missing_evidence:
-                        continue
-
-                    sink_name = call.direct_callee or call.callee_expression or "sensitive sink"
-                    line_number = getattr(node, "line_number", 1) or 1
-                    source_lines = getattr(ast_ctx, "source_lines", ())
-                    snippet = (
-                        source_lines[line_number - 1]
-                        if 0 < line_number <= len(source_lines)
-                        else getattr(node, "expr_str", "")
-                    )
-                    message = (
-                        f"Security-sensitive sink '{sink_name}' is reachable without all required "
-                        f"validation: {'; '.join(missing_evidence)}. "
-                        "Validation facts are must-properties, so a property established only on "
-                        "some paths does not satisfy the sink requirement."
-                    )
-                    issue = self.create_issue(
-                        file_path=file_path,
-                        line_number=line_number,
-                        code_snippet=snippet,
-                        message=message,
-                        engine="AST-CFG",
-                    )
-                    if has_unknown:
-                        issue.confidence = Confidence.LIMITED
-                    issues.append(issue)
+            snippet = (
+                source_lines[finding.line_number - 1]
+                if 0 < finding.line_number <= len(source_lines)
+                else finding.expression
+            )
+            message = (
+                f"Security-sensitive sink '{finding.sink_name}' is reachable without all required "
+                f"validation: {'; '.join(evidence)}. Validation facts are must-properties, so a "
+                "property established only on some paths does not satisfy the sink requirement."
+            )
+            issue = self.create_issue(
+                file_path=file_path,
+                line_number=finding.line_number,
+                code_snippet=snippet,
+                message=message,
+                engine="AST-CFG",
+            )
+            if finding.degraded:
+                issue.confidence = Confidence.LIMITED
+            issues.append(issue)
 
         return issues
