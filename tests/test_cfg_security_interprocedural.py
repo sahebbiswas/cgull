@@ -122,6 +122,25 @@ def test_output_parameter_wrapper_preserves_external_provenance():
     assert facts.query_provenance("x", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
 
 
+def test_direct_output_parameter_dependency_is_substituted_at_call_site():
+    ctx = _ctx(
+        r"""
+        int external_read(void);
+        void sink(int);
+        void copy_out(int *out, int value) { *out = value; }
+        void caller(void) {
+            int x = external_read();
+            int y = 0;
+            copy_out(&y, x);
+            sink(y);
+        }
+        """
+    )
+    cfg, facts, summaries = _facts(ctx, "caller", _models())
+    assert summaries["copy_out"].output_dependencies(0) == frozenset({1})
+    assert facts.query_provenance("y", _sink_node(cfg).node_id) is Provenance.UNTRUSTED
+
+
 def test_checked_validator_helper_establishes_validation():
     ctx = _ctx(
         r"""
@@ -158,6 +177,28 @@ def test_ignored_validator_helper_return_does_not_validate():
         """
     )
     cfg, facts, _ = _facts(ctx, "caller", _models())
+    assert facts.query_validation_properties("x", _sink_node(cfg).node_id) == frozenset()
+
+
+def test_helper_that_discards_validator_result_cannot_manufacture_validation():
+    ctx = _ctx(
+        r"""
+        int external_read(void);
+        int validate(int);
+        void sink(int);
+        int bad_check(int x) {
+            validate(x);
+            return 1;
+        }
+        void caller(void) {
+            int x = external_read();
+            if (!bad_check(x)) return;
+            sink(x);
+        }
+        """
+    )
+    cfg, facts, summaries = _facts(ctx, "caller", _models())
+    assert summaries["bad_check"].validator_effects == ()
     assert facts.query_validation_properties("x", _sink_node(cfg).node_id) == frozenset()
 
 
