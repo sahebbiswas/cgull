@@ -37,6 +37,38 @@ def _get_condition_tag(issue: Any) -> str:
     return f"[{', '.join(tags)}]"
 
 
+def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
+    """Build a SARIF 2.1.0 fix for a mechanically safe issue replacement."""
+    if issue.fix_type != FixType.SAFE_FIX or not issue.auto_fix_replacement:
+        return None
+
+    snippet_lines = issue.code_snippet.splitlines() or [""]
+    start_line = max(1, issue.line_number)
+    start_column = max(1, issue.column_number)
+    deleted_region: Dict[str, Any] = {
+        "startLine": start_line,
+        "startColumn": start_column,
+    }
+
+    if len(snippet_lines) == 1:
+        deleted_region["endLine"] = start_line
+        deleted_region["endColumn"] = start_column + len(snippet_lines[0])
+    else:
+        deleted_region["endLine"] = start_line + len(snippet_lines) - 1
+        deleted_region["endColumn"] = len(snippet_lines[-1]) + 1
+
+    return {
+        "description": {"text": "Apply C-GULL mechanically safe fix"},
+        "artifactChanges": [{
+            "artifactLocation": {"uri": issue.file_path.replace("\\", "/")},
+            "replacements": [{
+                "deletedRegion": deleted_region,
+                "insertedContent": {"text": issue.auto_fix_replacement},
+            }],
+        }],
+    }
+
+
 class ReportGenerator:
     """
     Formats ScanResult into various standard security reporting formats.
@@ -95,7 +127,7 @@ class ReportGenerator:
             if issue.confidence:
                 props["confidence"] = issue.confidence.value if hasattr(issue.confidence, "value") else str(issue.confidence)
 
-            results_list.append({
+            sarif_result: Dict[str, Any] = {
                 "ruleId": issue.rule_id,
                 "level": level,
                 "message": {"text": issue.message},
@@ -113,7 +145,11 @@ class ReportGenerator:
                 "partialFingerprints": {
                     "cgullFingerprint/v1": issue.fingerprint
                 } if issue.fingerprint else {}
-            })
+            }
+            sarif_fix = _sarif_fix_for_issue(issue)
+            if sarif_fix is not None:
+                sarif_result["fixes"] = [sarif_fix]
+            results_list.append(sarif_result)
 
         disc = result.files_discovered or (result.scanned_files_count + len(result.ignored_paths) + len(result.failed_paths))
         analyzed = result.files_analyzed or result.scanned_files_count
