@@ -1,3 +1,5 @@
+import cgull.cfg as cfg_api
+
 from cgull.cfg.call_graph import CallGraphFunction, build_call_graph
 from cgull.cfg.dataflow import StructuredCFG
 from cgull.cfg.fixed_point import FiniteLattice, FixedPointConfig, SCCFixedPointEngine
@@ -30,6 +32,20 @@ def _function(name, *callees):
         calls=tuple(_call(callee) for callee in callees),
     )
     return CallGraphFunction(name=name, cfg=cfg)
+
+
+def test_fixed_point_star_export_does_not_leak_implementation_imports():
+    for leaked_name in ("ABC", "abstractmethod", "dataclass", "Generic", "Mapping", "Optional", "Tuple", "TypeVar"):
+        assert leaked_name not in cfg_api.__all__
+
+    for public_name in (
+        "FiniteLattice",
+        "FixedPointConfig",
+        "FixedPointDiagnostic",
+        "FixedPointResult",
+        "SCCFixedPointEngine",
+    ):
+        assert public_name in cfg_api.__all__
 
 
 def test_self_recursive_scc_converges_to_fixed_point():
