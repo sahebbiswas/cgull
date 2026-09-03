@@ -1,9 +1,8 @@
 """Declarative call-effect models shared by CFG analyses.
 
-The model deliberately describes effects rather than rule policy.  Built-ins
-cover the C/POSIX functions that were historically hard-coded by CFG summary
-logic; projects may override a built-in by supplying a model for the same
-function name.
+The model deliberately describes effects rather than rule policy. Built-ins
+cover C/POSIX functions historically hard-coded by CFG summary logic; project
+models replace built-ins by function name.
 """
 
 from __future__ import annotations
@@ -41,8 +40,6 @@ class CallEffectModel:
         for data_index, size_index in self.size_relationships:
             indexes.add(data_index)
             indexes.add(size_index)
-            if data_index == size_index:
-                raise ValueError("size relationship cannot use the same argument for data and size")
         if any(isinstance(index, bool) or not isinstance(index, int) or index < 0 for index in indexes):
             raise ValueError("argument positions must be non-negative integers")
         contradictory = self.deallocates & self.output_parameters
@@ -67,7 +64,6 @@ class CallEffectRegistry:
         return self.effects.get(function) if function else None
 
     def merged(self, overrides: Mapping[str, CallEffectModel]) -> "CallEffectRegistry":
-        """Return built-ins plus project models, with project entries replacing by name."""
         merged = dict(self.effects)
         merged.update(overrides)
         return CallEffectRegistry(effects=dict(sorted(merged.items())))
@@ -77,9 +73,6 @@ def _effect(function: str, **kwargs) -> CallEffectModel:
     return CallEffectModel(function=function, **kwargs)
 
 
-# Standard C/POSIX behavior that was previously spread across rule/summary
-# implementation details.  These models are always available and project
-# configuration may replace an entry by function name.
 _BUILTIN_EFFECTS = {
     model.function: model
     for model in (
@@ -108,12 +101,7 @@ BUILTIN_CALL_EFFECTS = CallEffectRegistry(effects=dict(sorted(_BUILTIN_EFFECTS.i
 
 
 def parse_call_effects(raw: object) -> CallEffectRegistry:
-    """Parse project call-effect overrides and merge them over built-ins.
-
-    ``raw`` must be an array of tables.  Supported keys are ``function``,
-    ``returns``, ``deallocates``, ``outputs``, ``format_argument``,
-    ``size_relationships`` and ``sanitizes``.
-    """
+    """Parse project overrides and merge them over the built-in registry."""
     if raw in (None, []):
         return BUILTIN_CALL_EFFECTS
     if not isinstance(raw, list):
@@ -153,10 +141,9 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
             for pair in relationships_raw:
                 if not isinstance(pair, list) or len(pair) != 2:
                     raise ValueError("size_relationships entries must be [data_arg, size_arg] pairs")
-                data_index, size_index = pair
                 if any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in pair):
                     raise ValueError("size_relationship argument positions must be non-negative integers")
-                relationships.append((data_index, size_index))
+                relationships.append((pair[0], pair[1]))
             overrides[function] = CallEffectModel(
                 function=function,
                 return_effect=returns,
