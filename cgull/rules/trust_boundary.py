@@ -6,13 +6,8 @@ from typing import List
 
 from .base import BaseRule
 from ..ast_analyzer import CASTContext
-from ..cfg.security_queries import query_unvalidated_sink_flows
 from ..models import AnalysisEngine, Confidence, Issue, RuleCategory, Severity
-from ..semantic_models import (
-    EMPTY_SEMANTIC_MODELS,
-    SemanticModelRegistry,
-    TUAnalysisSession,
-)
+from ..semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
 
 
 class UnvalidatedExternalDataSinkRule(BaseRule):
@@ -58,8 +53,8 @@ class UnvalidatedExternalDataSinkRule(BaseRule):
         if not getattr(ast_ctx, "has_pycparser", False) or getattr(ast_ctx, "pycparser_ast", None) is None:
             return []
 
-        session = TUAnalysisSession(ast_ctx, self._semantic_models)
-        findings = query_unvalidated_sink_flows(ast_ctx, session.semantic_models)
+        session = self.get_analysis_session(ast_ctx)
+        findings = session.queries.unvalidated_sink_flows()
         source_lines = getattr(ast_ctx, "source_lines", ())
         issues: List[Issue] = []
 
