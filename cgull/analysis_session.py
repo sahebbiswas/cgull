@@ -2,28 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Dict
 
 from .semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
-
-
-ConfigurationIdentity = Tuple[Tuple[str, str], ...]
-
-
-def configuration_identity(defined_syms: Optional[Dict[str, Any]]) -> ConfigurationIdentity:
-    """Return a deterministic identity for one preprocessor configuration."""
-    if not defined_syms:
-        return ()
-    return tuple(sorted((str(name), repr(value)) for name, value in defined_syms.items()))
-
-
-def semantic_models_from_rules(rules: Iterable[object]) -> SemanticModelRegistry:
-    """Recover the immutable semantic registry already configured on AST rules."""
-    for rule in rules:
-        registry = getattr(rule, "_semantic_models", None)
-        if isinstance(registry, SemanticModelRegistry):
-            return registry
-    return EMPTY_SEMANTIC_MODELS
 
 
 class AnalysisQueries:
@@ -51,6 +32,9 @@ class AnalysisSession:
     Expensive domains are created only when requested. The session is attached to
     the existing ``CASTContext`` so AST rules can share it without changing the
     long-standing ``scan_ast(file_path, ast_ctx)`` extension signature.
+
+    Configuration-profile isolation is provided by the scan pipeline: each profile
+    is parsed into a distinct ``CASTContext``, and therefore owns a distinct session.
     """
 
     def __init__(
@@ -58,7 +42,6 @@ class AnalysisSession:
         ast_context: object,
         *,
         semantic_models: SemanticModelRegistry = EMPTY_SEMANTIC_MODELS,
-        configuration: ConfigurationIdentity = (),
     ) -> None:
         self.ast_context = ast_context
         self.semantic_models = (
@@ -66,7 +49,6 @@ class AnalysisSession:
             if isinstance(semantic_models, SemanticModelRegistry)
             else EMPTY_SEMANTIC_MODELS
         )
-        self.configuration_identity = tuple(configuration)
         self._call_graph = None
         self._function_summaries = None
         self._summary_construction_count = 0
@@ -103,24 +85,27 @@ def analysis_session_for(
     ast_context: object,
     *,
     semantic_models: SemanticModelRegistry = EMPTY_SEMANTIC_MODELS,
-    configuration: ConfigurationIdentity = (),
 ) -> AnalysisSession:
-    """Return the context's shared session, creating one when first requested."""
+    """Return the context's shared session, rejecting incompatible model registries."""
     existing = getattr(ast_context, "analysis_session", None)
     if isinstance(existing, AnalysisSession):
-        if (
-            existing.semantic_models is EMPTY_SEMANTIC_MODELS
-            and isinstance(semantic_models, SemanticModelRegistry)
-            and semantic_models is not EMPTY_SEMANTIC_MODELS
+        requested = (
+            semantic_models
+            if isinstance(semantic_models, SemanticModelRegistry)
+            else EMPTY_SEMANTIC_MODELS
+        )
+        if existing.semantic_models is EMPTY_SEMANTIC_MODELS and requested is not EMPTY_SEMANTIC_MODELS:
+            existing.semantic_models = requested
+        elif (
+            requested is not EMPTY_SEMANTIC_MODELS
+            and existing.semantic_models is not EMPTY_SEMANTIC_MODELS
+            and requested != existing.semantic_models
         ):
-            existing.semantic_models = semantic_models
-        if not existing.configuration_identity and configuration:
-            existing.configuration_identity = tuple(configuration)
+            raise ValueError(
+                "AST rules sharing one analysis session must use the same semantic model registry"
+            )
         return existing
-    session = AnalysisSession(
-        ast_context,
-        semantic_models=semantic_models,
-        configuration=configuration,
-    )
+
+    session = AnalysisSession(ast_context, semantic_models=semantic_models)
     setattr(ast_context, "analysis_session", session)
     return session
