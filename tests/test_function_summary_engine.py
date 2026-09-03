@@ -81,6 +81,27 @@ def test_mutually_recursive_allocation_summary_converges():
     assert ("a", "b") in result.iterations_by_scc
 
 
+def test_mutual_recursion_refines_transient_unknown_return_nullness():
+    ctx = _parse(
+        """
+        void *f(int c);
+        void *g(void) { return f(0); }
+        void *f(int c) {
+            if (c) return 0;
+            return g();
+        }
+        """
+    )
+
+    result = analyze_function_summaries_detailed(ctx)
+
+    assert result.summaries["f"].return_nullness == Nullness.NULL
+    assert result.summaries["g"].return_nullness == Nullness.NULL
+    assert result.summaries["f"].is_unknown is False
+    assert result.summaries["g"].is_unknown is False
+    assert result.diagnostics == ()
+
+
 def test_forced_summary_limit_returns_conservative_unknown_and_diagnostic():
     ctx = _parse(
         """
