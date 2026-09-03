@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Dict, Mapping, Optional, Tuple
 
 from pycparser import c_parser
@@ -23,6 +24,9 @@ from .value_facts import (
     _transfer_event,
     analyze_value_summaries_detailed,
 )
+
+
+_ACTUAL_PARSER = c_parser.CParser()
 
 
 @dataclass(frozen=True)
@@ -253,16 +257,18 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
     )
 
 
+@lru_cache(maxsize=4096)
 def _parse_actual_expression(text: str):
     """Parse one CFG actual argument back into an expression AST.
 
     CFG call metadata intentionally stores stable source spellings.  Re-parsing
     just the actual expression lets caller-to-formal propagation reuse the same
     semantic-model and summary-aware evaluator as ordinary assignments, rather
-    than treating call expressions as variable names.
+    than treating call expressions as variable names. Parsed ASTs are immutable
+    for this analysis and cached by their deterministic source spelling.
     """
     try:
-        parsed = c_parser.CParser().parse(
+        parsed = _ACTUAL_PARSER.parse(
             f"void __cgull_actual(void) {{ __cgull_sink({text}); }}"
         )
         call = parsed.ext[0].body.block_items[0]
