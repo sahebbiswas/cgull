@@ -13,6 +13,13 @@ from .dataflow import meet_nullness
 from .fixed_point import FiniteLattice, FixedPointConfig, FixedPointDiagnostic, SCCFixedPointEngine
 from .model import Allocation, FunctionSummary, Nullness
 
+__all__ = [
+    "FunctionSummaryAnalysisResult",
+    "analyze_function_summaries",
+    "analyze_function_summaries_detailed",
+    "serialize_function_summaries",
+]
+
 
 def _unwrap_cast(node):
     while node is not None and type(node).__name__ in {"Cast", "ExprList"}:
@@ -63,7 +70,7 @@ class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
     def __init__(self, parameter_counts: Mapping[str, int]) -> None:
         self._parameter_counts = dict(parameter_counts)
         # Each parameter can enter two may-effect sets, allocation can rise once,
-        # and return nullness has a short finite chain. This is a conservative
+        # and return nullness has a short finite chain.  This is a conservative
         # finite upper bound used to make the domain contract executable.
         max_params = max(self._parameter_counts.values(), default=0)
         self.max_height = max(4, (2 * max_params) + 5)
@@ -82,7 +89,7 @@ class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
 
     def unknown(self, symbol: str, current: _SummaryFact) -> _SummaryFact:
         # Unknown effects are represented conservatively as all parameters
-        # possibly affected. Existing consumers that do not yet inspect
+        # possibly affected.  Existing consumers that do not yet inspect
         # ``is_unknown`` therefore cannot accidentally treat a limit as safe.
         all_params = frozenset(range(self._parameter_counts.get(symbol, 0)))
         return _SummaryFact(
@@ -95,14 +102,7 @@ class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
 
 
 def _join_summary_nullness(left: Optional[Nullness], right: Optional[Nullness]) -> Optional[Nullness]:
-    """Join legacy summary nullness while preserving a distinct engine BOTTOM.
-
-    The shipped summary analysis uses ``meet_nullness``, where ``UNKNOWN`` is
-    the identity rather than lattice top. Preserve that behavior here so a
-    transient recursive-callee UNKNOWN cannot permanently hide a later
-    NULL/NON_NULL/MAYBE_NULL result. ``None`` remains the engine-only BOTTOM;
-    convergence-limit top is tracked separately by ``_SummaryFact.is_unknown``.
-    """
+    """Join summary nullness while preserving legacy UNKNOWN-as-identity semantics."""
     if left is None:
         return right
     if right is None:
@@ -252,7 +252,7 @@ def _analyze_one_function(
 
             return_nullness_set.add(ret_nullness)
 
-    # Preserve the existing intra-function path merge semantics. BOTTOM is an
+    # Preserve the existing intra-function path merge semantics.  BOTTOM is an
     # interprocedural engine concern; legacy meet_nullness remains the behavior
     # for multiple concrete return statements.
     if not return_nullness_set:
