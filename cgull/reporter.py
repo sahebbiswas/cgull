@@ -66,7 +66,7 @@ def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
             return None
 
     rendered_replacement = "\n".join(replacement_lines)
-    original_width = replacement_indent + len(snippet)
+    original_width = len(snippet)
     deleted_region: Dict[str, Any] = {
         "startLine": max(1, issue.line_number),
         "startColumn": 1,
