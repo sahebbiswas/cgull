@@ -4,6 +4,7 @@ from .model import *
 from .dataflow import *
 from .construction import *
 from .summaries import *
+from .call_graph import *
 from .construction import _deref_vars, _deref_vars_with_lines
 from ..ast_analyzer import _PRELUDE_LINE_COUNT
 
