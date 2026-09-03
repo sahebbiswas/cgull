@@ -14,7 +14,7 @@ from .banned_functions import FormatStringRule as _LegacyFormatStringRule
 from ..ast_analyzer import CASTContext
 from ..cfg.construction import build_cfg, find_function_def
 from ..cfg.value_facts import FormatLiteralness, ValueFact, ValueProvenance
-from ..cfg.value_interprocedural import _actual_fact
+from ..cfg.value_interprocedural import _actual_fact as _resolve_actual_fact
 from ..models import AnalysisEngine, Confidence, FixType, Issue
 from ..utils import mask_string_and_char_literals
 
@@ -58,18 +58,66 @@ class FormatStringRule(_LegacyFormatStringRule):
         return getattr(effect, "format_argument", None) if effect is not None else None
 
     @staticmethod
-    def _actual_fact(result, event, call, index: int, session) -> ValueFact:
+    def _fact_for_actual(result, event, call, index: int, session) -> ValueFact:
         if index < 0 or index >= len(getattr(call, "actual_arguments", ())):
             return ValueFact(degradations=frozenset({"MISSING_FORMAT_ARGUMENT"}))
 
         states = getattr(result, "_facts_before", {})
         state = states.get(event.node_id, {})
-        return _actual_fact(
+        return _resolve_actual_fact(
             call.actual_arguments[index],
             state,
             session.semantic_models,
             session.value_analysis.summaries,
             128,
+        )
+
+    def _literal_fact_is_safe(
+        self,
+        file_path: str,
+        ast_ctx: CASTContext,
+        function,
+        event,
+        call,
+        arg: str,
+    ) -> bool:
+        """Validate literal facts that originate in mutable local storage.
+
+        The rule-neutral value domain intentionally tracks value literalness,
+        not whether a local character buffer has subsequently escaped or been
+        mutated through an alias.  CGULL-002 must retain the established
+        conservative policy for those mutable locals.  Parameters and other
+        interprocedurally propagated values remain governed by the semantic
+        fact, which is what permits proven literals to flow safely through
+        helpers.
+        """
+        variable = self._simple_identifier(arg)
+        if variable is None:
+            return True
+
+        variables = getattr(function, "variables", {})
+        if variable not in variables:
+            # Formal parameters and non-local expressions are handled by the
+            # interprocedural fact itself rather than the legacy local-buffer
+            # integrity check.
+            return True
+
+        clean_code = getattr(ast_ctx, "clean_source", "") or getattr(ast_ctx, "raw_source", "")
+        source_lines = clean_code.splitlines()
+        line_number = int(getattr(event, "line_number", 0) or 0)
+        if line_number <= 0 or line_number > len(source_lines):
+            return False
+        line_content = source_lines[line_number - 1]
+        loc = getattr(call, "source_location", None) or getattr(event, "source_location", None)
+        call_offset = max(0, int(getattr(loc, "column_number", 0) or 1) - 1)
+        return self._has_literal_local_provenance(
+            arg,
+            file_path,
+            clean_code,
+            line_number,
+            call_offset,
+            line_content,
+            source_lines,
         )
 
     @staticmethod
@@ -128,7 +176,7 @@ class FormatStringRule(_LegacyFormatStringRule):
         loc = getattr(call, "source_location", None) or getattr(event, "source_location", None)
         line_number = int(getattr(event, "line_number", 0) or 1)
         column_number = int(getattr(loc, "column_number", 0) or 1)
-        is_direct_printf = call.direct_callee == "printf"
+        is_safe_direct_printf = call.direct_callee == "printf" and len(call.actual_arguments) == 1
 
         issue = self.create_issue(
             file_path=file_path,
@@ -137,11 +185,11 @@ class FormatStringRule(_LegacyFormatStringRule):
             message=message,
             column_number=column_number,
             engine="Interprocedural",
-            fix_type=FixType.SAFE_FIX if is_direct_printf else FixType.SUGGESTED_FIX,
-            auto_fix_replacement=f'printf("%s", {arg})' if is_direct_printf else None,
+            fix_type=FixType.SAFE_FIX if is_safe_direct_printf else FixType.SUGGESTED_FIX,
+            auto_fix_replacement=f'printf("%s", {arg})' if is_safe_direct_printf else None,
             suggested_fix_replacement=(
                 None
-                if is_direct_printf
+                if is_safe_direct_printf
                 else f"Use a constant format literal and pass the dynamic value as data (for example, \"%s\", {arg})."
             ),
         )
@@ -184,8 +232,13 @@ class FormatStringRule(_LegacyFormatStringRule):
                     if self._is_literal_format(arg):
                         continue
 
-                    fact = self._actual_fact(result, event, call, index, session)
-                    if fact.format_literalness is FormatLiteralness.LITERAL:
+                    fact = self._fact_for_actual(result, event, call, index, session)
+                    if (
+                        fact.format_literalness is FormatLiteralness.LITERAL
+                        and self._literal_fact_is_safe(
+                            file_path, ast_ctx, function, event, call, arg
+                        )
+                    ):
                         continue
                     issues.append(
                         self._semantic_issue(file_path, ast_ctx, event, call, index, fact)
