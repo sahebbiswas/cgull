@@ -48,9 +48,9 @@ class AnalysisQueries:
 class AnalysisSession:
     """Shared analysis state for exactly one TU/configuration-profile scan.
 
-    Expensive domains are created only when requested.  The scan pipeline attaches
-    one instance to ``CASTContext.analysis_session`` before AST rules execute, so
-    existing ``scan_ast(file_path, ast_ctx)`` signatures remain unchanged.
+    Expensive domains are created only when requested. The session is attached to
+    the existing ``CASTContext`` so AST rules can share it without changing the
+    long-standing ``scan_ast(file_path, ast_ctx)`` extension signature.
     """
 
     def __init__(
@@ -105,9 +105,17 @@ def analysis_session_for(
     semantic_models: SemanticModelRegistry = EMPTY_SEMANTIC_MODELS,
     configuration: ConfigurationIdentity = (),
 ) -> AnalysisSession:
-    """Return the pipeline-owned session, creating a fallback for direct rule tests."""
+    """Return the context's shared session, creating one when first requested."""
     existing = getattr(ast_context, "analysis_session", None)
     if isinstance(existing, AnalysisSession):
+        if (
+            existing.semantic_models is EMPTY_SEMANTIC_MODELS
+            and isinstance(semantic_models, SemanticModelRegistry)
+            and semantic_models is not EMPTY_SEMANTIC_MODELS
+        ):
+            existing.semantic_models = semantic_models
+        if not existing.configuration_identity and configuration:
+            existing.configuration_identity = tuple(configuration)
         return existing
     session = AnalysisSession(
         ast_context,
