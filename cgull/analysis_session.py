@@ -26,6 +26,10 @@ class AnalysisQueries:
             )
         return self._cache[key]
 
+    def value_facts(self, function_name: str):
+        """Return cached interprocedural value facts for one function."""
+        return self._session.value_analysis.function(function_name)
+
 
 class AnalysisSession:
     """Shared analysis state for exactly one TU/configuration-profile scan."""
@@ -44,6 +48,7 @@ class AnalysisSession:
         )
         self._call_graph = None
         self._function_summary_result = None
+        self._value_analysis_result = None
         self._summary_construction_count = 0
         self._queries = AnalysisQueries(self)
 
@@ -84,6 +89,17 @@ class AnalysisSession:
             )
         return self._function_summary_result
 
+    def _ensure_value_analysis(self):
+        if self._value_analysis_result is None:
+            from .cfg.value_interprocedural import analyze_translation_unit_value_dataflow
+
+            self._value_analysis_result = analyze_translation_unit_value_dataflow(
+                self.ast_context,
+                self.semantic_models,
+                call_graph=self.call_graph,
+            )
+        return self._value_analysis_result
+
     @property
     def function_summaries(self):
         return self._ensure_function_summaries().summaries
@@ -95,6 +111,11 @@ class AnalysisSession:
     @property
     def summary_iterations_by_scc(self):
         return self._ensure_function_summaries().iterations_by_scc
+
+    @property
+    def value_analysis(self):
+        """Lazily computed provenance/format analysis shared by all rules."""
+        return self._ensure_value_analysis()
 
     @property
     def summary_construction_count(self) -> int:
