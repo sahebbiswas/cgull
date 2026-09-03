@@ -66,7 +66,10 @@ def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
             return None
 
     rendered_replacement = "\n".join(replacement_lines)
-    original_width = len(snippet)
+    # BaseRule.create_issue normalizes code_snippet with .strip(), so the
+    # replacement's leading indentation is the only retained source of the
+    # original line's indentation for these full-line regex fixes.
+    original_width = replacement_indent + len(snippet)
     deleted_region: Dict[str, Any] = {
         "startLine": max(1, issue.line_number),
         "startColumn": 1,
