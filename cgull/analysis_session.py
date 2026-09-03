@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Dict
 
+from .call_effects import ReturnEffect
 from .semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
 
 
@@ -27,15 +28,7 @@ class AnalysisQueries:
 
 
 class AnalysisSession:
-    """Shared analysis state for exactly one TU/configuration-profile scan.
-
-    Expensive domains are created only when requested. The session is attached to
-    the existing ``CASTContext`` so AST rules can share it without changing the
-    long-standing ``scan_ast(file_path, ast_ctx)`` extension signature.
-
-    Configuration-profile isolation is provided by the scan pipeline: each profile
-    is parsed into a distinct ``CASTContext``, and therefore owns a distinct session.
-    """
+    """Shared analysis state for exactly one TU/configuration-profile scan."""
 
     def __init__(
         self,
@@ -62,13 +55,31 @@ class AnalysisSession:
             self._call_graph = build_translation_unit_call_graph(self.ast_context)
         return self._call_graph
 
+    def _memory_effect_sets(self):
+        """Translate declarative effects into the legacy CFG summary inputs."""
+        alloc = set()
+        dealloc = set()
+        realloc = set()
+        for function, effect in self.semantic_models.call_effects.effects.items():
+            if effect.return_effect is ReturnEffect.ALLOCATION:
+                alloc.add(function)
+            if effect.deallocates:
+                dealloc.add(function)
+            if effect.return_effect is ReturnEffect.ALLOCATION and effect.deallocates:
+                realloc.add(function)
+        return alloc, dealloc, realloc
+
     def _ensure_function_summaries(self):
         if self._function_summary_result is None:
             from .cfg.summaries import analyze_function_summaries_detailed
 
+            alloc_funcs, dealloc_funcs, realloc_funcs = self._memory_effect_sets()
             self._summary_construction_count += 1
             self._function_summary_result = analyze_function_summaries_detailed(
                 self.ast_context,
+                alloc_funcs=alloc_funcs,
+                dealloc_funcs=dealloc_funcs,
+                realloc_funcs=realloc_funcs,
                 call_graph=self.call_graph,
             )
         return self._function_summary_result
@@ -79,7 +90,6 @@ class AnalysisSession:
 
     @property
     def summary_diagnostics(self):
-        """Visible convergence/degradation diagnostics from summary construction."""
         return self._ensure_function_summaries().diagnostics
 
     @property
@@ -88,7 +98,6 @@ class AnalysisSession:
 
     @property
     def summary_construction_count(self) -> int:
-        """Number of actual function-summary constructions performed by this session."""
         return self._summary_construction_count
 
     @property
