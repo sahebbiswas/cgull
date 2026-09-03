@@ -1,10 +1,4 @@
-"""Rule-neutral semantic models for embedded trust boundaries.
-
-The model layer deliberately describes only call semantics.  It does not infer
-platform behavior from function names and it does not mutate CFG/dataflow
-facts.  Rules and future dataflow passes can query the same per-TU session and
-apply the declared provenance/validation requirements conservatively.
-"""
+"""Rule-neutral semantic and call-effect models."""
 
 from __future__ import annotations
 
@@ -12,6 +6,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
 
+from .call_effects import (
+    BUILTIN_CALL_EFFECTS,
+    CallEffectConfigError,
+    CallEffectModel,
+    CallEffectRegistry,
+    parse_call_effects,
+)
 from .cfg.model import CFGCall
 
 
@@ -32,13 +33,6 @@ class SemanticLocationKind(str, Enum):
 
 @dataclass(frozen=True)
 class SemanticLocation:
-    """A value/location participating in a modeled call.
-
-    ``argument`` and ``output_argument`` use zero-based C argument indexes.
-    ``output_argument`` denotes the object written through an output pointer,
-    while ``argument`` denotes the argument value itself.
-    """
-
     kind: SemanticLocationKind
     argument_index: Optional[int] = None
 
@@ -156,10 +150,11 @@ class CallSemanticModel:
     source: Optional[SourceModel] = None
     validator: Optional[ValidatorModel] = None
     sink: Optional[SinkModel] = None
+    effect: Optional[CallEffectModel] = None
 
     @property
     def is_modeled(self) -> bool:
-        return self.source is not None or self.validator is not None or self.sink is not None
+        return any((self.source, self.validator, self.sink, self.effect))
 
 
 @dataclass(frozen=True)
@@ -169,6 +164,7 @@ class SemanticModelRegistry:
     sources: Mapping[str, SourceModel] = field(default_factory=dict)
     validators: Mapping[str, ValidatorModel] = field(default_factory=dict)
     sinks: Mapping[str, SinkModel] = field(default_factory=dict)
+    call_effects: CallEffectRegistry = field(default_factory=lambda: BUILTIN_CALL_EFFECTS)
 
     def for_function(self, function: Optional[str]) -> CallSemanticModel:
         if not function:
@@ -177,10 +173,10 @@ class SemanticModelRegistry:
             source=self.sources.get(function),
             validator=self.validators.get(function),
             sink=self.sinks.get(function),
+            effect=self.call_effects.for_function(function),
         )
 
     def for_call(self, call: CFGCall) -> CallSemanticModel:
-        # Indirect/unresolved calls are intentionally never trusted by spelling.
         if call.is_indirect or not call.direct_callee:
             return CallSemanticModel()
         return self.for_function(call.direct_callee)
@@ -194,19 +190,15 @@ class SemanticModelRegistry:
     def sink_for(self, call: CFGCall) -> Optional[SinkModel]:
         return self.for_call(call).sink
 
+    def effect_for(self, call: CFGCall) -> Optional[CallEffectModel]:
+        return self.for_call(call).effect
+
 
 EMPTY_SEMANTIC_MODELS = SemanticModelRegistry()
 
 
 @dataclass(frozen=True)
 class TUAnalysisSession:
-    """Shared per-translation-unit analysis state.
-
-    Rules should query ``semantic_models`` through this object rather than
-    reparsing project configuration.  Additional shared TU facts can be added
-    here without changing the semantic-model contract.
-    """
-
     ast_context: object
     semantic_models: SemanticModelRegistry = EMPTY_SEMANTIC_MODELS
 
@@ -226,14 +218,13 @@ class SemanticModelConfigError(ValueError):
 
 
 def parse_semantic_models(raw: object) -> SemanticModelRegistry:
-    """Parse the ``[semantic_models]`` TOML section, including opt-in profiles."""
-
+    """Parse ``[semantic_models]`` and merge project effects over built-ins."""
     if raw in (None, {}):
         return EMPTY_SEMANTIC_MODELS
     if not isinstance(raw, Mapping):
         raise SemanticModelConfigError("[semantic_models] must be a table")
 
-    unknown = set(raw) - {"profiles", "sources", "validators", "sinks"}
+    unknown = set(raw) - {"profiles", "sources", "validators", "sinks", "effects"}
     if unknown:
         raise SemanticModelConfigError(
             f"unknown [semantic_models] key(s): {', '.join(sorted(str(k) for k in unknown))}"
@@ -289,17 +280,15 @@ def parse_semantic_models(raw: object) -> SemanticModelRegistry:
         _insert_unique(sources, function, model, "source")
 
     for entry in _model_entries(raw, "validators"):
-        _require_keys(
-            entry,
-            "validator",
-            required={"function", "target", "property", "success"},
-        )
+        _require_keys(entry, "validator", required={"function", "target", "property", "success"})
         function = _function(entry["function"], "validator")
         try:
-            target = SemanticLocation.parse(entry["target"])
-            prop = ValidationProperty(str(entry["property"]).strip().lower())
-            success = SuccessCondition.parse(entry["success"])
-            model = ValidatorModel(function, target, prop, success)
+            model = ValidatorModel(
+                function,
+                SemanticLocation.parse(entry["target"]),
+                ValidationProperty(str(entry["property"]).strip().lower()),
+                SuccessCondition.parse(entry["success"]),
+            )
         except ValueError as exc:
             raise SemanticModelConfigError(f"validator '{function}': {exc}") from exc
         _insert_unique(validators, function, model, "validator")
@@ -332,7 +321,17 @@ def parse_semantic_models(raw: object) -> SemanticModelRegistry:
                 raise SemanticModelConfigError(f"sink '{function}': {exc}") from exc
         _insert_unique(sinks, function, SinkModel(function, tuple(requirements)), "sink")
 
-    return SemanticModelRegistry(sources=sources, validators=validators, sinks=sinks)
+    try:
+        call_effects = parse_call_effects(raw.get("effects", []))
+    except CallEffectConfigError as exc:
+        raise SemanticModelConfigError(str(exc)) from exc
+
+    return SemanticModelRegistry(
+        sources=sources,
+        validators=validators,
+        sinks=sinks,
+        call_effects=call_effects,
+    )
 
 
 def _model_entries(raw: Mapping[object, object], key: str) -> Iterable[Mapping[object, object]]:
@@ -343,18 +342,11 @@ def _model_entries(raw: Mapping[object, object], key: str) -> Iterable[Mapping[o
         raise SemanticModelConfigError(f"[semantic_models].{key} must be an array of tables")
     for index, entry in enumerate(entries):
         if not isinstance(entry, Mapping):
-            raise SemanticModelConfigError(
-                f"[semantic_models].{key}[{index}] must be a table"
-            )
+            raise SemanticModelConfigError(f"[semantic_models].{key}[{index}] must be a table")
     return entries
 
 
-def _require_keys(
-    entry: Mapping[object, object],
-    kind: str,
-    *,
-    required: set[str],
-) -> None:
+def _require_keys(entry: Mapping[object, object], kind: str, *, required: set[str]) -> None:
     keys = {str(k) for k in entry}
     missing = required - keys
     unknown = keys - required
