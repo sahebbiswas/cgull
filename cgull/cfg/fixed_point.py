@@ -1,6 +1,6 @@
 """Deterministic fixed-point evaluation over call-graph SCCs.
 
-The engine is deliberately fact-domain agnostic.  Domains provide a finite
+The engine is deliberately fact-domain agnostic. Domains provide a finite
 lattice and a monotone transfer function; the engine supplies stable SCC
 ordering, bounded iteration, and explicit conservative degradation when a
 component does not converge within the configured budget.
@@ -11,6 +11,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Generic, Mapping, Optional, Tuple, TypeVar
+
+
+__all__ = [
+    "FiniteLattice",
+    "FixedPointConfig",
+    "FixedPointDiagnostic",
+    "FixedPointResult",
+    "SCCFixedPointEngine",
+]
 
 
 FactT = TypeVar("FactT")
@@ -51,7 +60,7 @@ class FiniteLattice(ABC, Generic[FactT]):
     """Executable contract required by :class:`SCCFixedPointEngine`.
 
     ``max_height`` is a finite upper bound on the ascending-chain height for
-    one fact.  ``join`` must be commutative, associative, and idempotent.
+    one fact. ``join`` must be commutative, associative, and idempotent.
     ``unknown`` returns a conservative top-like value for a symbol when an
     analysis limit is reached.
     """
