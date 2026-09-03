@@ -3,7 +3,7 @@ C-GULL: Code Guardian for Unchecked Logic & Leaks
 A lightweight & AST-capable C Static Code Security Analyzer.
 """
 
-__version__ = "0.9.40"
+__version__ = "0.9.41"
 __author__ = "Saheb Biswas"
 
 from .logging_config import configure_logging, TRACE_LEVEL_NUM
@@ -13,6 +13,7 @@ from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander, expand_includes
 from .reporter import ReportGenerator
 from .config import CGullConfig, load_config
+from .analysis_session import AnalysisSession, AnalysisQueries, analysis_session_for
 from .ast_analyzer import (
     ConditionalFlagCollector,
     CollectedFlags,
@@ -47,6 +48,9 @@ __all__ = [
     "ConfigProfile",
     "CGullConfig",
     "load_config",
+    "AnalysisSession",
+    "AnalysisQueries",
+    "analysis_session_for",
     "OUTPUT_SCHEMA_VERSION",
     "ConditionalFlagCollector",
     "CollectedFlags",

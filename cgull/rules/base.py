@@ -7,6 +7,8 @@ from typing import List, Optional
 from ..models import Issue, Severity, RuleCategory, RuleDefinition, AnalysisEngine, FixType
 import logging
 from ..ast_analyzer import CASTContext
+from ..analysis_session import analysis_session_for
+from ..semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,17 @@ class BaseRule(ABC):
         Override to implement AST or pycparser-based checks.
         """
         return []
+
+    def get_analysis_session(self, ast_ctx: CASTContext):
+        """Return the shared lazy session attached to this AST context.
+
+        This helper intentionally does not alter ``scan_ast``'s signature, so
+        existing third-party/custom AST rules remain source compatible.
+        """
+        registry = getattr(self, "_semantic_models", EMPTY_SEMANTIC_MODELS)
+        if not isinstance(registry, SemanticModelRegistry):
+            registry = EMPTY_SEMANTIC_MODELS
+        return analysis_session_for(ast_ctx, semantic_models=registry)
 
     def create_issue(
         self,
