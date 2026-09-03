@@ -195,13 +195,13 @@ def analyze_value_summaries_detailed(
     config = fixed_point_config or FixedPointConfig()
     engine = SCCFixedPointEngine(graph, lattice, config)
 
-    def transfer(name, facts, cfg):
+    def transfer(name, facts, config):
         fn = fn_map[name]
         funcdef = find_function_def(ast_ctx.pycparser_ast, name)
         if funcdef is None:
             return lattice.unknown(name, facts[name])
         params = tuple(p.name for p in fn.parameters if p.name)
-        return _summarize_function(funcdef, params, facts, semantic_models, cfg.max_provenance)
+        return _summarize_function(funcdef, params, facts, semantic_models, config.max_provenance)
 
     result = engine.run(transfer)
     return ValueSummaryAnalysisResult(
