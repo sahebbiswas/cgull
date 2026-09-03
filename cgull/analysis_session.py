@@ -50,7 +50,7 @@ class AnalysisSession:
             else EMPTY_SEMANTIC_MODELS
         )
         self._call_graph = None
-        self._function_summaries = None
+        self._function_summary_result = None
         self._summary_construction_count = 0
         self._queries = AnalysisQueries(self)
 
@@ -62,14 +62,29 @@ class AnalysisSession:
             self._call_graph = build_translation_unit_call_graph(self.ast_context)
         return self._call_graph
 
-    @property
-    def function_summaries(self):
-        if self._function_summaries is None:
-            from .cfg.summaries import analyze_function_summaries
+    def _ensure_function_summaries(self):
+        if self._function_summary_result is None:
+            from .cfg.summaries import analyze_function_summaries_detailed
 
             self._summary_construction_count += 1
-            self._function_summaries = analyze_function_summaries(self.ast_context)
-        return self._function_summaries
+            self._function_summary_result = analyze_function_summaries_detailed(
+                self.ast_context,
+                call_graph=self.call_graph,
+            )
+        return self._function_summary_result
+
+    @property
+    def function_summaries(self):
+        return self._ensure_function_summaries().summaries
+
+    @property
+    def summary_diagnostics(self):
+        """Visible convergence/degradation diagnostics from summary construction."""
+        return self._ensure_function_summaries().diagnostics
+
+    @property
+    def summary_iterations_by_scc(self):
+        return self._ensure_function_summaries().iterations_by_scc
 
     @property
     def summary_construction_count(self) -> int:
