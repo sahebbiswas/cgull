@@ -1,0 +1,617 @@
+"""
+Command Line Interface (CLI) for C-GULL Static Analyzer.
+"""
+
+import sys
+import os
+import argparse
+from typing import List, Optional
+
+from .engine import CGullScanner
+from .models import Severity, AnalysisEngine, ParseTier, ScanConfig, ScanMode
+from .ignore import CGullIgnoreFilter
+from .reporter import ReportGenerator
+from .rules import get_all_rules
+from .baseline import load_baseline_fingerprints, apply_baseline, BaselineError
+from .utils import ProgressIndicator
+import logging
+from .config import load_config
+
+logger = logging.getLogger(__name__)
+
+
+def print(*values, file=None, sep=" ", end="\n", flush=False) -> None:
+    """Print text without failing when a Windows console uses a legacy encoding."""
+    stream = sys.stdout if file is None else file
+    text = sep.join(str(value) for value in values) + end
+    try:
+        stream.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(text.encode(encoding, errors="replace").decode(encoding))
+    if flush:
+        stream.flush()
+
+
+
+def build_parser() -> argparse.ArgumentParser:
+    from . import __version__
+    parser = argparse.ArgumentParser(
+        prog="cgull",
+        description=f"C-GULL v{__version__}: Code Guardian for Unchecked Logic & Leaks (C Code Security Static Analyzer)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  cgull scan src/
+  cgull scan src/ -o report.json --format json
+  cgull scan src/ --engine regex --severity high
+  cgull scan main.c --format sarif -o results.sarif
+  cgull scan src/ --ignore-file .cgullignore --fail-on high
+  cgull scan src/ -j 0            # parallelize across all CPU cores
+  cgull scan src/ --update-baseline baseline.json     # snapshot current findings
+  cgull scan src/ --baseline baseline.json --fail-on medium  # only fail on NEW issues (medium or higher)
+  cgull scan src/ --list-flags                       # list preprocessor conditional flags
+  cgull flags src/                                   # discover preprocessor flags in target
+  cgull rules
+  cgull init-ignore
+
+Suppressing findings inline:
+  // cgull-ignore                          suppress all rules on this line
+  // cgull-ignore: CGULL-001                suppress a specific rule on this line
+  // cgull-ignore-next-line: CGULL-001,CGULL-003
+        """
+    )
+    parser.add_argument("--version", action="version", version=f"C-GULL {__version__}")
+
+    # Common logging arguments
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase output verbosity (-v for INFO, -vv for DEBUG, -vvv for TRACE)")
+    parser.add_argument("--log-level", choices=["error", "warning", "info", "debug", "trace"], default=None, help="Set logging verbosity level")
+    parser.add_argument("--log-file", metavar="PATH", help="Write diagnostic log messages to file")
+
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # SCAN subcommand
+    scan_parser = subparsers.add_parser("scan", help="Scan C source files or directories for vulnerabilities")
+    scan_parser.add_argument("-v", "--verbose", action="count", default=argparse.SUPPRESS, help="Increase output verbosity (-v for INFO, -vv for DEBUG, -vvv for TRACE)")
+    scan_parser.add_argument("--log-level", choices=["error", "warning", "info", "debug", "trace"], default=argparse.SUPPRESS, help="Set logging verbosity level")
+    scan_parser.add_argument("--log-file", metavar="PATH", default=argparse.SUPPRESS, help="Write diagnostic log messages to file")
+    scan_parser.add_argument("target", nargs="*", default=["."], help="Target file(s) or directory to scan (default: current directory)")
+    scan_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
+    scan_parser.add_argument("-o", "--output", help="Path to write the report file (defaults to stdout)")
+    scan_parser.add_argument("-f", "--format", choices=["text", "json", "sarif", "markdown"], default=None, help="Report format (default: text or config default_format)")
+    scan_parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress indicator during scan")
+    scan_parser.add_argument("--ignore-file", help="Path to .cgullignore file")
+    scan_parser.add_argument("--ignore-pattern", action="append", default=[], help="Pattern to ignore (can be specified multiple times)")
+    scan_parser.add_argument("--severity", choices=["high", "medium", "low", "all"], default="all", help="Severity filter threshold")
+    scan_parser.add_argument("--engine", choices=["regex", "ast", "hybrid"], default="hybrid", help="Scan engine mode (default: hybrid)")
+    scan_parser.add_argument("--fail-on", choices=["high", "medium", "low", "all"], default=None, help="Exit with code 1 if vulnerabilities at or above severity threshold are found (useful for CI/CD)")
+    scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD; alias for --fail-on high)")
+    scan_parser.add_argument("--fail-on-error", action="store_true", help="Exit with code 1 if scan errors or file analysis failures occur (useful for CI/CD)")
+    scan_parser.add_argument("--warn-on-fallback", action="store_true", help="Exit with code 1 if AST parsing falls back to regex-fallback mode for any file")
+    scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count. Negative values are invalid.")
+    scan_parser.add_argument("--baseline", metavar="PATH", help="Path to a previous C-GULL JSON report; only findings NOT present in it are reported/counted (see --update-baseline to create one)")
+    scan_parser.add_argument("--update-baseline", metavar="PATH", help="Write the full current scan as a new baseline JSON report to PATH (independent of --format/--output), for later use with --baseline")
+    scan_parser.add_argument("--config-seed", action="append", metavar="PATH", help="Path to a header (.h/.hpp), directory, or JSON (.json) configuration seed file (can be specified multiple times)")
+    scan_parser.add_argument("--compile-commands", metavar="PATH", help="Path to compile_commands.json database file")
+    scan_parser.add_argument("--mode", choices=["file", "tu"], default=None, help="Scan mode: 'file' (per-file scan) or 'tu' (translation unit mode) (default: file)")
+    scan_parser.add_argument("--config-strategy", choices=["baseline", "one-at-a-time", "pairwise", "exhaustive"], default="one-at-a-time", help="Configuration space expansion strategy (default: one-at-a-time)")
+    scan_parser.add_argument("--exhaustive-threshold", type=int, default=10, help="Maximum flag threshold permitted for exhaustive strategy (default: 10)")
+    scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
+    scan_parser.add_argument('--no-dedup-headers', dest='dedup_headers', action='store_false', default=True,
+                             help='Do not collapse duplicate header findings across translation units (disable header deduplication)')
+
+    # FLAGS subcommand
+    flags_parser = subparsers.add_parser("flags", help="Discover and enumerate tested preprocessor flags in target C source files")
+    flags_parser.add_argument("target", nargs="*", default=["."], help="Target file(s) or directory to inspect (default: current directory)")
+    flags_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
+    flags_parser.add_argument("-o", "--output", help="Path to write output (defaults to stdout)")
+    flags_parser.add_argument("-f", "--format", choices=["text", "json"], default="text", help="Output format (default: text)")
+    flags_parser.add_argument("--ignore-file", help="Path to .cgullignore file")
+    flags_parser.add_argument("--ignore-pattern", action="append", default=[], help="Pattern to ignore")
+
+    # RULES subcommand
+    rules_parser = subparsers.add_parser("rules", help="List all security audit rules supported by C-GULL")
+    rules_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
+
+    # INIT-IGNORE subcommand
+    subparsers.add_parser("init-ignore", help="Generate a default .cgullignore template file")
+
+    return parser
+
+
+def handle_flags(args) -> int:
+    targets = getattr(args, "target", ["."])
+    if isinstance(targets, str):
+        targets = [targets]
+    for t in targets:
+        if not os.path.exists(t):
+            print(f"Error: Target path '{t}' does not exist.", file=sys.stderr)
+            return 1
+    report_target_str = " ".join(targets) if len(targets) > 1 else targets[0]
+    primary_target = targets[0] if len(targets) == 1 else (os.path.commonpath([os.path.abspath(t) for t in targets]) if targets else ".")
+
+    from .utils import strip_comments_keep_lines
+    from .ast_analyzer import ConditionalFlagCollector, CollectedFlags
+
+    ignore_file = getattr(args, "ignore_file", None)
+    ignore_patterns = list(getattr(args, "ignore_pattern", []) or [])
+    config_path = getattr(args, "config", None)
+    config = load_config(config_path=config_path, target_path=primary_target)
+    if config.error:
+        print(f"Error: {config.error}", file=sys.stderr)
+        return 1
+    for warning in config.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+    resolved_excludes = config.get_resolved_exclude_paths(primary_target)
+    if resolved_excludes:
+        ignore_patterns.extend(resolved_excludes)
+
+    base_dir = primary_target if os.path.isdir(primary_target) else (os.path.dirname(primary_target) or ".")
+    filter_obj = CGullIgnoreFilter(base_dir=base_dir, custom_patterns=ignore_patterns)
+    if ignore_file and os.path.exists(ignore_file):
+        filter_obj.load_from_file(ignore_file)
+
+    files_to_inspect: List[str] = []
+    for t in targets:
+        abs_t = os.path.abspath(t)
+        if os.path.isfile(abs_t):
+            if not filter_obj.should_ignore(abs_t) and abs_t not in files_to_inspect:
+                files_to_inspect.append(abs_t)
+        elif os.path.isdir(abs_t):
+            for root, dirs, files in os.walk(abs_t):
+                dirs[:] = [d for d in dirs if not filter_obj.should_prune_dir(os.path.join(root, d))]
+                for file in files:
+                    ext = os.path.splitext(file)[1].lower()
+                    if ext in (".c", ".h", ".i", ".hpp"):
+                        full_path = os.path.join(root, file)
+                        if not filter_obj.should_ignore(full_path) and full_path not in files_to_inspect:
+                            files_to_inspect.append(full_path)
+
+    all_presence: Set[str] = set()
+    all_value: Set[str] = set()
+
+    for fpath in files_to_inspect:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            _, clean_code = strip_comments_keep_lines(content)
+            res = ConditionalFlagCollector.collect(clean_code)
+            all_presence.update(res.presence_flags)
+            all_value.update(res.value_flags)
+        except Exception as e:
+            print(f"Warning: Failed to collect flags from {fpath}: {e}", file=sys.stderr)
+
+    all_presence -= all_value
+    collected = CollectedFlags(presence_flags=all_presence, value_flags=all_value)
+
+    fmt = (getattr(args, "format", None) or "text").lower()
+    out_path = getattr(args, "output", None)
+
+    if fmt == "json":
+        import json
+        data = {
+            "target_path": report_target_str,
+            "presence_flags": sorted(collected.presence_flags),
+            "value_flags": sorted(collected.value_flags),
+            "all_flags": sorted(collected.all_flags),
+        }
+        output_str = json.dumps(data, indent=2)
+    else:
+        lines = [
+            "=" * 80,
+            f" 🚩 Discovered Preprocessor Flags for: {report_target_str}",
+            "=" * 80,
+            " Presence Flags (Boolean Toggles):",
+        ]
+        if collected.presence_flags:
+            for flag in sorted(collected.presence_flags):
+                lines.append(f"   - {flag}")
+        else:
+            lines.append("   (None)")
+
+        lines.append("")
+        lines.append(" Value-Comparison Flags (Out of scope for boolean toggling; logged separately):")
+        if collected.value_flags:
+            for flag in sorted(collected.value_flags):
+                lines.append(f"   - {flag}")
+        else:
+            lines.append("   (None)")
+
+        lines.append("")
+        lines.append(f" Total Flags Discovered: {len(collected.all_flags)} ({len(collected.presence_flags)} presence, {len(collected.value_flags)} value-comparison)")
+        lines.append("=" * 80)
+        output_str = "\n".join(lines)
+
+    if out_path:
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(output_str + "\n")
+            print(f"✅ Preprocessor flags output saved to: {out_path}")
+        except Exception as e:
+            print(f"Error writing flags output to {out_path}: {e}", file=sys.stderr)
+            return 1
+    else:
+        print(output_str)
+
+    return 0
+
+
+def handle_scan(args) -> int:
+    if getattr(args, "list_flags", False):
+        return handle_flags(args)
+
+    targets = args.target
+    if isinstance(targets, str):
+        targets = [targets]
+    for t in targets:
+        if not os.path.exists(t):
+            print(f"Error: Target path '{t}' does not exist.", file=sys.stderr)
+            return 1
+
+    primary_target = targets[0] if len(targets) == 1 else (os.path.commonpath([os.path.abspath(t) for t in targets]) if targets else ".")
+
+    # Load configuration file
+    config = load_config(config_path=args.config, target_path=primary_target)
+    if config.error:
+        print(f"Error: {config.error}", file=sys.stderr)
+        return 1
+    for warning in config.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+    # Determine rules to run
+    all_rules = get_all_rules()
+    active_rules = config.apply_to_rules(all_rules)
+
+    # Merge custom ignore patterns from config [paths] exclude
+    custom_ignores = list(args.ignore_pattern or [])
+    resolved_excludes = config.get_resolved_exclude_paths(primary_target)
+    if resolved_excludes:
+        custom_ignores.extend(resolved_excludes)
+
+    # Determine severity filter
+    sev_filter = None
+    if args.severity == "high":
+        sev_filter = {Severity.HIGH}
+    elif args.severity == "medium":
+        sev_filter = {Severity.HIGH, Severity.MEDIUM}
+    elif args.severity == "low":
+        sev_filter = {Severity.HIGH, Severity.MEDIUM, Severity.LOW}
+
+    # Determine engine mode
+    eng_mode = AnalysisEngine.HYBRID
+    if args.engine == "regex":
+        eng_mode = AnalysisEngine.REGEX
+    elif args.engine == "ast":
+        eng_mode = AnalysisEngine.AST
+
+    seed_flags = {}
+
+    profile_sources: Dict[str, str] = {}
+    cc_seed_profiles: List[ConfigProfile] = []
+    config_seed_profiles: List[ConfigProfile] = []
+
+    # Compile commands ingestion (lowest priority seed source)
+    cc_arg = getattr(args, "compile_commands", None)
+    compile_commands_path = cc_arg
+    if not compile_commands_path and primary_target:
+        from .ast_analyzer import find_compile_commands
+        compile_commands_path = find_compile_commands(primary_target, config_dir=config.config_dir)
+
+    if compile_commands_path:
+        from .ast_analyzer import parse_compile_commands
+        if cc_arg and not os.path.exists(compile_commands_path):
+            print(f"Error: Compile commands file '{compile_commands_path}' does not exist.", file=sys.stderr)
+            return 1
+        if os.path.exists(compile_commands_path):
+            try:
+                parsed_cc = parse_compile_commands(compile_commands_path)
+                for p in parsed_cc:
+                    if p.name in profile_sources:
+                        print(f"Error: Profile name collision '{p.name}' between seed sources '{profile_sources[p.name]}' and '{compile_commands_path}'.", file=sys.stderr)
+                        return 1
+                    profile_sources[p.name] = compile_commands_path
+                    cc_seed_profiles.append(p)
+            except Exception as e:
+                if cc_arg:
+                    print(f"Error parsing compile commands file '{compile_commands_path}': {e}", file=sys.stderr)
+                    return 1
+
+    # Header / JSON Config Seeds ingestion (higher priority seed source)
+    config_seeds = getattr(args, "config_seed", None)
+    if config_seeds:
+        from .ast_analyzer import parse_config_seeds
+        for seed_path in config_seeds:
+            try:
+                profiles = parse_config_seeds(seed_path)
+                for p in profiles:
+                    if p.name in profile_sources:
+                        print(f"Error: Profile name collision '{p.name}' between seed sources '{profile_sources[p.name]}' and '{seed_path}'.", file=sys.stderr)
+                        return 1
+                    profile_sources[p.name] = seed_path
+                    config_seed_profiles.append(p)
+            except Exception as e:
+                print(f"Error parsing config seed file '{seed_path}': {e}", file=sys.stderr)
+                return 1
+
+    all_seed_profiles = cc_seed_profiles + config_seed_profiles
+
+    # Build seed_flags with explicit precedence: higher-priority config_seed_profiles overwrite cc_seed_profiles
+    from .ast_analyzer import merge_profile_flags
+    if cc_seed_profiles:
+        seed_flags = merge_profile_flags(cc_seed_profiles)
+    else:
+        seed_flags = {}
+
+    if config_seed_profiles:
+        cfg_flags = merge_profile_flags(config_seed_profiles)
+        cfg_keys = {k for p in config_seed_profiles for k in p.flags.keys()}
+        # Higher-priority config seed profile keys override (and remove dropped conflicts from) lower-priority cc_flags
+        for k in cfg_keys:
+            seed_flags.pop(k, None)
+        seed_flags.update(cfg_flags)
+
+    config_strategy = getattr(args, "config_strategy", "one-at-a-time")
+    exhaustive_threshold = getattr(args, "exhaustive_threshold", 10)
+
+    mode_arg = getattr(args, "mode", None)
+    if mode_arg is not None:
+        scan_mode = ScanMode(mode_arg.lower())
+    elif config.mode is not None:
+        scan_mode = config.mode
+    else:
+        scan_mode = ScanMode.FILE
+
+    scan_config = ScanConfig.create(
+        rules=active_rules,
+        severity_filter=sev_filter,
+        engine_mode=eng_mode,
+        defined_syms=seed_flags if seed_flags else None,
+        config_strategy=config_strategy,
+        exhaustive_threshold=exhaustive_threshold,
+        include_roots=config.include_roots,
+        dedup_headers=args.dedup_headers,
+        mode=scan_mode,
+    )
+
+    scanner = CGullScanner(
+        config=scan_config,
+    )
+
+    jobs = args.jobs
+    if jobs < 0:
+        print("Error: Invalid -j/--jobs value. Must be non-negative (0 or greater).", file=sys.stderr)
+        return 1
+
+    progress = ProgressIndicator(quiet=args.quiet)
+    try:
+        result = scanner.scan_path(
+            target_path=targets if len(targets) > 1 else targets[0],
+            ignore_file=args.ignore_file,
+            custom_ignore_patterns=custom_ignores,
+            jobs=jobs,
+            progress_callback=progress.update,
+            quiet=args.quiet,
+            config_strategy=config_strategy,
+            exhaustive_threshold=exhaustive_threshold,
+            seed_profiles=all_seed_profiles if all_seed_profiles else None,
+        )
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        progress.finish()
+
+    # --update-baseline always snapshots the full (pre-baseline-filter)
+    # result, so it reflects everything currently found regardless of
+    # whether --baseline was also passed in the same invocation.
+    if args.update_baseline:
+        try:
+            with open(args.update_baseline, "w", encoding="utf-8") as f:
+                f.write(ReportGenerator.to_json(result))
+            print(f"✅ Baseline saved to: {args.update_baseline} ({result.total_issues_count} issue(s) recorded)")
+        except Exception as e:
+            print(f"Error writing baseline to {args.update_baseline}: {e}", file=sys.stderr)
+            return 1
+
+    if args.baseline:
+        try:
+            baseline_counts, baseline_rules_count = load_baseline_fingerprints(args.baseline)
+        except BaselineError as e:
+            print(f"Error loading baseline: {e}", file=sys.stderr)
+            return 1
+
+        if baseline_rules_count is not None and baseline_rules_count != result.rules_applied:
+            print(
+                f"Warning: Baseline ruleset count ({baseline_rules_count}) differs from "
+                f"current scan ruleset count ({result.rules_applied}). "
+                "Findings from new or modified rules will be reported as new.",
+                file=sys.stderr,
+            )
+
+        result = apply_baseline(result, baseline_counts, baseline_rules_count=baseline_rules_count)
+
+    # Format output (CLI flag > config default_format > output extension auto-detect > text)
+    user_format_given = args.format is not None
+
+    if user_format_given:
+        fmt = args.format.lower()
+    elif config.default_format:
+        fmt = config.default_format.lower()
+    elif args.output:
+        if args.output.endswith(".json"):
+            fmt = "json"
+        elif args.output.endswith(".sarif"):
+            fmt = "sarif"
+        elif args.output.endswith(".md"):
+            fmt = "markdown"
+        else:
+            fmt = "text"
+    else:
+        fmt = "text"
+
+    if fmt == "json":
+        output_str = ReportGenerator.to_json(result)
+    elif fmt == "sarif":
+        output_str = ReportGenerator.to_sarif(result)
+    elif fmt == "markdown":
+        output_str = ReportGenerator.to_markdown(result)
+    else:
+        output_str = ReportGenerator.to_terminal_text(result)
+
+    if args.output:
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(output_str)
+            print(f"✅ Report saved to: {args.output}")
+        except Exception as e:
+            print(f"Error writing report to {args.output}: {e}", file=sys.stderr)
+            return 1
+    else:
+        print(output_str)
+
+    if args.fail_on_error and (result.files_failed > 0 or len(result.scan_errors) > 0):
+        return 1
+
+    warn_on_fallback = args.warn_on_fallback or config.warn_on_fallback
+    if warn_on_fallback:
+        fallback_files = [
+            fs.file_path for fs in result.file_summaries
+            if fs.status == "success" and fs.parse_tier == ParseTier.REGEX_FALLBACK.value
+        ]
+        if fallback_files:
+            print(f"Warning: {len(fallback_files)} file(s) fell back to regex-fallback AST parse tier.", file=sys.stderr)
+            return 1
+
+    # Check fail-on conditions
+    fail_on = config.fail_on
+    if args.fail_on is not None:
+        fail_on = args.fail_on
+    if args.fail_on_high:
+        fail_on = "high"
+
+    if fail_on == "high" and result.high_severity_count > 0:
+        return 1
+    elif fail_on == "medium" and (result.high_severity_count > 0 or result.medium_severity_count > 0):
+        return 1
+    elif fail_on in ("low", "all") and result.total_issues_count > 0:
+        return 1
+
+    return 0
+
+
+def handle_rules(args=None) -> int:
+    config_path = getattr(args, "config", None) if args else None
+    config = load_config(config_path=config_path, target_path=".")
+    if config.error:
+        print(f"Error: {config.error}", file=sys.stderr)
+        return 1
+    for warning in config.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+    all_rules = get_all_rules()
+    active_rules = config.apply_to_rules([r() for r in [type(ru) for ru in all_rules]])
+    active_ids = {r.rule_id for r in active_rules}
+
+    print("=" * 80)
+    config_note = f" (Config: {config.config_file_path})" if config.config_file_path else ""
+    print(f" 🛡️  C-GULL Security Rules Catalog ({len(active_rules)}/{len(all_rules)} Active Rules){config_note}")
+    print("=" * 80)
+    print(f"{'ID':<11} | {'Status':<8} | {'Impact':<7} | {'CWE':<15} | {'Rule Name'}")
+    print("-" * 80)
+    for r in sorted(all_rules, key=lambda x: (0 if x.impact == Severity.HIGH else (1 if x.impact == Severity.MEDIUM else 2), x.rule_id)):
+        status = "ACTIVE" if r.rule_id in active_ids else "SKIPPED"
+        imp = r.impact.value.upper()
+        if r.rule_id in config.severity_overrides:
+            imp = config.severity_overrides[r.rule_id].value.upper()
+        print(f"{r.rule_id:<11} | {status:<8} | {imp:<7} | {r.cwe_id:<15} | {r.name}")
+        if status == "SKIPPED":
+            reason = config.skipped_rules.get(r.rule_id, "Disabled via configuration")
+            print(f"   Reason      : {reason}")
+        else:
+            print(f"   Description : {r.description}")
+            print(f"   Remediation : {r.remediation_suggestion}")
+        print("-" * 80)
+    return 0
+
+
+def handle_init_ignore() -> int:
+    ignore_content = """# .cgullignore - C-GULL Static Analyzer Ignore Rules
+# Exclude third-party vendor directories
+vendor/
+third_party/
+deps/
+
+# Build artifacts
+build/
+dist/
+*.o
+*.obj
+*.so
+*.dylib
+*.a
+
+# Test suites & mocks if desired
+test/mocks/
+temp_*.c
+"""
+    file_path = ".cgullignore"
+    if os.path.exists(file_path):
+        print(f"⚠️  {file_path} already exists. Not overwriting.")
+        return 0
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(ignore_content)
+    print(f"✅ Created default '{file_path}' template.")
+    return 0
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    try:
+        parser = build_parser()
+        if argv is None:
+            argv = sys.argv[1:]
+
+        # Default to 'scan .' if no args provided or path given without subcommand
+        known_subcommands = {"scan", "rules", "flags", "init-ignore"}
+        if not argv:
+            argv = ["scan", "."]
+        else:
+            first_non_opt = None
+            for a in argv:
+                if not a.startswith("-"):
+                    first_non_opt = a
+                    break
+            if first_non_opt is None or first_non_opt not in known_subcommands:
+                if argv[0] not in ("--help", "-h", "--version"):
+                    argv = ["scan"] + argv
+
+        args = parser.parse_args(argv)
+
+        from .logging_config import configure_logging
+        verbose_cnt = getattr(args, "verbose", 0) or 0
+        log_lvl = getattr(args, "log_level", None)
+        log_fl = getattr(args, "log_file", None)
+        try:
+            configure_logging(verbose_count=verbose_cnt, log_level_str=log_lvl, log_file=log_fl)
+        except OSError as e:
+            print(f"Error configuring logging: {e}", file=sys.stderr)
+            return 1
+
+        if args.command == "rules":
+            return handle_rules(args)
+        elif args.command == "flags":
+            return handle_flags(args)
+        elif args.command == "init-ignore":
+            return handle_init_ignore()
+        elif args.command == "scan":
+            return handle_scan(args)
+        else:
+            parser.print_help()
+            return 0
+    except KeyboardInterrupt:
+        print("\nScan interrupted by user.", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
