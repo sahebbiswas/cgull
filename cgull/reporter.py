@@ -37,6 +37,58 @@ def _get_condition_tag(issue: Any) -> str:
     return f"[{', '.join(tags)}]"
 
 
+def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
+    """Build a SARIF fix only when the replacement is provably a full line.
+
+    ``Issue`` does not yet carry an exact replacement span. Emitting a SARIF
+    replacement for a sub-expression would therefore risk deleting unrelated
+    source. Restrict one-click fixes to regex findings whose replacement text
+    is already a complete source line (including any indentation).
+    """
+    if issue.fix_type != FixType.SAFE_FIX or not issue.auto_fix_replacement:
+        return None
+    if str(getattr(issue, "engine", "")).lower() != "regex":
+        return None
+
+    snippet_lines = issue.code_snippet.splitlines() or [""]
+    replacement_lines = issue.auto_fix_replacement.splitlines() or [""]
+    if len(snippet_lines) != 1:
+        return None
+
+    replacement_first = replacement_lines[0]
+    replacement_indent = len(replacement_first) - len(replacement_first.lstrip())
+    if replacement_indent == 0 and max(1, issue.column_number) != 1:
+        return None
+
+    snippet = snippet_lines[0]
+    if snippet.rstrip() and replacement_lines[-1].rstrip():
+        if snippet.rstrip()[-1] != replacement_lines[-1].rstrip()[-1]:
+            return None
+
+    rendered_replacement = "\n".join(replacement_lines)
+    # BaseRule.create_issue normalizes code_snippet with .strip(), so the
+    # replacement's leading indentation is the only retained source of the
+    # original line's indentation for these full-line regex fixes.
+    original_width = replacement_indent + len(snippet)
+    deleted_region: Dict[str, Any] = {
+        "startLine": max(1, issue.line_number),
+        "startColumn": 1,
+        "endLine": max(1, issue.line_number),
+        "endColumn": original_width + 1,
+    }
+
+    return {
+        "description": {"text": "Apply C-GULL mechanically safe fix"},
+        "artifactChanges": [{
+            "artifactLocation": {"uri": issue.file_path.replace("\\", "/")},
+            "replacements": [{
+                "deletedRegion": deleted_region,
+                "insertedContent": {"text": rendered_replacement},
+            }],
+        }],
+    }
+
+
 class ReportGenerator:
     """
     Formats ScanResult into various standard security reporting formats.
@@ -60,7 +112,6 @@ class ReportGenerator:
         from .rules import RULE_REGISTRY
 
         for issue in result.issues:
-            # Rule entry
             if issue.rule_id not in rules_dict:
                 rule_cls = RULE_REGISTRY.get(issue.rule_id)
                 full_desc = (getattr(rule_cls, "description", None) or issue.rule_name) if rule_cls else issue.rule_name
@@ -79,7 +130,6 @@ class ReportGenerator:
                     }
                 }
 
-            # SARIF level
             level = "error" if issue.impact == Severity.HIGH else ("warning" if issue.impact == Severity.MEDIUM else "note")
 
             props: Dict[str, Any] = {
@@ -95,7 +145,7 @@ class ReportGenerator:
             if issue.confidence:
                 props["confidence"] = issue.confidence.value if hasattr(issue.confidence, "value") else str(issue.confidence)
 
-            results_list.append({
+            sarif_result: Dict[str, Any] = {
                 "ruleId": issue.rule_id,
                 "level": level,
                 "message": {"text": issue.message},
@@ -113,7 +163,11 @@ class ReportGenerator:
                 "partialFingerprints": {
                     "cgullFingerprint/v1": issue.fingerprint
                 } if issue.fingerprint else {}
-            })
+            }
+            sarif_fix = _sarif_fix_for_issue(issue)
+            if sarif_fix is not None:
+                sarif_result["fixes"] = [sarif_fix]
+            results_list.append(sarif_result)
 
         disc = result.files_discovered or (result.scanned_files_count + len(result.ignored_paths) + len(result.failed_paths))
         analyzed = result.files_analyzed or result.scanned_files_count
