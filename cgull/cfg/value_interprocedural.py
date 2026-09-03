@@ -5,16 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Mapping, Optional, Tuple
 
+from pycparser import c_parser
+
 from ..semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
 from .call_graph import build_translation_unit_call_graph
 from .construction import build_cfg, find_function_def
-from .fixed_point import FixedPointConfig
+from .fixed_point import FixedPointConfig, FixedPointDiagnostic
 from .value_facts import (
     ValueDataflowResult,
     ValueFact,
     ValueFunctionSummary,
     ValueSummaryAnalysisResult,
     _canonical_location,
+    _expression_fact,
     _join_facts,
     _merge_state,
     _transfer_event,
@@ -27,7 +30,7 @@ class TranslationUnitValueResult:
     summaries: Mapping[str, ValueFunctionSummary]
     parameter_facts: Mapping[str, Tuple[ValueFact, ...]]
     function_results: Mapping[str, ValueDataflowResult]
-    diagnostics: Tuple[object, ...] = ()
+    diagnostics: Tuple[FixedPointDiagnostic, ...] = ()
 
     def function(self, name: str) -> Optional[ValueDataflowResult]:
         return self.function_results.get(name)
@@ -124,13 +127,21 @@ def analyze_translation_unit_value_dataflow(
 
         if recursive and not converged:
             for name in component:
-                incoming[name] = [ValueFact(degradations=frozenset({"CONVERGENCE_LIMIT"})) for _ in incoming[name]]
+                incoming[name] = [
+                    ValueFact(degradations=frozenset({"CONVERGENCE_LIMIT"}))
+                    for _ in incoming[name]
+                ]
             diagnostics.append(
-                {
-                    "code": "CONVERGENCE_LIMIT",
-                    "functions": component,
-                    "iterations": budget,
-                }
+                FixedPointDiagnostic(
+                    code="CONVERGENCE_LIMIT",
+                    functions=component,
+                    iterations=budget,
+                    message=(
+                        "caller-to-formal value propagation did not converge within "
+                        f"{budget} iterations; affected parameter facts were degraded "
+                        "to conservative unknown"
+                    ),
+                )
             )
 
         # Once the SCC's incoming facts are stable, analyze it one final time so
@@ -202,7 +213,16 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
             for call in getattr(event, "calls", ()):
                 if not call.direct_callee:
                     continue
-                actuals = tuple(_actual_fact(text, state) for text in call.actual_arguments)
+                actuals = tuple(
+                    _actual_fact(
+                        text,
+                        state,
+                        registry,
+                        summaries,
+                        evidence_limit,
+                    )
+                    for text in call.actual_arguments
+                )
                 key = (event.node_id, call.direct_callee, call.actual_arguments)
                 old = calls.get(key)
                 if old is None:
@@ -233,15 +253,38 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
     )
 
 
-def _actual_fact(text: str, state: Mapping[str, ValueFact]) -> ValueFact:
-    stripped = text.strip()
-    if stripped.startswith('"'):
-        from .value_facts import EvidenceRef, FormatLiteralness, ValueProvenance
+def _parse_actual_expression(text: str):
+    """Parse one CFG actual argument back into an expression AST.
 
-        return ValueFact(
-            ValueProvenance.TRUSTED,
-            FormatLiteralness.LITERAL,
-            (EvidenceRef("SOURCE", identity=stripped),),
+    CFG call metadata intentionally stores stable source spellings.  Re-parsing
+    just the actual expression lets caller-to-formal propagation reuse the same
+    semantic-model and summary-aware evaluator as ordinary assignments, rather
+    than treating call expressions as variable names.
+    """
+    try:
+        parsed = c_parser.CParser().parse(
+            f"void __cgull_actual(void) {{ __cgull_sink({text}); }}"
         )
-    key = _canonical_location(stripped.lstrip("& "))
+        call = parsed.ext[0].body.block_items[0]
+        args = list(getattr(getattr(call, "args", None), "exprs", ()) or ())
+        return args[0] if args else None
+    except Exception:
+        return None
+
+
+def _actual_fact(
+    text: str,
+    state: Mapping[str, ValueFact],
+    registry: SemanticModelRegistry,
+    summaries: Mapping[str, ValueFunctionSummary],
+    evidence_limit: int,
+) -> ValueFact:
+    expression = _parse_actual_expression(text)
+    if expression is not None:
+        return _expression_fact(expression, state, registry, summaries, evidence_limit)
+
+    # Keep a conservative fallback for parser-hostile spellings.  Identity
+    # locations still preserve already-known facts; everything else remains
+    # UNKNOWN instead of accidentally being classified as safe.
+    key = _canonical_location(text.strip().lstrip("& "))
     return state.get(key, ValueFact())
