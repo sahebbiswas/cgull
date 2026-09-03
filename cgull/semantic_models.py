@@ -154,7 +154,10 @@ class CallSemanticModel:
 
     @property
     def is_modeled(self) -> bool:
-        return any((self.source, self.validator, self.sink, self.effect))
+        # Generic call effects are consumed by memory/format analyses, but do not
+        # by themselves constitute a security-dataflow model. Keeping them out
+        # of this gate preserves conservative invalidation for effect-only calls.
+        return any((self.source, self.validator, self.sink))
 
 
 @dataclass(frozen=True)
