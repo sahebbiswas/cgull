@@ -88,7 +88,7 @@ def test_address_of_actual_preserves_underlying_value_fact():
     ctx = build_security_context(
         r'''
         char *external_read(void);
-        void consume(char **value);
+        void consume(char **value) { (void)value; }
         void caller(void) {
             char *buf = external_read();
             consume(&buf);
