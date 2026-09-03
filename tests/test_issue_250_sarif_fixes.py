@@ -25,53 +25,18 @@ def _apply_single_line_sarif_replacement(source: str, replacement: dict) -> str:
     body = original[:-1] if newline else original
     start = region["startColumn"] - 1
     end = region["endColumn"] - 1
-    lines[index] = (
-        body[:start]
-        + replacement["insertedContent"]["text"]
-        + body[end:]
-        + newline
-    )
+    lines[index] = body[:start] + replacement["insertedContent"]["text"] + body[end:] + newline
     return "".join(lines)
 
 
-def test_sarif_full_line_safe_fix_applies_cleanly_and_validates_schema():
-    source = "void f(void) {\n    int *p;\n}\n"
-    scanner = CGullScanner(
-        rules=[UninitializedPointersRule()],
-        engine_mode=AnalysisEngine.REGEX,
-    )
-    result = scanner.scan_text(source, "src\\pointer.c")
-    issue = next(issue for issue in result.issues if issue.fix_type == FixType.SAFE_FIX)
-
-    parsed = json.loads(ReportGenerator.to_sarif(result))
-    jsonschema.validate(instance=parsed, schema=SARIF_SCHEMA)
-
-    sarif_result = next(r for r in parsed["runs"][0]["results"] if r["ruleId"] == issue.rule_id)
-    assert len(sarif_result["fixes"]) == 1
-
-    fix = sarif_result["fixes"][0]
-    assert fix["description"]["text"] == "Apply C-GULL mechanically safe fix"
-    change = fix["artifactChanges"][0]
-    assert change["artifactLocation"]["uri"] == "src/pointer.c"
-
-    replacement = change["replacements"][0]
-    region = replacement["deletedRegion"]
-    assert region["startColumn"] == 1
-    assert region["endColumn"] == len("    int *p;") + 1
-    assert replacement["insertedContent"]["text"] == "    int *p = NULL;"
-
-    updated = _apply_single_line_sarif_replacement(source, replacement)
-    assert updated == "void f(void) {\n    int *p = NULL;\n}\n"
-
-
-def test_sarif_subspan_safe_fix_is_not_exposed_without_exact_span_metadata():
+def test_sarif_subexpression_safe_fix_is_not_exposed_without_exact_span():
     scanner = CGullScanner(
         rules=[FormatStringRule()],
         engine_mode=AnalysisEngine.REGEX,
     )
     result = scanner.scan_text(
         "void f(char *user_input) {\n    printf(user_input);\n}\n",
-        "format.c",
+        "src\\format.c",
     )
     issue = next(issue for issue in result.issues if issue.fix_type == FixType.SAFE_FIX)
     assert issue.auto_fix_replacement == 'printf("%s", user_input)'
@@ -81,6 +46,34 @@ def test_sarif_subspan_safe_fix_is_not_exposed_without_exact_span_metadata():
 
     sarif_result = next(r for r in parsed["runs"][0]["results"] if r["ruleId"] == issue.rule_id)
     assert "fixes" not in sarif_result
+
+
+def test_sarif_full_line_safe_fix_applies_exactly_and_validates_schema():
+    source = "void f(void) {\n    int *p;\n    use(p);\n}\n"
+    scanner = CGullScanner(
+        rules=[UninitializedPointersRule()],
+        engine_mode=AnalysisEngine.REGEX,
+    )
+    result = scanner.scan_text(source, "src\\pointer.c")
+    issue = next(issue for issue in result.issues if issue.fix_type == FixType.SAFE_FIX)
+    assert issue.code_snippet == "    int *p;"
+    assert issue.auto_fix_replacement == "    int *p = NULL;"
+
+    parsed = json.loads(ReportGenerator.to_sarif(result))
+    jsonschema.validate(instance=parsed, schema=SARIF_SCHEMA)
+
+    sarif_result = next(r for r in parsed["runs"][0]["results"] if r["ruleId"] == issue.rule_id)
+    fix = sarif_result["fixes"][0]
+    change = fix["artifactChanges"][0]
+    assert change["artifactLocation"]["uri"] == "src/pointer.c"
+
+    replacement = change["replacements"][0]
+    region = replacement["deletedRegion"]
+    assert region["startColumn"] == 1
+    assert region["endColumn"] == len(issue.code_snippet) + 1
+    assert _apply_single_line_sarif_replacement(source, replacement) == (
+        "void f(void) {\n    int *p = NULL;\n    use(p);\n}\n"
+    )
 
 
 def test_sarif_suggested_fix_does_not_offer_one_click_replacement():
