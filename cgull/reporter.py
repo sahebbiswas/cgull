@@ -38,24 +38,29 @@ def _get_condition_tag(issue: Any) -> str:
 
 
 def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
-    """Build a SARIF 2.1.0 fix for a mechanically safe issue replacement."""
+    """Build a SARIF 2.1.0 full-line fix for a mechanically safe issue."""
     if issue.fix_type != FixType.SAFE_FIX or not issue.auto_fix_replacement:
         return None
 
     snippet_lines = issue.code_snippet.splitlines() or [""]
     start_line = max(1, issue.line_number)
-    start_column = max(1, issue.column_number)
+    indent = ""
+    first_snippet_line = snippet_lines[0]
+    if first_snippet_line:
+        indent = first_snippet_line[: len(first_snippet_line) - len(first_snippet_line.lstrip())]
+
+    replacement_lines = issue.auto_fix_replacement.splitlines() or [""]
+    if replacement_lines[0][:1] in (" ", "\t"):
+        rendered_replacement = "\n".join(replacement_lines)
+    else:
+        rendered_replacement = "\n".join(indent + line for line in replacement_lines)
+
     deleted_region: Dict[str, Any] = {
         "startLine": start_line,
-        "startColumn": start_column,
+        "startColumn": 1,
+        "endLine": start_line + len(snippet_lines) - 1,
+        "endColumn": len(snippet_lines[-1]) + 1,
     }
-
-    if len(snippet_lines) == 1:
-        deleted_region["endLine"] = start_line
-        deleted_region["endColumn"] = start_column + len(snippet_lines[0])
-    else:
-        deleted_region["endLine"] = start_line + len(snippet_lines) - 1
-        deleted_region["endColumn"] = len(snippet_lines[-1]) + 1
 
     return {
         "description": {"text": "Apply C-GULL mechanically safe fix"},
@@ -63,7 +68,7 @@ def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
             "artifactLocation": {"uri": issue.file_path.replace("\\", "/")},
             "replacements": [{
                 "deletedRegion": deleted_region,
-                "insertedContent": {"text": issue.auto_fix_replacement},
+                "insertedContent": {"text": rendered_replacement},
             }],
         }],
     }
@@ -92,7 +97,6 @@ class ReportGenerator:
         from .rules import RULE_REGISTRY
 
         for issue in result.issues:
-            # Rule entry
             if issue.rule_id not in rules_dict:
                 rule_cls = RULE_REGISTRY.get(issue.rule_id)
                 full_desc = (getattr(rule_cls, "description", None) or issue.rule_name) if rule_cls else issue.rule_name
@@ -111,7 +115,6 @@ class ReportGenerator:
                     }
                 }
 
-            # SARIF level
             level = "error" if issue.impact == Severity.HIGH else ("warning" if issue.impact == Severity.MEDIUM else "note")
 
             props: Dict[str, Any] = {
