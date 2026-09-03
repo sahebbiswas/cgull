@@ -56,7 +56,9 @@ def test_sarif_full_line_safe_fix_applies_exactly_and_validates_schema():
     )
     result = scanner.scan_text(source, "src\\pointer.c")
     issue = next(issue for issue in result.issues if issue.fix_type == FixType.SAFE_FIX)
-    assert issue.code_snippet == "    int *p;"
+    # Issue snippets are intentionally normalized by BaseRule.create_issue;
+    # the full-line replacement retains the source indentation.
+    assert issue.code_snippet == "int *p;"
     assert issue.auto_fix_replacement == "    int *p = NULL;"
 
     parsed = json.loads(ReportGenerator.to_sarif(result))
@@ -69,8 +71,10 @@ def test_sarif_full_line_safe_fix_applies_exactly_and_validates_schema():
 
     replacement = change["replacements"][0]
     region = replacement["deletedRegion"]
+    original_line = source.splitlines()[1]
+    assert original_line == "    int *p;"
     assert region["startColumn"] == 1
-    assert region["endColumn"] == len(issue.code_snippet) + 1
+    assert region["endColumn"] == len(original_line) + 1
     assert _apply_single_line_sarif_replacement(source, replacement) == (
         "void f(void) {\n    int *p = NULL;\n    use(p);\n}\n"
     )
