@@ -4,6 +4,7 @@ import unittest
 
 from cgull.analysis_session import AnalysisSession
 from cgull.call_effects import ReturnEffect
+from cgull.cfg.model import CFGCall
 from cgull.semantic_models import SemanticModelConfigError, parse_semantic_models
 
 
@@ -25,6 +26,20 @@ class TestCallEffectModels(unittest.TestCase):
         self.assertEqual(free.deallocates, frozenset({0}))
         self.assertEqual(realloc.return_effect, ReturnEffect.ALLOCATION)
         self.assertEqual(realloc.deallocates, frozenset({0}))
+
+    def test_effect_only_io_call_keeps_security_dataflow_fallback(self):
+        registry = parse_semantic_models({})
+        call = CFGCall(
+            direct_callee="read",
+            callee_expression="read",
+            actual_arguments=("fd", "&buffer", "size"),
+            result_target="count",
+        )
+
+        model = registry.for_call(call)
+        self.assertIsNotNone(model.effect)
+        self.assertEqual(model.effect.output_parameters, frozenset({1}))
+        self.assertFalse(model.is_modeled)
 
     def test_project_model_overrides_builtin_by_function_name(self):
         registry = parse_semantic_models(
