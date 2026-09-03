@@ -350,7 +350,7 @@ def _expression_fact(node, state, registry, summaries, limit) -> ValueFact:
     if kind == "Constant":
         literal = FormatLiteralness.LITERAL if getattr(node, "type", None) == "string" else FormatLiteralness.UNKNOWN
         return ValueFact(ValueProvenance.TRUSTED, literal, (_evidence(node, "SOURCE", str(getattr(node, "value", ""))),))
-    if kind == "UnaryOp" and getattr(node, "op", None) in {"+", "-", "~", "!"}:
+    if kind == "UnaryOp" and getattr(node, "op", None) in {"+", "-", "~", "!", "&"}:
         return _expression_fact(node.expr, state, registry, summaries, limit)
     if kind == "TernaryOp":
         return _join_facts(
