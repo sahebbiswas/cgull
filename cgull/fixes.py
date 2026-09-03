@@ -51,8 +51,8 @@ def _render_replacement(original_line: str, replacement: str) -> str:
         rendered_lines = [indent + part for part in replacement_lines]
 
     # Preserve the source file's newline convention when one is available.
-    # An unterminated final line has no newline to preserve, but multi-line
-    # replacement text still needs separators between its logical lines.
+    # A final line without a terminator has no newline to preserve, but
+    # multi-line replacement text still needs separators between logical lines.
     separator = newline or "\n"
     rendered = separator.join(rendered_lines)
     return rendered + newline
