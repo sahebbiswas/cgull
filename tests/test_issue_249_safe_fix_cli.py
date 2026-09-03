@@ -57,6 +57,28 @@ def test_multiple_safe_fixes_preserve_indentation_and_write_exact_output(tmp_pat
     )
 
 
+def test_existing_indent_in_replacement_is_not_duplicated(tmp_path):
+    source = tmp_path / "regex_indent.c"
+    source.write_text("void f(void) {\n    int *p;\n}\n", encoding="utf-8")
+    issue = _issue(source, 2, "int *p;", "    int *p = NULL;")
+
+    result = apply_safe_fixes([issue], write=True)
+
+    assert result.replacements == 1
+    assert source.read_text(encoding="utf-8") == "void f(void) {\n    int *p = NULL;\n}\n"
+
+
+def test_multiline_replacement_on_final_line_without_newline_keeps_separator(tmp_path):
+    source = tmp_path / "final_line.c"
+    source.write_text("foo();", encoding="utf-8")
+    issue = _issue(source, 1, "foo();", "foo();\nbar();")
+
+    result = apply_safe_fixes([issue], write=True)
+
+    assert result.replacements == 1
+    assert source.read_text(encoding="utf-8") == "foo();\nbar();"
+
+
 def test_suggested_fix_is_never_written(tmp_path):
     source = tmp_path / "suggested.c"
     source.write_text("strcpy(dst, src);\n", encoding="utf-8")
