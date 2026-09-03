@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -83,9 +84,14 @@ def test_expensive_domains_are_lazy_and_cached():
 
     ctx = Context()
     session = AnalysisSession(ctx)
+    summary_result = SimpleNamespace(
+        summaries={"f": "summary"},
+        diagnostics=(),
+        iterations_by_scc={},
+    )
 
     with patch("cgull.cfg.call_graph.build_translation_unit_call_graph", return_value="graph") as graph_builder, patch(
-        "cgull.cfg.summaries.analyze_function_summaries", return_value={"f": "summary"}
+        "cgull.cfg.summaries.analyze_function_summaries_detailed", return_value=summary_result
     ) as summary_builder:
         assert graph_builder.call_count == 0
         assert summary_builder.call_count == 0
@@ -95,6 +101,7 @@ def test_expensive_domains_are_lazy_and_cached():
         assert session.call_graph == "graph"
         assert session.function_summaries == {"f": "summary"}
         assert session.function_summaries == {"f": "summary"}
+        assert session.summary_diagnostics == ()
 
         assert graph_builder.call_count == 1
         assert summary_builder.call_count == 1
