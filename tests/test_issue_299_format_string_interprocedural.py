@@ -1,7 +1,7 @@
 from cgull.ast_analyzer import CASTContext
 from cgull.call_effects import BUILTIN_CALL_EFFECTS, CallEffectModel
 from cgull.engine import CGullScanner
-from cgull.models import AnalysisEngine, Confidence
+from cgull.models import AnalysisEngine, Confidence, FixType
 from cgull.rules.format_string import FormatStringRule
 from cgull.semantic_models import (
     SemanticLocation,
@@ -94,6 +94,58 @@ void entry(char *user) {
     assert len(issues) == 1
     assert issues[0].line_number == 4
     assert "log_wrapper" in issues[0].message
+
+
+def test_mutable_local_literal_requires_storage_integrity_before_suppression():
+    code = """
+int printf(const char *fmt, ...);
+char *fgets(char *s, int n, void *stream);
+void entry(void) {
+    char format[32] = "fixed string";
+    fgets(format, sizeof(format), 0);
+    printf(format);
+}
+"""
+    result = _scan(code)
+    issues = [issue for issue in result.issues if issue.rule_id == "CGULL-002"]
+    assert len(issues) == 1
+    assert issues[0].line_number == 7
+
+
+def test_directive_bearing_local_literal_is_not_suppressed():
+    code = """
+int printf(const char *fmt, ...);
+void entry(void) {
+    char format[] = "%x %x";
+    printf(format);
+}
+"""
+    result = _scan(code)
+    issues = [issue for issue in result.issues if issue.rule_id == "CGULL-002"]
+    assert len(issues) == 1
+
+
+def test_single_argument_printf_keeps_safe_fix():
+    code = """
+int printf(const char *fmt, ...);
+void entry(char *user) { printf(user); }
+"""
+    result = _scan(code)
+    issue = next(issue for issue in result.issues if issue.rule_id == "CGULL-002")
+    assert issue.fix_type is FixType.SAFE_FIX
+    assert issue.auto_fix_replacement == 'printf("%s", user)'
+
+
+def test_variadic_printf_does_not_offer_behavior_changing_safe_fix():
+    code = """
+int printf(const char *fmt, ...);
+char *get_fmt(void);
+void entry(int count) { printf(get_fmt(), count); }
+"""
+    result = _scan(code)
+    issue = next(issue for issue in result.issues if issue.rule_id == "CGULL-002")
+    assert issue.fix_type is FixType.SUGGESTED_FIX
+    assert issue.auto_fix_replacement is None
 
 
 def test_regex_mode_keeps_existing_syntactic_behavior():
