@@ -84,6 +84,24 @@ def test_multiple_safe_and_unsafe_callers_merge_formal_fact_conservatively():
     assert facts.query_format_literalness("format", sink.node_id) is FormatLiteralness.UNKNOWN
 
 
+def test_address_of_actual_preserves_underlying_value_fact():
+    ctx = build_security_context(
+        r'''
+        char *external_read(void);
+        void consume(char **value);
+        void caller(void) {
+            char *buf = external_read();
+            consume(&buf);
+        }
+        '''
+    )
+    result = analyze_translation_unit_value_dataflow(ctx, build_security_models())
+
+    incoming = result.parameter_facts["consume"][0]
+    assert incoming.provenance is ValueProvenance.UNTRUSTED
+    assert incoming.format_literalness is FormatLiteralness.NON_LITERAL
+
+
 def test_recursive_summary_converges_with_parameter_relationship():
     ctx = build_security_context(
         r'''
