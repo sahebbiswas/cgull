@@ -1,9 +1,12 @@
 from unittest.mock import patch
 
+import pytest
+
 from cgull import CGullScanner
 from cgull.analysis_session import AnalysisSession, analysis_session_for
 from cgull.models import AnalysisEngine
 from cgull.rules.base import BaseRule
+from cgull.semantic_models import SemanticModelRegistry, SourceModel, SemanticLocation, SemanticLocationKind
 
 
 class _SummaryProbeRule(BaseRule):
@@ -105,5 +108,43 @@ def test_analysis_session_for_reuses_context_session():
     ctx = Context()
     first = analysis_session_for(ctx)
     second = analysis_session_for(ctx)
+
+    assert first is second
+
+
+def test_analysis_session_rejects_different_nonempty_semantic_registries():
+    class Context:
+        pass
+
+    out = SemanticLocation(SemanticLocationKind.RETURN)
+    first_registry = SemanticModelRegistry(
+        sources={"source_a": SourceModel("source_a", (out,))}
+    )
+    second_registry = SemanticModelRegistry(
+        sources={"source_b": SourceModel("source_b", (out,))}
+    )
+
+    ctx = Context()
+    analysis_session_for(ctx, semantic_models=first_registry)
+
+    with pytest.raises(ValueError, match="same semantic model registry"):
+        analysis_session_for(ctx, semantic_models=second_registry)
+
+
+def test_analysis_session_accepts_equivalent_semantic_registry():
+    class Context:
+        pass
+
+    out = SemanticLocation(SemanticLocationKind.RETURN)
+    first_registry = SemanticModelRegistry(
+        sources={"source_a": SourceModel("source_a", (out,))}
+    )
+    equivalent_registry = SemanticModelRegistry(
+        sources={"source_a": SourceModel("source_a", (out,))}
+    )
+
+    ctx = Context()
+    first = analysis_session_for(ctx, semantic_models=first_registry)
+    second = analysis_session_for(ctx, semantic_models=equivalent_registry)
 
     assert first is second
