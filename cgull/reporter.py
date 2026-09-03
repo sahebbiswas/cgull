@@ -38,28 +38,40 @@ def _get_condition_tag(issue: Any) -> str:
 
 
 def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
-    """Build a SARIF 2.1.0 full-line fix for a mechanically safe issue."""
+    """Build a SARIF fix only when the replacement is provably a full line.
+
+    ``Issue`` does not yet carry an exact replacement span. Emitting a SARIF
+    replacement for a sub-expression would therefore risk deleting unrelated
+    source. Restrict one-click fixes to regex findings whose replacement text
+    is already a complete source line (including any indentation).
+    """
     if issue.fix_type != FixType.SAFE_FIX or not issue.auto_fix_replacement:
+        return None
+    if str(getattr(issue, "engine", "")).lower() != "regex":
         return None
 
     snippet_lines = issue.code_snippet.splitlines() or [""]
-    start_line = max(1, issue.line_number)
-    indent = ""
-    first_snippet_line = snippet_lines[0]
-    if first_snippet_line:
-        indent = first_snippet_line[: len(first_snippet_line) - len(first_snippet_line.lstrip())]
-
     replacement_lines = issue.auto_fix_replacement.splitlines() or [""]
-    if replacement_lines[0][:1] in (" ", "\t"):
-        rendered_replacement = "\n".join(replacement_lines)
-    else:
-        rendered_replacement = "\n".join(indent + line for line in replacement_lines)
+    if len(snippet_lines) != 1:
+        return None
 
+    replacement_first = replacement_lines[0]
+    replacement_indent = len(replacement_first) - len(replacement_first.lstrip())
+    if replacement_indent == 0 and max(1, issue.column_number) != 1:
+        return None
+
+    snippet = snippet_lines[0]
+    if snippet.rstrip() and replacement_lines[-1].rstrip():
+        if snippet.rstrip()[-1] != replacement_lines[-1].rstrip()[-1]:
+            return None
+
+    rendered_replacement = "\n".join(replacement_lines)
+    original_width = replacement_indent + len(snippet)
     deleted_region: Dict[str, Any] = {
-        "startLine": start_line,
+        "startLine": max(1, issue.line_number),
         "startColumn": 1,
-        "endLine": start_line + len(snippet_lines) - 1,
-        "endColumn": len(snippet_lines[-1]) + 1,
+        "endLine": max(1, issue.line_number),
+        "endColumn": original_width + 1,
     }
 
     return {
