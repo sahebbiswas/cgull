@@ -96,42 +96,59 @@ def _call_sort_key(call: CFGCall) -> Tuple[Any, ...]:
 
 
 def _strongly_connected_components(names: Sequence[str], adjacency: Mapping[str, Tuple[str, ...]]) -> Tuple[Tuple[str, ...], ...]:
-    """Tarjan SCCs with stable node/edge visitation and stable component order."""
-    index = 0
-    indices: Dict[str, int] = {}
-    lowlinks: Dict[str, int] = {}
-    stack = []
-    on_stack = set()
+    """Compute deterministic SCCs without depending on Python recursion depth.
+
+    This is an iterative Kosaraju traversal. Both passes visit nodes and edges in
+    stable lexical order so component membership and ordering are repeatable.
+    """
+    ordered_names = tuple(sorted(names))
+    seen = set()
+    finish_order = []
+
+    # Iterative DFS that records vertices on exit. A 1,000+ function call chain
+    # therefore consumes heap-backed Python containers rather than call frames.
+    for start in ordered_names:
+        if start in seen:
+            continue
+        seen.add(start)
+        frames = [(start, 0)]
+        while frames:
+            name, next_index = frames[-1]
+            neighbors = adjacency.get(name, ())
+            if next_index < len(neighbors):
+                callee = neighbors[next_index]
+                frames[-1] = (name, next_index + 1)
+                if callee not in seen:
+                    seen.add(callee)
+                    frames.append((callee, 0))
+            else:
+                finish_order.append(name)
+                frames.pop()
+
+    reverse = {name: [] for name in ordered_names}
+    for caller in ordered_names:
+        for callee in adjacency.get(caller, ()):
+            reverse[callee].append(caller)
+    stable_reverse = {name: tuple(sorted(callers)) for name, callers in reverse.items()}
+
+    assigned = set()
     components = []
+    for start in reversed(finish_order):
+        if start in assigned:
+            continue
+        assigned.add(start)
+        component = []
+        stack = [start]
+        while stack:
+            name = stack.pop()
+            component.append(name)
+            # Push in reverse lexical order so pop() visits lexical order.
+            for caller in reversed(stable_reverse[name]):
+                if caller not in assigned:
+                    assigned.add(caller)
+                    stack.append(caller)
+        components.append(tuple(sorted(component)))
 
-    def visit(name: str) -> None:
-        nonlocal index
-        indices[name] = index
-        lowlinks[name] = index
-        index += 1
-        stack.append(name)
-        on_stack.add(name)
-
-        for callee in adjacency[name]:
-            if callee not in indices:
-                visit(callee)
-                lowlinks[name] = min(lowlinks[name], lowlinks[callee])
-            elif callee in on_stack:
-                lowlinks[name] = min(lowlinks[name], indices[callee])
-
-        if lowlinks[name] == indices[name]:
-            component = []
-            while True:
-                member = stack.pop()
-                on_stack.remove(member)
-                component.append(member)
-                if member == name:
-                    break
-            components.append(tuple(sorted(component)))
-
-    for name in sorted(names):
-        if name not in indices:
-            visit(name)
     return tuple(sorted(components))
 
 
