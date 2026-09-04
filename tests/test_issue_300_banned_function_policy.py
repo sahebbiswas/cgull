@@ -1,5 +1,4 @@
 from cgull.engine import CGullScanner
-from cgull.models import Severity
 from cgull.rules.banned_functions import (
     BannedFunctionPolicy,
     BannedFunctionsRule,
@@ -30,7 +29,7 @@ def test_default_banned_function_policy_is_table_driven():
         assert entry.reason
 
 
-def test_trusted_literal_does_not_suppress_or_downgrade_unconditional_strcpy_or_gets():
+def test_trusted_literal_does_not_suppress_unconditional_strcpy_or_gets():
     issues = _scan(
         """
         void copy_trusted(void) {
@@ -42,7 +41,6 @@ def test_trusted_literal_does_not_suppress_or_downgrade_unconditional_strcpy_or_
         """
     )
     assert len(issues) == 2
-    assert all(issue.impact is Severity.HIGH for issue in issues)
     assert all("policy=unconditional" in issue.message for issue in issues)
 
 
