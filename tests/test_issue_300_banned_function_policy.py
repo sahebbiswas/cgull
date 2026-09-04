@@ -61,7 +61,7 @@ def test_bounded_direct_scanf_is_suppressed_but_unbounded_scanf_is_reported():
     assert "unbounded %s" in issues[0].message
 
 
-def test_bounded_scanf_format_propagates_across_helper_boundary():
+def test_bounded_scanf_format_propagates_across_static_helper_boundary():
     issues = _scan(
         """
         static void read_with(const char *fmt, char *out) {
@@ -75,6 +75,24 @@ def test_bounded_scanf_format_propagates_across_helper_boundary():
         """
     )
     assert issues == []
+
+
+def test_bounded_scanf_format_does_not_suppress_externally_visible_helper():
+    issues = _scan(
+        """
+        void read_with(const char *fmt, char *out) {
+            scanf(fmt, out);
+        }
+
+        void caller(void) {
+            char name[32];
+            read_with("%31s", name);
+        }
+        """
+    )
+    assert len(issues) == 1
+    assert "externally visible helper may have callers outside this translation unit" in issues[0].message
+    assert "conservative fallback retained" in issues[0].message
 
 
 def test_unbounded_scanf_format_propagates_across_helper_boundary():
@@ -104,6 +122,24 @@ def test_unknown_scanf_format_retains_conservative_fallback_coverage():
     )
     assert len(issues) == 1
     assert "conservative fallback retained" in issues[0].message
+
+
+def test_multi_banned_call_line_preserves_each_producing_callee_policy():
+    issues = _scan(
+        """
+        void f(char *a, const char *b, char *c) {
+            strcpy(a, b); scanf("%s", c);
+        }
+        """
+    )
+    assert len(issues) == 2
+
+    strcpy_issues = [issue for issue in issues if "'strcpy'" in issue.message]
+    scanf_issues = [issue for issue in issues if "'scanf'" in issue.message]
+    assert len(strcpy_issues) == 1
+    assert len(scanf_issues) == 1
+    assert "policy=unconditional" in strcpy_issues[0].message
+    assert "policy=data-dependent" in scanf_issues[0].message
 
 
 def test_project_configured_bans_are_unconditional_unless_explicitly_overridden():
