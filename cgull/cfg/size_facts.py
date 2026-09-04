@@ -64,14 +64,24 @@ class SizeFact:
         lower = self.lower
         if lower is not None and lower > upper:
             return SizeFact(degradations=self.degradations | {"INFEASIBLE_GUARD"})
-        return SizeFact(lower=lower, upper=upper, parameter_index=self.parameter_index, degradations=self.degradations)
+        return SizeFact(
+            lower=lower,
+            upper=upper,
+            parameter_index=self.parameter_index,
+            degradations=self.degradations,
+        )
 
     def with_lower(self, lower: int) -> "SizeFact":
         lower = max(0, int(lower))
         upper = self.upper
         if upper is not None and lower > upper:
             return SizeFact(degradations=self.degradations | {"INFEASIBLE_GUARD"})
-        return SizeFact(lower=lower, upper=upper, parameter_index=self.parameter_index, degradations=self.degradations)
+        return SizeFact(
+            lower=lower,
+            upper=upper,
+            parameter_index=self.parameter_index,
+            degradations=self.degradations,
+        )
 
 
 def join_size_facts(left: SizeFact, right: SizeFact) -> SizeFact:
@@ -79,8 +89,16 @@ def join_size_facts(left: SizeFact, right: SizeFact) -> SizeFact:
     if left == right:
         return left
     relation = left.parameter_index if left.parameter_index == right.parameter_index else None
-    lower = min(left.lower, right.lower) if left.lower is not None and right.lower is not None else None
-    upper = max(left.upper, right.upper) if left.upper is not None and right.upper is not None else None
+    lower = (
+        min(left.lower, right.lower)
+        if left.lower is not None and right.lower is not None
+        else None
+    )
+    upper = (
+        max(left.upper, right.upper)
+        if left.upper is not None and right.upper is not None
+        else None
+    )
     return SizeFact(
         lower=lower,
         upper=upper,
@@ -282,6 +300,11 @@ def _analyze_statement(node, state, calls, caller, struct_members):
         for item in list(getattr(node, "block_items", ()) or ()):
             current = _analyze_statement(item, current, calls, caller, struct_members)
         return current
+    if kind == "DeclList":
+        current = state
+        for decl in list(getattr(node, "decls", ()) or ()):
+            current = _analyze_statement(decl, current, calls, caller, struct_members)
+        return current
     if kind == "Decl":
         _transfer_decl(node, state, struct_members)
         _record_calls(node.init, state, calls, caller, struct_members)
@@ -297,15 +320,28 @@ def _analyze_statement(node, state, calls, caller, struct_members):
         _refine_condition(node.cond, true_state, truth=True, struct_members=struct_members)
         _refine_condition(node.cond, false_state, truth=False, struct_members=struct_members)
         true_out = _analyze_statement(node.iftrue, true_state, calls, caller, struct_members)
-        false_out = _analyze_statement(node.iffalse, false_state, calls, caller, struct_members) if node.iffalse else false_state
+        false_out = (
+            _analyze_statement(node.iffalse, false_state, calls, caller, struct_members)
+            if node.iffalse
+            else false_state
+        )
         return _join_states(true_out, false_out)
     if kind in {"While", "DoWhile", "For"}:
+        if kind == "For":
+            state = _analyze_statement(
+                getattr(node, "init", None), state, calls, caller, struct_members
+            )
         cond = getattr(node, "cond", None)
         _record_calls(cond, state, calls, caller, struct_members)
         body_state = state.copy()
         _refine_condition(cond, body_state, truth=True, struct_members=struct_members)
         body = getattr(node, "stmt", None)
         body_out = _analyze_statement(body, body_state, calls, caller, struct_members)
+        if kind == "For":
+            next_node = getattr(node, "next", None)
+            _record_calls(next_node, body_out, calls, caller, struct_members)
+            if type(next_node).__name__ == "Assignment":
+                _transfer_assignment(next_node, body_out, struct_members)
         return _join_states(state, body_out)
     _record_calls(node, state, calls, caller, struct_members)
     return state
@@ -459,7 +495,14 @@ def _scalar_fact(node, state, struct_members):
     if node is None:
         return SizeFact()
     kind = type(node).__name__
-    if kind == "Constant" and getattr(node, "type", None) in {"int", "unsigned int", "long", "unsigned long", "long long", "unsigned long long"}:
+    if kind == "Constant" and getattr(node, "type", None) in {
+        "int",
+        "unsigned int",
+        "long",
+        "unsigned long",
+        "long long",
+        "unsigned long long",
+    }:
         value = _parse_int(getattr(node, "value", ""))
         return SizeFact.exact(value) if value is not None and value >= 0 else SizeFact()
     if kind == "ID":
@@ -515,6 +558,7 @@ def _parse_int(value):
 def _decl_array_extent(type_node):
     node = type_node
     multiplier = 1
+    saw_array = False
     while node is not None:
         kind = type(node).__name__
         if kind == "ArrayDecl":
@@ -522,11 +566,14 @@ def _decl_array_extent(type_node):
             if dim is None:
                 return None
             multiplier *= dim
+            saw_array = True
             node = node.type
             continue
         if kind == "TypeDecl":
             width = _scalar_type_width(getattr(node, "type", None))
-            return multiplier * width if width is not None and multiplier != 1 else (multiplier if width == 1 else None)
+            if width is None or not saw_array:
+                return None
+            return multiplier * width
         node = getattr(node, "type", None)
     return None
 
