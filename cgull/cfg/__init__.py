@@ -6,6 +6,7 @@ from .construction import *
 from .fixed_point import *
 from .summaries import *
 from .call_graph import *
+from .size_facts import *
 from .construction import _deref_vars, _deref_vars_with_lines
 from ..ast_analyzer import _PRELUDE_LINE_COUNT
 
@@ -33,6 +34,7 @@ _IMPLEMENTATION_EXPORTS = {
     "Union",
     "logging",
     "json",
+    "c_ast",
     "_IMPLEMENTATION_EXPORTS",
 }
 
