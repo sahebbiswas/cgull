@@ -6,12 +6,12 @@ from typing import List, Dict, Type
 from .base import BaseRule
 from .banned_functions import (
     BannedFunctionsRule,
-    FormatStringRule,
     UnsafeIntegerConversionsRule,
     UncheckedSnprintfReturnRule,
     CommandInjectionRule,
     StrncpyNullTerminationRule,
 )
+from .format_string import FormatStringRule
 from .memory_management import (
     UncheckedDynamicAllocationsRule,
     MissingNullCheckOnFunctionParametersRule,
