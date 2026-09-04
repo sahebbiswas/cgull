@@ -222,13 +222,11 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
             line_content,
         ))
 
-    def _callee_for_issue(self, issue: Issue) -> Optional[str]:
-        """Resolve the legacy issue to the call starting at its reported column."""
-        snippet = issue.code_snippet or ""
+    def _callee_for_issue(self, issue: Issue, line_content: str) -> Optional[str]:
+        """Resolve the legacy issue using its column in the original source line."""
         call_offset = max(0, issue.column_number - 1)
         for fn_name in self.policy:
-            match = re.match(rf'{re.escape(fn_name)}\s*\(', snippet[call_offset:])
-            if match:
+            if re.match(rf'{re.escape(fn_name)}\s*\(', line_content[call_offset:]):
                 return fn_name
         return None
 
@@ -252,7 +250,7 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
         inherited = super().scan_line(file_path, line_number, line_content, full_code, source_lines, masked_line_content)
         issues: List[Issue] = []
         for issue in inherited:
-            fn_name = self._callee_for_issue(issue)
+            fn_name = self._callee_for_issue(issue, line_content)
             if fn_name is None:
                 issues.append(issue)
             elif fn_name != "scanf":
