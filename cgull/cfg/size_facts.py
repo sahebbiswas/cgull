@@ -123,6 +123,7 @@ class SizeCallFact:
     line: int
     extents: Tuple[SizeFact, ...]
     sizes: Tuple[SizeFact, ...]
+    column: int = 0
 
     def classify(self, *, buffer_arg: int, size_arg: int) -> SizeSafety:
         if buffer_arg >= len(self.extents) or size_arg >= len(self.sizes):
@@ -176,7 +177,7 @@ def analyze_translation_unit_size_dataflow(
         name: [None] * len(parameter_names.get(name, ())) for name in fn_meta
     }
     diagnostics = []
-    calls_by_site: Dict[Tuple[str, str, int], SizeCallFact] = {}
+    calls_by_site: Dict[Tuple[str, str, int, int], SizeCallFact] = {}
     struct_members = _collect_struct_member_extents(getattr(ast_ctx, "pycparser_ast", None))
 
     for name in sorted(fn_meta):
@@ -212,7 +213,7 @@ def analyze_translation_unit_size_dataflow(
                     struct_members,
                 )
                 for call in call_facts:
-                    key = (call.caller, call.callee, call.line)
+                    key = (call.caller, call.callee, call.line, call.column)
                     old_call = calls_by_site.get(key)
                     calls_by_site[key] = call if old_call is None else _join_call(old_call, call)
                     if call.callee not in incoming_extents:
@@ -278,6 +279,7 @@ def _join_call(left: SizeCallFact, right: SizeCallFact) -> SizeCallFact:
         line=left.line,
         extents=tuple(join_size_facts(a, b) for a, b in zip(left.extents, right.extents)),
         sizes=tuple(join_size_facts(a, b) for a, b in zip(left.sizes, right.sizes)),
+        column=left.column,
     )
 
 
@@ -405,13 +407,15 @@ def _record_calls(node, state, calls, caller, struct_members):
         callee = _direct_callee(node)
         if callee:
             args = list(getattr(getattr(node, "args", None), "exprs", ()) or ())
+            coord = getattr(node, "coord", None)
             calls.append(
                 SizeCallFact(
                     caller=caller,
                     callee=callee,
-                    line=getattr(getattr(node, "coord", None), "line", 0) or 0,
+                    line=getattr(coord, "line", 0) or 0,
                     extents=tuple(_extent_fact(arg, state, struct_members) for arg in args),
                     sizes=tuple(_scalar_fact(arg, state, struct_members) for arg in args),
+                    column=getattr(coord, "column", 0) or 0,
                 )
             )
         for arg in list(getattr(getattr(node, "args", None), "exprs", ()) or ()):
