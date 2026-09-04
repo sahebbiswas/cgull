@@ -60,10 +60,10 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
     def _annotate(self, issue: Issue, fn_name: str, evidence: str) -> Issue:
         entry = self.policy[fn_name]
         issue.message = f"{issue.message} [{self._policy_text(entry, evidence)}]"
-        if entry.policy is BannedFunctionPolicy.UNCONDITIONAL:
-            # Dataflow can explain an unconditional finding, never suppress or
-            # downgrade the configured policy violation.
-            issue.impact = self.impact
+        # Unconditional means the finding is never suppressed. Preserve the
+        # legacy severity attached to the finding (for example, a provably
+        # bounded strcpy remains LOW/fragile) rather than conflating policy
+        # classification with severity.
         return issue
 
     @classmethod
