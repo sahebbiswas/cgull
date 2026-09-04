@@ -5,12 +5,12 @@ Rule registry for C-GULL Static Analyzer.
 from typing import List, Dict, Type
 from .base import BaseRule
 from .banned_functions import (
-    BannedFunctionsRule,
     UnsafeIntegerConversionsRule,
     UncheckedSnprintfReturnRule,
     CommandInjectionRule,
     StrncpyNullTerminationRule,
 )
+from .banned_functions_policy import BannedFunctionsRule
 from .format_string import FormatStringRule
 from .memory_management import (
     UncheckedDynamicAllocationsRule,
