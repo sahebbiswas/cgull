@@ -113,7 +113,12 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
                     return index
         return None
 
-    def _enclosing_parameter(self, full_code: str, line_number: int, variable: str) -> Optional[Tuple[str, int]]:
+    def _enclosing_parameter(
+        self,
+        full_code: str,
+        line_number: int,
+        variable: str,
+    ) -> Optional[Tuple[str, int, bool]]:
         header = re.compile(r'\b([A-Za-z_]\w*)\s*\(([^{};]*)\)\s*\{', re.DOTALL)
         for match in header.finditer(full_code):
             start_line = self._line_at(full_code, match.start())
@@ -132,13 +137,30 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
                         break
             if end is None or line_number > self._line_at(full_code, end):
                 continue
+
+            # The helper's linkage is part of the proof boundary. In-file call
+            # enumeration is exhaustive only for an internal-linkage function.
+            declaration_start = max(
+                full_code.rfind(';', 0, match.start()),
+                full_code.rfind('{', 0, match.start()),
+                full_code.rfind('}', 0, match.start()),
+            ) + 1
+            declaration_prefix = full_code[declaration_start:match.start()]
+            is_static = bool(re.search(r'\bstatic\b', declaration_prefix))
+
             params = [part.strip() for part in match.group(2).split(',')]
             for param_index, param in enumerate(params):
                 if re.search(rf'\b{re.escape(variable)}\b(?:\s*\[[^\]]*\])?\s*$', param):
-                    return match.group(1), param_index
+                    return match.group(1), param_index, is_static
         return None
 
-    def _caller_status(self, full_code: str, function_name: str, param_index: int) -> Tuple[Optional[bool], str]:
+    def _caller_status(
+        self,
+        full_code: str,
+        function_name: str,
+        param_index: int,
+        internal_linkage: bool,
+    ) -> Tuple[Optional[bool], str]:
         statuses: List[bool] = []
         saw_unknown = False
         for match in re.finditer(rf'\b{re.escape(function_name)}\s*\(', full_code):
@@ -160,8 +182,10 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
                 statuses.append(status)
         if any(statuses):
             return True, "at least one caller passes a literal with an unbounded %s conversion"
+        if statuses and not saw_unknown and internal_linkage:
+            return False, "all observed callers of the static helper pass bounded literal formats"
         if statuses and not saw_unknown:
-            return False, "all observed callers pass bounded literal formats across the helper boundary"
+            return None, "externally visible helper may have callers outside this translation unit; conservative fallback retained"
         return None, "caller format could not be proven bounded; conservative fallback retained"
 
     def _scanf_status(self, fmt_expr: str, full_code: str, line_number: int, source_lines: List[str]) -> Tuple[Optional[bool], str]:
@@ -186,7 +210,7 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
             )
         parameter = self._enclosing_parameter(full_code, line_number, variable)
         if parameter:
-            return self._caller_status(full_code, parameter[0], parameter[1])
+            return self._caller_status(full_code, parameter[0], parameter[1], parameter[2])
         return None, "format provenance is unknown; conservative fallback retained"
 
     @staticmethod
@@ -197,6 +221,16 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
             r'\bscanf\s*\([^;{}]*\)\s*;?\s*$',
             line_content,
         ))
+
+    def _callee_for_issue(self, issue: Issue) -> Optional[str]:
+        """Resolve the legacy issue to the call starting at its reported column."""
+        snippet = issue.code_snippet or ""
+        call_offset = max(0, issue.column_number - 1)
+        for fn_name in self.policy:
+            match = re.match(rf'{re.escape(fn_name)}\s*\(', snippet[call_offset:])
+            if match:
+                return fn_name
+        return None
 
     def _make_scanf_issue(self, file_path: str, line_number: int, line_content: str, column: int, evidence: str) -> Issue:
         reason, fix = self.banned_funcs["scanf"]
@@ -218,10 +252,7 @@ class BannedFunctionsRule(_LegacyBannedFunctionsRule):
         inherited = super().scan_line(file_path, line_number, line_content, full_code, source_lines, masked_line_content)
         issues: List[Issue] = []
         for issue in inherited:
-            fn_name = next(
-                (name for name in self.policy if re.search(rf'\b{re.escape(name)}\s*\(', issue.code_snippet or "")),
-                None,
-            )
+            fn_name = self._callee_for_issue(issue)
             if fn_name is None:
                 issues.append(issue)
             elif fn_name != "scanf":
