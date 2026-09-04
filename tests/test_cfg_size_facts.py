@@ -48,6 +48,23 @@ def test_safe_and_unsafe_constant_sizes_are_distinguished():
     assert _safety(analyze_translation_unit_size_dataflow(unsafe), "sink") == [SizeSafety.UNSAFE]
 
 
+def test_single_element_non_char_array_uses_element_width():
+    ctx = build_security_context(
+        r'''
+        void sink(int *, unsigned);
+        void caller(void) {
+            int buf[1];
+            sink(buf, 4);
+        }
+        '''
+    )
+    result = analyze_translation_unit_size_dataflow(ctx)
+
+    call = result.calls_to("sink")[0]
+    assert call.extents[0] == SizeFact.exact(4)
+    assert call.classify(buffer_arg=0, size_arg=1) is SizeSafety.SAFE
+
+
 def test_guard_refines_only_guarded_path():
     ctx = build_security_context(
         r'''
@@ -102,6 +119,42 @@ def test_named_struct_member_extent_is_field_sensitive():
     result = analyze_translation_unit_size_dataflow(ctx)
 
     assert result.calls_to("sink")[0].extents[0] == SizeFact.exact(24)
+    assert _safety(result, "sink") == [SizeSafety.SAFE]
+
+
+def test_for_init_and_update_calls_are_recorded():
+    ctx = build_security_context(
+        r'''
+        void sink(char *, unsigned);
+        int ready(void);
+        void caller(void) {
+            char buf[8];
+            for (sink(buf, 8); ready(); sink(buf, 9)) {
+                break;
+            }
+        }
+        '''
+    )
+    result = analyze_translation_unit_size_dataflow(ctx)
+
+    assert _safety(result, "sink") == [SizeSafety.SAFE, SizeSafety.UNSAFE]
+
+
+def test_for_initializer_declaration_updates_size_state():
+    ctx = build_security_context(
+        r'''
+        void sink(char *, unsigned);
+        void caller(void) {
+            char buf[8];
+            for (unsigned n = 8; n; n = 0) {
+                sink(buf, n);
+                break;
+            }
+        }
+        '''
+    )
+    result = analyze_translation_unit_size_dataflow(ctx)
+
     assert _safety(result, "sink") == [SizeSafety.SAFE]
 
 
