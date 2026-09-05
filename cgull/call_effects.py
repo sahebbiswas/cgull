@@ -30,11 +30,19 @@ class CallEffectModel:
     format_argument: Optional[int] = None
     size_relationships: Tuple[Tuple[int, int], ...] = ()
     sanitizes: FrozenSet[int] = frozenset()
+    takes_ownership: FrozenSet[int] = frozenset()
+    escapes: FrozenSet[int] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.function or not self.function.isidentifier():
             raise ValueError(f"invalid C function identifier '{self.function}'")
-        indexes = set(self.deallocates) | set(self.output_parameters) | set(self.sanitizes)
+        indexes = (
+            set(self.deallocates)
+            | set(self.output_parameters)
+            | set(self.sanitizes)
+            | set(self.takes_ownership)
+            | set(self.escapes)
+        )
         if self.format_argument is not None:
             indexes.add(self.format_argument)
         for data_index, size_index in self.size_relationships:
@@ -53,6 +61,12 @@ class CallEffectModel:
             positions = ", ".join(str(i) for i in sorted(contradictory))
             raise ValueError(
                 f"argument position(s) {positions} cannot be both deallocated and sanitized"
+            )
+        contradictory = self.output_parameters & self.takes_ownership
+        if contradictory:
+            positions = ", ".join(str(i) for i in sorted(contradictory))
+            raise ValueError(
+                f"argument position(s) {positions} cannot be both output parameters and ownership transfers"
             )
 
 
@@ -110,7 +124,7 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
     overrides: Dict[str, CallEffectModel] = {}
     allowed = {
         "function", "returns", "deallocates", "outputs", "format_argument",
-        "size_relationships", "sanitizes",
+        "size_relationships", "sanitizes", "takes_ownership", "escapes",
     }
     for index, entry in enumerate(raw):
         if not isinstance(entry, Mapping):
@@ -131,6 +145,8 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
             deallocates = _indexes(entry.get("deallocates", []), "deallocates")
             outputs = _indexes(entry.get("outputs", []), "outputs")
             sanitizes = _indexes(entry.get("sanitizes", []), "sanitizes")
+            takes_ownership = _indexes(entry.get("takes_ownership", []), "takes_ownership")
+            escapes = _indexes(entry.get("escapes", []), "escapes")
             fmt = entry.get("format_argument")
             if fmt is not None and (isinstance(fmt, bool) or not isinstance(fmt, int) or fmt < 0):
                 raise ValueError("format_argument must be a non-negative integer")
@@ -152,6 +168,8 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
                 format_argument=fmt,
                 size_relationships=tuple(relationships),
                 sanitizes=sanitizes,
+                takes_ownership=takes_ownership,
+                escapes=escapes,
             )
         except ValueError as exc:
             raise CallEffectConfigError(f"call effect '{function}': {exc}") from exc
