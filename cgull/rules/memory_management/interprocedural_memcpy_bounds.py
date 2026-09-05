@@ -119,7 +119,7 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         """Return whether shared extent facts describe the exact destination base.
 
         The size-fact domain currently tracks base object extents, not residual
-        capacity after pointer arithmetic or address-of indexed expressions.  A
+        capacity after pointer arithmetic or address-of indexed expressions. A
         SAFE proof therefore must not suppress the legacy rule for such shapes.
         """
         if destination is None:
@@ -128,14 +128,8 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         return re.fullmatch(r"[A-Za-z_]\w*(?:->|\.)?\w*", normalized) is not None
 
     @staticmethod
-    def _destination_is_parameter(ast_ctx, call_fact, destination: Optional[str]) -> bool:
-        """Return whether destination is a formal parameter of the sink wrapper."""
-        if destination is None:
-            return False
-        normalized = re.sub(r"\s+", "", destination)
-        if not re.fullmatch(r"[A-Za-z_]\w*", normalized):
-            return False
-        function = next(
+    def _function_for_call(ast_ctx, call_fact):
+        return next(
             (
                 fn
                 for fn in getattr(ast_ctx, "functions", ())
@@ -143,11 +137,61 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
             ),
             None,
         )
+
+    @classmethod
+    def _destination_is_parameter(cls, ast_ctx, call_fact, destination: Optional[str]) -> bool:
+        """Return whether destination is a formal parameter of the sink wrapper."""
+        if destination is None:
+            return False
+        normalized = re.sub(r"\s+", "", destination)
+        if not re.fullmatch(r"[A-Za-z_]\w*", normalized):
+            return False
+        function = cls._function_for_call(ast_ctx, call_fact)
         if function is None:
             return False
         return any(
             getattr(parameter, "name", None) == normalized
             for parameter in getattr(function, "parameters", ())
+        )
+
+    def _residual_capacity_issue(self, file_path: str, ast_ctx, call_fact, destination: Optional[str]) -> Optional[Issue]:
+        """Check offset destinations against their local residual capacity.
+
+        Shared size facts intentionally model the base object's extent.  For an
+        offset destination such as ``&buf[2]`` that can make the shared result
+        look SAFE even though fewer bytes remain from the destination pointer.
+        Reuse the legacy capacity resolver before accepting that SAFE proof.
+        """
+        if destination is None or len(call_fact.sizes) <= 2:
+            return None
+        size = call_fact.sizes[2]
+        if not size.is_exact:
+            return None
+        function = self._function_for_call(ast_ctx, call_fact)
+        if function is None:
+            return None
+        source_line = self._source_line(ast_ctx, call_fact)
+        capacity = self._resolve_dest_capacity(destination, function, source_line, ast_ctx)
+        if capacity is None or size.exact_value is None or size.exact_value <= capacity:
+            return None
+        snippet = _source_snippet(ast_ctx, source_line, f"{call_fact.callee}(...)")
+        return self.create_issue(
+            file_path=file_path,
+            line_number=source_line,
+            code_snippet=snippet,
+            message=(
+                f"Buffer Overflow in '{call_fact.callee}': size argument "
+                f"({size.exact_value} bytes) provably exceeds destination buffer "
+                f"capacity ({capacity} bytes for '{destination}'). Provable "
+                "out-of-bounds write."
+            ),
+            column_number=max(1, call_fact.column),
+            engine="AST",
+            fix_type=FixType.SUGGESTED_FIX,
+            suggested_fix_replacement=(
+                f"Gate the requested size against the {capacity}-byte residual "
+                f"capacity before calling {call_fact.callee}()."
+            ),
         )
 
     def _interprocedural_issue(self, file_path: str, ast_ctx, call_fact, safety: SizeSafety) -> Issue:
@@ -209,11 +253,18 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
             site = self._site_key(ast_ctx, call_fact, destination)
 
             if safety is SizeSafety.SAFE:
-                # SAFE suppresses legacy review only when the shared extent is for
-                # the exact destination base.  Offset expressions need the legacy
-                # residual-capacity reasoning.
-                if site is not None and self._is_simple_destination(destination):
-                    handled.add(site)
+                if self._is_simple_destination(destination):
+                    if site is not None:
+                        handled.add(site)
+                    continue
+
+                residual_issue = self._residual_capacity_issue(
+                    file_path, ast_ctx, call_fact, destination
+                )
+                if residual_issue is not None:
+                    if site is not None:
+                        handled.add(site)
+                    issues.append(residual_issue)
                 continue
 
             if safety is SizeSafety.UNSAFE:
@@ -224,10 +275,10 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
                 )
                 continue
 
-            # Conflicting callers degrade the shared fact to UNKNOWN.  Emit that
+            # Conflicting callers degrade the shared fact to UNKNOWN. Emit that
             # conservative review when the memory API receives a wrapper formal:
             # this is precisely the cross-boundary case the local legacy rule
-            # cannot decide from the callee body alone.  Local destinations remain
+            # cannot decide from the callee body alone. Local destinations remain
             # governed by the stronger legacy CFG/gating policy.
             if (
                 self._informative(call_fact)
