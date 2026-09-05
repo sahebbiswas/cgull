@@ -50,24 +50,26 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
     def _destination_for_call(cls, ast_ctx, call_fact) -> Optional[str]:
         """Recover the destination expression for one precise call site.
 
-        ``SizeCallFact`` deliberately carries facts rather than source argument
-        strings.  For deduplication we recover the direct call at its pycparser
-        source column, which also distinguishes multiple same-callee calls on one
-        source line.
+        Use the same bounded multi-line source window as the legacy scanner so
+        interprocedural and legacy findings share a stable destination identity.
+        The source column still disambiguates multiple same-callee calls that
+        begin on the same line.
         """
         lines = getattr(ast_ctx, "source_lines", None) or (
             getattr(ast_ctx, "clean_source", "") or ""
         ).splitlines()
         if not (0 < call_fact.line <= len(lines)):
             return None
-        line = lines[call_fact.line - 1]
+
+        window = "\n".join(lines[call_fact.line - 1 : call_fact.line + 10])
         pattern = re.compile(rf"\b{re.escape(call_fact.callee)}\s*\(")
-        matches = list(pattern.finditer(line))
+        matches = list(pattern.finditer(window))
         if not matches:
             return None
+
         expected = max(0, int(call_fact.column or 1) - 1)
         match = min(matches, key=lambda item: abs(item.start() - expected))
-        args = BannedFunctionsRule._extract_call_args(line, match.end() - 1)
+        args = BannedFunctionsRule._extract_call_args(window, match.end() - 1)
         if not args:
             return None
         return args[0].strip()
@@ -96,15 +98,27 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
             return None
         return (issue.line_number, callee, destination)
 
-    def _legacy_can_reason_about_destination(self, ast_ctx, call_fact, destination: Optional[str]) -> bool:
-        """Return whether the existing local rule has a concrete destination capacity.
+    @staticmethod
+    def _is_simple_destination(destination: Optional[str]) -> bool:
+        """Return whether shared extent facts describe the exact destination base.
 
-        UNKNOWN interprocedural facts must not override stronger local CFG proofs.
-        We therefore emit a new UNKNOWN review only when propagated capacity crosses
-        a function boundary that the legacy rule cannot resolve locally.
+        The size-fact domain currently tracks base object extents, not residual
+        capacity after pointer arithmetic or address-of indexed expressions.  A
+        SAFE proof therefore must not suppress the legacy rule for such shapes.
         """
         if destination is None:
-            return True
+            return False
+        normalized = re.sub(r"\s+", "", destination)
+        return re.fullmatch(r"[A-Za-z_]\w*(?:->|\.)?[A-Za-z_]*", normalized) is not None
+
+    @staticmethod
+    def _destination_is_parameter(ast_ctx, call_fact, destination: Optional[str]) -> bool:
+        """Return whether destination is a formal parameter of the sink wrapper."""
+        if destination is None:
+            return False
+        normalized = re.sub(r"\s+", "", destination)
+        if not re.fullmatch(r"[A-Za-z_]\w*", normalized):
+            return False
         function = next(
             (
                 fn
@@ -114,15 +128,10 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
             None,
         )
         if function is None:
-            return True
-        return (
-            self._resolve_dest_capacity(
-                destination,
-                function,
-                call_fact.line,
-                ast_ctx,
-            )
-            is not None
+            return False
+        return any(
+            getattr(parameter, "name", None) == normalized
+            for parameter in getattr(function, "parameters", ())
         )
 
     def _interprocedural_issue(self, file_path: str, ast_ctx, call_fact, safety: SizeSafety) -> Issue:
@@ -183,7 +192,10 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
             site = self._site_key(call_fact, destination)
 
             if safety is SizeSafety.SAFE:
-                if site is not None:
+                # SAFE suppresses legacy review only when the shared extent is for
+                # the exact destination base.  Offset expressions need the legacy
+                # residual-capacity reasoning.
+                if site is not None and self._is_simple_destination(destination):
                     handled.add(site)
                 continue
 
@@ -195,15 +207,14 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
                 )
                 continue
 
-            # UNKNOWN is intentionally subordinate to the legacy local policy.
-            # If the old rule knows this destination capacity, its CFG/bounds
-            # reasoning decides whether review is necessary.  New UNKNOWN review
-            # is reserved for genuinely propagated capacity unavailable locally.
+            # Conflicting callers degrade the shared fact to UNKNOWN.  Emit that
+            # conservative review when the memory API receives a wrapper formal:
+            # this is precisely the cross-boundary case the local legacy rule
+            # cannot decide from the callee body alone.  Local destinations remain
+            # governed by the stronger legacy CFG/gating policy.
             if (
                 self._informative(call_fact)
-                and not self._legacy_can_reason_about_destination(
-                    ast_ctx, call_fact, destination
-                )
+                and self._destination_is_parameter(ast_ctx, call_fact, destination)
             ):
                 if site is not None:
                     handled.add(site)
