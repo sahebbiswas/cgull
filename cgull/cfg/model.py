@@ -9,7 +9,6 @@ from typing import Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 
-
 class Nullness(Enum):
     NULL = "NULL"
     NON_NULL = "NON_NULL"
@@ -66,6 +65,12 @@ class FunctionSummary:
     # parameter's initial location, not a variable of the same name after an
     # assignment in the callee.
     unsafe_deref_params: Set[int] = field(default_factory=set)
+    # Pointer parameters whose referenced caller-owned object is initialized
+    # on every reachable exit vs on at least one reachable path.  The must set
+    # is always a subset of the may set.  Consumers may use only the must fact
+    # to suppress uninitialized-use diagnostics.
+    must_initialize_params: Set[int] = field(default_factory=set)
+    may_initialize_params: Set[int] = field(default_factory=set)
     return_nullness: Nullness = Nullness.UNKNOWN
     returns_allocation: bool = False
     is_unknown: bool = False
@@ -150,5 +155,3 @@ class CFGEvent:
 
     def get_deref_line(self, var_name: str) -> int:
         return self.deref_lines.get(var_name, self.line_number)
-
-
