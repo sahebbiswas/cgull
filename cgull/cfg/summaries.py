@@ -55,9 +55,6 @@ def _get_builtin_summaries(
             freed_params=set(), return_nullness=Nullness.MAYBE_NULL, returns_allocation=True
         )
 
-    # Declarative effects are conservative summary seeds.  An output model says
-    # the argument may be written; without a success-condition proof it must not
-    # be promoted to a definite initialization.
     registry = call_effects or BUILTIN_CALL_EFFECTS
     for function, effect in registry.effects.items():
         summary = builtins.get(function, FunctionSummary())
@@ -80,7 +77,7 @@ class _SummaryFact:
     unsafe_deref_params: FrozenSet[int] = frozenset()
     must_initialize_params: FrozenSet[int] = frozenset()
     may_initialize_params: FrozenSet[int] = frozenset()
-    return_nullness: Optional[Nullness] = None  # None is BOTTOM, never exposed to callers.
+    return_nullness: Optional[Nullness] = None
     returns_allocation: bool = False
     is_unknown: bool = False
 
@@ -88,8 +85,6 @@ class _SummaryFact:
 class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
     def __init__(self, parameter_counts: Mapping[str, int]) -> None:
         self._parameter_counts = dict(parameter_counts)
-        # Each parameter can enter four may/must-effect sets, allocation can
-        # rise once, and return nullness has a short finite chain.
         max_params = max(self._parameter_counts.values(), default=0)
         self.max_height = max(4, (4 * max_params) + 5)
 
@@ -108,8 +103,6 @@ class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
         )
 
     def unknown(self, symbol: str, current: _SummaryFact) -> _SummaryFact:
-        # Unknown effects may affect any parameter, but never establish a must
-        # initialization fact.  This preserves safety at convergence limits.
         all_params = frozenset(range(self._parameter_counts.get(symbol, 0)))
         return _SummaryFact(
             freed_params=current.freed_params | all_params,
@@ -123,7 +116,6 @@ class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
 
 
 def _join_summary_nullness(left: Optional[Nullness], right: Optional[Nullness]) -> Optional[Nullness]:
-    """Join summary nullness while preserving legacy UNKNOWN-as-identity semantics."""
     if left is None:
         return right
     if right is None:
@@ -152,21 +144,27 @@ def _current_summaries(
     return result
 
 
-def _direct_output_write_index(node, param_indexes: Mapping[str, int]) -> Optional[int]:
-    """Return the pointer parameter whose pointee is directly assigned."""
+def _direct_output_write(
+    node, param_indexes: Mapping[str, int]
+) -> Optional[Tuple[int, bool]]:
+    """Return ``(parameter_index, whole_object_write)`` for a direct pointee write."""
     if node is None or type(node).__name__ != "Assignment":
         return None
     lhs = _unwrap_cast(getattr(node, "lvalue", None))
     if lhs is None:
         return None
 
-    base = None
     if type(lhs).__name__ == "UnaryOp" and getattr(lhs, "op", None) == "*":
         base = _unwrap_cast(lhs.expr)
-    elif type(lhs).__name__ in {"ArrayRef", "StructRef"}:
+        if base is not None and type(base).__name__ == "ID":
+            index = param_indexes.get(str(base.name))
+            return (index, True) if index is not None else None
+
+    if type(lhs).__name__ in {"ArrayRef", "StructRef"}:
         base = _unwrap_cast(lhs.name)
-    if base is not None and type(base).__name__ == "ID":
-        return param_indexes.get(str(base.name))
+        if base is not None and type(base).__name__ == "ID":
+            index = param_indexes.get(str(base.name))
+            return (index, False) if index is not None else None
     return None
 
 
@@ -180,10 +178,12 @@ def _node_output_effects(
     may: Set[int] = set()
     ast_node = getattr(node, "_ast_node", None)
 
-    direct = _direct_output_write_index(ast_node, param_indexes)
+    direct = _direct_output_write(ast_node, param_indexes)
     if direct is not None:
-        must.add(direct)
-        may.add(direct)
+        index, whole_object = direct
+        may.add(index)
+        if whole_object:
+            must.add(index)
 
     for use_kind, call, _guarded_nonnull in _guarded_expression_uses(ast_node):
         if use_kind != "call":
@@ -246,6 +246,8 @@ def _summarize_output_initialization(
             if successor in reachable:
                 predecessors[successor].add(node_id)
 
+    must_in: Dict[int, Set[int]] = {node_id: set() for node_id in reachable}
+    may_in: Dict[int, Set[int]] = {node_id: set() for node_id in reachable}
     must_out: Dict[int, Set[int]] = {node_id: set() for node_id in reachable}
     may_out: Dict[int, Set[int]] = {node_id: set() for node_id in reachable}
     changed = True
@@ -266,22 +268,36 @@ def _summarize_output_initialization(
 
             new_must = in_must | node_must.get(node_id, set())
             new_may = in_may | node_may.get(node_id, set())
-            if new_must != must_out[node_id] or new_may != may_out[node_id]:
+            if (
+                in_must != must_in[node_id]
+                or in_may != may_in[node_id]
+                or new_must != must_out[node_id]
+                or new_may != may_out[node_id]
+            ):
+                must_in[node_id] = in_must
+                may_in[node_id] = in_may
                 must_out[node_id] = new_must
                 may_out[node_id] = new_may
                 changed = True
 
-    exits = [
-        node_id for node_id in reachable
-        if not any(successor in reachable for successor in cfg.nodes[node_id].successors)
-    ]
-    if not exits:
+    exit_states: list[Tuple[Set[int], Set[int]]] = []
+    for node_id in reachable:
+        successors = [s for s in cfg.nodes[node_id].successors if s in reachable]
+        if not successors:
+            exit_states.append((must_out[node_id], may_out[node_id]))
+        elif cfg.nodes[node_id].kind.endswith("_cond") and len(successors) < 2:
+            # A missing condition edge can represent fall-through out of a
+            # terminal branch/function. Account for that implicit exit using
+            # the condition's incoming state so a one-sided write is not must.
+            exit_states.append((must_in[node_id], may_in[node_id] | node_may[node_id]))
+
+    if not exit_states:
         return set(), set().union(*(may_out.values())) if may_out else set()
 
-    must = set(must_out[exits[0]])
-    for node_id in exits[1:]:
-        must.intersection_update(must_out[node_id])
-    may = set().union(*(may_out[node_id] for node_id in exits))
+    must = set(exit_states[0][0])
+    for state_must, _state_may in exit_states[1:]:
+        must.intersection_update(state_must)
+    may = set().union(*(state_may for _state_must, state_may in exit_states))
     return must, may
 
 
@@ -337,8 +353,6 @@ def _analyze_one_function(
                     freed_params.add(i)
                     break
 
-        # Track unsafe dereferences against each parameter's incoming location,
-        # preserving the pre-engine alias semantics.
         for i, p_name in enumerate(param_names):
             param_location = f"var_{p_name}"
             for node in cfg.nodes.values():
@@ -414,9 +428,6 @@ def _analyze_one_function(
 
             return_nullness_set.add(ret_nullness)
 
-    # Preserve the existing intra-function path merge semantics.  BOTTOM is an
-    # interprocedural engine concern; legacy meet_nullness remains the behavior
-    # for multiple concrete return statements.
     if not return_nullness_set:
         final_ret_nullness = Nullness.UNKNOWN
     else:
@@ -456,7 +467,6 @@ def analyze_function_summaries_detailed(
     call_graph=None,
     call_effects: Optional[CallEffectRegistry] = None,
 ) -> FunctionSummaryAnalysisResult:
-    """Compute summaries with SCC convergence diagnostics and explicit limits."""
     builtins = _get_builtin_summaries(
         alloc_funcs=alloc_funcs,
         dealloc_funcs=dealloc_funcs,
@@ -513,7 +523,6 @@ def analyze_function_summaries(
     *,
     call_effects: Optional[CallEffectRegistry] = None,
 ) -> Dict[str, FunctionSummary]:
-    """Compatibility wrapper returning the historic ``dict`` result."""
     return dict(
         analyze_function_summaries_detailed(
             ast_ctx,
@@ -526,7 +535,6 @@ def analyze_function_summaries(
 
 
 def serialize_function_summaries(summaries: Mapping[str, FunctionSummary]) -> bytes:
-    """Canonical, byte-for-byte deterministic summary serialization."""
     payload = {
         name: {
             "freed_params": sorted(summary.freed_params),
