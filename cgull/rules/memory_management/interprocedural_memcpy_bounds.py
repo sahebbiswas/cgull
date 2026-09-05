@@ -109,7 +109,7 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         if destination is None:
             return False
         normalized = re.sub(r"\s+", "", destination)
-        return re.fullmatch(r"[A-Za-z_]\w*(?:->|\.)?[A-Za-z_]*", normalized) is not None
+        return re.fullmatch(r"[A-Za-z_]\w*(?:->|\.)?\w*", normalized) is not None
 
     @staticmethod
     def _destination_is_parameter(ast_ctx, call_fact, destination: Optional[str]) -> bool:
