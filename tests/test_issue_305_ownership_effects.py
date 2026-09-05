@@ -1,5 +1,12 @@
+import pytest
+
 from cgull.ast_analyzer import CASTParser
-from cgull.call_effects import BUILTIN_CALL_EFFECTS, CallEffectModel
+from cgull.call_effects import (
+    BUILTIN_CALL_EFFECTS,
+    CallEffectConfigError,
+    CallEffectModel,
+    parse_call_effects,
+)
 from cgull.cfg.ownership import analyze_ownership_summaries
 from cgull.rules.memory_management import DoubleFreeRule, MemoryLeakRule, UseAfterFreeRule
 from cgull.semantic_models import SemanticModelRegistry
@@ -80,36 +87,46 @@ def test_allocation_returned_through_wrapper_is_not_reported_when_freed():
     assert not issues
 
 
-def test_modeled_transfer_suppresses_leak_but_unknown_escape_stays_conservative():
-    code = """
+def test_modeled_transfer_suppresses_leak():
+    ctx = _parse(
+        """
         typedef unsigned long size_t;
         void *malloc(size_t);
         void adopt(void *);
-        void unknown(void *);
 
         void transferred(void) {
             void *p = malloc(16);
             adopt(p);
         }
-        void unknown_escape(void) {
-            void *p = malloc(16);
-            unknown(p);
-        }
-    """
-
+        """
+    )
     transfer = CallEffectModel(function="adopt", takes_ownership=frozenset({0}))
     registry = SemanticModelRegistry(
         call_effects=BUILTIN_CALL_EFFECTS.merged({"adopt": transfer})
     )
-    ctx = _parse(code)
     rule = MemoryLeakRule()
     rule._semantic_models = registry
 
-    issues = rule.scan_ast("test.c", ctx)
+    assert rule.scan_ast("test.c", ctx) == []
 
-    messages = [issue.message for issue in issues]
-    assert not any("allocated for 'p'" in message and issue.line_number < 10 for issue, message in zip(issues, messages))
-    assert any(issue.line_number >= 10 for issue in issues)
+
+def test_unknown_escape_remains_conservative_for_leaks():
+    ctx = _parse(
+        """
+        typedef unsigned long size_t;
+        void *malloc(size_t);
+        void unknown(void *);
+
+        void unknown_escape(void) {
+            void *p = malloc(16);
+            unknown(p);
+        }
+        """
+    )
+
+    issues = MemoryLeakRule().scan_ast("test.c", ctx)
+
+    assert any("allocated for 'p'" in issue.message for issue in issues)
 
 
 def test_modeled_transfer_and_escape_are_propagated_through_wrapper():
@@ -132,3 +149,29 @@ def test_modeled_transfer_and_escape_are_propagated_through_wrapper():
     assert summaries["wrap_adopt"].consumed_params == frozenset({0})
     assert summaries["wrap_retain"].escaped_params == frozenset({0})
     assert summaries["wrap_retain"].consumed_params == frozenset({0})
+
+
+def test_call_effect_config_supports_ownership_and_escape_fields():
+    registry = parse_call_effects([
+        {
+            "function": "handoff",
+            "takes_ownership": [0],
+            "escapes": [1],
+        }
+    ])
+
+    effect = registry.for_function("handoff")
+    assert effect is not None
+    assert effect.takes_ownership == frozenset({0})
+    assert effect.escapes == frozenset({1})
+
+
+def test_call_effect_config_rejects_output_and_transfer_on_same_argument():
+    with pytest.raises(CallEffectConfigError, match="ownership transfers"):
+        parse_call_effects([
+            {
+                "function": "bad_model",
+                "outputs": [0],
+                "takes_ownership": [0],
+            }
+        ])
