@@ -180,8 +180,6 @@ def _actual_var(expression: str) -> Optional[str]:
     text = expression.strip()
     if _IDENTIFIER.fullmatch(text):
         return text
-    # Support a simple cast around an identifier without pretending to resolve
-    # arbitrary pointer arithmetic or field expressions.
     identifiers = re.findall(r"[A-Za-z_]\w*", text)
     if not identifiers:
         return None
@@ -200,6 +198,14 @@ def _vars_for_indexes(actual_arguments: Tuple[str, ...], indexes) -> Set[str]:
         if var:
             result.add(var)
     return result
+
+
+def _is_reallocation_model(model) -> bool:
+    return bool(
+        model
+        and model.return_effect is ReturnEffect.ALLOCATION
+        and model.deallocates
+    )
 
 
 def ownership_effects_for_cfg(
@@ -229,7 +235,11 @@ def ownership_effects_for_cfg(
             summary = summaries.get(callee) if callee else None
 
             if model is not None:
-                freed.update(_vars_for_indexes(call.actual_arguments, model.deallocates))
+                # realloc-like calls only release the old storage on successful
+                # replacement. The CFG already tracks that result correlation,
+                # so do not flatten it into an unconditional call-site free.
+                if not _is_reallocation_model(model):
+                    freed.update(_vars_for_indexes(call.actual_arguments, model.deallocates))
                 transferred.update(_vars_for_indexes(call.actual_arguments, model.takes_ownership))
                 escaped.update(_vars_for_indexes(call.actual_arguments, model.escapes))
                 if model.return_effect is ReturnEffect.ALLOCATION and call.result_target:
@@ -255,9 +265,6 @@ def ownership_effects_for_cfg(
                             returned_aliases.add((call.result_target, source))
 
             if model is None and summary is None:
-                # An unresolved call may retain an argument, but treating every
-                # unknown call as a free would manufacture UAF/double-free
-                # findings.  Record only a possible escape.
                 for expression in call.actual_arguments:
                     var = _actual_var(expression)
                     if var:
@@ -397,6 +404,12 @@ def _analyze_one_function(
     for node_id, effects in node_effects.items():
         free_must = _param_indexes_for_vars(cfg, node_id, set(effects.freed), param_names)
         free_may = _param_indexes_for_vars(cfg, node_id, set(effects.maybe_freed), param_names)
+        # A realloc-like operation may release its input, but only on the
+        # successful replacement path. Preserve that uncertainty in wrappers.
+        realloc_may = _param_indexes_for_vars(
+            cfg, node_id, set(getattr(cfg.nodes[node_id], "realloc_inputs", set())), param_names
+        )
+        free_may.update(realloc_may)
         transfer_must = _param_indexes_for_vars(cfg, node_id, set(effects.transferred), param_names)
         transfer_may = _param_indexes_for_vars(cfg, node_id, set(effects.maybe_transferred), param_names)
         escape_must = _param_indexes_for_vars(cfg, node_id, set(effects.escaped), param_names)
