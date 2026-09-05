@@ -71,3 +71,33 @@ void unsafe_entry(const char *src) {
     assert issues[0].engine == "Interprocedural"
     assert "do not prove the copy safe" in issues[0].message
     assert issues[0].confidence == Confidence.LIMITED
+
+
+def test_local_cfg_safety_proof_is_not_overridden_by_unknown_size_fact():
+    code = r"""
+void memcpy(void *dst, const void *src, unsigned long n);
+
+void local_copy(const char *src, unsigned long n) {
+    char buf[8];
+    if (n <= 8) {
+        memcpy(buf, src, n);
+    }
+}
+"""
+    assert _scan(code) == []
+
+
+def test_same_line_safe_copy_does_not_suppress_other_destination_overflow():
+    code = r"""
+void memcpy(void *dst, const void *src, unsigned long n);
+
+void sibling_copies(const char *src) {
+    char large[16];
+    char small[4];
+    memcpy(large, src, 4); memcpy(&small[2], src, 4);
+}
+"""
+    issues = _scan(code)
+    assert len(issues) == 1
+    assert "small[2]" in issues[0].message
+    assert "provably exceeds destination buffer capacity" in issues[0].message
