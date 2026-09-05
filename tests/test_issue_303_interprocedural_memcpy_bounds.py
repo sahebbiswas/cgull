@@ -101,3 +101,44 @@ void sibling_copies(const char *src) {
     assert len(issues) == 1
     assert "small[2]" in issues[0].message
     assert "provably exceeds destination buffer capacity" in issues[0].message
+
+
+def test_multiline_safe_wrapper_call_suppresses_legacy_finding():
+    code = r"""
+void memcpy(void *dst, const void *src, unsigned long n);
+
+void leaf(char *dst, const char *src, unsigned long n) {
+    memcpy(
+        dst,
+        src,
+        n
+    );
+}
+void entry(const char *src) {
+    char buf[16];
+    leaf(buf, src, 8);
+}
+"""
+    assert _scan(code) == []
+
+
+def test_multiline_unsafe_wrapper_call_is_reported_once():
+    code = r"""
+void memcpy(void *dst, const void *src, unsigned long n);
+
+void leaf(char *dst, const char *src, unsigned long n) {
+    memcpy(
+        dst,
+        src,
+        n
+    );
+}
+void entry(const char *src) {
+    char buf[4];
+    leaf(buf, src, 8);
+}
+"""
+    issues = _scan(code)
+    assert len(issues) == 1
+    assert issues[0].engine == "Interprocedural"
+    assert "Provable out-of-bounds write" in issues[0].message
