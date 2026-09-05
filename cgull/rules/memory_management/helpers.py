@@ -31,7 +31,6 @@ def _brace_depths(body_lines: List[str]) -> List[int]:
     return depths
 
 
-
 def _source_snippet(ast_ctx: CASTContext, line_no: int, fallback: str) -> str:
     if 1 <= line_no <= len(ast_ctx.source_lines):
         return ast_ctx.source_lines[line_no - 1].strip()
@@ -41,7 +40,6 @@ def _source_snippet(ast_ctx: CASTContext, line_no: int, fallback: str) -> str:
 def _addressed_variable(argument: str) -> Optional[str]:
     """Return the simple local named by an address-of call argument."""
     text = argument.strip()
-    # Preserve conservatism for complex pointer arithmetic/field expressions.
     match = re.fullmatch(r"\(?\s*&\s*([A-Za-z_]\w*)\s*\)?", text)
     return match.group(1) if match else None
 
@@ -50,37 +48,22 @@ def _apply_output_summary_effects(
     cfg: StructuredCFG,
     summaries: Optional[Dict[str, FunctionSummary]],
 ) -> None:
-    """Project definite callee output effects onto caller CFG writes.
-
-    Only a must-initialize fact for a simple ``&local`` argument becomes a CFG
-    write. May effects are retained as event metadata but deliberately do not
-    suppress uninitialized-use diagnostics.
-    """
+    """Project definite callee output effects onto caller CFG writes."""
     if not summaries:
         return
     for node in cfg.nodes.values():
-        may_writes: Set[str] = set()
         for call in node.calls:
             if call.is_indirect or not call.direct_callee:
                 continue
             summary = summaries.get(call.direct_callee)
             if summary is None:
                 continue
-            for index in summary.may_initialize_params:
-                if index >= len(call.actual_arguments):
-                    continue
-                target = _addressed_variable(call.actual_arguments[index])
-                if target:
-                    may_writes.add(target)
             for index in summary.must_initialize_params:
                 if index >= len(call.actual_arguments):
                     continue
                 target = _addressed_variable(call.actual_arguments[index])
                 if target:
                     node.writes.add(target)
-                    may_writes.discard(target)
-        if may_writes:
-            setattr(node, "summary_maybe_writes", frozenset(may_writes))
 
 
 def _ast_cfg_for_function(
@@ -181,8 +164,6 @@ def _find_unsafe_allocation_use(
                        cfg.query_nullness(deref_var, nid) != Nullness.NON_NULL:
                         return node
 
-        # Calls inside conditions still execute. The summary-specific check
-        # intentionally stays outside the legacy condition-node exclusion.
         if _passes_to_unchecked_callee_param(cfg, node, allocation_locations, summaries):
             return node
 
@@ -207,7 +188,6 @@ def _find_unsafe_param_deref(cfg: StructuredCFG, param: str):
             return node
 
         if param in node.writes:
-            # Parameter reassigned
             continue
 
         for succ in node.successors:
@@ -246,7 +226,6 @@ def _find_uaf_uses(cfg: StructuredCFG, freed_node_id: int, ptr_name: str):
                 work.append(succ)
 
 
-
 def _find_memory_leak_exits(
     ast_ctx: CASTContext,
     fn: CFunction,
@@ -273,19 +252,16 @@ def _find_memory_leak_exits(
 
         node = cfg.nodes[curr_id]
 
-        # 1. Deallocation check
         if node.freed & aliases:
             continue
         if any(cfg.query_allocation(a, curr_id) == Allocation.FREED for a in aliases):
             continue
 
-        # 2. Exit call check (program exit)
         if node.kind == "funccall":
             expr_lower = node.expr_str.lower()
             if any(re.search(rf'\b{re.escape(ef)}\b', expr_lower) for ef in exit_call_names):
                 continue
 
-        # 3. Ownership transfer check
         if node.kind in ("assignment", "decl"):
             if node.reads & aliases:
                 is_direct_alias = False
@@ -303,7 +279,6 @@ def _find_memory_leak_exits(
                     if written_var in fn.variables:
                         aliases = aliases | {written_var}
 
-        # 4. Return statement check
         if node.kind == "return":
             if node.reads & aliases:
                 continue
@@ -314,7 +289,6 @@ def _find_memory_leak_exits(
                     leak_nodes.append(node)
             continue
 
-        # 5. Overwrite check
         if curr_id == alloc_node_id:
             overwritten = []
         else:
@@ -331,7 +305,6 @@ def _find_memory_leak_exits(
             else:
                 aliases = remaining_aliases
 
-        # 6. End of CFG check
         if not node.successors:
             is_null = any(cfg.query_nullness(a, curr_id) == Nullness.NULL or cfg.query_allocation(a, curr_id) == Allocation.NOT_ALLOCATED for a in aliases)
             if not is_null:
@@ -340,7 +313,6 @@ def _find_memory_leak_exits(
                     leak_nodes.append(node)
             continue
 
-        # 7. Propagate to successors
         for succ in node.successors:
             if succ not in path_visited:
                 queue.append((succ, path_visited | {succ}, set(aliases)))
