@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 
+
 class Nullness(Enum):
     NULL = "NULL"
     NON_NULL = "NON_NULL"
@@ -69,7 +70,7 @@ class FunctionSummary:
     returns_allocation: bool = False
     is_unknown: bool = False
     # Pointer parameters whose referenced caller-owned object is initialized
-    # on every reachable exit vs on at least one reachable path.  Appended to
+    # on every reachable exit vs on at least one reachable path. Appended to
     # preserve the positional constructor contract of the older fields.
     must_initialize_params: Set[int] = field(default_factory=set)
     may_initialize_params: Set[int] = field(default_factory=set)
@@ -154,3 +155,5 @@ class CFGEvent:
 
     def get_deref_line(self, var_name: str) -> int:
         return self.deref_lines.get(var_name, self.line_number)
+
+
