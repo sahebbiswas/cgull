@@ -57,13 +57,18 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         return _map_line(expanded_line, getattr(ast_ctx, "line_map", None))
 
     @classmethod
-    def _destination_for_call(cls, ast_ctx, call_fact) -> Optional[str]:
+    def _destination_for_call(
+        cls,
+        ast_ctx,
+        call_fact,
+        occurrence: int = 0,
+    ) -> Optional[str]:
         """Recover the destination expression for one precise call site.
 
-        Use the same bounded multi-line source window as the legacy scanner so
-        interprocedural and legacy findings share a stable destination identity.
-        The source column still disambiguates multiple same-callee calls that
-        begin on the same line.
+        Prefer the occurrence on the call's own source line.  pycparser columns
+        are not reliable enough after preprocessing to distinguish sibling calls
+        on the same physical line, while SizeCallFact order preserves source AST
+        order.  Fall back to the bounded multi-line window for continued calls.
         """
         lines = getattr(ast_ctx, "source_lines", None) or (
             getattr(ast_ctx, "clean_source", "") or ""
@@ -72,8 +77,20 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         if not (0 < source_line <= len(lines)):
             return None
 
-        window = "\n".join(lines[source_line - 1 : source_line + 10])
         pattern = re.compile(rf"\b{re.escape(call_fact.callee)}\s*\(")
+        source_text = lines[source_line - 1]
+        line_matches = list(pattern.finditer(source_text))
+        if line_matches:
+            if occurrence < len(line_matches):
+                match = line_matches[occurrence]
+            else:
+                expected = max(0, int(call_fact.column or 1) - 1)
+                match = min(line_matches, key=lambda item: abs(item.start() - expected))
+            args = BannedFunctionsRule._extract_call_args(source_text, match.end() - 1)
+            if args:
+                return args[0].strip()
+
+        window = "\n".join(lines[source_line - 1 : source_line + 10])
         matches = list(pattern.finditer(window))
         if not matches:
             return None
@@ -239,17 +256,22 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         size_result = self.get_analysis_session(ast_ctx).queries.size_facts()
         issues: List[Issue] = []
         handled = set()
+        occurrences = {}
 
         for call_fact in size_result.calls:
-            if (
-                call_fact.callee not in self.TARGET_FUNCS
-                or len(call_fact.extents) <= 0
-                or len(call_fact.sizes) <= 2
-            ):
+            if call_fact.callee not in self.TARGET_FUNCS:
+                continue
+
+            source_line = self._source_line(ast_ctx, call_fact)
+            occurrence_key = (source_line, call_fact.callee)
+            occurrence = occurrences.get(occurrence_key, 0)
+            occurrences[occurrence_key] = occurrence + 1
+
+            if len(call_fact.extents) <= 0 or len(call_fact.sizes) <= 2:
                 continue
 
             safety = call_fact.classify(buffer_arg=0, size_arg=2)
-            destination = self._destination_for_call(ast_ctx, call_fact)
+            destination = self._destination_for_call(ast_ctx, call_fact, occurrence)
             site = self._site_key(ast_ctx, call_fact, destination)
 
             if safety is SizeSafety.SAFE:
