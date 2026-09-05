@@ -4,25 +4,27 @@ Memory Management Rule Submodule.
 
 import re
 import logging
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Set
 
 from ..base import BaseRule
-from ..banned_functions import BannedFunctionsRule
 from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
-from ...ast_analyzer import CASTContext, CFunction, get_type_byte_size, is_unsigned_type
-from ...utils import extract_call_args, split_call_args, extract_balanced_parens
-from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
+from ...ast_analyzer import CASTContext
+from ...cfg import (
+    analyze_function_summaries,
+    analyze_ownership_summaries,
+    filter_leak_exits_for_ownership,
+    ownership_effects_for_cfg,
+)
 from .helpers import (
     _brace_depths,
     _source_snippet,
     _ast_cfg_for_function,
-    _find_unsafe_allocation_use,
-    _find_unsafe_param_deref,
-    _find_uaf_uses,
     _find_memory_leak_exits,
 )
 
 logger = logging.getLogger(__name__)
+
+
 class MemoryLeakRule(BaseRule):
     rule_id = "CGULL-036"
     name = "Memory Leak"
@@ -74,10 +76,12 @@ class MemoryLeakRule(BaseRule):
         alloc_pattern = "|".join(re.escape(f) for f in sorted(self.alloc_funcs, key=len, reverse=True))
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
         summaries = analyze_function_summaries(ast_ctx, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs)
+        ownership_summaries = analyze_ownership_summaries(ast_ctx)
 
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
+                ownership_effects = ownership_effects_for_cfg(cfg, ownership_summaries)
                 reported_allocs = set()
                 for node in cfg.nodes.values():
                     if not node.allocated:
@@ -87,6 +91,13 @@ class MemoryLeakRule(BaseRule):
                         if key in reported_allocs:
                             continue
                         leak_nodes = _find_memory_leak_exits(ast_ctx, fn, cfg, node.node_id, ptr_name, self.dealloc_funcs)
+                        leak_nodes = filter_leak_exits_for_ownership(
+                            cfg,
+                            node.node_id,
+                            ptr_name,
+                            leak_nodes,
+                            ownership_effects,
+                        )
                         if leak_nodes:
                             reported_allocs.add(key)
                             line_no = node.line_number
