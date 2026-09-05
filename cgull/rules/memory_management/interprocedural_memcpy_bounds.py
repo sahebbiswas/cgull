@@ -19,13 +19,16 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
 
     @staticmethod
     def _informative(call_fact) -> bool:
+        """Only interprocedurally review UNKNOWN when destination capacity propagated.
+
+        A known size alone is insufficient because the legacy rule may still prove
+        a local struct-member capacity that the bounded size domain intentionally
+        does not reconstruct from every legacy AST shape.
+        """
         return (
             len(call_fact.extents) > 0
             and len(call_fact.sizes) > 2
-            and (
-                not call_fact.extents[0].is_unknown
-                or not call_fact.sizes[2].is_unknown
-            )
+            and not call_fact.extents[0].is_unknown
         )
 
     @staticmethod
@@ -43,11 +46,7 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
     def _interprocedural_issue(self, file_path: str, ast_ctx, call_fact, safety: SizeSafety) -> Issue:
         size = call_fact.sizes[2]
         capacity = call_fact.extents[0]
-        snippet = _source_snippet(
-            ast_ctx,
-            call_fact.line,
-            f"{call_fact.callee}(...)"
-        )
+        snippet = _source_snippet(ast_ctx, call_fact.line, f"{call_fact.callee}(...)")
         flow = f"{call_fact.caller} -> {call_fact.callee}"
         if safety is SizeSafety.UNSAFE:
             message = (
