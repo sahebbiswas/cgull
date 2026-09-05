@@ -40,7 +40,7 @@ class UninitializedPointersRule(BaseRule):
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
-        summaries = analyze_function_summaries(ast_ctx)
+        summaries = self.get_analysis_session(ast_ctx).function_summaries
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, summaries=summaries)
             if cfg is not None:
