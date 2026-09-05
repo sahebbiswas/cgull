@@ -91,6 +91,7 @@ class AnalysisSession:
                 dealloc_funcs=dealloc_funcs,
                 realloc_funcs=realloc_funcs,
                 call_graph=self.call_graph,
+                call_effects=self.semantic_models.call_effects,
             )
         return self._function_summary_result
 
