@@ -34,6 +34,19 @@ def test_output_parameter_summaries_distinguish_must_from_may_and_propagate_wrap
     assert summaries["wrapper"].may_initialize_params == {0}
 
 
+def test_partial_aggregate_output_writes_are_may_only():
+    summaries = analyze_function_summaries(_parse("""
+        struct S { int written; int other; };
+        void init_field(struct S *out) { out->written = 7; }
+        void init_element(int *out) { out[0] = 7; }
+    """))
+
+    assert summaries["init_field"].must_initialize_params == set()
+    assert summaries["init_field"].may_initialize_params == {0}
+    assert summaries["init_element"].must_initialize_params == set()
+    assert summaries["init_element"].may_initialize_params == {0}
+
+
 def test_cgull_023_definite_helper_initialization_is_safe_but_conditional_is_not():
     safe = _scan("CGULL-023", """
         void initialize(int *out) { *out = 7; }
