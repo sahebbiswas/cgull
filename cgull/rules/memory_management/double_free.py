@@ -4,25 +4,26 @@ Memory Management Rule Submodule.
 
 import re
 import logging
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Set
 
 from ..base import BaseRule
-from ..banned_functions import BannedFunctionsRule
 from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
-from ...ast_analyzer import CASTContext, CFunction, get_type_byte_size, is_unsigned_type
-from ...utils import extract_call_args, split_call_args, extract_balanced_parens
-from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
+from ...ast_analyzer import CASTContext
+from ...cfg import (
+    Allocation,
+    analyze_function_summaries,
+    build_ownership_predecessors,
+    has_prior_free_effect,
+)
 from .helpers import (
     _brace_depths,
     _source_snippet,
     _ast_cfg_for_function,
-    _find_unsafe_allocation_use,
-    _find_unsafe_param_deref,
-    _find_uaf_uses,
-    _find_memory_leak_exits,
 )
 
 logger = logging.getLogger(__name__)
+
+
 class DoubleFreeRule(BaseRule):
     rule_id = "CGULL-027"
     name = "Double Free"
@@ -53,15 +54,43 @@ class DoubleFreeRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
-        summaries = analyze_function_summaries(ast_ctx, dealloc_funcs=self.dealloc_funcs)
+        session = self.get_analysis_session(ast_ctx)
+        if self.dealloc_funcs == self.DEFAULT_DEALLOC_FUNCS:
+            summaries = session.function_summaries
+        else:
+            summaries = analyze_function_summaries(
+                ast_ctx,
+                dealloc_funcs=self.dealloc_funcs,
+                call_effects=session.semantic_models.call_effects,
+            )
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
+                ownership_effects = session.ownership_effects(fn.name, cfg)
+                predecessors = build_ownership_predecessors(cfg)
+                reported = set()
                 for node in cfg.nodes.values():
-                    for freed_ptr in node.freed:
-                        # Check if ptr was already freed prior to this node
+                    node_effect = ownership_effects.get(node.node_id)
+                    freed_ptrs = set(node.freed)
+                    if node_effect is not None:
+                        freed_ptrs.update(node_effect.freed)
+                        freed_ptrs.update(node_effect.maybe_freed)
+                    for freed_ptr in freed_ptrs:
+                        key = (node.node_id, freed_ptr)
+                        if key in reported:
+                            continue
                         alloc_status = cfg.query_allocation(freed_ptr, node.node_id)
-                        if alloc_status in (Allocation.FREED, Allocation.MAYBE_FREED):
+                        already_freed = alloc_status in (Allocation.FREED, Allocation.MAYBE_FREED)
+                        if not already_freed:
+                            already_freed = has_prior_free_effect(
+                                cfg,
+                                node.node_id,
+                                freed_ptr,
+                                ownership_effects,
+                                predecessors=predecessors,
+                            )
+                        if already_freed:
+                            reported.add(key)
                             snippet = _source_snippet(ast_ctx, node.line_number, node.expr_str)
                             issues.append(self.create_issue(
                                 file_path=file_path,
@@ -89,7 +118,6 @@ class DoubleFreeRule(BaseRule):
                         break
                     next_line = body_lines[j]
                     next_line_no = fn.start_line + 1 + j
-                    # If reassigned to NULL or another value, break
                     if re.search(rf'\b{re.escape(freed_ptr)}\s*=', next_line):
                         break
                     if re.search(rf'\b(?:free|cfree|vfree)\s*\(\s*{re.escape(freed_ptr)}\s*\)', next_line):
@@ -99,7 +127,7 @@ class DoubleFreeRule(BaseRule):
                             code_snippet=next_line,
                             message=f"Potential Double Free: pointer '{freed_ptr}' was already freed at line {line_no}.",
                             column_number=1,
-                            engine="AST",
+                            engine="Regex",
                             fix_type=FixType.MANUAL_REVIEW,
                         ))
                         break

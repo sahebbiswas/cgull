@@ -34,6 +34,10 @@ class AnalysisQueries:
         """Return cached bounded interprocedural size/extent facts for the TU."""
         return self._session.size_analysis
 
+    def ownership_summaries(self):
+        """Return cached allocation ownership/effect summaries for the TU."""
+        return self._session.ownership_summaries
+
 
 class AnalysisSession:
     """Shared analysis state for exactly one TU/configuration-profile scan."""
@@ -52,6 +56,8 @@ class AnalysisSession:
         )
         self._call_graph = None
         self._function_summary_result = None
+        self._ownership_summary_result = None
+        self._ownership_effects_cache: Dict[str, object] = {}
         self._value_analysis_result = None
         self._size_analysis_result = None
         self._summary_construction_count = 0
@@ -95,6 +101,29 @@ class AnalysisSession:
             )
         return self._function_summary_result
 
+    def _ensure_ownership_summaries(self):
+        if self._ownership_summary_result is None:
+            from .cfg.ownership import analyze_ownership_summaries_detailed
+
+            self._ownership_summary_result = analyze_ownership_summaries_detailed(
+                self.ast_context,
+                call_graph=self.call_graph,
+                call_effects=self.semantic_models.call_effects,
+            )
+        return self._ownership_summary_result
+
+    def ownership_effects(self, function_name: str, cfg):
+        """Return cached per-node ownership effects for one function CFG."""
+        if function_name not in self._ownership_effects_cache:
+            from .cfg.ownership import ownership_effects_for_cfg
+
+            self._ownership_effects_cache[function_name] = ownership_effects_for_cfg(
+                cfg,
+                self.ownership_summaries,
+                call_effects=self.semantic_models.call_effects,
+            )
+        return self._ownership_effects_cache[function_name]
+
     def _ensure_value_analysis(self):
         if self._value_analysis_result is None:
             from .cfg.value_interprocedural import analyze_translation_unit_value_dataflow
@@ -127,6 +156,18 @@ class AnalysisSession:
     @property
     def summary_iterations_by_scc(self):
         return self._ensure_function_summaries().iterations_by_scc
+
+    @property
+    def ownership_summaries(self):
+        return self._ensure_ownership_summaries().summaries
+
+    @property
+    def ownership_diagnostics(self):
+        return self._ensure_ownership_summaries().diagnostics
+
+    @property
+    def ownership_iterations_by_scc(self):
+        return self._ensure_ownership_summaries().iterations_by_scc
 
     @property
     def value_analysis(self):

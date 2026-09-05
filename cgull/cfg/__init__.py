@@ -5,6 +5,8 @@ from .dataflow import *
 from .construction import *
 from .fixed_point import *
 from .summaries import *
+from .ownership import *
+from .ownership_queries import *
 from .call_graph import *
 from .size_facts import *
 from .construction import _deref_vars, _deref_vars_with_lines
@@ -34,6 +36,8 @@ _IMPLEMENTATION_EXPORTS = {
     "Union",
     "logging",
     "json",
+    "re",
+    "collections",
     "c_ast",
     "_IMPLEMENTATION_EXPORTS",
 }

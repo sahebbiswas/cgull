@@ -4,25 +4,21 @@ Memory Management Rule Submodule.
 
 import re
 import logging
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Set
 
 from ..base import BaseRule
-from ..banned_functions import BannedFunctionsRule
 from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
-from ...ast_analyzer import CASTContext, CFunction, get_type_byte_size, is_unsigned_type
-from ...utils import extract_call_args, split_call_args, extract_balanced_parens
-from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
+from ...ast_analyzer import CASTContext
+from ...cfg import analyze_function_summaries, find_uses_after_free_effect
 from .helpers import (
     _brace_depths,
     _source_snippet,
     _ast_cfg_for_function,
-    _find_unsafe_allocation_use,
-    _find_unsafe_param_deref,
-    _find_uaf_uses,
-    _find_memory_leak_exits,
 )
 
 logger = logging.getLogger(__name__)
+
+
 class UseAfterFreeRule(BaseRule):
     rule_id = "CGULL-022"
     name = "Use-After-Free"
@@ -53,15 +49,30 @@ class UseAfterFreeRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
-        summaries = analyze_function_summaries(ast_ctx, dealloc_funcs=self.dealloc_funcs)
+        session = self.get_analysis_session(ast_ctx)
+        if self.dealloc_funcs == self.DEFAULT_DEALLOC_FUNCS:
+            summaries = session.function_summaries
+        else:
+            summaries = analyze_function_summaries(
+                ast_ctx,
+                dealloc_funcs=self.dealloc_funcs,
+                call_effects=session.semantic_models.call_effects,
+            )
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
+                ownership_effects = session.ownership_effects(fn.name, cfg)
                 reported_uafs = set()
                 for node in cfg.nodes.values():
-                    freed_ptrs = node.freed | node.realloc_inputs
+                    node_effect = ownership_effects.get(node.node_id)
+                    freed_ptrs = set(node.freed) | set(node.realloc_inputs)
+                    if node_effect is not None:
+                        freed_ptrs.update(node_effect.freed)
+                        freed_ptrs.update(node_effect.maybe_freed)
                     for freed_ptr in freed_ptrs:
-                        for use_node, accessed_var in _find_uaf_uses(cfg, node.node_id, freed_ptr):
+                        for use_node, accessed_var in find_uses_after_free_effect(
+                            cfg, node.node_id, freed_ptr
+                        ):
                             key = (use_node.line_number, accessed_var)
                             if key in reported_uafs:
                                 continue
