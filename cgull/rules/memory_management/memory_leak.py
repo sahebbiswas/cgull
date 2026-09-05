@@ -11,7 +11,6 @@ from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext
 from ...cfg import (
     analyze_function_summaries,
-    analyze_ownership_summaries,
     filter_leak_exits_for_ownership,
     ownership_effects_for_cfg,
 )
@@ -75,13 +74,31 @@ class MemoryLeakRule(BaseRule):
         issues = []
         alloc_pattern = "|".join(re.escape(f) for f in sorted(self.alloc_funcs, key=len, reverse=True))
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
-        summaries = analyze_function_summaries(ast_ctx, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs)
-        ownership_summaries = analyze_ownership_summaries(ast_ctx)
+        session = self.get_analysis_session(ast_ctx)
+        if (
+            self.alloc_funcs == self.DEFAULT_ALLOC_FUNCS
+            and self.realloc_funcs == self.DEFAULT_REALLOC_FUNCS
+            and self.dealloc_funcs == self.DEFAULT_DEALLOC_FUNCS
+        ):
+            summaries = session.function_summaries
+        else:
+            summaries = analyze_function_summaries(
+                ast_ctx,
+                alloc_funcs=self.alloc_funcs,
+                dealloc_funcs=self.dealloc_funcs,
+                realloc_funcs=self.realloc_funcs,
+                call_effects=session.semantic_models.call_effects,
+            )
+        ownership_summaries = session.ownership_summaries
 
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
-                ownership_effects = ownership_effects_for_cfg(cfg, ownership_summaries)
+                ownership_effects = ownership_effects_for_cfg(
+                    cfg,
+                    ownership_summaries,
+                    call_effects=session.semantic_models.call_effects,
+                )
                 reported_allocs = set()
                 for node in cfg.nodes.values():
                     if not node.allocated:
