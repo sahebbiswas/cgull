@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 from ...ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
 from ...cfg.size_facts import SizeSafety
 from ...models import Confidence, FixType, Issue
+from ...utils import split_call_args
 from ..banned_functions import BannedFunctionsRule
 from .helpers import _source_snippet
 from .memcpy_struct_member_overflow import (
@@ -65,15 +66,31 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
     ) -> Optional[str]:
         """Recover the destination expression for one precise call site.
 
-        Prefer the occurrence on the call's own source line.  pycparser columns
-        are not reliable enough after preprocessing to distinguish sibling calls
-        on the same physical line, while SizeCallFact order preserves source AST
-        order.  Fall back to the bounded multi-line window for continued calls.
+        Pair the size fact with the corresponding AST call metadata first. That
+        metadata already carries raw arguments for each individual call, which is
+        the only reliable way to distinguish sibling calls on the same line after
+        preprocessing. Fall back to source parsing only when call metadata is not
+        available.
         """
+        source_line = cls._source_line(ast_ctx, call_fact)
+        function = cls._function_for_call(ast_ctx, call_fact)
+        if function is not None:
+            matching_calls = [
+                call
+                for call in getattr(function, "calls", ())
+                if len(call) >= 3
+                and call[0] == call_fact.callee
+                and call[1] == source_line
+            ]
+            if occurrence < len(matching_calls):
+                raw_args = matching_calls[occurrence][2]
+                args = split_call_args(raw_args) if raw_args else []
+                if args:
+                    return args[0].strip()
+
         lines = getattr(ast_ctx, "source_lines", None) or (
             getattr(ast_ctx, "clean_source", "") or ""
         ).splitlines()
-        source_line = cls._source_line(ast_ctx, call_fact)
         if not (0 < source_line <= len(lines)):
             return None
 
@@ -263,7 +280,7 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
                 continue
 
             source_line = self._source_line(ast_ctx, call_fact)
-            occurrence_key = (source_line, call_fact.callee)
+            occurrence_key = (call_fact.caller, source_line, call_fact.callee)
             occurrence = occurrences.get(occurrence_key, 0)
             occurrences[occurrence_key] = occurrence + 1
 
@@ -297,11 +314,6 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
                 )
                 continue
 
-            # Conflicting callers degrade the shared fact to UNKNOWN. Emit that
-            # conservative review when the memory API receives a wrapper formal:
-            # this is precisely the cross-boundary case the local legacy rule
-            # cannot decide from the callee body alone. Local destinations remain
-            # governed by the stronger legacy CFG/gating policy.
             if (
                 self._informative(call_fact)
                 and self._destination_is_parameter(ast_ctx, call_fact, destination)
