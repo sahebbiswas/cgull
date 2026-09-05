@@ -12,7 +12,6 @@ from ...ast_analyzer import CASTContext
 from ...cfg import (
     Allocation,
     analyze_function_summaries,
-    analyze_ownership_summaries,
     has_prior_free_effect,
     ownership_effects_for_cfg,
 )
@@ -55,12 +54,24 @@ class DoubleFreeRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         dealloc_pattern = "|".join(re.escape(f) for f in sorted(self.dealloc_funcs, key=len, reverse=True))
-        summaries = analyze_function_summaries(ast_ctx, dealloc_funcs=self.dealloc_funcs)
-        ownership_summaries = analyze_ownership_summaries(ast_ctx)
+        session = self.get_analysis_session(ast_ctx)
+        if self.dealloc_funcs == self.DEFAULT_DEALLOC_FUNCS:
+            summaries = session.function_summaries
+        else:
+            summaries = analyze_function_summaries(
+                ast_ctx,
+                dealloc_funcs=self.dealloc_funcs,
+                call_effects=session.semantic_models.call_effects,
+            )
+        ownership_summaries = session.ownership_summaries
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
-                ownership_effects = ownership_effects_for_cfg(cfg, ownership_summaries)
+                ownership_effects = ownership_effects_for_cfg(
+                    cfg,
+                    ownership_summaries,
+                    call_effects=session.semantic_models.call_effects,
+                )
                 reported = set()
                 for node in cfg.nodes.values():
                     node_effect = ownership_effects.get(node.node_id)
