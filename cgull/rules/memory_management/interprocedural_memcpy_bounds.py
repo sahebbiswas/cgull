@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional, Tuple
 
+from ...ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
 from ...cfg.size_facts import SizeSafety
 from ...models import Confidence, FixType, Issue
 from ..banned_functions import BannedFunctionsRule
@@ -46,6 +47,15 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
             return None
         return re.sub(r"\s+", "", destination.strip())
 
+    @staticmethod
+    def _source_line(ast_ctx, call_fact) -> int:
+        """Map a pycparser/prelude coordinate back to the original source line."""
+        raw_line = int(getattr(call_fact, "line", 0) or 0)
+        if raw_line <= 0:
+            return 1
+        expanded_line = max(1, raw_line - _PRELUDE_LINE_COUNT)
+        return _map_line(expanded_line, getattr(ast_ctx, "line_map", None))
+
     @classmethod
     def _destination_for_call(cls, ast_ctx, call_fact) -> Optional[str]:
         """Recover the destination expression for one precise call site.
@@ -58,10 +68,11 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         lines = getattr(ast_ctx, "source_lines", None) or (
             getattr(ast_ctx, "clean_source", "") or ""
         ).splitlines()
-        if not (0 < call_fact.line <= len(lines)):
+        source_line = cls._source_line(ast_ctx, call_fact)
+        if not (0 < source_line <= len(lines)):
             return None
 
-        window = "\n".join(lines[call_fact.line - 1 : call_fact.line + 10])
+        window = "\n".join(lines[source_line - 1 : source_line + 10])
         pattern = re.compile(rf"\b{re.escape(call_fact.callee)}\s*\(")
         matches = list(pattern.finditer(window))
         if not matches:
@@ -75,11 +86,16 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         return args[0].strip()
 
     @classmethod
-    def _site_key(cls, call_fact, destination: Optional[str]) -> Optional[Tuple[int, str, str]]:
+    def _site_key(
+        cls,
+        ast_ctx,
+        call_fact,
+        destination: Optional[str],
+    ) -> Optional[Tuple[int, str, str]]:
         normalized = cls._normalize_destination(destination)
         if normalized is None:
             return None
-        return (call_fact.line, call_fact.callee, normalized)
+        return (cls._source_line(ast_ctx, call_fact), call_fact.callee, normalized)
 
     @classmethod
     def _legacy_site_key(cls, issue: Issue) -> Optional[Tuple[int, str, str]]:
@@ -137,7 +153,8 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
     def _interprocedural_issue(self, file_path: str, ast_ctx, call_fact, safety: SizeSafety) -> Issue:
         size = call_fact.sizes[2]
         capacity = call_fact.extents[0]
-        snippet = _source_snippet(ast_ctx, call_fact.line, f"{call_fact.callee}(...)")
+        source_line = self._source_line(ast_ctx, call_fact)
+        snippet = _source_snippet(ast_ctx, source_line, f"{call_fact.callee}(...)")
         flow = f"{call_fact.caller} -> {call_fact.callee}"
         if safety is SizeSafety.UNSAFE:
             message = (
@@ -155,7 +172,7 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
             )
         issue = self.create_issue(
             file_path=file_path,
-            line_number=max(1, call_fact.line),
+            line_number=source_line,
             code_snippet=snippet,
             message=message,
             column_number=max(1, call_fact.column),
@@ -189,7 +206,7 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
 
             safety = call_fact.classify(buffer_arg=0, size_arg=2)
             destination = self._destination_for_call(ast_ctx, call_fact)
-            site = self._site_key(call_fact, destination)
+            site = self._site_key(ast_ctx, call_fact, destination)
 
             if safety is SizeSafety.SAFE:
                 # SAFE suppresses legacy review only when the shared extent is for
