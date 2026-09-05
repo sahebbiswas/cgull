@@ -21,7 +21,7 @@ from .unsafe_sensitive_memory_clearing import UnsafeSensitiveMemoryClearingRule
 from .realloc_overwrite import ReallocOverwriteRule
 from .memory_leak import MemoryLeakRule
 from .return_stack_variable import ReturnStackVariableRule
-from .memcpy_struct_member_overflow import MemcpyStructMemberOverflowRule
+from .interprocedural_memcpy_bounds_precise import MemcpyStructMemberOverflowRule
 
 __all__ = [
     "_brace_depths",
