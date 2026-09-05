@@ -9,11 +9,7 @@ from typing import List, Optional, Set
 from ..base import BaseRule
 from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext
-from ...cfg import (
-    analyze_function_summaries,
-    filter_leak_exits_for_ownership,
-    ownership_effects_for_cfg,
-)
+from ...cfg import analyze_function_summaries, filter_leak_exits_for_ownership
 from .helpers import (
     _brace_depths,
     _source_snippet,
@@ -89,16 +85,11 @@ class MemoryLeakRule(BaseRule):
                 realloc_funcs=self.realloc_funcs,
                 call_effects=session.semantic_models.call_effects,
             )
-        ownership_summaries = session.ownership_summaries
 
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, alloc_funcs=self.alloc_funcs, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
-                ownership_effects = ownership_effects_for_cfg(
-                    cfg,
-                    ownership_summaries,
-                    call_effects=session.semantic_models.call_effects,
-                )
+                ownership_effects = session.ownership_effects(fn.name, cfg)
                 reported_allocs = set()
                 for node in cfg.nodes.values():
                     if not node.allocated:
@@ -131,7 +122,6 @@ class MemoryLeakRule(BaseRule):
                             ))
                 continue
 
-            # Parser unavailable: fallback to lexical scope analysis
             body_lines = fn.body.splitlines()
             depths = _brace_depths(body_lines)
             alloc_regex = re.compile(rf'\b(\w+)\s*=\s*(?:\([^\)]+\)\s*)?(?:{alloc_pattern})\s*\(')
