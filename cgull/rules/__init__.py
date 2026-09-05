@@ -7,11 +7,11 @@ from .base import BaseRule
 from .banned_functions import (
     UnsafeIntegerConversionsRule,
     UncheckedSnprintfReturnRule,
-    CommandInjectionRule,
     StrncpyNullTerminationRule,
 )
 from .banned_functions_policy import BannedFunctionsRule
 from .format_string import FormatStringRule
+from .command_injection import CommandInjectionRule
 from .memory_management import (
     UncheckedDynamicAllocationsRule,
     MissingNullCheckOnFunctionParametersRule,
