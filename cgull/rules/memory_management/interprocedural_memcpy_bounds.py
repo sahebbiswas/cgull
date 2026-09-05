@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import List
+import re
+from typing import List, Optional, Tuple
 
 from ...cfg.size_facts import SizeSafety
 from ...models import Confidence, FixType, Issue
+from ..banned_functions import BannedFunctionsRule
 from .helpers import _source_snippet
 from .memcpy_struct_member_overflow import (
     MemcpyStructMemberOverflowRule as _LegacyMemcpyStructMemberOverflowRule,
@@ -19,12 +21,7 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
 
     @staticmethod
     def _informative(call_fact) -> bool:
-        """Only interprocedurally review UNKNOWN when destination capacity propagated.
-
-        A known size alone is insufficient because the legacy rule may still prove
-        a local struct-member capacity that the bounded size domain intentionally
-        does not reconstruct from every legacy AST shape.
-        """
+        """Only review UNKNOWN facts when destination capacity propagated."""
         return (
             len(call_fact.extents) > 0
             and len(call_fact.sizes) > 2
@@ -42,6 +39,91 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         if fact.upper is not None:
             return f"<={fact.upper}"
         return "unknown"
+
+    @staticmethod
+    def _normalize_destination(destination: Optional[str]) -> Optional[str]:
+        if not destination:
+            return None
+        return re.sub(r"\s+", "", destination.strip())
+
+    @classmethod
+    def _destination_for_call(cls, ast_ctx, call_fact) -> Optional[str]:
+        """Recover the destination expression for one precise call site.
+
+        ``SizeCallFact`` deliberately carries facts rather than source argument
+        strings.  For deduplication we recover the direct call at its pycparser
+        source column, which also distinguishes multiple same-callee calls on one
+        source line.
+        """
+        lines = getattr(ast_ctx, "source_lines", None) or (
+            getattr(ast_ctx, "clean_source", "") or ""
+        ).splitlines()
+        if not (0 < call_fact.line <= len(lines)):
+            return None
+        line = lines[call_fact.line - 1]
+        pattern = re.compile(rf"\b{re.escape(call_fact.callee)}\s*\(")
+        matches = list(pattern.finditer(line))
+        if not matches:
+            return None
+        expected = max(0, int(call_fact.column or 1) - 1)
+        match = min(matches, key=lambda item: abs(item.start() - expected))
+        args = BannedFunctionsRule._extract_call_args(line, match.end() - 1)
+        if not args:
+            return None
+        return args[0].strip()
+
+    @classmethod
+    def _site_key(cls, call_fact, destination: Optional[str]) -> Optional[Tuple[int, str, str]]:
+        normalized = cls._normalize_destination(destination)
+        if normalized is None:
+            return None
+        return (call_fact.line, call_fact.callee, normalized)
+
+    @classmethod
+    def _legacy_site_key(cls, issue: Issue) -> Optional[Tuple[int, str, str]]:
+        """Recover the legacy rule's (line, callee, destination) identity."""
+        callee = next(
+            (name for name in cls.TARGET_FUNCS if f"'{name}'" in issue.message),
+            None,
+        )
+        if callee is None:
+            return None
+        destination_match = re.search(r"\bfor '([^']+)'", issue.message)
+        if destination_match is None:
+            return None
+        destination = cls._normalize_destination(destination_match.group(1))
+        if destination is None:
+            return None
+        return (issue.line_number, callee, destination)
+
+    def _legacy_can_reason_about_destination(self, ast_ctx, call_fact, destination: Optional[str]) -> bool:
+        """Return whether the existing local rule has a concrete destination capacity.
+
+        UNKNOWN interprocedural facts must not override stronger local CFG proofs.
+        We therefore emit a new UNKNOWN review only when propagated capacity crosses
+        a function boundary that the legacy rule cannot resolve locally.
+        """
+        if destination is None:
+            return True
+        function = next(
+            (
+                fn
+                for fn in getattr(ast_ctx, "functions", ())
+                if getattr(fn, "name", None) == call_fact.caller
+            ),
+            None,
+        )
+        if function is None:
+            return True
+        return (
+            self._resolve_dest_capacity(
+                destination,
+                function,
+                call_fact.line,
+                ast_ctx,
+            )
+            is not None
+        )
 
     def _interprocedural_issue(self, file_path: str, ast_ctx, call_fact, safety: SizeSafety) -> Issue:
         size = call_fact.sizes[2]
@@ -89,24 +171,53 @@ class MemcpyStructMemberOverflowRule(_LegacyMemcpyStructMemberOverflowRule):
         handled = set()
 
         for call_fact in size_result.calls:
-            if call_fact.callee not in self.TARGET_FUNCS or len(call_fact.extents) <= 0 or len(call_fact.sizes) <= 2:
+            if (
+                call_fact.callee not in self.TARGET_FUNCS
+                or len(call_fact.extents) <= 0
+                or len(call_fact.sizes) <= 2
+            ):
                 continue
+
             safety = call_fact.classify(buffer_arg=0, size_arg=2)
-            site = (call_fact.line, call_fact.callee)
+            destination = self._destination_for_call(ast_ctx, call_fact)
+            site = self._site_key(call_fact, destination)
 
             if safety is SizeSafety.SAFE:
-                handled.add(site)
+                if site is not None:
+                    handled.add(site)
                 continue
-            if safety is SizeSafety.UNSAFE or self._informative(call_fact):
-                handled.add(site)
-                issues.append(self._interprocedural_issue(file_path, ast_ctx, call_fact, safety))
+
+            if safety is SizeSafety.UNSAFE:
+                if site is not None:
+                    handled.add(site)
+                issues.append(
+                    self._interprocedural_issue(file_path, ast_ctx, call_fact, safety)
+                )
+                continue
+
+            # UNKNOWN is intentionally subordinate to the legacy local policy.
+            # If the old rule knows this destination capacity, its CFG/bounds
+            # reasoning decides whether review is necessary.  New UNKNOWN review
+            # is reserved for genuinely propagated capacity unavailable locally.
+            if (
+                self._informative(call_fact)
+                and not self._legacy_can_reason_about_destination(
+                    ast_ctx, call_fact, destination
+                )
+            ):
+                if site is not None:
+                    handled.add(site)
+                issues.append(
+                    self._interprocedural_issue(file_path, ast_ctx, call_fact, safety)
+                )
 
         for issue in legacy:
-            if any(
-                issue.line_number == line and f"'{callee}'" in issue.message
-                for line, callee in handled
-            ):
+            site = self._legacy_site_key(issue)
+            if site is not None and site in handled:
                 continue
             issues.append(issue)
 
-        return sorted(issues, key=lambda issue: (issue.line_number, issue.column_number, issue.message))
+        return sorted(
+            issues,
+            key=lambda issue: (issue.line_number, issue.column_number, issue.message),
+        )
