@@ -44,7 +44,6 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
     def _sink_argument_indexes(call, session) -> Tuple[int, ...]:
         if call.direct_callee in CommandInjectionRule.TARGET_FUNCS:
             return (0,)
-
         sink = session.semantic_models.sink_for(call)
         if sink is None:
             return ()
@@ -64,11 +63,8 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
             return ValueFact(degradations=frozenset({"MISSING_COMMAND_ARGUMENT"}))
         state = getattr(result, "_facts_before", {}).get(event.node_id, {})
         return _resolve_actual_fact(
-            call.actual_arguments[index],
-            state,
-            session.semantic_models,
-            session.value_analysis.summaries,
-            128,
+            call.actual_arguments[index], state, session.semantic_models,
+            session.value_analysis.summaries, 128,
         )
 
     @staticmethod
@@ -78,21 +74,28 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
 
     @classmethod
     def _sanitized_locations_before(cls, cfg, sink_node_id: int, session) -> Set[str]:
-        """Collect explicit in-place sanitizer effects preceding this sink.
-
-        This is intentionally conservative: only a direct identifier passed at
-        a modelled ``sanitizes`` position is considered completely sanitized.
-        Unknown calls and partial string construction do not alter provenance.
-        """
+        """Collect only still-valid explicit in-place sanitizer effects."""
         sanitized: Set[str] = set()
         for event in sorted(cfg.nodes.values(), key=lambda item: item.node_id):
             if event.node_id >= sink_node_id:
                 break
+
+            # Any subsequent write replaces the sanitized value.
+            sanitized.difference_update(getattr(event, "written_vars", ()) or ())
+
             for call in getattr(event, "calls", ()):
                 effect = session.semantic_models.effect_for(call)
+                sanitizer_indexes = set(effect.sanitizes) if effect is not None else set()
+
+                # An unmodeled call receiving a sanitized object may mutate it;
+                # do not retain a proof across that call.
                 if effect is None:
-                    continue
-                for index in effect.sanitizes:
+                    for actual in call.actual_arguments:
+                        name = cls._simple_identifier(actual)
+                        if name:
+                            sanitized.discard(name)
+
+                for index in sanitizer_indexes:
                     if index >= len(call.actual_arguments):
                         continue
                     name = cls._simple_identifier(call.actual_arguments[index])
