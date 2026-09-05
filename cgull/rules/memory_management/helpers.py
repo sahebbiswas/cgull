@@ -38,6 +38,51 @@ def _source_snippet(ast_ctx: CASTContext, line_no: int, fallback: str) -> str:
     return fallback
 
 
+def _addressed_variable(argument: str) -> Optional[str]:
+    """Return the simple local named by an address-of call argument."""
+    text = argument.strip()
+    # Preserve conservatism for complex pointer arithmetic/field expressions.
+    match = re.fullmatch(r"\(?\s*&\s*([A-Za-z_]\w*)\s*\)?", text)
+    return match.group(1) if match else None
+
+
+def _apply_output_summary_effects(
+    cfg: StructuredCFG,
+    summaries: Optional[Dict[str, FunctionSummary]],
+) -> None:
+    """Project definite callee output effects onto caller CFG writes.
+
+    Only a must-initialize fact for a simple ``&local`` argument becomes a CFG
+    write. May effects are retained as event metadata but deliberately do not
+    suppress uninitialized-use diagnostics.
+    """
+    if not summaries:
+        return
+    for node in cfg.nodes.values():
+        may_writes: Set[str] = set()
+        for call in node.calls:
+            if call.is_indirect or not call.direct_callee:
+                continue
+            summary = summaries.get(call.direct_callee)
+            if summary is None:
+                continue
+            for index in summary.may_initialize_params:
+                if index >= len(call.actual_arguments):
+                    continue
+                target = _addressed_variable(call.actual_arguments[index])
+                if target:
+                    may_writes.add(target)
+            for index in summary.must_initialize_params:
+                if index >= len(call.actual_arguments):
+                    continue
+                target = _addressed_variable(call.actual_arguments[index])
+                if target:
+                    node.writes.add(target)
+                    may_writes.discard(target)
+        if may_writes:
+            setattr(node, "summary_maybe_writes", frozenset(may_writes))
+
+
 def _ast_cfg_for_function(
     ast_ctx: CASTContext,
     fn: CFunction,
@@ -54,6 +99,7 @@ def _ast_cfg_for_function(
     if summaries is None:
         summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs)
     cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
+    _apply_output_summary_effects(cfg, summaries)
     initial_initialized = set(p.name for p in fn.parameters if p.name) | set(ast_ctx.global_variables.keys()) | {var.name for var in fn.variables.values() if getattr(var, "has_initializer", False) and var.name}
     cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
     return cfg
@@ -135,10 +181,6 @@ def _find_unsafe_allocation_use(
                        cfg.query_nullness(deref_var, nid) != Nullness.NON_NULL:
                         return node
 
-            # A known direct callee summary is a use of the caller's
-            # allocation.  Keep the caller-side path facts: a guard before
-            # this call suppresses the report, while any reaching NULL path
-            # remains reportable.
         # Calls inside conditions still execute. The summary-specific check
         # intentionally stays outside the legacy condition-node exclusion.
         if _passes_to_unchecked_callee_param(cfg, node, allocation_locations, summaries):
@@ -202,7 +244,6 @@ def _find_uaf_uses(cfg: StructuredCFG, freed_node_id: int, ptr_name: str):
         for succ in node.successors:
             if succ not in visited:
                 work.append(succ)
-
 
 
 
