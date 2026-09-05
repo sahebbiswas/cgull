@@ -57,6 +57,7 @@ class AnalysisSession:
         self._call_graph = None
         self._function_summary_result = None
         self._ownership_summary_result = None
+        self._ownership_effects_cache: Dict[str, object] = {}
         self._value_analysis_result = None
         self._size_analysis_result = None
         self._summary_construction_count = 0
@@ -110,6 +111,18 @@ class AnalysisSession:
                 call_effects=self.semantic_models.call_effects,
             )
         return self._ownership_summary_result
+
+    def ownership_effects(self, function_name: str, cfg):
+        """Return cached per-node ownership effects for one function CFG."""
+        if function_name not in self._ownership_effects_cache:
+            from .cfg.ownership import ownership_effects_for_cfg
+
+            self._ownership_effects_cache[function_name] = ownership_effects_for_cfg(
+                cfg,
+                self.ownership_summaries,
+                call_effects=self.semantic_models.call_effects,
+            )
+        return self._ownership_effects_cache[function_name]
 
     def _ensure_value_analysis(self):
         if self._value_analysis_result is None:
