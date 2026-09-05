@@ -142,3 +142,35 @@ void entry(const char *src) {
     assert len(issues) == 1
     assert issues[0].engine == "Interprocedural"
     assert "Provable out-of-bounds write" in issues[0].message
+
+
+def test_safe_struct_member_with_digit_is_suppressed():
+    code = r"""
+void memcpy(void *dst, const void *src, unsigned long n);
+
+struct Packet {
+    char field1[16];
+};
+
+void copy(struct Packet *packet, const char *src) {
+    memcpy(packet->field1, src, 8);
+}
+"""
+    assert _scan(code) == []
+
+
+def test_interprocedural_issue_uses_original_source_line():
+    code = r"""
+void memcpy(void *dst, const void *src, unsigned long n);
+
+void leaf(char *dst, const char *src, unsigned long n) {
+    memcpy(dst, src, n);
+}
+void entry(const char *src) {
+    char buf[4];
+    leaf(buf, src, 8);
+}
+"""
+    issues = _scan(code)
+    assert len(issues) == 1
+    assert issues[0].line_number == 5
