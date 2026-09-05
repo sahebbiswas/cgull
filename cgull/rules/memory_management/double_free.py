@@ -12,8 +12,8 @@ from ...ast_analyzer import CASTContext
 from ...cfg import (
     Allocation,
     analyze_function_summaries,
+    build_ownership_predecessors,
     has_prior_free_effect,
-    ownership_effects_for_cfg,
 )
 from .helpers import (
     _brace_depths,
@@ -63,15 +63,11 @@ class DoubleFreeRule(BaseRule):
                 dealloc_funcs=self.dealloc_funcs,
                 call_effects=session.semantic_models.call_effects,
             )
-        ownership_summaries = session.ownership_summaries
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
-                ownership_effects = ownership_effects_for_cfg(
-                    cfg,
-                    ownership_summaries,
-                    call_effects=session.semantic_models.call_effects,
-                )
+                ownership_effects = session.ownership_effects(fn.name, cfg)
+                predecessors = build_ownership_predecessors(cfg)
                 reported = set()
                 for node in cfg.nodes.values():
                     node_effect = ownership_effects.get(node.node_id)
@@ -87,7 +83,11 @@ class DoubleFreeRule(BaseRule):
                         already_freed = alloc_status in (Allocation.FREED, Allocation.MAYBE_FREED)
                         if not already_freed:
                             already_freed = has_prior_free_effect(
-                                cfg, node.node_id, freed_ptr, ownership_effects
+                                cfg,
+                                node.node_id,
+                                freed_ptr,
+                                ownership_effects,
+                                predecessors=predecessors,
                             )
                         if already_freed:
                             reported.add(key)
@@ -118,7 +118,6 @@ class DoubleFreeRule(BaseRule):
                         break
                     next_line = body_lines[j]
                     next_line_no = fn.start_line + 1 + j
-                    # If reassigned to NULL or another value, break
                     if re.search(rf'\b{re.escape(freed_ptr)}\s*=', next_line):
                         break
                     if re.search(rf'\b(?:free|cfree|vfree)\s*\(\s*{re.escape(freed_ptr)}\s*\)', next_line):
