@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import collections
 import re
-from typing import Dict, Iterable, List, Mapping, Set, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-from .model import CFGEvent
+from .model import Allocation, CFGEvent
 from .ownership import NodeOwnershipEffects
 
 
 __all__ = [
+    "build_ownership_predecessors",
     "filter_leak_exits_for_ownership",
     "find_uses_after_free_effect",
     "has_prior_free_effect",
@@ -36,11 +37,25 @@ def find_uses_after_free_effect(cfg, free_node_id: int, ptr_name: str):
         accessed = node.derefs | (node.reads - node.writes)
         for variable in sorted(accessed):
             if freed_locations & set(loc_map.get(variable, {f"var_{variable}"})):
-                if not node.kind.endswith("_cond"):
+                allocation = cfg.query_allocation(variable, node_id)
+                if (
+                    allocation in (Allocation.FREED, Allocation.MAYBE_FREED)
+                    and not node.kind.endswith("_cond")
+                ):
                     yield node, variable
         for successor in node.successors:
             if successor not in visited:
                 work.append(successor)
+
+
+def build_ownership_predecessors(cfg) -> Dict[int, Set[int]]:
+    """Build the predecessor map reused by backward ownership queries."""
+    predecessors: Dict[int, Set[int]] = {nid: set() for nid in cfg.nodes}
+    for pred_id, node in cfg.nodes.items():
+        for successor in node.successors:
+            if successor in predecessors:
+                predecessors[successor].add(pred_id)
+    return predecessors
 
 
 def has_prior_free_effect(
@@ -48,16 +63,14 @@ def has_prior_free_effect(
     node_id: int,
     ptr_name: str,
     effects: Mapping[int, NodeOwnershipEffects],
+    *,
+    predecessors: Optional[Mapping[int, Set[int]]] = None,
 ) -> bool:
     """Whether the location freed at ``node_id`` may already have been freed."""
     target_locations = _locations(cfg, node_id, ptr_name)
-    predecessors: Dict[int, Set[int]] = {nid: set() for nid in cfg.nodes}
-    for pred_id, node in cfg.nodes.items():
-        for successor in node.successors:
-            if successor in predecessors:
-                predecessors[successor].add(pred_id)
+    predecessor_map = predecessors if predecessors is not None else build_ownership_predecessors(cfg)
 
-    queue = collections.deque(sorted(predecessors.get(node_id, set())))
+    queue = collections.deque(sorted(predecessor_map.get(node_id, set())))
     visited = set()
     while queue:
         current = queue.popleft()
@@ -68,7 +81,7 @@ def has_prior_free_effect(
         for variable in current_effects.freed | current_effects.maybe_freed:
             if target_locations & _locations(cfg, current, variable):
                 return True
-        for predecessor in sorted(predecessors.get(current, set())):
+        for predecessor in sorted(predecessor_map.get(current, set())):
             if predecessor not in visited:
                 queue.append(predecessor)
     return False
