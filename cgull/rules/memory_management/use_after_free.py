@@ -9,11 +9,7 @@ from typing import List, Optional, Set
 from ..base import BaseRule
 from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext
-from ...cfg import (
-    analyze_function_summaries,
-    ownership_effects_for_cfg,
-    find_uses_after_free_effect,
-)
+from ...cfg import analyze_function_summaries, find_uses_after_free_effect
 from .helpers import (
     _brace_depths,
     _source_snippet,
@@ -62,15 +58,10 @@ class UseAfterFreeRule(BaseRule):
                 dealloc_funcs=self.dealloc_funcs,
                 call_effects=session.semantic_models.call_effects,
             )
-        ownership_summaries = session.ownership_summaries
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, dealloc_funcs=self.dealloc_funcs, summaries=summaries)
             if cfg is not None:
-                ownership_effects = ownership_effects_for_cfg(
-                    cfg,
-                    ownership_summaries,
-                    call_effects=session.semantic_models.call_effects,
-                )
+                ownership_effects = session.ownership_effects(fn.name, cfg)
                 reported_uafs = set()
                 for node in cfg.nodes.values():
                     node_effect = ownership_effects.get(node.node_id)
