@@ -403,13 +403,18 @@ def _analyze_one_function(
     }
     for node_id, effects in node_effects.items():
         free_must = _param_indexes_for_vars(cfg, node_id, set(effects.freed), param_names)
-        free_may = _param_indexes_for_vars(cfg, node_id, set(effects.maybe_freed), param_names)
-        # A realloc-like operation may release its input, but only on the
-        # successful replacement path. Preserve that uncertainty in wrappers.
-        realloc_may = _param_indexes_for_vars(
-            cfg, node_id, set(getattr(cfg.nodes[node_id], "realloc_inputs", set())), param_names
-        )
-        free_may.update(realloc_may)
+        free_may_vars = set(effects.maybe_freed)
+        free_may_vars.update(getattr(cfg.nodes[node_id], "realloc_inputs", set()))
+        # Return expressions do not currently populate realloc_inputs in CFG
+        # construction, so derive realloc-like inputs from structured calls as
+        # well. This stays summary-only and does not flatten direct CFG state.
+        for call in cfg.nodes[node_id].calls:
+            model = call_effects.for_function(call.direct_callee)
+            if _is_reallocation_model(model):
+                free_may_vars.update(
+                    _vars_for_indexes(call.actual_arguments, model.deallocates)
+                )
+        free_may = _param_indexes_for_vars(cfg, node_id, free_may_vars, param_names)
         transfer_must = _param_indexes_for_vars(cfg, node_id, set(effects.transferred), param_names)
         transfer_may = _param_indexes_for_vars(cfg, node_id, set(effects.maybe_transferred), param_names)
         escape_must = _param_indexes_for_vars(cfg, node_id, set(effects.escaped), param_names)
