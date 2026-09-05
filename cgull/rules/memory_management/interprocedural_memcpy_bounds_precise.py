@@ -6,6 +6,7 @@ import re
 from typing import Optional
 
 from ..banned_functions import BannedFunctionsRule
+from ...cfg.size_facts import SizeSafety
 from .interprocedural_memcpy_bounds import (
     MemcpyStructMemberOverflowRule as _InterproceduralMemcpyStructMemberOverflowRule,
 )
@@ -63,3 +64,34 @@ class MemcpyStructMemberOverflowRule(_InterproceduralMemcpyStructMemberOverflowR
                 return simple_destinations[0]
 
         return super()._destination_for_call(ast_ctx, call_fact)
+
+    def scan_ast(self, file_path: str, ast_ctx):
+        """Recover locally provable offset overflows hidden by UNKNOWN size facts."""
+        issues = super().scan_ast(file_path, ast_ctx)
+        if not getattr(ast_ctx, "has_pycparser", False) or getattr(
+            ast_ctx, "pycparser_ast", None
+        ) is None:
+            return issues
+
+        size_result = self.get_analysis_session(ast_ctx).queries.size_facts()
+        for call_fact in size_result.calls:
+            if call_fact.callee not in self.TARGET_FUNCS:
+                continue
+            if len(call_fact.extents) <= 0 or len(call_fact.sizes) <= 2:
+                continue
+            if call_fact.classify(buffer_arg=0, size_arg=2) is not SizeSafety.UNKNOWN:
+                continue
+
+            destination = self._destination_for_call(ast_ctx, call_fact)
+            if self._is_simple_destination(destination):
+                continue
+            residual_issue = self._residual_capacity_issue(
+                file_path, ast_ctx, call_fact, destination
+            )
+            if residual_issue is not None:
+                issues.append(residual_issue)
+
+        return sorted(
+            issues,
+            key=lambda issue: (issue.line_number, issue.column_number, issue.message),
+        )
