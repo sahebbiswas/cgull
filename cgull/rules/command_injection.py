@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .banned_functions import CommandInjectionRule as _LegacyCommandInjectionRule
 from ..ast_analyzer import CASTContext
@@ -73,35 +73,84 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
         return value if value.isidentifier() else None
 
     @classmethod
-    def _sanitized_locations_before(cls, cfg, sink_node_id: int, session) -> Set[str]:
-        """Collect only still-valid explicit in-place sanitizer effects."""
-        sanitized: Set[str] = set()
-        for event in sorted(cfg.nodes.values(), key=lambda item: item.node_id):
-            if event.node_id >= sink_node_id:
-                break
+    def _sanitized_state_before(cls, cfg, session) -> Dict[int, FrozenSet[str]]:
+        """Compute must-sanitized locations at each event in one CFG dataflow pass.
 
-            # Any subsequent write replaces the sanitized value.
-            sanitized.difference_update(getattr(event, "written_vars", ()) or ())
+        Sanitization is a proof that must hold on every path reaching a sink, so
+        predecessor states merge by intersection.  Walking basic blocks follows
+        the CFG's execution order rather than creation-time ``node_id`` order,
+        which is intentionally reversed for portions of CFG construction.
+        """
+        if not cfg.blocks:
+            cfg.build_basic_blocks()
+        if not cfg.blocks:
+            return {}
 
-            for call in getattr(event, "calls", ()):
-                effect = session.semantic_models.effect_for(call)
-                sanitizer_indexes = set(effect.sanitizes) if effect is not None else set()
+        entry = cfg.node_to_block.get(cfg.entry) if cfg.entry else min(cfg.blocks)
+        if entry not in cfg.blocks:
+            entry = min(cfg.blocks)
 
-                # An unmodeled call receiving a sanitized object may mutate it;
-                # do not retain a proof across that call.
-                if effect is None:
-                    for actual in call.actual_arguments:
-                        name = cls._simple_identifier(actual)
-                        if name:
-                            sanitized.discard(name)
+        reachable: Set[int] = set()
+        queue = [entry]
+        while queue:
+            block_id = queue.pop(0)
+            if block_id in reachable or block_id not in cfg.blocks:
+                continue
+            reachable.add(block_id)
+            queue.extend(cfg.blocks[block_id].successors)
 
-                for index in sanitizer_indexes:
-                    if index >= len(call.actual_arguments):
+        incoming: Dict[int, Optional[Set[str]]] = {
+            block_id: None for block_id in reachable
+        }
+        incoming[entry] = set()
+        before: Dict[int, FrozenSet[str]] = {}
+        work = [entry]
+
+        while work:
+            block_id = work.pop(0)
+            block_in = incoming.get(block_id)
+            if block_in is None:
+                continue
+            state = set(block_in)
+            block = cfg.blocks[block_id]
+
+            for event in block.nodes:
+                before[event.node_id] = frozenset(state)
+
+                # A write replaces the value for which sanitization was proven.
+                state.difference_update(getattr(event, "writes", ()) or ())
+
+                for call in getattr(event, "calls", ()):
+                    effect = session.semantic_models.effect_for(call)
+
+                    # An unknown call may mutate referenced command storage.  A
+                    # modeled sanitizer below can establish a fresh proof for
+                    # its declared argument positions in the same event.
+                    if effect is None:
+                        for actual in call.actual_arguments:
+                            name = cls._simple_identifier(actual)
+                            if name:
+                                state.discard(name)
                         continue
-                    name = cls._simple_identifier(call.actual_arguments[index])
-                    if name:
-                        sanitized.add(name)
-        return sanitized
+
+                    for index in effect.sanitizes:
+                        if index >= len(call.actual_arguments):
+                            continue
+                        name = cls._simple_identifier(call.actual_arguments[index])
+                        if name:
+                            state.add(name)
+
+            for successor in block.successors:
+                if successor not in reachable:
+                    continue
+                old = incoming.get(successor)
+                merged = set(state) if old is None else old & state
+                if old is None or merged != old:
+                    incoming[successor] = merged
+                    if successor not in work:
+                        work.append(successor)
+
+        return before
 
     @staticmethod
     def _compact_flow(fact: ValueFact, call, event, fallback_file: str) -> str:
@@ -177,9 +226,16 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
             cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
             if not cfg.blocks:
                 cfg.build_basic_blocks()
+            sanitized_before = self._sanitized_state_before(cfg, session)
 
-            for event in sorted(cfg.nodes.values(), key=lambda item: item.node_id):
-                sanitized = self._sanitized_locations_before(cfg, event.node_id, session)
+            # Finding order remains deterministic/source-oriented even though
+            # sanitizer facts themselves come from CFG control-flow order.
+            events = sorted(
+                cfg.nodes.values(),
+                key=lambda item: (item.line_number, item.node_id),
+            )
+            for event in events:
+                sanitized = sanitized_before.get(event.node_id, frozenset())
                 for call in getattr(event, "calls", ()):
                     for index in self._sink_argument_indexes(call, session):
                         if index >= len(call.actual_arguments):
