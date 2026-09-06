@@ -45,6 +45,16 @@ class FormatStringRule(_LegacyFormatStringRule):
                     masked_line_content=mask_string_and_char_literals(line),
                 )
             )
+
+        for issue in issues:
+            issue.confidence = Confidence.FALLBACK
+            issue.analysis_degradations = ("PARSER_FALLBACK",)
+            issue.interprocedural_evidence = ()
+            issue.evidence_truncated = False
+            issue.message += (
+                " Analysis degraded (PARSER_FALLBACK); this syntactic fallback "
+                "must not be interpreted as proof of safety."
+            )
         return issues
 
     @staticmethod
@@ -122,7 +132,7 @@ class FormatStringRule(_LegacyFormatStringRule):
 
     @staticmethod
     def _compact_flow(fact: ValueFact, call, event, fallback_file: str) -> str:
-        """Return a compact source-to-sink explanation when evidence is available."""
+        """Return a deterministic source-to-sink explanation when evidence is available."""
         source = next(
             (
                 evidence
@@ -141,7 +151,25 @@ class FormatStringRule(_LegacyFormatStringRule):
         source_label = f"{source_file}:{source.line}"
         if source.identity:
             source_label += f" ({source.identity})"
-        return f" Flow: {source_label} -> {sink_file}:{sink_line}."
+
+        call_names = sorted(
+            {
+                evidence.identity
+                for evidence in fact.evidence
+                if evidence.kind == "CALL" and evidence.identity
+            }
+        )
+        via = f" via {', '.join(call_names)}" if call_names else ""
+        return f" Flow: {source_label}{via} -> {sink_file}:{sink_line}."
+
+    @staticmethod
+    def _degradation_reasons(fact: ValueFact) -> tuple[str, ...]:
+        """Expose stable public degradation names without changing the fact domain."""
+        reasons = set(fact.degradations)
+        if "EVIDENCE_LIMIT" in reasons:
+            reasons.remove("EVIDENCE_LIMIT")
+            reasons.add("PROVENANCE_LIMIT")
+        return tuple(sorted(reasons))
 
     @staticmethod
     def _event_snippet(ast_ctx: CASTContext, line_number: int) -> str:
@@ -154,6 +182,7 @@ class FormatStringRule(_LegacyFormatStringRule):
         callee = call.direct_callee or call.callee_expression
         arg = call.actual_arguments[index] if index < len(call.actual_arguments) else "<missing>"
         flow = self._compact_flow(fact, call, event, file_path)
+        degradation_reasons = self._degradation_reasons(fact)
 
         if fact.format_literalness is FormatLiteralness.NON_LITERAL:
             if fact.provenance in {ValueProvenance.UNTRUSTED, ValueProvenance.MIXED}:
@@ -172,6 +201,13 @@ class FormatStringRule(_LegacyFormatStringRule):
                 "treating the sink conservatively as potentially unsafe."
             )
         message += flow
+        if degradation_reasons:
+            message += (
+                f" Analysis degraded ({', '.join(degradation_reasons)}); "
+                "the result is conservative and must not be interpreted as proof of safety."
+            )
+        if "PROVENANCE_LIMIT" in degradation_reasons:
+            message += " Evidence was deterministically truncated at the configured provenance bound."
 
         loc = getattr(call, "source_location", None) or getattr(event, "source_location", None)
         line_number = int(getattr(event, "line_number", 0) or 1)
@@ -193,10 +229,13 @@ class FormatStringRule(_LegacyFormatStringRule):
                 else f"Use a constant format literal and pass the dynamic value as data (for example, \"%s\", {arg})."
             ),
         )
+        issue.analysis_degradations = degradation_reasons
+        issue.interprocedural_evidence = tuple(fact.evidence)
+        issue.evidence_truncated = "PROVENANCE_LIMIT" in degradation_reasons
         if (
             fact.format_literalness is FormatLiteralness.UNKNOWN
             or fact.provenance is ValueProvenance.UNKNOWN
-            or fact.degradations
+            or degradation_reasons
         ):
             issue.confidence = Confidence.LIMITED
         return issue
