@@ -32,8 +32,8 @@ from cgull.models import AnalysisEngine, Issue
 CWE_RULE_MAP = {
     "CWE-134": {"CGULL-002"},
     "CWE-190": {"CGULL-006"},
-    "CWE-121": {"CGULL-007"},
-    "CWE-122": {"CGULL-007"},
+    "CWE-121": {"CGULL-001", "CGULL-007", "CGULL-044"},
+    "CWE-122": {"CGULL-001", "CGULL-007", "CGULL-044"},
     "CWE-369": {"CGULL-034"},
     "CWE-476": {"CGULL-003", "CGULL-004"},
     "CWE-690": {"CGULL-003"},
