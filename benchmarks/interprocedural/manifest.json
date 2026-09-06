@@ -11,17 +11,20 @@
     "aliases",
     "header_defined_helpers",
     "recursion",
-    "unresolved_calls"
+    "unresolved_calls",
+    "data_dependent_policy"
   ],
   "required_families": [
     "format_strings",
     "command_execution",
     "memory_copy_bounds",
-    "allocation_lifecycle"
+    "allocation_lifecycle",
+    "banned_functions"
   ],
   "baseline": {
-    "overall": {"cases": 22, "expected_positives": 9, "expected_negatives": 13, "tp": 6, "fp": 7, "tn": 6, "fn": 3, "known_gaps": 10},
+    "overall": {"cases": 24, "expected_positives": 10, "expected_negatives": 14, "tp": 7, "fp": 7, "tn": 7, "fn": 3, "known_gaps": 10},
     "by_rule": {
+      "CGULL-001": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 0, "tn": 1, "fn": 0, "known_gaps": 0},
       "CGULL-002": {"cases": 8, "expected_positives": 3, "expected_negatives": 5, "tp": 3, "fp": 4, "tn": 1, "fn": 0, "known_gaps": 4},
       "CGULL-003": {"cases": 4, "expected_positives": 2, "expected_negatives": 2, "tp": 0, "fp": 0, "tn": 2, "fn": 2, "known_gaps": 2},
       "CGULL-022": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 0, "tn": 1, "fn": 0, "known_gaps": 0},
@@ -30,12 +33,14 @@
     },
     "by_family": {
       "allocation_lifecycle": {"cases": 6, "expected_positives": 3, "expected_negatives": 3, "tp": 1, "fp": 0, "tn": 3, "fn": 2, "known_gaps": 2},
+      "banned_functions": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 0, "tn": 1, "fn": 0, "known_gaps": 0},
       "command_execution": {"cases": 6, "expected_positives": 2, "expected_negatives": 4, "tp": 2, "fp": 3, "tn": 1, "fn": 0, "known_gaps": 3},
       "format_strings": {"cases": 8, "expected_positives": 3, "expected_negatives": 5, "tp": 3, "fp": 4, "tn": 1, "fn": 0, "known_gaps": 4},
       "memory_copy_bounds": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 0, "fp": 0, "tn": 1, "fn": 1, "known_gaps": 1}
     },
     "by_scenario": {
       "aliases": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 0, "fp": 0, "tn": 1, "fn": 1, "known_gaps": 1},
+      "data_dependent_policy": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 0, "tn": 1, "fn": 0, "known_gaps": 0},
       "direct_wrappers": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 1, "tn": 0, "fn": 0, "known_gaps": 1},
       "globals": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 1, "tn": 0, "fn": 0, "known_gaps": 1},
       "header_defined_helpers": {"cases": 2, "expected_positives": 1, "expected_negatives": 1, "tp": 1, "fp": 1, "tn": 0, "fn": 0, "known_gaps": 1},
@@ -48,6 +53,24 @@
     }
   },
   "cases": [
+    {
+      "id": "data_dependent_scanf_unsafe",
+      "file": "fixtures/data_dependent_scanf_unsafe.c",
+      "scenario": "data_dependent_policy",
+      "family": "banned_functions",
+      "rule_id": "CGULL-001",
+      "vulnerable": true,
+      "baseline_detected": true
+    },
+    {
+      "id": "data_dependent_scanf_safe",
+      "file": "fixtures/data_dependent_scanf_safe.c",
+      "scenario": "data_dependent_policy",
+      "family": "banned_functions",
+      "rule_id": "CGULL-001",
+      "vulnerable": false,
+      "baseline_detected": false
+    },
     {
       "id": "direct_wrapper_unsafe",
       "file": "fixtures/direct_wrapper_unsafe.c",
