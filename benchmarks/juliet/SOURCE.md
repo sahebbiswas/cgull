@@ -1,20 +1,32 @@
-# Vendored Juliet subset
+# Juliet benchmark sources
 
-The fixtures in this directory are small, self-contained reductions of the
-NIST Juliet 1.3 C/C++ test suite. They retain the CWE-specific vulnerable and
-remediated sink patterns while removing the suite's support headers, network
-inputs, and platform-specific build dependencies so C-GULL can scan each file
-in isolation.
+The fixtures in `benchmarks/juliet/testcases/` are small, self-contained
+reductions of NIST Juliet 1.3. They are retained as fast regression fixtures;
+they are **not** the canonical measurement of C-GULL's overall detection
+precision or recall and their metrics should not be presented as representative
+of the full Juliet suite.
 
-The upstream source is the [Juliet 1.3 C/C++ test suite](https://github.com/arichardson/juliet-test-suite-c), published from NIST's SARD suite. Each fixture's leading comment identifies its upstream CWE and pattern family.
+The canonical detection-quality benchmark is `benchmarks/run_juliet_upstream.py`.
+It runs against a pinned checkout of the upstream Juliet 1.3 C/C++ suite and
+discovers ground-truth functions through Juliet's conventional `bad` and
+`good*` names rather than a maintainer-authored per-file oracle. The PR workflow
+uses a deterministic stratified selection across supported CWEs and flow
+variants so results remain reproducible and bounded.
 
-Each rule listed by an oracle is independently applicable to that function.
-The manifest's `rule_contracts` section documents the source pattern and
-rationale for every expected rule. Tests verify that every oracle's rule IDs
-belong to its CWE, have a contract, and match the declared source pattern in
-the oracle function or its explicit helper functions.
+CI pins the public-domain Juliet mirror at commit
+`f88433e3443648a17671398797a04ea1f8e1a274`. The source is the Juliet 1.3 C/C++
+test suite published through NIST SARD. The upstream snapshot is intentionally
+not copied into this repository; keeping it external avoids repository bloat
+while making the exact benchmark source independently auditable.
 
-The direct-null CWE-476 fixtures exercise `CGULL-004`, while the allocation
-fixtures under CWE-690 exercise `CGULL-003`. The pointer-focused CWE-457
-fixtures exercise `CGULL-021`; `CGULL-023` additionally applies only to the
-interprocedural pair, where the local pointer is read as a call argument.
+Run the canonical benchmark against an existing checkout with:
+
+```bash
+python benchmarks/run_juliet_upstream.py /path/to/juliet-test-suite-c \
+  --per-flow 2 --format markdown --output juliet-upstream.md
+```
+
+The legacy manifest runner (`benchmarks/run_juliet.py`) remains useful for fast,
+focused regression testing. Each rule listed by one of those legacy oracles is
+independently applicable to that function. The manifest's `rule_contracts`
+section documents the source pattern and rationale for every expected rule.
