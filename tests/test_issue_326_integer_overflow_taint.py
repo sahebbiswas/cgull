@@ -38,11 +38,34 @@ def test_reports_argv_derived_increment():
     assert "data++" in issues[0].message
 
 
-def test_comparison_guard_suppresses_tainted_arithmetic():
+def test_upper_bound_guard_suppresses_tainted_addition():
     issues = _scan(
         "int data = atoi(argv[1]);\n"
         "if (data < 1000) {\n"
         "int result = data + 1;\n"
+        "}\n",
+        params=("argc", "argv"),
+    )
+    assert issues == []
+
+
+def test_lower_bound_only_guard_does_not_suppress_tainted_addition():
+    issues = _scan(
+        "int data = atoi(argv[1]);\n"
+        "if (data > 0) {\n"
+        "int result = data + 1;\n"
+        "}\n",
+        params=("argc", "argv"),
+    )
+    assert len(issues) == 1
+    assert issues[0].line_number == 3
+
+
+def test_lower_bound_guard_suppresses_tainted_subtraction():
+    issues = _scan(
+        "int data = atoi(argv[1]);\n"
+        "if (data > 0) {\n"
+        "int result = data - 1;\n"
         "}\n",
         params=("argc", "argv"),
     )
@@ -68,3 +91,25 @@ def test_read_buffer_propagates_through_integer_conversion():
     )
     assert len(issues) == 1
     assert issues[0].line_number == 4
+
+
+def test_tainted_allocation_arithmetic_is_reported_once():
+    issues = _scan(
+        "int count = atoi(argv[1]);\n"
+        "void *p = malloc(count + 1);\n",
+        params=("argc", "argv"),
+    )
+    assert len(issues) == 1
+    assert issues[0].line_number == 2
+    assert "memory allocation argument" in issues[0].message
+
+
+def test_for_loop_header_arithmetic_is_not_reported():
+    issues = _scan(
+        "int len = atoi(argv[1]);\n"
+        "for (int i = 0; i < len - 1; i++) {\n"
+        "use(i);\n"
+        "}\n",
+        params=("argc", "argv"),
+    )
+    assert issues == []
