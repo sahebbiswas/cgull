@@ -22,6 +22,38 @@ def _locations(cfg, node_id: int, variable: str) -> Set[str]:
     return set(cfg.get_loc_map_at_node(node_id).get(variable, {f"var_{variable}"}))
 
 
+def _locations_for_aliases(cfg, node_id: int, aliases: Set[str]) -> Set[str]:
+    """Return the abstract locations currently represented by ``aliases``."""
+    result: Set[str] = set()
+    for variable in aliases:
+        result.update(_locations(cfg, node_id, variable))
+    return result
+
+
+def _consumes_tracked_location(
+    cfg,
+    node_id: int,
+    aliases: Set[str],
+    consumed_variables: Iterable[str],
+) -> bool:
+    """Whether a consumption effect targets the allocation represented by aliases.
+
+    Rule-local alias tracking intentionally handles only simple source-level alias
+    assignments.  The CFG location map is stronger: it also knows when another
+    variable denotes the same allocation because of data-flow or an
+    interprocedural returned-alias effect.  Leak suppression therefore compares
+    abstract allocation locations instead of requiring the consumed variable's
+    spelling to appear in the tracked alias set.
+    """
+    tracked_locations = _locations_for_aliases(cfg, node_id, aliases)
+    if not tracked_locations:
+        return False
+    for variable in consumed_variables:
+        if tracked_locations & _locations(cfg, node_id, variable):
+            return True
+    return False
+
+
 def find_uses_after_free_effect(cfg, free_node_id: int, ptr_name: str):
     """Yield downstream accesses that still alias a location freed by a call effect."""
     freed_locations = _locations(cfg, free_node_id, ptr_name)
@@ -129,9 +161,14 @@ def _reaches_exit_without_consumption(
 
         # Only definite ownership consumption suppresses a leak. Possible or
         # unknown escapes remain conservative and keep the leak path alive.
-        if node_effects.consumed & aliases:
-            continue
-        if node.freed & aliases:
+        # Compare abstract locations, not only variable spellings, so cleanup
+        # through aliases and returned-alias wrappers is credited correctly.
+        if _consumes_tracked_location(
+            cfg,
+            node_id,
+            aliases,
+            node_effects.consumed | node.freed,
+        ):
             continue
 
         aliases = _extend_aliases(node, aliases)
