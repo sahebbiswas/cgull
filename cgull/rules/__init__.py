@@ -24,6 +24,7 @@ from .memory_management import (
     MemoryLeakRule,
     ReturnStackVariableRule,
     MemcpyStructMemberOverflowRule,
+    BufferCopyOverflowRule,
 )
 from .crypto_and_safety import (
     NonConstantTimeMemoryComparisonRule,
@@ -90,6 +91,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     MemoryLeakRule,
     ReturnStackVariableRule,
     MemcpyStructMemberOverflowRule,
+    BufferCopyOverflowRule,
     ToctouFileAccessRule,
     StrncpyNullTerminationRule,
     UnvalidatedExternalDataSinkRule,
