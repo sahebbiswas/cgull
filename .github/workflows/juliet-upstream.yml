@@ -7,6 +7,8 @@ on:
       - "cgull/rules/**"
       - "benchmarks/run_juliet.py"
       - "benchmarks/run_juliet_upstream.py"
+      - "benchmarks/diagnose_juliet_oracle.py"
+      - "docs/benchmarks/**"
       - ".github/workflows/juliet-upstream.yml"
   workflow_dispatch:
 
@@ -47,10 +49,19 @@ jobs:
           cat juliet-upstream.md
           cat juliet-upstream.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Diagnose split-file oracle attribution
+        run: |
+          python benchmarks/diagnose_juliet_oracle.py .juliet-upstream --per-cwe 25 --output juliet-oracle-diagnostic.md
+          cat juliet-oracle-diagnostic.md
+          cat juliet-oracle-diagnostic.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload benchmark reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: juliet-upstream-metrics
+          if-no-files-found: warn
           path: |
             juliet-upstream.md
             juliet-upstream.json
+            juliet-oracle-diagnostic.md
