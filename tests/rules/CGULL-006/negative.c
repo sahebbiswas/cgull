@@ -31,3 +31,22 @@ void test_fp_max_constant_check(size_t count) {
     int *buf = malloc(count * sizeof(int));
     (void)buf;
 }
+
+/* True Negative: tainted input with an explicit upper-bound guard */
+void test_tn_guarded_argv(int argc, char **argv) {
+    if (argc < 2) return;
+    int data = atoi(argv[1]);
+    if (data < 1000) {
+        int result = data + 1;
+        (void)result;
+    }
+}
+
+/* True Negative: later trusted assignment clears prior taint */
+void test_tn_taint_overwritten(int argc, char **argv) {
+    if (argc < 2) return;
+    int data = atoi(argv[1]);
+    data = 2;
+    int result = data + 1;
+    (void)result;
+}
