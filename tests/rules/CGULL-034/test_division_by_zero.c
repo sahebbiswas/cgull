@@ -55,3 +55,44 @@ int safe_assign(int w) {
     }
     return res;
 }
+
+int safe_constant_assignment(void) {
+    int data = 7;
+    return 100 / data;
+}
+
+int safe_negative_constant_assignment(void) {
+    int data = -7;
+    return 100 % data;
+}
+
+int vulnerable_zero_assignment(void) {
+    int data = 0;
+    return 100 / data; // expect: CGULL-034
+}
+
+int vulnerable_unknown_reassignment(int input) {
+    int data = 7;
+    data = input;
+    return 100 / data; // expect: CGULL-034
+}
+
+int safe_all_branches_nonzero(int flag) {
+    int data;
+    if (flag) {
+        data = 7;
+    } else {
+        data = -3;
+    }
+    return 100 / data;
+}
+
+int vulnerable_one_branch_unknown(int flag, int input) {
+    int data;
+    if (flag) {
+        data = 7;
+    } else {
+        data = input;
+    }
+    return 100 / data; // expect: CGULL-034
+}
