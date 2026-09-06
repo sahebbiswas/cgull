@@ -15,6 +15,7 @@ from ..ast_analyzer import CASTContext
 from ..cfg.construction import build_cfg, find_function_def
 from ..cfg.value_facts import FormatLiteralness, ValueFact, ValueProvenance
 from ..cfg.value_interprocedural import _actual_fact as _resolve_actual_fact
+from ..evidence import build_value_fact_evidence, public_degradation_reasons
 from ..models import AnalysisEngine, Confidence, FixType, Issue
 from ..utils import mask_string_and_char_literals
 
@@ -44,6 +45,17 @@ class FormatStringRule(_LegacyFormatStringRule):
                     source_lines=source_lines,
                     masked_line_content=mask_string_and_char_literals(line),
                 )
+            )
+
+        for issue in issues:
+            issue.confidence = Confidence.FALLBACK
+            issue.analysis_degradations = ("PARSER_FALLBACK",)
+            issue.interprocedural_evidence = ()
+            issue.finding_evidence = None
+            issue.evidence_truncated = False
+            issue.message += (
+                " Analysis degraded (PARSER_FALLBACK); this syntactic fallback "
+                "must not be interpreted as proof of safety."
             )
         return issues
 
@@ -121,8 +133,16 @@ class FormatStringRule(_LegacyFormatStringRule):
         )
 
     @staticmethod
+    def _display_file_path(path: object, fallback_file: str) -> str:
+        """Prefer the scan path over parser-internal synthetic filenames."""
+        value = str(path or "")
+        if not value or value.startswith("<"):
+            return fallback_file
+        return value
+
+    @staticmethod
     def _compact_flow(fact: ValueFact, call, event, fallback_file: str) -> str:
-        """Return a compact source-to-sink explanation when evidence is available."""
+        """Return a deterministic source-to-sink explanation when evidence is available."""
         source = next(
             (
                 evidence
@@ -136,12 +156,36 @@ class FormatStringRule(_LegacyFormatStringRule):
         if source is None or sink_line <= 0:
             return ""
 
-        source_file = source.file_path or fallback_file
-        sink_file = str(getattr(sink, "file_path", "") or fallback_file)
+        source_file = FormatStringRule._display_file_path(source.file_path, fallback_file)
+        sink_file = FormatStringRule._display_file_path(getattr(sink, "file_path", ""), fallback_file)
         source_label = f"{source_file}:{source.line}"
         if source.identity:
             source_label += f" ({source.identity})"
-        return f" Flow: {source_label} -> {sink_file}:{sink_line}."
+
+        # Value-fact evidence is canonicalized upstream for deterministic joins,
+        # so tuple insertion order is not necessarily source-to-sink flow order.
+        # Re-establish the call-site order before deduplicating helper names.
+        call_evidence = sorted(
+            (
+                evidence
+                for evidence in fact.evidence
+                if evidence.kind == "CALL" and evidence.identity
+            ),
+            key=lambda evidence: (
+                str(evidence.file_path or fallback_file),
+                int(evidence.line or 0),
+                int(evidence.column or 0),
+                evidence.identity,
+            ),
+        )
+        call_names = list(dict.fromkeys(evidence.identity for evidence in call_evidence))
+        via = f" via {', '.join(call_names)}" if call_names else ""
+        return f" Flow: {source_label}{via} -> {sink_file}:{sink_line}."
+
+    @staticmethod
+    def _degradation_reasons(fact: ValueFact) -> tuple[str, ...]:
+        """Expose stable public degradation names without changing the fact domain."""
+        return public_degradation_reasons(fact.degradations)
 
     @staticmethod
     def _event_snippet(ast_ctx: CASTContext, line_number: int) -> str:
@@ -154,6 +198,18 @@ class FormatStringRule(_LegacyFormatStringRule):
         callee = call.direct_callee or call.callee_expression
         arg = call.actual_arguments[index] if index < len(call.actual_arguments) else "<missing>"
         flow = self._compact_flow(fact, call, event, file_path)
+        loc = getattr(call, "source_location", None) or getattr(event, "source_location", None)
+        line_number = int(getattr(event, "line_number", 0) or 1)
+        column_number = int(getattr(loc, "column_number", 0) or 1)
+        sink_file = self._display_file_path(getattr(loc, "file_path", ""), file_path)
+        finding_evidence = build_value_fact_evidence(
+            fact,
+            sink_file=sink_file,
+            sink_line=line_number,
+            sink_column=column_number,
+            sink_identity=str(callee),
+        )
+        degradation_reasons = finding_evidence.degradation_reasons
 
         if fact.format_literalness is FormatLiteralness.NON_LITERAL:
             if fact.provenance in {ValueProvenance.UNTRUSTED, ValueProvenance.MIXED}:
@@ -172,10 +228,14 @@ class FormatStringRule(_LegacyFormatStringRule):
                 "treating the sink conservatively as potentially unsafe."
             )
         message += flow
+        if degradation_reasons:
+            message += (
+                f" Analysis degraded ({', '.join(degradation_reasons)}); "
+                "the result is conservative and must not be interpreted as proof of safety."
+            )
+        if finding_evidence.truncated:
+            message += " Evidence was deterministically truncated at the configured provenance bound."
 
-        loc = getattr(call, "source_location", None) or getattr(event, "source_location", None)
-        line_number = int(getattr(event, "line_number", 0) or 1)
-        column_number = int(getattr(loc, "column_number", 0) or 1)
         is_safe_direct_printf = call.direct_callee == "printf" and len(call.actual_arguments) == 1
 
         issue = self.create_issue(
@@ -193,10 +253,14 @@ class FormatStringRule(_LegacyFormatStringRule):
                 else f"Use a constant format literal and pass the dynamic value as data (for example, \"%s\", {arg})."
             ),
         )
+        issue.finding_evidence = finding_evidence
+        issue.analysis_degradations = degradation_reasons
+        issue.interprocedural_evidence = finding_evidence.steps
+        issue.evidence_truncated = finding_evidence.truncated
         if (
             fact.format_literalness is FormatLiteralness.UNKNOWN
             or fact.provenance is ValueProvenance.UNKNOWN
-            or fact.degradations
+            or degradation_reasons
         ):
             issue.confidence = Confidence.LIMITED
         return issue
