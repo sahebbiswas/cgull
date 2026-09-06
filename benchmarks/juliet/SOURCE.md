@@ -9,9 +9,10 @@ of the full Juliet suite.
 The canonical detection-quality benchmark is `benchmarks/run_juliet_upstream.py`.
 It runs against a pinned checkout of the upstream Juliet 1.3 C/C++ suite and
 discovers ground-truth functions through Juliet's conventional `bad` and
-`good*` names rather than a maintainer-authored per-file oracle. The PR workflow
-uses a deterministic stratified selection across supported CWEs and flow
-variants so results remain reproducible and bounded.
+`good*` names rather than a maintainer-authored per-file oracle. The runner has
+two modes: `--all` evaluates every discoverable entry file for the selected
+mapped CWEs, while the default mode uses a deterministic stratified selection
+for bounded PR feedback.
 
 CI pins the public-domain Juliet mirror at commit
 `f88433e3443648a17671398797a04ea1f8e1a274`. The source is the Juliet 1.3 C/C++
@@ -19,7 +20,14 @@ test suite published through NIST SARD. The upstream snapshot is intentionally
 not copied into this repository; keeping it external avoids repository bloat
 while making the exact benchmark source independently auditable.
 
-Run the canonical benchmark against an existing checkout with:
+Run the full canonical benchmark against an existing checkout with:
+
+```bash
+python benchmarks/run_juliet_upstream.py /path/to/juliet-test-suite-c \
+  --all --format markdown --output juliet-upstream-full.md
+```
+
+Reproduce the bounded PR benchmark with:
 
 ```bash
 python benchmarks/run_juliet_upstream.py /path/to/juliet-test-suite-c \
