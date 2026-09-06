@@ -4,7 +4,9 @@
     "max_wall_seconds": 30.0,
     "max_peak_memory_bytes": 536870912,
     "max_profile_runtime_overhead_ratio": 4.0,
-    "max_profile_memory_overhead_ratio": 2.0
+    "max_profile_memory_overhead_ratio": 2.0,
+    "profile_runtime_ratio_min_baseline_seconds": 0.5,
+    "profile_memory_ratio_min_baseline_bytes": 16777216
   },
   "analysis_limits": {
     "max_summary_iterations": 64,
