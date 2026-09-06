@@ -9,9 +9,9 @@ SOURCE_DOC = REPO_ROOT / "benchmarks" / "juliet" / "SOURCE.md"
 def test_rule_changes_trigger_upstream_juliet_metrics_workflow():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert '"cgull/rules/**"' in text
-    assert "run_juliet_upstream.py" in text
+    assert text.count("python benchmarks/run_juliet_upstream.py") == 1
     assert "--format markdown" in text
-    assert "--format json" in text
+    assert "--json-output juliet-upstream.json" in text
     assert "GITHUB_STEP_SUMMARY" in text
     assert "actions/upload-artifact@v4" in text
 
