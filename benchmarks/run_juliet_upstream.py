@@ -4,7 +4,12 @@
 The upstream checkout remains the canonical source. This runner discovers cases
 using Juliet's function-name convention instead of a hand-authored per-file
 manifest. It supports both a deterministic stratified PR sample and a full run
-across every discoverable entry file for C-GULL's mapped CWEs.
+across every discoverable entry testcase for C-GULL's mapped CWEs.
+
+Split-file Juliet flows are evaluated as testcase groups: the entry file owns
+the bad/good oracle, while findings may occur in any sibling stage belonging to
+the same testcase. This avoids treating delegated sinks as misses simply because
+they live outside the entry file's lexical function ranges.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from cgull.models import AnalysisEngine
 
 DEFAULT_FLOW_VARIANTS = ("01", "02", "04", "08", "31", "54", "61")
 FLOW_RE = re.compile(r"_(\d{2})(?:[a-z])?\.(?:c|cpp)$", re.IGNORECASE)
+_CASE_STEM_RE = re.compile(r"^(?P<base>.+_\d{2})(?P<stage>[a-z])?$", re.IGNORECASE)
 
 
 def normalize_cwe(value: str) -> str:
@@ -58,6 +64,23 @@ def infer_oracles(path: Path) -> List[Tuple[str, bool]]:
 def flow_variant(path: Path) -> str | None:
     match = FLOW_RE.search(path.name)
     return match.group(1) if match else None
+
+
+def testcase_members(entry_path: Path) -> List[Path]:
+    """Return all source stages belonging to the entry path's Juliet testcase."""
+    match = _CASE_STEM_RE.match(entry_path.stem)
+    if match is None or match.group("stage") is None:
+        return [entry_path]
+
+    base = match.group("base")
+    suffix = entry_path.suffix.lower()
+    member_re = re.compile(rf"^{re.escape(base)}[a-z]?{re.escape(suffix)}$", re.IGNORECASE)
+    members = [
+        path
+        for path in sorted(entry_path.parent.iterdir())
+        if path.is_file() and member_re.match(path.name)
+    ]
+    return members or [entry_path]
 
 
 def discover_candidates(suite_root: Path, cwe: str) -> List[Path]:
@@ -104,26 +127,72 @@ def _issue_in_range(issue, start: int, end: int) -> bool:
     return issue.line_number is not None and start <= issue.line_number <= end
 
 
+def _oracle_token(function: str) -> str:
+    lower = function.lower()
+    if lower == "bad" or lower.endswith("_bad"):
+        return "bad"
+    if lower == "good" or lower.endswith("_good"):
+        return "good"
+    if lower.startswith("good"):
+        return lower
+    marker = lower.rfind("_good")
+    if marker >= 0:
+        return lower[marker + 1:]
+    return lower
+
+
+def _function_matches_oracle(candidate: str, oracle: str) -> bool:
+    token = _oracle_token(oracle)
+    lower = candidate.lower()
+    if token == "bad":
+        return lower == "bad" or "_bad" in lower
+    if token == "good":
+        return lower == "good" or lower.startswith("good") or "_good" in lower
+    return token in lower
+
+
+def _result_detects_oracle(result, ranges, relevant_rules, oracle: str) -> bool:
+    for function, (start, end) in ranges.items():
+        if not _function_matches_oracle(function, oracle):
+            continue
+        if any(
+            issue.rule_id in relevant_rules and _issue_in_range(issue, start, end)
+            for issue in result.issues
+        ):
+            return True
+    return False
+
+
 def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
     scanner = CGullScanner(engine_mode=AnalysisEngine.HYBRID)
     stats: Dict[str, Dict[str, int]] = {
         cwe: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for cwe in CWE_RULE_MAP
     }
     evaluated = 0
+    scanned_files = 0
     failed_files: List[str] = []
 
-    for cwe, path in cases:
-        ranges = extract_function_line_ranges(str(path))
-        result = scanner.scan_path(str(path))
-        if result.files_failed or result.failed_paths or result.get_overall_analysis_status() == "failed":
-            failed_files.append(str(path))
-            continue
+    for cwe, entry_path in cases:
         relevant_rules = CWE_RULE_MAP[cwe]
-        for function, vulnerable in infer_oracles(path):
-            start, end = ranges[function]
+        member_results = []
+        case_failed = False
+        for member in testcase_members(entry_path):
+            result = scanner.scan_path(str(member))
+            scanned_files += 1
+            if result.files_failed or result.failed_paths or result.get_overall_analysis_status() == "failed":
+                failed_files.append(str(member))
+                case_failed = True
+                continue
+            ranges = extract_function_line_ranges(str(member))
+            member_results.append((result, ranges))
+
+        if case_failed:
+            continue
+
+        for function, vulnerable in infer_oracles(entry_path):
             detected = any(
-                issue.rule_id in relevant_rules and _issue_in_range(issue, start, end)
-                for issue in result.issues
+                _result_detects_oracle(result, ranges, relevant_rules, function)
+                for result, ranges in member_results
             )
             evaluated += 1
             if vulnerable and detected:
@@ -145,8 +214,9 @@ def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
         for key in ("tp", "fp", "tn", "fn")
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "selected_files": len(cases),
+        "scanned_files": scanned_files,
         "evaluated_functions": evaluated,
         "failed_files": failed_files,
         "overall": compute_metrics(**overall_counts),
@@ -158,7 +228,8 @@ def format_markdown(report: Dict[str, object]) -> str:
     lines = [
         "# Upstream Juliet 1.3 Benchmark",
         "",
-        f"Selected files: {report['selected_files']}",
+        f"Selected testcase entries: {report['selected_files']}",
+        f"Scanned source files: {report.get('scanned_files', report['selected_files'])}",
         f"Evaluated bad/good functions: {report['evaluated_functions']}",
         f"Failed files: {len(report['failed_files'])}",
         "",
