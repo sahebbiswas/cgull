@@ -31,6 +31,9 @@ def _literal_write_nonzero(expr_str: str, var_name: str) -> Optional[bool]:
         return None
     value_str = re.sub(r"[uUlL]+$", "", match.group("value"))
     try:
+        sign, digits = (value_str[0], value_str[1:]) if value_str[:1] in "+-" else ("", value_str)
+        if len(digits) > 1 and digits[0] == "0" and digits[1] not in "xXbB":
+            return int(sign + digits, 8) != 0
         return int(value_str, 0) != 0
     except ValueError:
         return None
