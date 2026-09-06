@@ -43,8 +43,8 @@ jobs:
 
       - name: Run deterministic upstream benchmark
         run: |
-          python benchmarks/run_juliet_upstream.py .juliet-upstream --per-flow 2 --format markdown --output juliet-upstream.md
-          python benchmarks/run_juliet_upstream.py .juliet-upstream --per-flow 2 --format json --output juliet-upstream.json
+          python benchmarks/run_juliet_upstream.py .juliet-upstream --per-flow 2 --format markdown --output juliet-upstream.md --json-output juliet-upstream.json
+          cat juliet-upstream.md
           cat juliet-upstream.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark reports
