@@ -154,12 +154,12 @@ class FormatStringRule(_LegacyFormatStringRule):
         if source.identity:
             source_label += f" ({source.identity})"
 
-        call_names = sorted(
-            {
+        call_names = list(
+            dict.fromkeys(
                 evidence.identity
                 for evidence in fact.evidence
                 if evidence.kind == "CALL" and evidence.identity
-            }
+            )
         )
         via = f" via {', '.join(call_names)}" if call_names else ""
         return f" Flow: {source_label}{via} -> {sink_file}:{sink_line}."
