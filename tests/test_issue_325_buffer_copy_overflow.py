@@ -147,24 +147,51 @@ def test_scanf_scanset_is_checked_like_percent_s():
     vulnerable = r'''
 void bad(void) {
     char dst[8];
-    scanf("%[^\\n]", dst);
+    scanf("%[^\n]", dst);
 }
 '''
     safe = r'''
 void good(void) {
     char dst[8];
-    scanf("%7[^\\n]", dst);
+    scanf("%7[^\n]", dst);
 }
 '''
     too_wide = r'''
 void bad_width(void) {
     char dst[8];
-    scanf("%8[^\\n]", dst);
+    scanf("%8[^\n]", dst);
 }
 '''
     assert any("%[ conversion is unbounded" in message for message in _messages(vulnerable))
     assert _scan(safe) == []
     assert any("%8[ conversion" in message for message in _messages(too_wide))
+
+
+def test_scanf_consecutive_scansets_keep_destinations_aligned():
+    source = """
+void bad(void) {
+    char first[16];
+    char second[4];
+    scanf("%15[a-z]%[0-9]", first, second);
+}
+"""
+    issues = _scan(source)
+    assert len(issues) == 1
+    assert "4-byte destination" in issues[0].message
+    assert "%[ conversion is unbounded" in issues[0].message
+
+
+def test_scanf_scanset_allows_literal_closing_bracket_first():
+    source = """
+void bad(void) {
+    char first[8];
+    char second[4];
+    scanf("%7[]]%[^]]", first, second);
+}
+"""
+    issues = _scan(source)
+    assert len(issues) == 1
+    assert "4-byte destination" in issues[0].message
 
 
 def test_rule_metadata_targets_stack_and_heap_buffer_overflow_cwes():
