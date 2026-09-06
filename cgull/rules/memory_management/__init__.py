@@ -22,6 +22,7 @@ from .realloc_overwrite import ReallocOverwriteRule
 from .memory_leak import MemoryLeakRule
 from .return_stack_variable import ReturnStackVariableRule
 from .interprocedural_memcpy_bounds_precise import MemcpyStructMemberOverflowRule
+from .buffer_copy_overflow import BufferCopyOverflowRule
 
 __all__ = [
     "_brace_depths",
@@ -42,4 +43,5 @@ __all__ = [
     "MemoryLeakRule",
     "ReturnStackVariableRule",
     "MemcpyStructMemberOverflowRule",
+    "BufferCopyOverflowRule",
 ]
