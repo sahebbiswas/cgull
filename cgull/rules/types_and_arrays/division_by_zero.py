@@ -11,6 +11,31 @@ from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext, is_unsigned_type
 
 logger = logging.getLogger(__name__)
+
+_INTEGER_LITERAL_RE = r"[+-]?(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|0[0-7]*|[1-9][0-9]*|0)[uUlL]*"
+
+
+def _literal_write_nonzero(expr_str: str, var_name: str) -> Optional[bool]:
+    """Return whether a direct write assigns ``var_name`` a non-zero integer literal.
+
+    ``None`` means the write is not a simple literal assignment and therefore
+    cannot establish a non-zero proof.  Both declarations (``int x = 7``) and
+    assignments (``x = -1``) are accepted because CFG event expressions retain
+    their source-like pycparser rendering.
+    """
+    match = re.search(
+        rf"\b{re.escape(var_name)}\b\s*=\s*(?P<value>{_INTEGER_LITERAL_RE})\s*;?\s*$",
+        expr_str,
+    )
+    if match is None:
+        return None
+    value_str = re.sub(r"[uUlL]+$", "", match.group("value"))
+    try:
+        return int(value_str, 0) != 0
+    except ValueError:
+        return None
+
+
 class DivisionByZeroRule(BaseRule):
     rule_id = "CGULL-034"
     name = "Division or Modulo by Zero"
@@ -74,7 +99,8 @@ class DivisionByZeroRule(BaseRule):
                 node = cfg.nodes[curr_id]
                 new_guarded = guarded
                 if var_name in node.writes:
-                    new_guarded = False
+                    literal_nonzero = _literal_write_nonzero(node.expr_str, var_name)
+                    new_guarded = literal_nonzero is True
 
                 if node.kind == "if_cond":
                     if is_zero_check(node.expr_str, var_name):
