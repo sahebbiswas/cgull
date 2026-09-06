@@ -1,7 +1,9 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from benchmarks.run_juliet_upstream import (
     DEFAULT_FLOW_VARIANTS,
+    _issue_in_range,
     flow_variant,
     format_markdown,
     infer_oracles,
@@ -58,6 +60,12 @@ def test_stratified_selection_is_deterministic_and_bounded(tmp_path):
         ("CWE-121", flow2),
         ("CWE-121", second),
     ]
+
+
+def test_issue_without_line_number_is_not_attributed_to_function():
+    assert _issue_in_range(SimpleNamespace(line_number=None), 1, 10) is False
+    assert _issue_in_range(SimpleNamespace(line_number=5), 1, 10) is True
+    assert _issue_in_range(SimpleNamespace(line_number=11), 1, 10) is False
 
 
 def test_markdown_report_exposes_per_cwe_metrics():
