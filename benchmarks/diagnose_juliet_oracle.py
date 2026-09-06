@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Sequence
 
@@ -63,8 +64,17 @@ def inspect_entry(path: Path, cwe: str) -> Dict[str, object]:
 def run_diagnostic(root: Path, per_cwe: int = 25) -> Dict[str, object]:
     samples: Dict[str, List[Dict[str, object]]] = {}
     totals = {"sampled": 0, "split_sink": 0, "lexical_oracle_can_own_sink": 0}
+    warnings: List[str] = []
     for cwe in TARGETS:
-        entries = select_flow54_entries(root, cwe, per_cwe)
+        try:
+            entries = select_flow54_entries(root, cwe, per_cwe)
+        except FileNotFoundError as exc:
+            entries = []
+            warnings.append(str(exc))
+        if len(entries) < per_cwe:
+            warnings.append(
+                f"{cwe}: requested {per_cwe} flow-54 entry files, found {len(entries)}"
+            )
         inspected = [inspect_entry(path, cwe) for path in entries]
         samples[cwe] = inspected
         totals["sampled"] += len(inspected)
@@ -78,6 +88,7 @@ def run_diagnostic(root: Path, per_cwe: int = 25) -> Dict[str, object]:
         "per_cwe_limit": per_cwe,
         "totals": totals,
         "by_cwe": samples,
+        "warnings": warnings,
         "finding": (
             "generic lexical bad/good function ranges are not a valid oracle for split-file flow-54 "
             "cases when the CWE sink is delegated to sibling 54b source files"
@@ -101,6 +112,11 @@ def format_markdown(report: Dict[str, object]) -> str:
         "The upstream benchmark currently scans each entry file independently and attributes findings only by line range inside bad/good wrapper functions. For these split-file cases that attribution cannot observe the sink by construction, so TP/FP/TN/FN symmetry from the generic oracle must not be treated as rule-quality evidence until multi-file attribution is fixed.",
         "",
     ]
+    warnings = report.get("warnings", [])
+    if warnings:
+        lines.extend(["## Sampling warnings", ""])
+        lines.extend(f"- {warning}" for warning in warnings)
+        lines.append("")
     for cwe, items in report["by_cwe"].items():
         split = sum(bool(item["has_external_sink_stage"]) for item in items)
         lines.append(f"- {cwe}: {split}/{len(items)} sampled entry files delegate to a sibling sink stage")
@@ -121,15 +137,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.per_cwe < 1:
         raise SystemExit("--per-cwe must be at least 1")
     report = run_diagnostic(args.suite_root.resolve(), args.per_cwe)
-    expected = args.per_cwe * len(TARGETS)
-    if report["totals"]["sampled"] != expected:
-        raise SystemExit(f"Expected {expected} samples, found {report['totals']['sampled']}")
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n" if args.format == "json" else format_markdown(report)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered, encoding="utf-8")
     else:
         print(rendered, end="")
+    for warning in report.get("warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
     return 0
 
 
