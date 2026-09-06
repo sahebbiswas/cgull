@@ -53,15 +53,10 @@ def test_stratified_selection_is_deterministic_and_bounded(tmp_path):
     selected = select_stratified_cases(tmp_path, ["CWE-121"], ["01", "02"], per_flow=1)
     assert selected == [("CWE-121", first), ("CWE-121", flow2)]
 
-    all_cases = select_all_cases(tmp_path, ["CWE-121"])
-    assert all_cases == [
+    assert select_all_cases(tmp_path, ["CWE-121"]) == [
         ("CWE-121", first),
         ("CWE-121", flow2),
         ("CWE-121", second),
-    ] or all_cases == [
-        ("CWE-121", first),
-        ("CWE-121", second),
-        ("CWE-121", flow2),
     ]
 
 
