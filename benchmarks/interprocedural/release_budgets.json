@@ -2,7 +2,9 @@
   "version": "1.0",
   "performance": {
     "max_wall_seconds": 30.0,
-    "max_peak_memory_bytes": 536870912
+    "max_peak_memory_bytes": 536870912,
+    "max_profile_runtime_overhead_ratio": 4.0,
+    "max_profile_memory_overhead_ratio": 2.0
   },
   "analysis_limits": {
     "max_summary_iterations": 64,
