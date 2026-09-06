@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from benchmarks.run_juliet_upstream import (
     DEFAULT_FLOW_VARIANTS,
+    _function_matches_oracle,
     _issue_in_range,
     flow_variant,
     format_markdown,
@@ -10,6 +11,7 @@ from benchmarks.run_juliet_upstream import (
     normalize_cwe,
     select_all_cases,
     select_stratified_cases,
+    testcase_members,
 )
 
 
@@ -62,6 +64,23 @@ def test_stratified_selection_is_deterministic_and_bounded(tmp_path):
     ]
 
 
+def test_split_file_testcase_members_are_grouped(tmp_path):
+    cwe_dir = "CWE369_Divide_by_Zero"
+    entry = _write_case(tmp_path, cwe_dir, "CWE369_Divide_by_Zero__int_54a.c")
+    sibling = _write_case(tmp_path, cwe_dir, "CWE369_Divide_by_Zero__int_54b.c")
+    unrelated = _write_case(tmp_path, cwe_dir, "CWE369_Divide_by_Zero__int_61a.c")
+
+    assert testcase_members(entry) == [entry, sibling]
+    assert unrelated not in testcase_members(entry)
+
+
+def test_oracle_family_matches_delegated_sink_names():
+    assert _function_matches_oracle("CWE369_example_54b_badSink", "bad")
+    assert _function_matches_oracle("CWE369_example_54b_goodG2BSink", "goodG2B")
+    assert not _function_matches_oracle("CWE369_example_54b_goodG2BSink", "bad")
+    assert not _function_matches_oracle("CWE369_example_54b_goodB2GSink", "goodG2B")
+
+
 def test_issue_without_line_number_is_not_attributed_to_function():
     assert _issue_in_range(SimpleNamespace(line_number=None), 1, 10) is False
     assert _issue_in_range(SimpleNamespace(line_number=5), 1, 10) is True
@@ -71,6 +90,7 @@ def test_issue_without_line_number_is_not_attributed_to_function():
 def test_markdown_report_exposes_per_cwe_metrics():
     report = {
         "selected_files": 2,
+        "scanned_files": 3,
         "evaluated_functions": 4,
         "failed_files": [],
         "overall": {"tp": 1, "fp": 0, "tn": 2, "fn": 1, "precision": 1.0, "recall": 0.5, "f1": 0.6667},
@@ -79,5 +99,7 @@ def test_markdown_report_exposes_per_cwe_metrics():
         },
     }
     rendered = format_markdown(report)
+    assert "Selected testcase entries: 2" in rendered
+    assert "Scanned source files: 3" in rendered
     assert "| CWE | TP | FP | TN | FN | Precision | Recall | F1 |" in rendered
     assert "| CWE-121 | 1 | 0 | 2 | 1 | 1.0000 | 0.5000 | 0.6667 |" in rendered
