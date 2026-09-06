@@ -5,13 +5,14 @@ from benchmarks.run_juliet_upstream import (
     DEFAULT_FLOW_VARIANTS,
     _function_matches_oracle,
     _issue_in_range,
+    discover_candidates,
     flow_variant,
     format_markdown,
     infer_oracles,
     normalize_cwe,
     select_all_cases,
     select_stratified_cases,
-    testcase_members,
+    testcase_members as juliet_testcase_members,
 )
 
 
@@ -60,8 +61,17 @@ def test_stratified_selection_is_deterministic_and_bounded(tmp_path):
     assert select_all_cases(tmp_path, ["CWE-121"]) == [
         ("CWE-121", first),
         ("CWE-121", flow2),
-        ("CWE-121", second),
     ]
+    assert second not in [path for _, path in selected]
+
+
+def test_split_file_discovery_only_returns_entry_stage(tmp_path):
+    cwe_dir = "CWE369_Divide_by_Zero"
+    entry = _write_case(tmp_path, cwe_dir, "CWE369_Divide_by_Zero__int_54a.c")
+    _write_case(tmp_path, cwe_dir, "CWE369_Divide_by_Zero__int_54b.c")
+    _write_case(tmp_path, cwe_dir, "CWE369_Divide_by_Zero__int_54c.c")
+
+    assert discover_candidates(tmp_path, "CWE-369") == [entry]
 
 
 def test_split_file_testcase_members_are_grouped(tmp_path):
@@ -70,8 +80,8 @@ def test_split_file_testcase_members_are_grouped(tmp_path):
     sibling = _write_case(tmp_path, cwe_dir, "CWE369_Divide_by_Zero__int_54b.c")
     unrelated = _write_case(tmp_path, cwe_dir, "CWE369_Divide_by_Zero__int_61a.c")
 
-    assert testcase_members(entry) == [entry, sibling]
-    assert unrelated not in testcase_members(entry)
+    assert juliet_testcase_members(entry) == [entry, sibling]
+    assert unrelated not in juliet_testcase_members(entry)
 
 
 def test_oracle_family_matches_delegated_sink_names():
