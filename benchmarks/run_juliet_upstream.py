@@ -189,6 +189,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--all", action="store_true", help="Run every discoverable upstream entry file for the selected CWEs")
     parser.add_argument("--format", choices=("json", "markdown"), default="markdown")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--json-output", type=Path, help="Also write the same benchmark result as JSON without rescanning")
     return parser.parse_args(argv)
 
 
@@ -215,16 +216,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not cases:
         raise SystemExit("No Juliet cases matched the requested CWE/flow selection")
     report = run_benchmark(cases)
-    rendered = (
-        json.dumps(report, indent=2, sort_keys=True) + "\n"
-        if args.format == "json"
-        else format_markdown(report)
-    )
+    json_rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    rendered = json_rendered if args.format == "json" else format_markdown(report)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered, encoding="utf-8")
     else:
         print(rendered, end="")
+    if args.json_output:
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
+        args.json_output.write_text(json_rendered, encoding="utf-8")
     return 0
 
 
