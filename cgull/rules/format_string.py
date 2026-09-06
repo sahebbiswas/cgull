@@ -154,13 +154,23 @@ class FormatStringRule(_LegacyFormatStringRule):
         if source.identity:
             source_label += f" ({source.identity})"
 
-        call_names = list(
-            dict.fromkeys(
-                evidence.identity
+        # Value-fact evidence is canonicalized upstream for deterministic joins,
+        # so tuple insertion order is not necessarily source-to-sink flow order.
+        # Re-establish the call-site order before deduplicating helper names.
+        call_evidence = sorted(
+            (
+                evidence
                 for evidence in fact.evidence
                 if evidence.kind == "CALL" and evidence.identity
-            )
+            ),
+            key=lambda evidence: (
+                str(evidence.file_path or fallback_file),
+                int(evidence.line or 0),
+                int(evidence.column or 0),
+                evidence.identity,
+            ),
         )
+        call_names = list(dict.fromkeys(evidence.identity for evidence in call_evidence))
         via = f" via {', '.join(call_names)}" if call_names else ""
         return f" Flow: {source_label}{via} -> {sink_file}:{sink_line}."
 
