@@ -2,13 +2,13 @@
 Rules for Arrays, Integer Overflows, VLAs, Bitwise Operations, and Magic Numbers.
 """
 
-import re
 import logging
+import re
 from typing import List, Set
 
 from ..base import BaseRule
-from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext
+from ...models import AnalysisEngine, FixType, Issue, RuleCategory, Severity
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +24,9 @@ class ArithmeticIntegerOverflowRule(BaseRule):
 
     Taint is propagated through simple assignments and cleared by assignments
     that no longer reference tainted input. Arithmetic on tainted values is
-    reported unless a preceding comparison/assert guard constrains one of the
-    operands. Existing MAX-constant and allocation-argument checks remain
-    additive fallbacks.
+    reported unless a preceding directionally relevant bounds/assert guard
+    constrains the operand. Existing MAX-constant and allocation-argument checks
+    remain additive fallbacks.
     """
 
     rule_id = "CGULL-006"
@@ -66,8 +66,15 @@ class ArithmeticIntegerOverflowRule(BaseRule):
         re.compile(r'\brecvfrom\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)\s*,'),
     )
 
-    def _has_preceding_overflow_check(self, source_lines: List[str], line_no: int, var_names: List[str]) -> bool:
-        """Return whether a recent comparison/assert guard constrains an operand."""
+    def _has_preceding_overflow_check(
+        self,
+        source_lines: List[str],
+        line_no: int,
+        var_names: List[str],
+        *,
+        bound_direction: str | None = None,
+    ) -> bool:
+        """Return whether a recent guard constrains an operand in the needed direction."""
         if line_no < 1 or line_no > len(source_lines):
             return False
 
@@ -81,22 +88,46 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             p_strip = clean_single.strip()
             if not p_strip or p_strip.startswith('#'):
                 continue
-
-            is_guard_stmt = bool(re.search(r'\b(?:if|while|assert|ASSERT)\b', p_strip))
-            if not is_guard_stmt:
+            if not re.search(r'\b(?:if|while|assert|ASSERT)\b', p_strip):
                 continue
 
             refs_var = any(
                 bool(re.search(r'\b' + re.escape(v) + r'\b', p_strip))
-                for v in var_names if v and not v.isdigit()
+                for v in var_names
+                if v and not v.isdigit()
             )
-            if refs_var and any(m_const in p_strip for m_const in ("SIZE_MAX", "INT_MAX", "UINT_MAX", "MAX_", "MIN_")):
+            if not refs_var:
+                continue
+
+            if bound_direction is None and any(
+                marker in p_strip for marker in ("SIZE_MAX", "INT_MAX", "UINT_MAX", "MAX_", "MIN_")
+            ):
+                return True
+            if bound_direction == "upper" and any(
+                marker in p_strip for marker in ("SIZE_MAX", "INT_MAX", "UINT_MAX", "MAX_")
+            ):
+                return True
+            if bound_direction == "lower" and "MIN_" in p_strip:
                 return True
 
             for v_name in var_names:
                 if not v_name or v_name.isdigit():
                     continue
                 v_esc = re.escape(v_name)
+                if bound_direction == "upper":
+                    if (
+                        re.search(r'\b' + v_esc + r'\b\s*(?:<|<=)', p_strip)
+                        or re.search(r'(?:>|>=)\s*\b' + v_esc + r'\b', p_strip)
+                    ):
+                        return True
+                    continue
+                if bound_direction == "lower":
+                    if (
+                        re.search(r'\b' + v_esc + r'\b\s*(?:>|>=)', p_strip)
+                        or re.search(r'(?:<|<=)\s*\b' + v_esc + r'\b', p_strip)
+                    ):
+                        return True
+                    continue
                 if (
                     re.search(r'\b' + v_esc + r'\b\s*(?:<|<=|>|>=)', p_strip)
                     or re.search(r'(?:<|<=|>|>=)\s*\b' + v_esc + r'\b', p_strip)
@@ -105,6 +136,10 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                     return True
 
         return False
+
+    @staticmethod
+    def _required_bound_direction(operator: str) -> str:
+        return "lower" if operator in {"-", "-=", "--"} else "upper"
 
     @staticmethod
     def _references_any(expr: str, names: Set[str]) -> bool:
@@ -120,7 +155,6 @@ class ArithmeticIntegerOverflowRule(BaseRule):
         return names
 
     def _update_external_input_taint(self, line: str, tainted: Set[str], argv_names: Set[str]) -> None:
-        """Update simple intraprocedural provenance for one source line."""
         for pattern in self.BUFFER_SOURCE_PATTERNS:
             for match in pattern.finditer(line):
                 tainted.add(match.group(1))
@@ -128,16 +162,14 @@ class ArithmeticIntegerOverflowRule(BaseRule):
         assignment = self.ASSIGNMENT_PATTERN.search(line)
         if not assignment:
             return
-
         target = assignment.group(1)
         expr = assignment.group(2)
         refs_argv = self._references_any(expr, argv_names) or bool(re.search(r'\bargv\s*\[', expr))
         refs_tainted = self._references_any(expr, tainted)
-        conversion_from_untrusted = bool(self.INTEGER_CONVERSION_PATTERN.search(expr)) and (
-            refs_tainted or refs_argv or bool(self.DIRECT_RETURN_SOURCE_PATTERN.search(expr))
-        )
         direct_return_source = bool(self.DIRECT_RETURN_SOURCE_PATTERN.search(expr))
-
+        conversion_from_untrusted = bool(self.INTEGER_CONVERSION_PATTERN.search(expr)) and (
+            refs_tainted or refs_argv or direct_return_source
+        )
         if refs_argv or refs_tainted or conversion_from_untrusted or direct_return_source:
             tainted.add(target)
         else:
@@ -153,15 +185,21 @@ class ArithmeticIntegerOverflowRule(BaseRule):
         line: str,
         line_no: int,
         expression: str,
+        operator: str,
         operands: List[str],
         column_number: int,
+        dedup_key: tuple,
     ) -> None:
-        if self._has_preceding_overflow_check(ast_ctx.source_lines, line_no, operands):
+        if self._has_preceding_overflow_check(
+            ast_ctx.source_lines,
+            line_no,
+            operands,
+            bound_direction=self._required_bound_direction(operator),
+        ):
             return
-        key = (line_no, expression)
-        if key in reported_lines:
+        if dedup_key in reported_lines:
             return
-        reported_lines.add(key)
+        reported_lines.add(dedup_key)
         snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else line.strip()
         issues.append(self.create_issue(
             file_path=file_path,
@@ -190,9 +228,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                 if m_assign and self.MAX_CONSTANTS_PATTERN.search(m_assign.group(2)):
                     max_assigned_vars.add(m_assign.group(1))
 
-            alloc_pattern = re.compile(
-                r'\b(?:malloc|calloc|realloc|aligned_alloc)\s*\(\s*([^)]+)\)'
-            )
+            alloc_pattern = re.compile(r'\b(?:malloc|calloc|realloc|aligned_alloc)\s*\(\s*([^)]+)\)')
             for i, line in enumerate(body_lines):
                 line_no = body_start + i
                 for m_alloc in alloc_pattern.finditer(line):
@@ -212,7 +248,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                         continue
                     reported_lines.add(key)
                     snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else line.strip()
-                    guard_expr = f"{var1} > SIZE_MAX - ({var2})" if op == '+' else f"{var1} > SIZE_MAX / ({var2})"
+                    guard_expr = f"{var1} > SIZE_MAX - ({var2})" if op == "+" else f"{var1} > SIZE_MAX / ({var2})"
                     issues.append(self.create_issue(
                         file_path=file_path,
                         line_number=line_no,
@@ -231,6 +267,9 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             for i, line in enumerate(body_lines):
                 line_no = body_start + i
                 self._update_external_input_taint(line, tainted, argv_names)
+                stripped = line.lstrip()
+                if stripped.startswith("for ") or stripped.startswith("for("):
+                    continue
 
                 for m_arith in self.ARITH_EXPR_PATTERN.finditer(line):
                     lhs = m_arith.group(1)
@@ -240,7 +279,6 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                         self.MAX_CONSTANTS_PATTERN.search(lhs) or self.MAX_CONSTANTS_PATTERN.search(rhs)
                     ):
                         continue
-
                     is_tainted_op = lhs in tainted or rhs in tainted
                     is_max_op = (
                         lhs in max_assigned_vars
@@ -248,7 +286,7 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                         or bool(self.MAX_CONSTANTS_PATTERN.search(lhs))
                         or bool(self.MAX_CONSTANTS_PATTERN.search(rhs))
                     )
-
+                    key = (line_no, lhs, op, rhs)
                     if is_tainted_op:
                         self._append_tainted_issue(
                             issues,
@@ -258,11 +296,12 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                             line=line,
                             line_no=line_no,
                             expression=f"{lhs} {op} {rhs}",
+                            operator=op,
                             operands=[lhs, rhs],
                             column_number=m_arith.start() + 1,
+                            dedup_key=key,
                         )
                     elif is_max_op and not self._has_preceding_overflow_check(ast_ctx.source_lines, line_no, [lhs, rhs]):
-                        key = (line_no, lhs, op, rhs)
                         if key not in reported_lines:
                             reported_lines.add(key)
                             snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else line.strip()
@@ -289,8 +328,10 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                         line=line,
                         line_no=line_no,
                         expression=f"{var_name}{token}",
+                        operator=token,
                         operands=[var_name],
                         column_number=m_inc.start() + 1,
+                        dedup_key=(line_no, var_name, token, ""),
                     )
 
         return issues
@@ -304,9 +345,8 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             var1 = m.group(1)
             op = m.group(2)
             var2 = m.group(3).strip()
-            has_overflow_check = self._has_preceding_overflow_check(source_lines, line_number, [var1, var2])
-            if not has_overflow_check:
-                guard_expr = f"{var1} > SIZE_MAX - ({var2})" if op == '+' else f"{var1} > SIZE_MAX / ({var2})"
+            if not self._has_preceding_overflow_check(source_lines, line_number, [var1, var2]):
+                guard_expr = f"{var1} > SIZE_MAX - ({var2})" if op == "+" else f"{var1} > SIZE_MAX / ({var2})"
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,
