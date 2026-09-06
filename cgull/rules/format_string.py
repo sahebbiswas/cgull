@@ -133,6 +133,14 @@ class FormatStringRule(_LegacyFormatStringRule):
         )
 
     @staticmethod
+    def _display_file_path(path: object, fallback_file: str) -> str:
+        """Prefer the scan path over parser-internal synthetic filenames."""
+        value = str(path or "")
+        if not value or value.startswith("<"):
+            return fallback_file
+        return value
+
+    @staticmethod
     def _compact_flow(fact: ValueFact, call, event, fallback_file: str) -> str:
         """Return a deterministic source-to-sink explanation when evidence is available."""
         source = next(
@@ -148,8 +156,8 @@ class FormatStringRule(_LegacyFormatStringRule):
         if source is None or sink_line <= 0:
             return ""
 
-        source_file = source.file_path or fallback_file
-        sink_file = str(getattr(sink, "file_path", "") or fallback_file)
+        source_file = FormatStringRule._display_file_path(source.file_path, fallback_file)
+        sink_file = FormatStringRule._display_file_path(getattr(sink, "file_path", ""), fallback_file)
         source_label = f"{source_file}:{source.line}"
         if source.identity:
             source_label += f" ({source.identity})"
@@ -193,9 +201,10 @@ class FormatStringRule(_LegacyFormatStringRule):
         loc = getattr(call, "source_location", None) or getattr(event, "source_location", None)
         line_number = int(getattr(event, "line_number", 0) or 1)
         column_number = int(getattr(loc, "column_number", 0) or 1)
+        sink_file = self._display_file_path(getattr(loc, "file_path", ""), file_path)
         finding_evidence = build_value_fact_evidence(
             fact,
-            sink_file=str(getattr(loc, "file_path", "") or file_path),
+            sink_file=sink_file,
             sink_line=line_number,
             sink_column=column_number,
             sink_identity=str(callee),
