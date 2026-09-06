@@ -106,5 +106,5 @@ void entry(void) { printf(unknown_format()); }
     finding = next(item for item in sarif["runs"][0]["results"] if item["ruleId"] == "CGULL-002")
 
     assert "UNRESOLVED_CALL" in finding["message"]["text"]
-    assert finding["properties"]["confidence"] == "limited"
+    assert finding["properties"]["confidence"] == "LIMITED"
     assert finding["locations"][0]["physicalLocation"]["region"]["startLine"] == 4
