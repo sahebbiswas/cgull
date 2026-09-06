@@ -128,13 +128,12 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         except (SyntaxError, ValueError):
             return []
 
-        # Consume a complete scanset so percent signs or conversion-like text
-        # inside it cannot be mistaken for a later conversion. Capture the
-        # assignment-suppression flag on the conversion itself instead of
-        # re-searching the format string from its beginning.
+        # Consume exactly one scanset conversion at a time. C permits an
+        # optional '^' followed by an optional leading ']' literal; after
+        # that, the first ']' terminates the scanset.
         conversion_re = re.compile(
             r'%(?!%)(\*)?(\d+)?(?:hh|h|ll|l|j|z|t|L)?'
-            r'(\[(?:\^)?(?:\]|[^\]])*\]|[A-Za-z])'
+            r'(\[\^?\]?[^\]]*\]|[A-Za-z])'
         )
         result: List[Tuple[str, Optional[int], str]] = []
         arg_index = 0
