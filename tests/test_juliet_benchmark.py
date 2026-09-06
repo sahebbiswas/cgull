@@ -42,8 +42,9 @@ def test_manifest_structure_and_validity():
 
     assert CWE_RULE_MAP["CWE-134"] == {"CGULL-002"}
     assert CWE_RULE_MAP["CWE-190"] == {"CGULL-006"}
-    assert CWE_RULE_MAP["CWE-121"] == {"CGULL-007"}
-    assert CWE_RULE_MAP["CWE-122"] == {"CGULL-007"}
+    expected_overflow_rules = {"CGULL-001", "CGULL-007", "CGULL-044"}
+    assert CWE_RULE_MAP["CWE-121"] == expected_overflow_rules
+    assert CWE_RULE_MAP["CWE-122"] == expected_overflow_rules
     assert CWE_RULE_MAP["CWE-369"] == {"CGULL-034"}
 
     seen_ids = set()
