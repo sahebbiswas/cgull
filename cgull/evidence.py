@@ -24,6 +24,15 @@ class EvidenceStepKind(str, Enum):
     SINK = "sink"
 
 
+_STEP_ORDER = {
+    EvidenceStepKind.SOURCE: 0,
+    EvidenceStepKind.ASSIGNMENT: 1,
+    EvidenceStepKind.ARGUMENT_FORMAL: 2,
+    EvidenceStepKind.RETURN_RESULT: 3,
+    EvidenceStepKind.MODELED_EFFECT: 4,
+}
+
+
 @dataclass(frozen=True)
 class EvidenceStep:
     kind: EvidenceStepKind
@@ -98,6 +107,18 @@ def _step_from_value_ref(ref: Any) -> EvidenceStep | None:
     )
 
 
+def _flow_order(step: EvidenceStep) -> tuple[int, str, int, int, str, str]:
+    """Order public evidence semantically while keeping ties deterministic."""
+    return (
+        _STEP_ORDER.get(step.kind, 9),
+        step.file_path,
+        step.line,
+        step.column,
+        step.function_name,
+        step.identity,
+    )
+
+
 def build_value_fact_evidence(
     fact: Any,
     *,
@@ -110,9 +131,10 @@ def build_value_fact_evidence(
 ) -> FindingEvidence:
     """Convert a value fact into bounded, deterministic finding evidence.
 
-    The incoming value-fact evidence is already deterministically ordered by
-    the domain.  Preserve that order, drop duplicate public steps, and always
-    retain the sink when truncation is necessary.
+    Internal value-fact evidence is canonicalized for lattice determinism, not
+    source-to-sink presentation.  Map and deduplicate it first, then impose a
+    public semantic order with sources first and the sink last so truncation
+    retains the most important origin evidence.
     """
     if max_steps < 1:
         raise ValueError("max_steps must be at least 1")
@@ -125,6 +147,7 @@ def build_value_fact_evidence(
             continue
         seen.add(step)
         steps.append(step)
+    steps.sort(key=_flow_order)
 
     sink = EvidenceStep(
         kind=EvidenceStepKind.SINK,
