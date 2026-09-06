@@ -91,6 +91,10 @@ def discover_candidates(suite_root: Path, cwe: str) -> List[Path]:
     for path in sorted(directory.rglob("*")):
         if path.suffix.lower() not in {".c", ".cpp"}:
             continue
+        stem_match = _CASE_STEM_RE.match(path.stem)
+        stage = stem_match.group("stage") if stem_match else None
+        if stage is not None and stage.lower() != "a":
+            continue
         if infer_oracles(path):
             candidates.append(path)
     return candidates
