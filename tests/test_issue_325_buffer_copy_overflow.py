@@ -1,5 +1,8 @@
 from cgull.engine import CGullScanner
-from cgull.rules.memory_management import BufferCopyOverflowRule
+from cgull.rules.memory_management import (
+    BufferCopyOverflowRule,
+    MemcpyStructMemberOverflowRule,
+)
 
 
 def _scan(source: str):
@@ -72,24 +75,22 @@ void bad(void) {
     assert any("'gets'" in message for message in _messages(source))
 
 
-def test_memcpy_and_memmove_use_cfg_bounds_gates():
+def test_memcpy_and_memmove_remain_owned_by_cgull_044_without_duplicate_048_findings():
     for callee in ("memcpy", "memmove"):
-        vulnerable = f"""
+        source = f"""
 void bad(char *src, unsigned n) {{
     char dst[8];
     {callee}(dst, src, n);
 }}
 """
-        safe = f"""
-void good(char *src, unsigned n) {{
-    char dst[8];
-    if (n <= 8) {{
-        {callee}(dst, src, n);
-    }}
-}}
-"""
-        assert any(f"'{callee}'" in message for message in _messages(vulnerable))
-        assert _scan(safe) == []
+        assert _scan(source) == []
+
+        scanner = CGullScanner(
+            rules=[MemcpyStructMemberOverflowRule(), BufferCopyOverflowRule()]
+        )
+        issues = scanner.scan_text(source, file_path="issue_325.c").issues
+        assert [issue.rule_id for issue in issues].count("CGULL-044") == 1
+        assert all(issue.rule_id != "CGULL-048" for issue in issues)
 
 
 def test_scanf_percent_s_requires_width_that_includes_space_for_nul():
@@ -116,6 +117,56 @@ void bad_width(void) {
     assert any("%8s conversion" in message for message in _messages(too_wide))
 
 
+def test_scanf_assignment_suppression_does_not_shift_later_string_destination():
+    source = """
+void bad(void) {
+    char dst[8];
+    scanf("%*s %s", dst);
+}
+"""
+    issues = _scan(source)
+    assert len(issues) == 1
+    assert "%s conversion is unbounded" in issues[0].message
+
+
+def test_scanf_suppressed_numeric_conversion_preserves_argument_alignment():
+    source = """
+void bad(void) {
+    int value;
+    char dst[8];
+    scanf("%*d %d %s", &value, dst);
+}
+"""
+    issues = _scan(source)
+    assert len(issues) == 1
+    assert "8-byte destination" in issues[0].message
+    assert "%s conversion is unbounded" in issues[0].message
+
+
+def test_scanf_scanset_is_checked_like_percent_s():
+    vulnerable = r'''
+void bad(void) {
+    char dst[8];
+    scanf("%[^\\n]", dst);
+}
+'''
+    safe = r'''
+void good(void) {
+    char dst[8];
+    scanf("%7[^\\n]", dst);
+}
+'''
+    too_wide = r'''
+void bad_width(void) {
+    char dst[8];
+    scanf("%8[^\\n]", dst);
+}
+'''
+    assert any("%[ conversion is unbounded" in message for message in _messages(vulnerable))
+    assert _scan(safe) == []
+    assert any("%8[ conversion" in message for message in _messages(too_wide))
+
+
 def test_rule_metadata_targets_stack_and_heap_buffer_overflow_cwes():
     rule = BufferCopyOverflowRule()
     assert rule.rule_id == "CGULL-048"
@@ -123,3 +174,5 @@ def test_rule_metadata_targets_stack_and_heap_buffer_overflow_cwes():
     assert "CWE-122" in rule.cwe_id
     assert "strcpy" in rule.sample_vulnerable_code
     assert "snprintf" in rule.sample_remediated_code
+    assert "memcpy" not in rule.TARGET_FUNCS
+    assert "memmove" not in rule.TARGET_FUNCS
