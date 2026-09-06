@@ -1,4 +1,4 @@
-"""Data-flow buffer overflow detection for classic copy and format APIs."""
+"""Data-flow buffer overflow detection for classic string and format APIs."""
 
 import ast
 import re
@@ -12,17 +12,17 @@ from .memcpy_struct_member_overflow import MemcpyStructMemberOverflowRule
 
 
 class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
-    """Detect writes whose required extent cannot be proven to fit a known buffer."""
+    """Detect string/format writes whose required extent cannot be proven to fit."""
 
     rule_id = "CGULL-048"
     name = "Data-Flow Buffer Copy Overflow"
     impact = Severity.HIGH
     category = RuleCategory.MEMORY
     description = (
-        "Detect classic string/memory copy and format calls where destination capacity is "
-        "known but the write extent cannot be proven to fit on all paths."
+        "Detect classic string copy, concatenation, format, and input calls where destination "
+        "capacity is known but the resulting write extent cannot be proven to fit."
     )
-    implementation_method = "AST destination-capacity reasoning with CFG bounds checks"
+    implementation_method = "AST destination-capacity and source-extent reasoning"
     implementation_complexity = "High"
     chances_of_false_positives = "Medium"
     cwe_id = "CWE-121 / CWE-122 / CWE-120"
@@ -44,14 +44,15 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
     )
     analysis_engine = AnalysisEngine.HYBRID
 
-    TARGET_FUNCS = {"strcpy", "strcat", "sprintf", "gets", "memcpy", "memmove", "scanf"}
+    # memcpy/memmove remain owned by CGULL-044. Keeping the rule families
+    # disjoint prevents duplicate findings while still reusing CGULL-044's
+    # destination-capacity resolver through inheritance.
+    TARGET_FUNCS = {"strcpy", "strcat", "sprintf", "gets", "scanf"}
 
     @staticmethod
     def _literal_string_length(expr: str) -> Optional[int]:
         """Return the C string payload length, excluding the trailing NUL."""
         text = expr.strip()
-        # pycparser formatting can preserve concatenated string tokens; v1 only folds a
-        # single literal because treating an uncertain expression as unknown is safer.
         if not re.fullmatch(r'(?:u8|u|U|L)?"(?:\\.|[^"\\])*"', text):
             return None
         text = re.sub(r'^(?:u8|u|U|L)', '', text)
@@ -108,31 +109,45 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                 known = self._literal_string_length(match.group(1))
             elif empty:
                 known = 0
-            elif known is not None and re.search(rf'\b(?:strcat|sprintf|gets|scanf)\s*\([^;]*\b{re.escape(name)}\b', text):
+            elif known is not None and re.search(
+                rf'\b(?:strcat|sprintf|gets|scanf)\s*\([^;]*\b{re.escape(name)}\b', text
+            ):
                 known = None
         return known
 
     @staticmethod
-    def _scanf_string_destinations(format_expr: str, args: List[str]) -> List[Tuple[str, Optional[int]]]:
-        """Return (%s destination, width) pairs for simple scanf format literals."""
+    def _scanf_string_destinations(
+        format_expr: str,
+        args: List[str],
+    ) -> List[Tuple[str, Optional[int], str]]:
+        """Return (destination, width, conversion) for scanf %s and scansets."""
         if not re.fullmatch(r'(?:u8|u|U|L)?"(?:\\.|[^"\\])*"', format_expr.strip()):
             return []
         try:
             fmt = ast.literal_eval(re.sub(r'^(?:u8|u|U|L)', '', format_expr.strip()))
         except (SyntaxError, ValueError):
             return []
-        conversions = re.findall(r'%(?!%)(?:\*)?(\d+)?(?:hh|h|ll|l|j|z|t|L)?([A-Za-z\[])', fmt)
-        result: List[Tuple[str, Optional[int]]] = []
+
+        # Consume a complete scanset so percent signs or conversion-like text
+        # inside it cannot be mistaken for a later conversion. Capture the
+        # assignment-suppression flag on the conversion itself instead of
+        # re-searching the format string from its beginning.
+        conversion_re = re.compile(
+            r'%(?!%)(\*)?(\d+)?(?:hh|h|ll|l|j|z|t|L)?'
+            r'(\[(?:\^)?(?:\]|[^\]])*\]|[A-Za-z])'
+        )
+        result: List[Tuple[str, Optional[int], str]] = []
         arg_index = 0
-        for width, conv in conversions:
+        for match in conversion_re.finditer(fmt):
+            suppress, width, conversion = match.groups()
+            if suppress:
+                continue
             if arg_index >= len(args):
                 break
-            # Assignment-suppressed conversions do not consume an argument.
-            token_match = re.search(r'%(?!%)(\*)?(?:\d+)?(?:hh|h|ll|l|j|z|t|L)?' + re.escape(conv), fmt)
-            if token_match and token_match.group(1):
-                continue
-            if conv == 's':
-                result.append((args[arg_index], int(width) if width else None))
+            if conversion == "s" or conversion.startswith("["):
+                result.append(
+                    (args[arg_index], int(width) if width else None, conversion)
+                )
             arg_index += 1
         return result
 
@@ -155,7 +170,7 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                 "buffer capacity is not proven sufficient on all paths."
             ),
             column_number=column,
-            engine="AST/CFG",
+            engine="AST",
             fix_type=FixType.MANUAL_REVIEW,
         )
 
@@ -188,36 +203,18 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                     line_no = (node.coord.line - line_offset) if node.coord else fn.start_line
                     column = getattr(node.coord, "column", 1) if node.coord else 1
 
-                    if callee in {"memcpy", "memmove"}:
-                        if len(args) < 3:
-                            return
-                        capacity = outer._resolve_dest_capacity(args[0], fn, line_no, ast_ctx)
-                        if capacity is None:
-                            return
-                        const_size, size_expr = outer._resolve_size_arg(args[2], fn, line_no, ast_ctx)
-                        if const_size is not None:
-                            if const_size > capacity:
-                                issues.append(outer._report(
-                                    file_path, ast_ctx, line_no, column, callee, capacity,
-                                    f"the requested write is {const_size} bytes",
-                                ))
-                            return
-                        if size_expr and re.fullmatch(r'[A-Za-z_]\w*', size_expr.strip()):
-                            if outer._is_size_var_gated(size_expr.strip(), capacity, fn, line_no, ast_ctx):
-                                return
-                        issues.append(outer._report(
-                            file_path, ast_ctx, line_no, column, callee, capacity,
-                            f"write extent '{args[2]}' is not bounded by the destination",
-                        ))
-                        return
-
                     if callee == "gets":
                         if not args:
                             return
                         capacity = outer._resolve_dest_capacity(args[0], fn, line_no, ast_ctx)
                         if capacity is not None:
                             issues.append(outer._report(
-                                file_path, ast_ctx, line_no, column, callee, capacity,
+                                file_path,
+                                ast_ctx,
+                                line_no,
+                                column,
+                                callee,
+                                capacity,
                                 "the input API has no maximum-length argument",
                             ))
                         return
@@ -225,19 +222,21 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                     if callee == "scanf":
                         if len(args) < 2:
                             return
-                        for dest, width in outer._scanf_string_destinations(args[0], args[1:]):
+                        for dest, width, conversion in outer._scanf_string_destinations(args[0], args[1:]):
                             capacity = outer._resolve_dest_capacity(dest, fn, line_no, ast_ctx)
                             if capacity is None:
                                 continue
                             required = None if width is None else width + 1
                             if required is None or required > capacity:
+                                display = "%s" if conversion == "s" else "%["
                                 detail = (
-                                    "the %s conversion is unbounded"
+                                    f"the {display} conversion is unbounded"
                                     if width is None
-                                    else f"the %{width}s conversion can write {required} bytes including NUL"
+                                    else f"the %{width}{'s' if conversion == 's' else '['} conversion can write "
+                                    f"{required} bytes including NUL"
                                 )
                                 issues.append(outer._report(
-                                    file_path, ast_ctx, line_no, column, callee, capacity, detail,
+                                    file_path, ast_ctx, line_no, column, callee, capacity, detail
                                 ))
                         return
 
@@ -256,7 +255,9 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                             if extent is not None
                             else f"source extent '{args[1]}' is data-dependent"
                         )
-                        issues.append(outer._report(file_path, ast_ctx, line_no, column, callee, capacity, detail))
+                        issues.append(outer._report(
+                            file_path, ast_ctx, line_no, column, callee, capacity, detail
+                        ))
                         return
 
                     if callee == "strcat":
@@ -269,15 +270,18 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                             detail = f"existing and appended strings may require {required} bytes"
                         else:
                             detail = "the resulting concatenated string extent is data-dependent"
-                        issues.append(outer._report(file_path, ast_ctx, line_no, column, callee, capacity, detail))
+                        issues.append(outer._report(
+                            file_path, ast_ctx, line_no, column, callee, capacity, detail
+                        ))
                         return
 
                     if callee == "sprintf":
                         fmt_len = outer._literal_string_length(args[1])
-                        # A literal with no active conversions has an exact output extent.
                         if fmt_len is not None:
                             try:
-                                fmt = ast.literal_eval(re.sub(r'^(?:u8|u|U|L)', '', args[1].strip()))
+                                fmt = ast.literal_eval(
+                                    re.sub(r'^(?:u8|u|U|L)', '', args[1].strip())
+                                )
                             except (SyntaxError, ValueError):
                                 fmt = None
                             if fmt is not None and re.search(r'%(?!%)', fmt) is None:
@@ -285,10 +289,17 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                                 if required <= capacity:
                                     return
                                 detail = f"formatted output requires {required} bytes including NUL"
-                                issues.append(outer._report(file_path, ast_ctx, line_no, column, callee, capacity, detail))
+                                issues.append(outer._report(
+                                    file_path, ast_ctx, line_no, column, callee, capacity, detail
+                                ))
                                 return
                         issues.append(outer._report(
-                            file_path, ast_ctx, line_no, column, callee, capacity,
+                            file_path,
+                            ast_ctx,
+                            line_no,
+                            column,
+                            callee,
+                            capacity,
                             "formatted output length is data-dependent",
                         ))
 
