@@ -39,11 +39,9 @@ def _consumes_tracked_location(
     """Whether a consumption effect targets the allocation represented by aliases.
 
     Rule-local alias tracking intentionally handles only simple source-level alias
-    assignments.  The CFG location map is stronger: it also knows when another
-    variable denotes the same allocation because of data-flow or an
-    interprocedural returned-alias effect.  Leak suppression therefore compares
-    abstract allocation locations instead of requiring the consumed variable's
-    spelling to appear in the tracked alias set.
+    assignments.  The CFG location map is stronger for ordinary aliases, so leak
+    suppression compares abstract allocation locations instead of requiring the
+    consumed variable's spelling to appear in the tracked alias set.
     """
     tracked_locations = _locations_for_aliases(cfg, node_id, aliases)
     if not tracked_locations:
@@ -119,13 +117,30 @@ def has_prior_free_effect(
     return False
 
 
-def _extend_aliases(node, aliases: Set[str]) -> Set[str]:
+def _extend_aliases(
+    cfg,
+    node_id: int,
+    node,
+    aliases: Set[str],
+    node_effects: NodeOwnershipEffects,
+) -> Set[str]:
+    """Extend tracked aliases with local assignments and returned-alias effects."""
     result = set(aliases)
-    if node.kind not in ("assignment", "decl") or not (node.reads & aliases):
+
+    # Ownership summaries express caller-visible aliases returned from helpers,
+    # e.g. ``cleanup_ptr = identity(data)``.  Those relationships are not part
+    # of the base CFG location map, so project them into this path-local alias
+    # state before downstream free/transfer checks.
+    tracked_locations = _locations_for_aliases(cfg, node_id, result)
+    for target, source in node_effects.returned_aliases:
+        if source in result or (tracked_locations & _locations(cfg, node_id, source)):
+            result.add(target)
+
+    if node.kind not in ("assignment", "decl") or not (node.reads & result):
         return result
     if node.alias_writes:
         for lhs, rhs in node.alias_writes.items():
-            if rhs in aliases:
+            if rhs in result:
                 result.add(lhs)
         return result
     if node.expr_str:
@@ -133,7 +148,7 @@ def _extend_aliases(node, aliases: Set[str]) -> Set[str]:
             r"^\s*([A-Za-z_]\w*)\s*=\s*(?:\([^)]+\)\s*)?([A-Za-z_]\w*)\s*;?$",
             node.expr_str,
         )
-        if match and match.group(2) in aliases:
+        if match and match.group(2) in result:
             result.add(match.group(1))
     return result
 
@@ -161,8 +176,6 @@ def _reaches_exit_without_consumption(
 
         # Only definite ownership consumption suppresses a leak. Possible or
         # unknown escapes remain conservative and keep the leak path alive.
-        # Compare abstract locations, not only variable spellings, so cleanup
-        # through aliases and returned-alias wrappers is credited correctly.
         if _consumes_tracked_location(
             cfg,
             node_id,
@@ -171,7 +184,7 @@ def _reaches_exit_without_consumption(
         ):
             continue
 
-        aliases = _extend_aliases(node, aliases)
+        aliases = _extend_aliases(cfg, node_id, node, aliases, node_effects)
         if node_id == target_exit_id:
             return True
 
