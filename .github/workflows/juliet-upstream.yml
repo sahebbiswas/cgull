@@ -56,9 +56,11 @@ jobs:
           cat juliet-oracle-diagnostic.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: juliet-upstream-metrics
+          if-no-files-found: warn
           path: |
             juliet-upstream.md
             juliet-upstream.json
