@@ -45,7 +45,7 @@ void entry(void) { printf(three(read_user())); }
 
     assert "Flow:" in issue.message
     assert "read_user" in issue.message
-    assert "via one, three, two" in issue.message
+    assert "via one, two, three" in issue.message
     assert "issue306.c:7" in issue.message
     assert issue.interprocedural_evidence
     assert issue.evidence_truncated is False
