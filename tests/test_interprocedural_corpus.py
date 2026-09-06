@@ -42,7 +42,7 @@ def _mock_scan_path(manifest, overrides=None):
 def test_manifest_covers_required_scenarios_families_and_juliet_variants():
     manifest = _load_manifest()
     cases = manifest["cases"]
-    assert len(cases) == 22
+    assert len(cases) == 24
     assert len({case["id"] for case in cases}) == len(cases)
     manifest_dir = os.path.dirname(DEFAULT_MANIFEST)
     fixture_dir = os.path.join(manifest_dir, "fixtures")
@@ -96,12 +96,12 @@ def test_current_corpus_accepts_stable_expectations_and_known_gaps():
     results = run_interprocedural_corpus()
     assert results["success"] is True
     assert results["recorded_baseline"]["overall"] == {
-        "cases": 22,
-        "expected_positives": 9,
-        "expected_negatives": 13,
-        "tp": 6,
+        "cases": 24,
+        "expected_positives": 10,
+        "expected_negatives": 14,
+        "tp": 7,
         "fp": 7,
-        "tn": 6,
+        "tn": 7,
         "fn": 3,
         "known_gaps": 10,
     }
@@ -132,7 +132,7 @@ def test_resolving_known_gap_is_non_blocking():
     assert results["success"] is True
     assert resolved["status"] == "resolved_known_gap"
     assert results["current"]["overall"]["fp"] == 6
-    assert results["current"]["overall"]["tn"] == 7
+    assert results["current"]["overall"]["tn"] == 8
     assert results["current"]["overall"]["known_gaps"] == 9
     assert results["current"]["by_rule"]["CGULL-002"]["known_gaps"] == 3
     assert results["current"]["by_family"]["format_strings"]["known_gaps"] == 3

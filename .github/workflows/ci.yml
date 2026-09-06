@@ -58,3 +58,31 @@ jobs:
         run: |
           python benchmarks/run_juliet.py --ci --min-f1 0.90
           python benchmarks/run_juliet.py --manifest benchmarks/juliet/manifest_expanded.json --ci --min-f1 0.90
+
+  interprocedural-release-gate:
+    name: Interprocedural Release Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[ast]"
+
+      - name: Run release gates
+        run: |
+          python benchmarks/run_interprocedural_release_gate.py --ci --format json --output interprocedural-release-gate.json
+
+      - name: Upload release-gate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: interprocedural-release-gate
+          path: interprocedural-release-gate.json

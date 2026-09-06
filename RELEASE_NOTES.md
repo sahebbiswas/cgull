@@ -47,3 +47,11 @@ Translation-Unit (`--mode tu`) mode now caches the expanded-and-parsed represent
 Wall-clock scan duration benchmark on a synthetic multi-file fixture (1 shared header with 100 declarations included by 50 small `.c` files):
 - **Uncached Header Expansion**: ~1.84s
 - **Cached Header Expansion**: ~1.70s (~1.08x speedup)
+
+## Interprocedural release gates (v0.9.51)
+
+The intra-TU interprocedural milestone now has a machine-readable release gate that checks deterministic findings across repeated, file/TU, sequential/parallel, and configuration-profile scans. It also records per-rule precision/recall deltas and benchmarks representative, macro-heavy, deep-wrapper, and recursive-SCC workloads against documented wall-time and peak-memory budgets.
+
+The gate includes explicit safe/unsafe coverage for the data-dependent `CGULL-001` `scanf` policy and verifies that fixed-point limit exhaustion remains visible through `CONVERGENCE_LIMIT` diagnostics rather than failing silently.
+
+This release gate does **not** imply whole-program analysis. Cross-TU analysis, full points-to analysis, path-sensitive symbolic execution, concurrency reasoning, and arbitrary function-pointer resolution remain deferred.
