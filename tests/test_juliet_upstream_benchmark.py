@@ -6,6 +6,7 @@ from benchmarks.run_juliet_upstream import (
     format_markdown,
     infer_oracles,
     normalize_cwe,
+    select_all_cases,
     select_stratified_cases,
 )
 
@@ -46,11 +47,22 @@ def test_generic_bad_good_oracles_and_flow_variant(tmp_path):
 def test_stratified_selection_is_deterministic_and_bounded(tmp_path):
     cwe_dir = "CWE121_Stack_Based_Buffer_Overflow"
     first = _write_case(tmp_path, cwe_dir, "CWE121_Stack_Based_Buffer_Overflow__a_01.c")
-    _write_case(tmp_path, cwe_dir, "CWE121_Stack_Based_Buffer_Overflow__b_01.c")
+    second = _write_case(tmp_path, cwe_dir, "CWE121_Stack_Based_Buffer_Overflow__b_01.c")
     flow2 = _write_case(tmp_path, cwe_dir, "CWE121_Stack_Based_Buffer_Overflow__a_02.c")
 
     selected = select_stratified_cases(tmp_path, ["CWE-121"], ["01", "02"], per_flow=1)
     assert selected == [("CWE-121", first), ("CWE-121", flow2)]
+
+    all_cases = select_all_cases(tmp_path, ["CWE-121"])
+    assert all_cases == [
+        ("CWE-121", first),
+        ("CWE-121", flow2),
+        ("CWE-121", second),
+    ] or all_cases == [
+        ("CWE-121", first),
+        ("CWE-121", second),
+        ("CWE-121", flow2),
+    ]
 
 
 def test_markdown_report_exposes_per_cwe_metrics():
