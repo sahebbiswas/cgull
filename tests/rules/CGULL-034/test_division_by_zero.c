@@ -66,6 +66,11 @@ int safe_negative_constant_assignment(void) {
     return 100 % data;
 }
 
+int safe_octal_constant_assignment(void) {
+    int data = 010;
+    return 100 / data;
+}
+
 int vulnerable_zero_assignment(void) {
     int data = 0;
     return 100 / data; // expect: CGULL-034
