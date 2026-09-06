@@ -101,7 +101,7 @@ def select_stratified_cases(
 
 
 def _issue_in_range(issue, start: int, end: int) -> bool:
-    return start <= issue.line_number <= end
+    return issue.line_number is not None and start <= issue.line_number <= end
 
 
 def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
