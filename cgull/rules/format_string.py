@@ -15,6 +15,7 @@ from ..ast_analyzer import CASTContext
 from ..cfg.construction import build_cfg, find_function_def
 from ..cfg.value_facts import FormatLiteralness, ValueFact, ValueProvenance
 from ..cfg.value_interprocedural import _actual_fact as _resolve_actual_fact
+from ..evidence import build_value_fact_evidence, public_degradation_reasons
 from ..models import AnalysisEngine, Confidence, FixType, Issue
 from ..utils import mask_string_and_char_literals
 
@@ -50,6 +51,7 @@ class FormatStringRule(_LegacyFormatStringRule):
             issue.confidence = Confidence.FALLBACK
             issue.analysis_degradations = ("PARSER_FALLBACK",)
             issue.interprocedural_evidence = ()
+            issue.finding_evidence = None
             issue.evidence_truncated = False
             issue.message += (
                 " Analysis degraded (PARSER_FALLBACK); this syntactic fallback "
@@ -165,11 +167,7 @@ class FormatStringRule(_LegacyFormatStringRule):
     @staticmethod
     def _degradation_reasons(fact: ValueFact) -> tuple[str, ...]:
         """Expose stable public degradation names without changing the fact domain."""
-        reasons = set(fact.degradations)
-        if "EVIDENCE_LIMIT" in reasons:
-            reasons.remove("EVIDENCE_LIMIT")
-            reasons.add("PROVENANCE_LIMIT")
-        return tuple(sorted(reasons))
+        return public_degradation_reasons(fact.degradations)
 
     @staticmethod
     def _event_snippet(ast_ctx: CASTContext, line_number: int) -> str:
@@ -182,7 +180,17 @@ class FormatStringRule(_LegacyFormatStringRule):
         callee = call.direct_callee or call.callee_expression
         arg = call.actual_arguments[index] if index < len(call.actual_arguments) else "<missing>"
         flow = self._compact_flow(fact, call, event, file_path)
-        degradation_reasons = self._degradation_reasons(fact)
+        loc = getattr(call, "source_location", None) or getattr(event, "source_location", None)
+        line_number = int(getattr(event, "line_number", 0) or 1)
+        column_number = int(getattr(loc, "column_number", 0) or 1)
+        finding_evidence = build_value_fact_evidence(
+            fact,
+            sink_file=str(getattr(loc, "file_path", "") or file_path),
+            sink_line=line_number,
+            sink_column=column_number,
+            sink_identity=str(callee),
+        )
+        degradation_reasons = finding_evidence.degradation_reasons
 
         if fact.format_literalness is FormatLiteralness.NON_LITERAL:
             if fact.provenance in {ValueProvenance.UNTRUSTED, ValueProvenance.MIXED}:
@@ -206,12 +214,9 @@ class FormatStringRule(_LegacyFormatStringRule):
                 f" Analysis degraded ({', '.join(degradation_reasons)}); "
                 "the result is conservative and must not be interpreted as proof of safety."
             )
-        if "PROVENANCE_LIMIT" in degradation_reasons:
+        if finding_evidence.truncated:
             message += " Evidence was deterministically truncated at the configured provenance bound."
 
-        loc = getattr(call, "source_location", None) or getattr(event, "source_location", None)
-        line_number = int(getattr(event, "line_number", 0) or 1)
-        column_number = int(getattr(loc, "column_number", 0) or 1)
         is_safe_direct_printf = call.direct_callee == "printf" and len(call.actual_arguments) == 1
 
         issue = self.create_issue(
@@ -229,9 +234,10 @@ class FormatStringRule(_LegacyFormatStringRule):
                 else f"Use a constant format literal and pass the dynamic value as data (for example, \"%s\", {arg})."
             ),
         )
+        issue.finding_evidence = finding_evidence
         issue.analysis_degradations = degradation_reasons
-        issue.interprocedural_evidence = tuple(fact.evidence)
-        issue.evidence_truncated = "PROVENANCE_LIMIT" in degradation_reasons
+        issue.interprocedural_evidence = finding_evidence.steps
+        issue.evidence_truncated = finding_evidence.truncated
         if (
             fact.format_literalness is FormatLiteralness.UNKNOWN
             or fact.provenance is ValueProvenance.UNKNOWN
