@@ -6,14 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import tempfile
 import time
 import tracemalloc
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if REPO_ROOT not in os.sys.path:
-    os.sys.path.insert(0, REPO_ROOT)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 from benchmarks.run_interprocedural import DEFAULT_MANIFEST, run_interprocedural_corpus
 from cgull.cfg.fixed_point import FixedPointConfig
@@ -66,10 +67,15 @@ def _scan(
     return result, elapsed
 
 
-def _measure_scan(target: Sequence[str] | str, *, mode: ScanMode) -> Dict[str, Any]:
+def _measure_scan(
+    target: Sequence[str] | str,
+    *,
+    mode: ScanMode,
+    profiles: List[ConfigProfile] | None = None,
+) -> Dict[str, Any]:
     tracemalloc.start()
     try:
-        result, elapsed = _scan(target, mode=mode, jobs=1)
+        result, elapsed = _scan(target, mode=mode, jobs=1, profiles=profiles)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
@@ -180,37 +186,43 @@ def _acceptance_rule_checks() -> Dict[str, Any]:
 
 
 def _determinism_matrix(targets: Sequence[str]) -> Dict[str, Any]:
+    profile = [ConfigProfile(name="release-gate", flags={"CGULL_RELEASE_GATE": 1})]
     matrix = [
-        ("file-sequential", ScanMode.FILE, 1, None),
-        ("file-repeat", ScanMode.FILE, 1, None),
-        ("file-parallel", ScanMode.FILE, 2, None),
-        ("tu-sequential", ScanMode.TU, 1, None),
-        ("tu-parallel", ScanMode.TU, 2, None),
-        (
-            "file-profile",
-            ScanMode.FILE,
-            1,
-            [ConfigProfile(name="release-gate", flags={"CGULL_RELEASE_GATE": 1})],
-        ),
+        ("file-sequential", "file", ScanMode.FILE, 1, None),
+        ("file-repeat", "file", ScanMode.FILE, 1, None),
+        ("file-parallel", "file", ScanMode.FILE, 2, None),
+        ("tu-sequential", "tu", ScanMode.TU, 1, None),
+        ("tu-repeat", "tu", ScanMode.TU, 1, None),
+        ("tu-parallel", "tu", ScanMode.TU, 2, None),
+        ("profile-sequential", "profile", ScanMode.FILE, 1, profile),
+        ("profile-repeat", "profile", ScanMode.FILE, 1, profile),
+        ("profile-parallel", "profile", ScanMode.FILE, 2, profile),
     ]
     runs = []
-    baseline = None
+    baselines: Dict[str, Tuple[Tuple[Any, ...], ...]] = {}
     failures = []
-    for label, mode, jobs, profiles in matrix:
+    for label, group, mode, jobs, profiles in matrix:
         result, elapsed = _scan(targets, mode=mode, jobs=jobs, profiles=profiles)
         normalized = _normalize_findings(result, FIXTURE_ROOT)
-        if baseline is None:
-            baseline = normalized
-        elif normalized != baseline:
+        baseline = baselines.setdefault(group, normalized)
+        matches = normalized == baseline
+        scan_failed = bool(
+            result.failed_paths
+            or result.files_failed
+            or result.get_overall_analysis_status() == "failed"
+        )
+        if not matches or scan_failed:
             failures.append(label)
         runs.append(
             {
                 "name": label,
+                "group": group,
                 "mode": mode.value,
                 "jobs": jobs,
                 "wall_seconds": elapsed,
                 "finding_count": len(normalized),
-                "matches_baseline": normalized == baseline,
+                "matches_group_baseline": matches,
+                "scan_failed": scan_failed,
             }
         )
     return {"success": not failures, "mismatched_runs": failures, "runs": runs}
@@ -231,6 +243,22 @@ def _evaluate_budgets(performance: Dict[str, Any], budgets: Dict[str, Any]) -> L
             failures.append(
                 "%s peak memory %d exceeds %d"
                 % (name, result["peak_memory_bytes"], limits["max_peak_memory_bytes"])
+            )
+    baseline = performance.get("representative_corpus")
+    profiled = performance.get("representative_profile")
+    if baseline and profiled and baseline["wall_seconds"] > 0:
+        runtime_ratio = profiled["wall_seconds"] / baseline["wall_seconds"]
+        if runtime_ratio > limits["max_profile_runtime_overhead_ratio"]:
+            failures.append(
+                "profile runtime overhead %.3fx exceeds %.3fx"
+                % (runtime_ratio, limits["max_profile_runtime_overhead_ratio"])
+            )
+    if baseline and profiled and baseline["peak_memory_bytes"] > 0:
+        memory_ratio = profiled["peak_memory_bytes"] / baseline["peak_memory_bytes"]
+        if memory_ratio > limits["max_profile_memory_overhead_ratio"]:
+            failures.append(
+                "profile memory overhead %.3fx exceeds %.3fx"
+                % (memory_ratio, limits["max_profile_memory_overhead_ratio"])
             )
     return failures
 
@@ -260,8 +288,14 @@ def run_release_gate(
     )
 
     determinism = _determinism_matrix(targets)
+    profile = [ConfigProfile(name="release-gate", flags={"CGULL_RELEASE_GATE": 1})]
     performance: Dict[str, Any] = {
         "representative_corpus": _measure_scan(targets, mode=ScanMode.FILE),
+        "representative_profile": _measure_scan(
+            targets,
+            mode=ScanMode.FILE,
+            profiles=profile,
+        ),
     }
     with tempfile.TemporaryDirectory(prefix="cgull-release-gate-") as temp_dir:
         for name, path in _stress_sources(temp_dir).items():
