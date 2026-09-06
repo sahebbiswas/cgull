@@ -61,6 +61,7 @@ def test_stratified_selection_is_deterministic_and_bounded(tmp_path):
     assert select_all_cases(tmp_path, ["CWE-121"]) == [
         ("CWE-121", first),
         ("CWE-121", flow2),
+        ("CWE-121", second),
     ]
     assert second not in [path for _, path in selected]
 
