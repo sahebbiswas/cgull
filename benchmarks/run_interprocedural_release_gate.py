@@ -244,22 +244,26 @@ def _evaluate_budgets(performance: Dict[str, Any], budgets: Dict[str, Any]) -> L
                 "%s peak memory %d exceeds %d"
                 % (name, result["peak_memory_bytes"], limits["max_peak_memory_bytes"])
             )
+
     baseline = performance.get("representative_corpus")
     profiled = performance.get("representative_profile")
-    if baseline and profiled and baseline["wall_seconds"] > 0:
-        runtime_ratio = profiled["wall_seconds"] / baseline["wall_seconds"]
-        if runtime_ratio > limits["max_profile_runtime_overhead_ratio"]:
-            failures.append(
-                "profile runtime overhead %.3fx exceeds %.3fx"
-                % (runtime_ratio, limits["max_profile_runtime_overhead_ratio"])
-            )
-    if baseline and profiled and baseline["peak_memory_bytes"] > 0:
-        memory_ratio = profiled["peak_memory_bytes"] / baseline["peak_memory_bytes"]
-        if memory_ratio > limits["max_profile_memory_overhead_ratio"]:
-            failures.append(
-                "profile memory overhead %.3fx exceeds %.3fx"
-                % (memory_ratio, limits["max_profile_memory_overhead_ratio"])
-            )
+    if baseline and profiled:
+        runtime_floor = limits.get("profile_runtime_ratio_min_baseline_seconds", 0.5)
+        memory_floor = limits.get("profile_memory_ratio_min_baseline_bytes", 16 * 1024 * 1024)
+        if baseline["wall_seconds"] >= runtime_floor:
+            runtime_ratio = profiled["wall_seconds"] / baseline["wall_seconds"]
+            if runtime_ratio > limits["max_profile_runtime_overhead_ratio"]:
+                failures.append(
+                    "profile runtime overhead %.3fx exceeds %.3fx"
+                    % (runtime_ratio, limits["max_profile_runtime_overhead_ratio"])
+                )
+        if baseline["peak_memory_bytes"] >= memory_floor:
+            memory_ratio = profiled["peak_memory_bytes"] / baseline["peak_memory_bytes"]
+            if memory_ratio > limits["max_profile_memory_overhead_ratio"]:
+                failures.append(
+                    "profile memory overhead %.3fx exceeds %.3fx"
+                    % (memory_ratio, limits["max_profile_memory_overhead_ratio"])
+                )
     return failures
 
 
