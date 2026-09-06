@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Run C-GULL against a deterministic slice of the upstream Juliet 1.3 suite.
+"""Run C-GULL against the upstream Juliet 1.3 suite.
 
 The upstream checkout remains the canonical source. This runner discovers cases
 using Juliet's function-name convention instead of a hand-authored per-file
-manifest, then selects a deterministic stratified sample per CWE/flow variant.
+manifest. It supports both a deterministic stratified PR sample and a full run
+across every discoverable entry file for C-GULL's mapped CWEs.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -26,7 +26,6 @@ from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine
 
 DEFAULT_FLOW_VARIANTS = ("01", "02", "04", "08", "31", "54", "61")
-FUNCTION_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 FLOW_RE = re.compile(r"_(\d{2})(?:[a-z])?\.(?:c|cpp)$", re.IGNORECASE)
 
 
@@ -72,6 +71,14 @@ def discover_candidates(suite_root: Path, cwe: str) -> List[Path]:
         if infer_oracles(path):
             candidates.append(path)
     return candidates
+
+
+def select_all_cases(suite_root: Path, cwes: Sequence[str]) -> List[Tuple[str, Path]]:
+    return [
+        (cwe, path)
+        for cwe in cwes
+        for path in discover_candidates(suite_root, cwe)
+    ]
 
 
 def select_stratified_cases(
@@ -133,7 +140,10 @@ def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
         for cwe, counts in stats.items()
         if sum(counts.values())
     }
-    overall_counts = {key: sum(item[key] for item in stats.values()) for key in ("tp", "fp", "tn", "fn")}
+    overall_counts = {
+        key: sum(item[key] for item in stats.values())
+        for key in ("tp", "fp", "tn", "fn")
+    }
     return {
         "schema_version": 1,
         "selected_files": len(cases),
@@ -176,6 +186,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cwe", action="append", default=[], help="CWE to include; may be repeated")
     parser.add_argument("--flow", action="append", default=[], help="Two-digit Juliet flow variant")
     parser.add_argument("--per-flow", type=int, default=2, help="Maximum entry files per CWE/flow")
+    parser.add_argument("--all", action="store_true", help="Run every discoverable upstream entry file for the selected CWEs")
     parser.add_argument("--format", choices=("json", "markdown"), default="markdown")
     parser.add_argument("--output", type=Path)
     return parser.parse_args(argv)
@@ -190,14 +201,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     unknown = sorted(set(cwes) - set(CWE_RULE_MAP))
     if unknown:
         raise SystemExit(f"Unsupported CWE(s): {', '.join(unknown)}")
-    flows = tuple(args.flow) or DEFAULT_FLOW_VARIANTS
+    if args.all and args.flow:
+        raise SystemExit("--all cannot be combined with --flow")
     if args.per_flow < 1:
         raise SystemExit("--per-flow must be at least 1")
-    cases = select_stratified_cases(suite_root, cwes, flows, args.per_flow)
+
+    if args.all:
+        cases = select_all_cases(suite_root, cwes)
+    else:
+        flows = tuple(args.flow) or DEFAULT_FLOW_VARIANTS
+        cases = select_stratified_cases(suite_root, cwes, flows, args.per_flow)
+
     if not cases:
         raise SystemExit("No Juliet cases matched the requested CWE/flow selection")
     report = run_benchmark(cases)
-    rendered = json.dumps(report, indent=2, sort_keys=True) + "\n" if args.format == "json" else format_markdown(report)
+    rendered = (
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+        if args.format == "json"
+        else format_markdown(report)
+    )
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered, encoding="utf-8")
