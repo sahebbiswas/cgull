@@ -2,7 +2,14 @@ import io
 import json
 import math
 
-from cgull import AnalysisEngine, CGullScanner, ConfigProfile, ScanConfig
+from cgull import (
+    AnalysisEngine,
+    CGullScanner,
+    ConfigProfile,
+    Issue,
+    ScanConfig,
+    Severity,
+)
 from cgull.reporter import ReportGenerator
 from cgull.telemetry import ProgressIndicator, ScanTelemetry, telemetry_for
 
@@ -10,6 +17,18 @@ from cgull.telemetry import ProgressIndicator, ScanTelemetry, telemetry_for
 def _scanner() -> CGullScanner:
     return CGullScanner(
         config=ScanConfig.create(rules=[], engine_mode=AnalysisEngine.REGEX)
+    )
+
+
+def _issue(*, impact=Severity.HIGH, file_path="shared.h") -> Issue:
+    return Issue(
+        rule_id="CGULL-TEST",
+        rule_name="Telemetry test",
+        impact=impact,
+        file_path=file_path,
+        line_number=1,
+        code_snippet="int x;",
+        message="test finding",
     )
 
 
@@ -68,6 +87,7 @@ def test_file_scan_counts_physical_lines_without_trailing_newline(tmp_path):
     assert telemetry.unique_source_lines == 3
     assert telemetry.analyzed_lines == 3
     assert result.total_lines_of_code == 3
+    assert telemetry.elapsed_seconds > 0.0
     assert math.isfinite(telemetry.throughput_kloc_per_sec)
 
 
@@ -101,6 +121,86 @@ def test_ignored_file_does_not_contribute_lines(tmp_path):
     assert telemetry.analyzed_lines == 1
 
 
+def test_live_files_discovered_matches_final_definition_with_ignored_file(tmp_path):
+    included = tmp_path / "included.c"
+    ignored = tmp_path / "ignored.c"
+    included.write_text("int x;\n", encoding="utf-8")
+    ignored.write_text("int y;\n", encoding="utf-8")
+
+    snapshots = []
+    progress_calls = []
+    result = _scanner().scan_path(
+        str(tmp_path),
+        custom_ignore_patterns=["ignored.c"],
+        progress_callback=lambda completed, total, current: progress_calls.append(
+            (completed, total, current)
+        ),
+        telemetry_callback=snapshots.append,
+        quiet=True,
+    )
+
+    assert progress_calls
+    assert snapshots
+    assert snapshots[-1].files_discovered == result.files_discovered == 2
+    assert snapshots[-1].files_scanned == result.files_analyzed == 1
+
+
+def test_plain_progress_callback_can_receive_telemetry_explicitly(tmp_path):
+    source = tmp_path / "sample.c"
+    source.write_text("int x;\n", encoding="utf-8")
+    progress_calls = []
+    snapshots = []
+
+    _scanner().scan_path(
+        str(source),
+        progress_callback=lambda completed, total, current: progress_calls.append(
+            (completed, total, current)
+        ),
+        telemetry_callback=snapshots.append,
+        quiet=True,
+    )
+
+    assert progress_calls[-1][0:2] == (1, 1)
+    assert snapshots[-1].unique_source_lines == 1
+    assert snapshots[-1].files_scanned == 1
+
+
+def test_live_findings_use_final_filter_and_dedup_semantics():
+    scanner = _scanner()
+    scanner.severity_filter = {Severity.HIGH}
+    scanner._begin_telemetry()
+    snapshots = []
+    scanner._telemetry_callback = snapshots.append
+
+    high = _issue(impact=Severity.HIGH)
+    low = _issue(impact=Severity.LOW, file_path="low.c")
+    scanner._record_progress_result(
+        loc=1,
+        file_issues=[high, low],
+        parser_status="regex",
+        status="success",
+        multiplier=1,
+        completed=1,
+        total=2,
+        progress_callback=None,
+        current_file="a.c",
+    )
+    scanner._record_progress_result(
+        loc=1,
+        file_issues=[high],
+        parser_status="regex",
+        status="success",
+        multiplier=1,
+        completed=2,
+        total=2,
+        progress_callback=None,
+        current_file="b.c",
+    )
+
+    assert snapshots[-1].findings_count == 1
+    assert snapshots[-1].files_scanned == 2
+
+
 def test_profile_repetition_increases_analysis_volume(tmp_path):
     source = tmp_path / "profiles.c"
     source.write_text("int x;\nint y;\n", encoding="utf-8")
@@ -115,6 +215,11 @@ def test_profile_repetition_increases_analysis_volume(tmp_path):
     assert telemetry.unique_source_lines == 2
     assert telemetry.analyzed_lines == 4
     assert telemetry.analyzed_lines > telemetry.unique_source_lines
+    # This is the Windows regression: a scan completing within one timer tick
+    # must still expose a positive canonical interval so consumers can safely
+    # recompute the documented throughput formula.
+    assert telemetry.elapsed_seconds > 0.0
+    assert telemetry.to_dict()["elapsed_seconds"] > 0.0
     expected = (telemetry.analyzed_lines / 1000.0) / telemetry.elapsed_seconds
     assert telemetry.throughput_kloc_per_sec == expected
 
@@ -153,6 +258,7 @@ def test_structured_and_human_reports_expose_scan_telemetry(tmp_path):
     json_report = json.loads(ReportGenerator.to_json(result))
     assert json_report["scan"]["unique_source_lines"] == 1
     assert json_report["scan"]["analyzed_lines"] == 1
+    assert json_report["scan"]["elapsed_seconds"] > 0.0
 
     sarif = json.loads(ReportGenerator.to_sarif(result))
     metrics = sarif["runs"][0]["invocations"][0]["properties"]["scanMetrics"]
