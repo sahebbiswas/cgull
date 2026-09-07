@@ -1,10 +1,4 @@
-"""Conservative integer range provenance over the structured CFG.
-
-The domain records closed integer intervals before CFG events, propagates
-constant/range assignments, and refines successor states with simple branch
-conditions. Facts are merged across all reaching paths, so a guard only
-survives when it constrains every path to the queried event.
-"""
+"""Conservative CFG-backed integer range provenance."""
 
 from __future__ import annotations
 
@@ -15,18 +9,12 @@ from typing import Dict, Mapping, Optional
 from ..ast_analyzer.integer_types import _resolved_scalar_type, get_integer_type_byte_size
 from .construction import build_cfg, find_function_def
 
-
-__all__ = [
-    "IntegerRange",
-    "IntegerRangeAnalysis",
-    "analyze_integer_ranges",
-    "integer_type_range",
-]
+__all__ = ["IntegerRange", "IntegerRangeAnalysis", "analyze_integer_ranges", "integer_type_range"]
 
 
 @dataclass(frozen=True)
 class IntegerRange:
-    """Inclusive integer interval; ``None`` denotes an unbounded endpoint."""
+    """Inclusive interval; ``None`` means an unbounded endpoint."""
 
     lower: Optional[int] = None
     upper: Optional[int] = None
@@ -36,14 +24,16 @@ class IntegerRange:
         return self.lower is not None and self.lower == self.upper
 
     def intersect(self, other: "IntegerRange") -> Optional["IntegerRange"]:
-        lower = _max_lower(self.lower, other.lower)
-        upper = _min_upper(self.upper, other.upper)
+        lower = other.lower if self.lower is None else self.lower if other.lower is None else max(self.lower, other.lower)
+        upper = other.upper if self.upper is None else self.upper if other.upper is None else min(self.upper, other.upper)
         if lower is not None and upper is not None and lower > upper:
             return None
         return IntegerRange(lower, upper)
 
     def hull(self, other: "IntegerRange") -> "IntegerRange":
-        return IntegerRange(_min_lower(self.lower, other.lower), _max_upper(self.upper, other.upper))
+        lower = None if self.lower is None or other.lower is None else min(self.lower, other.lower)
+        upper = None if self.upper is None or other.upper is None else max(self.upper, other.upper)
+        return IntegerRange(lower, upper)
 
     def fits_within(self, destination: "IntegerRange") -> bool:
         if self.lower is None or self.upper is None:
@@ -55,73 +45,40 @@ class IntegerRange:
         return True
 
 
-def _max_lower(left: Optional[int], right: Optional[int]) -> Optional[int]:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return max(left, right)
+def _widen(previous: IntegerRange, current: IntegerRange) -> IntegerRange:
+    """Widen moving endpoints so ascending chains converge conservatively."""
 
-
-def _min_upper(left: Optional[int], right: Optional[int]) -> Optional[int]:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return min(left, right)
-
-
-def _min_lower(left: Optional[int], right: Optional[int]) -> Optional[int]:
-    if left is None or right is None:
-        return None
-    return min(left, right)
-
-
-def _max_upper(left: Optional[int], right: Optional[int]) -> Optional[int]:
-    if left is None or right is None:
-        return None
-    return max(left, right)
+    lower = current.lower
+    upper = current.upper
+    if previous.lower is None or current.lower is None or current.lower < previous.lower:
+        lower = None
+    if previous.upper is None or current.upper is None or current.upper > previous.upper:
+        upper = None
+    return IntegerRange(lower, upper)
 
 
 def integer_type_range(type_name: str, ast_ctx=None) -> Optional[IntegerRange]:
-    """Return the representable range for a known integer type."""
-
     resolved = _resolved_scalar_type(type_name, ast_ctx)
-    width_bytes = get_integer_type_byte_size(type_name, ast_ctx)
-    if not resolved or width_bytes is None:
+    width = get_integer_type_byte_size(type_name, ast_ctx)
+    if not resolved or width is None:
         return None
-
     normalized = resolved.lower()
-    # These types have implementation-defined signedness in the information
-    # currently available to the analyzer, so do not manufacture a range.
     if normalized in {"char", "time_t"}:
         return None
-
-    unsigned = (
-        normalized.startswith("unsigned")
-        or normalized.startswith("uint")
-        or normalized in {"size_t", "uintptr_t"}
-    )
-    signed = (
-        normalized.startswith("signed")
-        or normalized.startswith("int")
-        or normalized.startswith("short")
-        or normalized.startswith("long")
-        or normalized in {"ssize_t", "intptr_t", "ptrdiff_t"}
-    )
+    unsigned = normalized.startswith(("unsigned", "uint")) or normalized in {"size_t", "uintptr_t"}
+    signed = normalized.startswith(("signed", "int", "short", "long")) or normalized in {
+        "ssize_t", "intptr_t", "ptrdiff_t"
+    }
     if not unsigned and not signed:
         return None
-
-    bits = width_bytes * 8
-    if unsigned:
-        return IntegerRange(0, (1 << bits) - 1)
-    return IntegerRange(-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
+    bits = width * 8
+    return IntegerRange(0, (1 << bits) - 1) if unsigned else IntegerRange(-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
 
 
 _LIMIT_RE = re.compile(r"^(U?INT)(8|16|32|64)_(MIN|MAX)$")
 
 
-def _named_integer_limit(name: str, ast_ctx=None) -> Optional[int]:
+def _named_limit(name: str, ast_ctx=None) -> Optional[int]:
     match = _LIMIT_RE.fullmatch(name)
     if match:
         family, bits_text, bound = match.groups()
@@ -129,7 +86,6 @@ def _named_integer_limit(name: str, ast_ctx=None) -> Optional[int]:
         if family == "UINT":
             return 0 if bound == "MIN" else (1 << bits) - 1
         return -(1 << (bits - 1)) if bound == "MIN" else (1 << (bits - 1)) - 1
-
     aliases = {
         "SIZE_MAX": "size_t",
         "SSIZE_MAX": "ssize_t",
@@ -137,16 +93,12 @@ def _named_integer_limit(name: str, ast_ctx=None) -> Optional[int]:
         "INTPTR_MAX": "intptr_t",
         "PTRDIFF_MAX": "ptrdiff_t",
     }
-    type_name = aliases.get(name)
-    if not type_name:
-        return None
-    bounds = integer_type_range(type_name, ast_ctx)
-    return bounds.upper if bounds is not None else None
+    bounds = integer_type_range(aliases[name], ast_ctx) if name in aliases else None
+    return bounds.upper if bounds else None
 
 
-def _parse_integer_literal(value: str) -> Optional[int]:
-    text = value.strip()
-    text = re.sub(r"(?i)(?:u(?:ll|l)?|(?:ll|l)u?)$", "", text)
+def _literal(text: str) -> Optional[int]:
+    text = re.sub(r"(?i)(?:u(?:ll|l)?|(?:ll|l)u?)$", "", text.strip())
     try:
         if text.lower().startswith("0x"):
             return int(text, 16)
@@ -160,246 +112,188 @@ def _parse_integer_literal(value: str) -> Optional[int]:
 
 
 def _c_div(left: int, right: int) -> int:
-    quotient = abs(left) // abs(right)
-    return -quotient if (left < 0) != (right < 0) else quotient
+    q = abs(left) // abs(right)
+    return -q if (left < 0) != (right < 0) else q
 
 
 def _constant_binary(op: str, left: int, right: int) -> Optional[int]:
-    try:
-        if op == "+":
-            return left + right
-        if op == "-":
-            return left - right
-        if op == "*":
-            return left * right
-        if op == "/" and right != 0:
-            return _c_div(left, right)
-        if op == "%" and right != 0:
-            return left - _c_div(left, right) * right
-        if op == "<<" and right >= 0:
-            return left << right
-        if op == ">>" and right >= 0:
-            return left >> right
-        if op == "&":
-            return left & right
-        if op == "|":
-            return left | right
-        if op == "^":
-            return left ^ right
-    except (OverflowError, ValueError):
-        return None
+    if op == "+": return left + right
+    if op == "-": return left - right
+    if op == "*": return left * right
+    if op == "/" and right: return _c_div(left, right)
+    if op == "%" and right: return left - _c_div(left, right) * right
+    if op == "<<" and right >= 0: return left << right
+    if op == ">>" and right >= 0: return left >> right
+    if op == "&": return left & right
+    if op == "|": return left | right
+    if op == "^": return left ^ right
     return None
 
 
-def _location_name(node) -> Optional[str]:
-    if node is not None and type(node).__name__ == "ID":
-        return str(node.name)
-    return None
+def _name(node) -> Optional[str]:
+    return str(node.name) if node is not None and type(node).__name__ == "ID" else None
 
 
-def _expression_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) -> Optional[IntegerRange]:
+def _expr_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) -> Optional[IntegerRange]:
     if node is None:
         return None
-
     kind = type(node).__name__
     if kind == "Cast":
-        return _expression_range(node.expr, state, ast_ctx, fn)
-
+        return _expr_range(node.expr, state, ast_ctx, fn)
     if kind == "ID":
-        named = _named_integer_limit(str(node.name), ast_ctx)
-        if named is not None:
-            return IntegerRange(named, named)
+        limit = _named_limit(str(node.name), ast_ctx)
+        if limit is not None:
+            return IntegerRange(limit, limit)
         fact = state.get(str(node.name))
-        static_type = ast_ctx.infer_expr_type(node, fn) if ast_ctx is not None and fn is not None else None
-        static_range = integer_type_range(static_type, ast_ctx) if static_type else None
+        type_name = ast_ctx.infer_expr_type(node, fn) if ast_ctx is not None and fn is not None else None
+        static = integer_type_range(type_name, ast_ctx) if type_name else None
         if fact is None:
-            return static_range
-        if static_range is None:
-            return fact
-        return fact.intersect(static_range)
-
+            return static
+        return fact if static is None else fact.intersect(static)
     if kind == "Constant":
-        value = _parse_integer_literal(str(getattr(node, "value", "")))
+        value = _literal(str(getattr(node, "value", "")))
         return IntegerRange(value, value) if value is not None else None
-
     if kind == "UnaryOp":
-        operand = _expression_range(node.expr, state, ast_ctx, fn)
-        if operand is None:
+        value = _expr_range(node.expr, state, ast_ctx, fn)
+        if value is None:
             return None
-        op = getattr(node, "op", None)
-        if op == "+":
-            return operand
-        if op == "-":
-            lower = -operand.upper if operand.upper is not None else None
-            upper = -operand.lower if operand.lower is not None else None
-            return IntegerRange(lower, upper)
-        if operand.is_singleton and op == "~":
-            value = ~operand.lower
-            return IntegerRange(value, value)
-        if operand.is_singleton and op == "!":
-            value = int(not operand.lower)
-            return IntegerRange(value, value)
+        if node.op == "+": return value
+        if node.op == "-":
+            return IntegerRange(-value.upper if value.upper is not None else None, -value.lower if value.lower is not None else None)
+        if value.is_singleton and node.op == "~": return IntegerRange(~value.lower, ~value.lower)
+        if value.is_singleton and node.op == "!":
+            folded = int(not value.lower)
+            return IntegerRange(folded, folded)
         return None
-
     if kind == "BinaryOp":
-        left = _expression_range(node.left, state, ast_ctx, fn)
-        right = _expression_range(node.right, state, ast_ctx, fn)
+        left = _expr_range(node.left, state, ast_ctx, fn)
+        right = _expr_range(node.right, state, ast_ctx, fn)
         if left is None or right is None:
             return None
-        op = getattr(node, "op", None)
         if left.is_singleton and right.is_singleton:
-            value = _constant_binary(op, left.lower, right.lower)
-            if value is not None:
-                return IntegerRange(value, value)
-        if op == "+" and None not in (left.lower, left.upper, right.lower, right.upper):
+            folded = _constant_binary(node.op, left.lower, right.lower)
+            if folded is not None:
+                return IntegerRange(folded, folded)
+        if node.op == "+" and None not in (left.lower, left.upper, right.lower, right.upper):
             return IntegerRange(left.lower + right.lower, left.upper + right.upper)
-        if op == "-" and None not in (left.lower, left.upper, right.lower, right.upper):
+        if node.op == "-" and None not in (left.lower, left.upper, right.lower, right.upper):
             return IntegerRange(left.lower - right.upper, left.upper - right.lower)
         return None
-
     if kind == "TernaryOp":
-        left = _expression_range(node.iftrue, state, ast_ctx, fn)
-        right = _expression_range(node.iffalse, state, ast_ctx, fn)
-        if left is None or right is None:
-            return None
-        return left.hull(right)
-
+        left = _expr_range(node.iftrue, state, ast_ctx, fn)
+        right = _expr_range(node.iffalse, state, ast_ctx, fn)
+        return left.hull(right) if left is not None and right is not None else None
     return None
 
 
-def _comparison_constraint(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str, IntegerRange]:
-    if node is None or type(node).__name__ != "BinaryOp":
+def _comparison(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str, IntegerRange]:
+    if node is None or type(node).__name__ != "BinaryOp" or node.op not in {"<", "<=", ">", ">=", "==", "!="}:
         return {}
-    op = getattr(node, "op", None)
-    if op not in {"<", "<=", ">", ">=", "==", "!="}:
-        return {}
-
-    left_name = _location_name(node.left)
-    right_name = _location_name(node.right)
-    left_value = _expression_range(node.left, {}, ast_ctx, fn)
-    right_value = _expression_range(node.right, {}, ast_ctx, fn)
-
-    # An identifier may be either a location or a named integer limit such as
-    # UINT8_MAX. Prefer the side whose opposite expression is provably a
-    # singleton; this lets standard limit macros participate in guard proofs
-    # without mistaking ordinary variable-to-variable comparisons for bounds.
+    left_name, right_name = _name(node.left), _name(node.right)
+    left_value = _expr_range(node.left, {}, ast_ctx, fn)
+    right_value = _expr_range(node.right, {}, ast_ctx, fn)
     if left_name and right_value is not None and right_value.is_singleton:
-        variable = left_name
-        value_range = right_value
-        orientation = op
+        variable, value, op = left_name, right_value.lower, node.op
     elif right_name and left_value is not None and left_value.is_singleton:
-        variable = right_name
-        value_range = left_value
-        orientation = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "==", "!=": "!="}[op]
+        variable, value = right_name, left_value.lower
+        op = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "==", "!=": "!="}[node.op]
     else:
         return {}
-
-    value = value_range.lower
     if not truth:
-        orientation = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}[orientation]
-    if orientation == "<":
-        return {variable: IntegerRange(upper=value - 1)}
-    if orientation == "<=":
-        return {variable: IntegerRange(upper=value)}
-    if orientation == ">":
-        return {variable: IntegerRange(lower=value + 1)}
-    if orientation == ">=":
-        return {variable: IntegerRange(lower=value)}
-    if orientation == "==":
-        return {variable: IntegerRange(value, value)}
-    # ``!=`` is non-convex and cannot be represented by this interval domain.
+        op = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}[op]
+    if op == "<": return {variable: IntegerRange(upper=value - 1)}
+    if op == "<=": return {variable: IntegerRange(upper=value)}
+    if op == ">": return {variable: IntegerRange(lower=value + 1)}
+    if op == ">=": return {variable: IntegerRange(lower=value)}
+    if op == "==": return {variable: IntegerRange(value, value)}
     return {}
 
 
-def _merge_constraints(left: Mapping[str, IntegerRange], right: Mapping[str, IntegerRange]) -> Dict[str, IntegerRange]:
-    result = dict(left)
-    for name, interval in right.items():
-        prior = result.get(name)
-        if prior is None:
-            result[name] = interval
-        else:
-            combined = prior.intersect(interval)
-            if combined is not None:
-                result[name] = combined
-    return result
-
-
-def _condition_constraints(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str, IntegerRange]:
+def _constraints(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str, IntegerRange]:
     if node is None:
         return {}
-    kind = type(node).__name__
-    if kind == "UnaryOp" and getattr(node, "op", None) == "!":
-        return _condition_constraints(node.expr, not truth, ast_ctx, fn)
-    if kind == "BinaryOp":
-        op = getattr(node, "op", None)
-        if op == "&&" and truth:
-            return _merge_constraints(
-                _condition_constraints(node.left, True, ast_ctx, fn),
-                _condition_constraints(node.right, True, ast_ctx, fn),
-            )
-        if op == "||" and not truth:
-            return _merge_constraints(
-                _condition_constraints(node.left, False, ast_ctx, fn),
-                _condition_constraints(node.right, False, ast_ctx, fn),
-            )
-        return _comparison_constraint(node, truth, ast_ctx, fn)
-    return {}
+    if type(node).__name__ == "UnaryOp" and node.op == "!":
+        return _constraints(node.expr, not truth, ast_ctx, fn)
+    if type(node).__name__ != "BinaryOp":
+        return {}
+    if node.op == "&&" and truth or node.op == "||" and not truth:
+        result = _constraints(node.left, truth, ast_ctx, fn)
+        for name, interval in _constraints(node.right, truth, ast_ctx, fn).items():
+            prior = result.get(name)
+            combined = interval if prior is None else prior.intersect(interval)
+            if combined is not None:
+                result[name] = combined
+        return result
+    return _comparison(node, truth, ast_ctx, fn)
 
 
-def _apply_constraints(
-    state: Mapping[str, IntegerRange], constraints: Mapping[str, IntegerRange], ast_ctx=None, fn=None
-) -> Optional[Dict[str, IntegerRange]]:
+def _apply(state: Mapping[str, IntegerRange], constraints: Mapping[str, IntegerRange], ast_ctx, fn) -> Optional[Dict[str, IntegerRange]]:
     result = dict(state)
-    for name, constraint in constraints.items():
+    if constraints and ast_ctx is not None and fn is not None:
+        from pycparser import c_ast
+    for name, interval in constraints.items():
         current = result.get(name)
         if current is None and ast_ctx is not None and fn is not None:
-            try:
-                from pycparser import c_ast
-
-                current = _expression_range(c_ast.ID(name), result, ast_ctx, fn)
-            except ImportError:
-                current = None
-        combined = constraint if current is None else current.intersect(constraint)
+            current = _expr_range(c_ast.ID(name), result, ast_ctx, fn)
+        combined = interval if current is None else current.intersect(interval)
         if combined is None:
             return None
         result[name] = combined
     return result
 
 
-def _merge_states(left: Mapping[str, IntegerRange], right: Mapping[str, IntegerRange]) -> Dict[str, IntegerRange]:
-    # A fact missing on either path is unknown on the join. Keeping only the
-    # intersection of keys makes guard suppression dominance-safe.
+def _merge(left: Mapping[str, IntegerRange], right: Mapping[str, IntegerRange]) -> Dict[str, IntegerRange]:
     return {name: left[name].hull(right[name]) for name in left.keys() & right.keys()}
 
 
-def _event_condition(event):
+def _condition(event):
     node = getattr(event, "_ast_node", None)
-    if node is None:
-        return None
-    if event.kind in {"if_cond", "while_cond", "do_cond", "for_cond"}:
-        return getattr(node, "cond", None)
-    return None
+    return getattr(node, "cond", None) if node is not None and event.kind in {"if_cond", "while_cond", "do_cond", "for_cond"} else None
 
 
 def _descendants(root):
-    if root is None:
-        return
-    yield root
-    for _, child in root.children():
-        yield from _descendants(child)
+    if root is not None:
+        yield root
+        for _, child in root.children():
+            yield from _descendants(child)
+
+
+def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn) -> Dict[str, IntegerRange]:
+    result = dict(state)
+    node = getattr(event, "_ast_node", None)
+    if node is None:
+        return result
+    kind = type(node).__name__
+    if kind == "Decl" and getattr(node, "name", None):
+        fact = _expr_range(node.init, state, ast_ctx, fn) if getattr(node, "init", None) is not None else None
+        result[str(node.name)] = fact if fact is not None else result.pop(str(node.name), None)
+        if fact is None:
+            result.pop(str(node.name), None)
+    elif kind == "Assignment":
+        target = _name(getattr(node, "lvalue", None))
+        if target:
+            fact = _expr_range(node.rvalue, state, ast_ctx, fn) if node.op == "=" else None
+            if fact is None: result.pop(target, None)
+            else: result[target] = fact
+    elif kind == "UnaryOp" and node.op in {"p++", "p--", "++", "--"}:
+        target = _name(node.expr)
+        if target:
+            current = _expr_range(node.expr, state, ast_ctx, fn)
+            if current is None or current.lower is None or current.upper is None:
+                result.pop(target, None)
+            else:
+                delta = 1 if "+" in node.op else -1
+                result[target] = IntegerRange(current.lower + delta, current.upper + delta)
+    return result
 
 
 class IntegerRangeAnalysis:
-    """Range facts for one function's structured CFG."""
-
     def __init__(self, ast_ctx, function, cfg, facts_before: Mapping[int, Mapping[str, IntegerRange]]) -> None:
-        self.ast_ctx = ast_ctx
-        self.function = function
-        self.cfg = cfg
+        self.ast_ctx, self.function, self.cfg = ast_ctx, function, cfg
         self._facts_before = facts_before
         self._ast_to_node: Dict[int, int] = {}
         for node_id, event in cfg.nodes.items():
-            root = _event_condition(event) if event.kind.endswith("_cond") else getattr(event, "_ast_node", None)
+            root = _condition(event) if event.kind.endswith("_cond") else getattr(event, "_ast_node", None)
             for child in _descendants(root):
                 self._ast_to_node.setdefault(id(child), node_id)
 
@@ -411,7 +305,7 @@ class IntegerRangeAnalysis:
         if node_id is None:
             node_id = self._ast_to_node.get(id(expression))
         state = self._facts_before.get(node_id, {}) if node_id is not None else {}
-        return _expression_range(expression, state, self.ast_ctx, self.function)
+        return _expr_range(expression, state, self.ast_ctx, self.function)
 
     def proves_expression_fits(self, expression, destination_type: str, at_node=None) -> bool:
         destination = integer_type_range(destination_type, self.ast_ctx)
@@ -419,47 +313,7 @@ class IntegerRangeAnalysis:
         return destination is not None and source is not None and source.fits_within(destination)
 
 
-def _transfer_event(event, state: Mapping[str, IntegerRange], ast_ctx, fn) -> Dict[str, IntegerRange]:
-    result = dict(state)
-    node = getattr(event, "_ast_node", None)
-    if node is None:
-        return result
-    kind = type(node).__name__
-    if kind == "Decl" and getattr(node, "name", None):
-        if getattr(node, "init", None) is None:
-            result.pop(str(node.name), None)
-        else:
-            fact = _expression_range(node.init, state, ast_ctx, fn)
-            if fact is None:
-                result.pop(str(node.name), None)
-            else:
-                result[str(node.name)] = fact
-    elif kind == "Assignment":
-        target = _location_name(getattr(node, "lvalue", None))
-        if target:
-            if getattr(node, "op", None) == "=":
-                fact = _expression_range(node.rvalue, state, ast_ctx, fn)
-                if fact is None:
-                    result.pop(target, None)
-                else:
-                    result[target] = fact
-            else:
-                result.pop(target, None)
-    elif kind == "UnaryOp" and getattr(node, "op", None) in {"p++", "p--", "++", "--"}:
-        target = _location_name(getattr(node, "expr", None))
-        if target:
-            current = _expression_range(node.expr, state, ast_ctx, fn)
-            if current is None or current.lower is None or current.upper is None:
-                result.pop(target, None)
-            else:
-                delta = 1 if "+" in node.op else -1
-                result[target] = IntegerRange(current.lower + delta, current.upper + delta)
-    return result
-
-
 def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRangeAnalysis]:
-    """Analyze range provenance for ``function_name`` using its structured CFG."""
-
     fn = next((candidate for candidate in getattr(ast_ctx, "functions", ()) if candidate.name == function_name), None)
     funcdef = find_function_def(getattr(ast_ctx, "pycparser_ast", None), function_name)
     if fn is None or funcdef is None:
@@ -470,27 +324,28 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
 
     incoming: Dict[int, Dict[str, IntegerRange]] = {cfg.entry: {}}
     facts_before: Dict[int, Dict[str, IntegerRange]] = {}
+    updates: Dict[int, int] = {}
     work = [cfg.entry]
     while work:
         node_id = work.pop(0)
-        if node_id not in incoming:
-            continue
         state = incoming[node_id]
         facts_before[node_id] = dict(state)
         event = cfg.nodes[node_id]
-        outgoing = _transfer_event(event, state, ast_ctx, fn)
-        condition = _event_condition(event)
+        outgoing = _transfer(event, state, ast_ctx, fn)
+        condition = _condition(event)
         for index, successor in enumerate(event.successors):
-            edge_state: Optional[Dict[str, IntegerRange]] = dict(outgoing)
+            edge_state = dict(outgoing)
             if condition is not None and index < 2:
-                constraints = _condition_constraints(condition, index == 0, ast_ctx, fn)
-                edge_state = _apply_constraints(edge_state, constraints, ast_ctx, fn)
+                edge_state = _apply(edge_state, _constraints(condition, index == 0, ast_ctx, fn), ast_ctx, fn)
             if edge_state is None:
                 continue
             prior = incoming.get(successor)
-            merged = edge_state if prior is None else _merge_states(prior, edge_state)
+            merged = edge_state if prior is None else _merge(prior, edge_state)
+            if prior is not None and updates.get(successor, 0) >= 2:
+                merged = {name: _widen(prior[name], merged[name]) for name in prior.keys() & merged.keys()}
             if prior != merged:
                 incoming[successor] = merged
+                updates[successor] = updates.get(successor, 0) + 1
                 if successor not in work:
                     work.append(successor)
 
