@@ -90,3 +90,29 @@ A representative platform mapping might look like:
 | `debug_enable(cmd)` | sink | `arg:0` requires `authorized` |
 
 Keep models narrow and auditable. If an API's semantics depend on flags, callback state, complex aliasing, or unsupported protocol state, leave it unmodeled until the analyzer can represent that condition safely.
+
+## Pointer interval validators
+
+Add `length = "arg:N"` to a `bounds_checked` validator to establish an accessible
+byte interval on its successful branch:
+
+```toml
+[[semantic_models.validators]]
+function = "validate_range"
+target = "arg:0"
+length = "arg:1"
+property = "bounds_checked"
+success = "return_nonzero"
+```
+
+This contract means success proves `[ptr, ptr + length)`. Both locations must
+be arguments; the length is in bytes. Existing validators without `length`
+retain their typed-property behavior. Merely calling a boolean validator and
+ignoring its return value establishes no interval proof.
+
+`CGULL-051` consumes these intervals for dereferences, indexing, pointer member
+access, `memcpy`, `memmove`, `memcmp`, and configured call-effect
+`size_relationships`. Simple aliases and pointer casts preserve the origin.
+A successful check on only one path does not establish a proof after a merge;
+a fail-closed early return does. Pointer reassignment replaces its facts.
+Separate successful checks may cover adjacent intervals of the same origin.

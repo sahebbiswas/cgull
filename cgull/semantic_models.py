@@ -119,9 +119,16 @@ class ValidatorModel:
     target: SemanticLocation
     property: ValidationProperty
     success: SuccessCondition
+    length: Optional[SemanticLocation] = None
 
     def __post_init__(self) -> None:
         _validate_function_name(self.function)
+        if self.length is not None and (
+            self.property is not ValidationProperty.BOUNDS_CHECKED
+            or self.target.kind is not SemanticLocationKind.ARGUMENT
+            or self.length.kind is not SemanticLocationKind.ARGUMENT
+        ):
+            raise ValueError("range validators require bounds_checked and arg:N target/length")
 
 
 @dataclass(frozen=True)
@@ -283,7 +290,7 @@ def parse_semantic_models(raw: object) -> SemanticModelRegistry:
         _insert_unique(sources, function, model, "source")
 
     for entry in _model_entries(raw, "validators"):
-        _require_keys(entry, "validator", required={"function", "target", "property", "success"})
+        _require_keys(entry, "validator", required={"function", "target", "property", "success"}, optional={"length"})
         function = _function(entry["function"], "validator")
         try:
             model = ValidatorModel(
@@ -291,6 +298,7 @@ def parse_semantic_models(raw: object) -> SemanticModelRegistry:
                 SemanticLocation.parse(entry["target"]),
                 ValidationProperty(str(entry["property"]).strip().lower()),
                 SuccessCondition.parse(entry["success"]),
+                SemanticLocation.parse(entry["length"]) if "length" in entry else None,
             )
         except ValueError as exc:
             raise SemanticModelConfigError(f"validator '{function}': {exc}") from exc
@@ -349,10 +357,10 @@ def _model_entries(raw: Mapping[object, object], key: str) -> Iterable[Mapping[o
     return entries
 
 
-def _require_keys(entry: Mapping[object, object], kind: str, *, required: set[str]) -> None:
+def _require_keys(entry: Mapping[object, object], kind: str, *, required: set[str], optional: frozenset[str] = frozenset()) -> None:
     keys = {str(k) for k in entry}
     missing = required - keys
-    unknown = keys - required
+    unknown = keys - required - optional
     if missing:
         raise SemanticModelConfigError(
             f"{kind} model missing required key(s): {', '.join(sorted(missing))}"

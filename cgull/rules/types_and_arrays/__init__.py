@@ -14,6 +14,7 @@ from .division_by_zero import DivisionByZeroRule
 from .pointer_subtraction_size import PointerSubtractionSizeRule
 from .integer_narrowing_cast import IntegerNarrowingCastRule
 from .pointer_range_bounds import PointerRangeBoundsRule
+from .validated_pointer_range import ValidatedPointerRangeRule
 
 __all__ = [
     "VariableLengthArraysRule",
@@ -28,4 +29,5 @@ __all__ = [
     "PointerSubtractionSizeRule",
     "IntegerNarrowingCastRule",
     "PointerRangeBoundsRule",
+    "ValidatedPointerRangeRule",
 ]

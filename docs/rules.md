@@ -84,3 +84,26 @@ effects are conservatively excluded from definite diagnostics until those
 effects are modeled. General subobject bounds, API validation, interprocedural
 propagation, and integer-to-pointer recovery are outside this rule's scope.
 Focused corpus coverage is provided; Juliet coverage is **not yet measured**.
+
+## CGULL-051: access outside a validated pointer range
+
+This AST rule checks actual memory uses against the byte intervals established
+by [configured pointer/length validators](trust-boundary-semantic-models.md#pointer-interval-validators).
+Validating `[p, p + 16)` covers a four-byte read at `p + 12`, but not at `p + 14`
+or `p - 4`. Forming a derived pointer alone does not trigger this rule.
+
+Diagnostics distinguish accesses before/after the validated range from uses
+whose offset or width cannot be established. Unknown widths are never claimed
+safe. Unrelated unknown pointers without a successful validation context do not
+report. A known enclosing object can prove accessibility independently; definite
+object-bound violations are left to `CGULL-050` to avoid duplicate reports.
+
+The analysis is intraprocedural and shares `CGULL-050`'s control-flow and scalar
+width limitations. Structs/unions use natural alignment under that width model;
+packed layouts, bitfields, and flexible arrays remain unsupported. Validator lengths currently require integer constants or
+supported `sizeof` expressions. Unknown lengths establish no concrete interval.
+Pointer member accesses use known field layout where available; unsupported
+layout produces an explicit unknown-width/offset diagnostic. Saved validator
+return variables, general relational bounds guards, integer-address wraparound,
+and interprocedural validation summaries are outside this drop. Findings use
+CWE-119 and require manual review. Juliet coverage is not yet measured.
