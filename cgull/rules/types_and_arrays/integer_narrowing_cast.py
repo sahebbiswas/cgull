@@ -10,7 +10,7 @@ from ...ast_analyzer import (
     get_integer_type_byte_size,
     is_integer_narrowing_conversion,
 )
-from ...cfg import _PRELUDE_LINE_COUNT, find_function_def
+from ...cfg import _PRELUDE_LINE_COUNT, analyze_integer_ranges, find_function_def
 from ...models import AnalysisEngine, FixType, Issue, RuleCategory, Severity
 
 
@@ -20,9 +20,9 @@ class IntegerNarrowingCastRule(BaseRule):
     impact = Severity.MEDIUM
     category = RuleCategory.ARITHMETIC
     description = "Detect explicit casts and implicit assignments or argument binding that convert an integer expression to a narrower integer type, which can truncate significant bits."
-    implementation_method = "AST traversal of casts, declarations, assignments, and direct calls with shared integer type-width comparison"
+    implementation_method = "AST conversion detection with CFG-backed integer range provenance and guard suppression"
     implementation_complexity = "Medium"
-    chances_of_false_positives = "Medium"
+    chances_of_false_positives = "Low-Medium"
     cwe_id = "CWE-197"
     remediation_suggestion = "Validate that the source value is representable in the destination type before narrowing, or retain a sufficiently wide integer type."
     sample_vulnerable_code = "uint32_t wide = read_value();\nuint8_t narrow = wide;"
@@ -59,7 +59,7 @@ class IntegerNarrowingCastRule(BaseRule):
             funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
             if funcdef is None:
                 continue
-
+            range_analysis = analyze_integer_ranges(ast_ctx, fn.name)
             rule = self
 
             class ConversionVisitor(c_ast.NodeVisitor):
@@ -68,6 +68,10 @@ class IntegerNarrowingCastRule(BaseRule):
                         return
                     source_type = rule._source_type(ast_ctx, source_node, fn)
                     if not source_type or is_integer_narrowing_conversion(source_type, destination_type, ast_ctx) is not True:
+                        return
+                    if range_analysis is not None and range_analysis.proves_expression_fits(
+                        source_node, destination_type, node
+                    ):
                         return
 
                     source_width = get_integer_type_byte_size(source_type, ast_ctx)
