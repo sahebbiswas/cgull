@@ -179,12 +179,19 @@ def join_pointer_facts(left: PointerRangeFact, right: PointerRangeFact) -> Point
 
 
 class PointerRangeFunctionResult:
-    def __init__(self, snapshots: Mapping[int, Mapping[str, PointerRangeFact]]) -> None:
+    def __init__(
+        self,
+        snapshots: Mapping[int, Mapping[str, PointerRangeFact]],
+        final_facts: Optional[Mapping[str, PointerRangeFact]] = None,
+    ) -> None:
         self._snapshots = {line: dict(facts) for line, facts in snapshots.items()}
+        self._final_facts = dict(final_facts) if final_facts is not None else None
 
     def query(self, location: str, line: Optional[int] = None) -> PointerRangeFact:
-        """Return the latest fact recorded no later than ``line``."""
+        """Return the final fact, or the latest fact no later than ``line``."""
         location = _canonical_location(location)
+        if line is None and self._final_facts is not None:
+            return self._final_facts.get(location, PointerRangeFact())
         if not self._snapshots:
             return PointerRangeFact()
         if line is None:
@@ -275,8 +282,8 @@ def analyze_translation_unit_pointer_ranges(
                     value_provenance=vp,
                 )
         snapshots: Dict[int, Dict[str, PointerRangeFact]] = {}
-        _analyze_statement(funcdef.body, state, snapshots)
-        results[name] = PointerRangeFunctionResult(snapshots)
+        final_state = _analyze_statement(funcdef.body, state, snapshots)
+        results[name] = PointerRangeFunctionResult(snapshots, final_state.facts)
     return TranslationUnitPointerRangeResult(dict(sorted(results.items())))
 
 
@@ -378,12 +385,11 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
             canonical, extent, element_width=width
         )
         return
-    if node.init is None:
+    declared_width = _pointer_element_width(getattr(node, "type", None))
+    if declared_width is None or node.init is None:
         return
     fact = _expression_fact(node.init, state)
-    declared_width = _pointer_element_width(getattr(node, "type", None))
-    if declared_width is not None and fact.origin is not None:
-        fact = replace(fact, element_width=declared_width)
+    fact = replace(fact, element_width=declared_width)
     state.facts[canonical] = fact
 
 
@@ -409,7 +415,9 @@ def _transfer_unary_update(node: c_ast.UnaryOp, state: _State) -> None:
     if not target:
         return
     target = _canonical_location(target)
-    old = state.facts.get(target, PointerRangeFact())
+    old = state.facts.get(target)
+    if old is None:
+        return
     count = 1 if node.op in {"p++", "++"} else -1
     state.facts[target] = old.shifted_elements(count)
 
