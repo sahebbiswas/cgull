@@ -445,15 +445,34 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
     return PointerRangeFact(degradations=frozenset({"UNSUPPORTED_TRANSFORM"}))
 
 
+_INTEGER_CONSTANT_TYPES = {
+    "int",
+    "long",
+    "long int",
+    "long long",
+    "long long int",
+    "signed",
+    "signed int",
+    "signed long",
+    "signed long int",
+    "signed long long",
+    "signed long long int",
+    "unsigned",
+    "unsigned int",
+    "unsigned long",
+    "unsigned long int",
+    "unsigned long long",
+    "unsigned long long int",
+}
+
+
 def _constant_int(node) -> Optional[int]:
-    if isinstance(node, c_ast.Constant) and node.type in {
-        "int",
-        "long",
-        "unsigned",
-        "unsigned int",
-    }:
+    if isinstance(node, c_ast.Constant) and node.type in _INTEGER_CONSTANT_TYPES:
+        value = node.value.rstrip("uUlL")
+        if not value:
+            return None
         try:
-            return int(node.value, 0)
+            return int(value, 0)
         except ValueError:
             return None
     if isinstance(node, c_ast.UnaryOp) and node.op in {"+", "-"}:
