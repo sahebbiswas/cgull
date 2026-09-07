@@ -308,6 +308,10 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
         _transfer_assignment(node, state)
         _record(node, state, snapshots)
         return state
+    if isinstance(node, c_ast.UnaryOp) and node.op in {"p++", "p--", "++", "--"}:
+        _transfer_unary_update(node, state)
+        _record(node, state, snapshots)
+        return state
     if isinstance(node, c_ast.If):
         left = _analyze_statement(node.iftrue, state.copy(), snapshots)
         right = (
@@ -328,8 +332,8 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
         for _ in range(8):
             previous = current
             body = _analyze_statement(node.stmt, current.copy(), snapshots)
-            if isinstance(node, c_ast.For) and isinstance(node.next, c_ast.Assignment):
-                _transfer_assignment(node.next, body)
+            if isinstance(node, c_ast.For) and node.next is not None:
+                body = _analyze_statement(node.next, body, snapshots)
             joined = _join_states(entry, body)
             unstable = {
                 key
@@ -369,7 +373,7 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
         return
     canonical = _canonical_location(name)
     extent, width = _array_extent_and_width(getattr(node, "type", None))
-    if extent is not None:
+    if extent is not None and width is not None:
         state.facts[canonical] = PointerRangeFact.object(
             canonical, extent, element_width=width
         )
@@ -400,6 +404,16 @@ def _transfer_assignment(node: c_ast.Assignment, state: _State) -> None:
     state.facts[target] = _expression_fact(node.rvalue, state)
 
 
+def _transfer_unary_update(node: c_ast.UnaryOp, state: _State) -> None:
+    target = _location(node.expr)
+    if not target:
+        return
+    target = _canonical_location(target)
+    old = state.facts.get(target, PointerRangeFact())
+    count = 1 if node.op in {"p++", "++"} else -1
+    state.facts[target] = old.shifted_elements(count)
+
+
 def _expression_fact(node, state: _State) -> PointerRangeFact:
     if node is None:
         return PointerRangeFact()
@@ -416,12 +430,18 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
             return base.unknown_offset("UNKNOWN_INDEX")
         return base.shifted_elements(index)
     if isinstance(node, c_ast.BinaryOp) and node.op in {"+", "-"}:
-        base = _expression_fact(node.left, state)
         amount = _constant_int(node.right)
-        if amount is None:
-            return base.unknown_offset("UNSUPPORTED_ARITHMETIC")
-        count = amount if node.op == "+" else -amount
-        return base.shifted_elements(count)
+        if amount is not None:
+            base = _expression_fact(node.left, state)
+            count = amount if node.op == "+" else -amount
+            return base.shifted_elements(count)
+        if node.op == "+":
+            amount = _constant_int(node.left)
+            if amount is not None:
+                base = _expression_fact(node.right, state)
+                return base.shifted_elements(amount)
+        base = _expression_fact(node.left, state)
+        return base.unknown_offset("UNSUPPORTED_ARITHMETIC")
     if isinstance(node, c_ast.FuncCall):
         callee = _location(node.name)
         if callee in {"malloc", "calloc", "realloc"}:
@@ -492,15 +512,17 @@ def _location(node) -> Optional[str]:
     return None
 
 
-def _array_extent_and_width(type_node) -> Tuple[Optional[int], int]:
+def _array_extent_and_width(type_node) -> Tuple[Optional[int], Optional[int]]:
     node = type_node
     while isinstance(node, c_ast.TypeDecl):
         node = node.type
     if not isinstance(node, c_ast.ArrayDecl):
-        return None, 1
+        return None, None
     count = _constant_int(node.dim)
     width = _type_width(node.type)
-    return (count * width if count is not None else None), width
+    if count is None or width is None:
+        return None, width
+    return count * width, width
 
 
 def _pointer_element_width(type_node) -> Optional[int]:
@@ -523,14 +545,18 @@ def _parameter_element_widths(funcdef) -> Dict[str, int]:
     return result
 
 
-def _type_width(type_node) -> int:
+def _type_width(type_node) -> Optional[int]:
     node = type_node
     while isinstance(node, c_ast.TypeDecl):
         node = node.type
     if isinstance(node, c_ast.PtrDecl):
         return 8
     if isinstance(node, c_ast.ArrayDecl):
-        return _type_width(node.type)
+        count = _constant_int(node.dim)
+        element_width = _type_width(node.type)
+        if count is None or element_width is None:
+            return None
+        return count * element_width
     if isinstance(node, c_ast.IdentifierType):
         names = tuple(node.names or ())
         if "char" in names:
@@ -542,7 +568,7 @@ def _type_width(type_node) -> int:
         if "long" in names:
             return 8
         return 4
-    return 1
+    return None
 
 
 __all__ = [
