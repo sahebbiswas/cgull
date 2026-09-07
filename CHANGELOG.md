@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Extended `CGULL-049` to detect implicit integer narrowing in declaration initialization, ordinary assignment, and direct argument-to-parameter binding when the callee type is available in the current translation unit (#348).
 - Structured CFG call metadata with ordered arguments, result bindings, unresolved indirect-call markers, and original source provenance (#241).
 
 ## [0.9.20] - 2026-09-02
