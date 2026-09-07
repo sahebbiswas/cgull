@@ -461,6 +461,8 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
         # Any loop iteration (including a condition/step expression) can
         # invalidate a dominating enclosing-range proof. Kill dependencies
         # before computing the loop invariant; never publish first-trip safety.
+        _invalidate_address_taken(node, state)
+
         class LoopMutations(c_ast.NodeVisitor):
             def visit_Assignment(self, update):
                 target = _location(update.lvalue)
@@ -700,8 +702,6 @@ def _supports_definite_events(funcdef, typedefs):
         ):
             if not isinstance(parent, (c_ast.Compound, c_ast.If, c_ast.For, c_ast.While, c_ast.DoWhile)):
                 supported = False
-        if isinstance(node, c_ast.UnaryOp) and node.op == "&" and isinstance(node.expr, c_ast.ID):
-            supported = False  # address-taken locals may change through aliases
         for _, child in node.children():
             walk(child, node)
 
@@ -715,9 +715,29 @@ def _index_address(node, state):
     return base.unknown_offset("UNKNOWN_INDEX") if index is None else base.shifted_elements(index)
 
 
+def _invalidate_address_taken(node, state):
+    """Drop proofs/constants that may be invalidated through an escaped address."""
+    if node is None:
+        return
+
+    class Visitor(c_ast.NodeVisitor):
+        def visit_UnaryOp(self, candidate):
+            if candidate.op == "&":
+                target = _location(candidate.expr)
+                if target:
+                    invalidate_pointer_guards(state, _canonical_location(target))
+                return
+            self.generic_visit(candidate)
+
+    Visitor().visit(node)
+
+
 def _observe(node, state, snapshots):
     """Record use-site facts before transfer, independent of source-line layout."""
-    if node is None or snapshots.suppress_events:
+    if node is None:
+        return
+    _invalidate_address_taken(node, state)
+    if snapshots.suppress_events:
         return
 
     class Visitor(c_ast.NodeVisitor):
