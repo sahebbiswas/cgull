@@ -3,7 +3,13 @@
 from typing import List, Optional
 
 from ..base import BaseRule
-from ...ast_analyzer import CASTContext, _format_pycparser_expr, _map_line, get_integer_type_byte_size
+from ...ast_analyzer import (
+    CASTContext,
+    _format_pycparser_expr,
+    _map_line,
+    get_integer_type_byte_size,
+    is_integer_narrowing_conversion,
+)
 from ...cfg import _PRELUDE_LINE_COUNT, find_function_def
 from ...models import AnalysisEngine, FixType, Issue, RuleCategory, Severity
 
@@ -46,14 +52,13 @@ class IntegerNarrowingCastRule(BaseRule):
                 def visit_Cast(self, node):
                     destination_type = _format_pycparser_expr(node.to_type)
                     source_type = rule._source_type(ast_ctx, node.expr, fn)
-                    destination_width = get_integer_type_byte_size(destination_type, ast_ctx)
-                    source_width = get_integer_type_byte_size(source_type, ast_ctx) if source_type else None
 
                     if (
-                        destination_width is not None
-                        and source_width is not None
-                        and destination_width < source_width
+                        source_type
+                        and is_integer_narrowing_conversion(source_type, destination_type, ast_ctx) is True
                     ):
+                        source_width = get_integer_type_byte_size(source_type, ast_ctx)
+                        destination_width = get_integer_type_byte_size(destination_type, ast_ctx)
                         raw_line = getattr(getattr(node, "coord", None), "line", 0) or 0
                         expanded_line = max(1, raw_line - _PRELUDE_LINE_COUNT) if raw_line else fn.start_line_exp
                         line_no = _map_line(expanded_line, ast_ctx.line_map)
