@@ -87,6 +87,11 @@ def _named_limit(name: str, ast_ctx=None) -> Optional[int]:
             return 0 if bound == "MIN" else (1 << bits) - 1
         return -(1 << (bits - 1)) if bound == "MIN" else (1 << (bits - 1)) - 1
     aliases = {
+        "SCHAR_MAX": "signed char", "UCHAR_MAX": "unsigned char",
+        "SHRT_MAX": "short", "USHRT_MAX": "unsigned short",
+        "INT_MAX": "int", "UINT_MAX": "unsigned int",
+        "LONG_MAX": "long", "ULONG_MAX": "unsigned long",
+        "LLONG_MAX": "long long", "ULLONG_MAX": "unsigned long long",
         "SIZE_MAX": "size_t",
         "SSIZE_MAX": "ssize_t",
         "UINTPTR_MAX": "uintptr_t",
@@ -139,7 +144,10 @@ def _expr_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) 
         return None
     kind = type(node).__name__
     if kind == "Cast":
-        return _expr_range(node.expr, state, ast_ctx, fn)
+        from ..ast_analyzer import _format_pycparser_expr
+        destination = integer_type_range(_format_pycparser_expr(node.to_type), ast_ctx)
+        source = _expr_range(node.expr, state, ast_ctx, fn)
+        return source if destination is not None and source is not None and source.fits_within(destination) else destination
     if kind == "ID":
         limit = _named_limit(str(node.name), ast_ctx)
         if limit is not None:
@@ -199,6 +207,17 @@ def _comparison(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str, IntegerRa
         op = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "==", "!=": "!="}[node.op]
     else:
         return {}
+    # A signed operand may be converted to unsigned by C's usual arithmetic
+    # conversions. Mathematical bounds are not valid for that comparison.
+    if ast_ctx is not None and fn is not None:
+        variable_node = node.left if left_name == variable else node.right
+        bound_node = node.right if left_name == variable else node.left
+        variable_type = ast_ctx.infer_expr_type(variable_node, fn)
+        bound_type = getattr(bound_node, "type", None) if type(bound_node).__name__ == "Constant" else ast_ctx.infer_expr_type(bound_node, fn)
+        variable_range = integer_type_range(variable_type, ast_ctx) if variable_type else None
+        bound_range = integer_type_range(bound_type, ast_ctx) if isinstance(bound_type, str) else None
+        if variable_range is not None and bound_range is not None and variable_range.lower < 0 and bound_range.lower == 0 and bound_range.upper > variable_range.upper:
+            return {}
     if not truth:
         op = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}[op]
     if op == "<": return {variable: IntegerRange(upper=value - 1)}
@@ -248,6 +267,14 @@ def _merge(left: Mapping[str, IntegerRange], right: Mapping[str, IntegerRange]) 
 
 def _condition(event):
     node = getattr(event, "_ast_node", None)
+    if node is not None and type(node).__name__ == "If":
+        def empty(branch):
+            return branch is None or type(branch).__name__ == "EmptyStatement" or (
+                type(branch).__name__ == "Compound" and not branch.block_items
+            )
+        # Both branches reach the same successor; this edge proves no bound.
+        if empty(node.iftrue) and empty(node.iffalse):
+            return None
     return getattr(node, "cond", None) if node is not None and event.kind in {"if_cond", "while_cond", "do_cond", "for_cond"} else None
 
 
@@ -258,7 +285,7 @@ def _descendants(root):
             yield from _descendants(child)
 
 
-def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn) -> Dict[str, IntegerRange]:
+def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=()) -> Dict[str, IntegerRange]:
     result = dict(state)
     node = getattr(event, "_ast_node", None)
     if node is None:
@@ -284,6 +311,9 @@ def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn) -> Dict[str
             else:
                 delta = 1 if "+" in node.op else -1
                 result[target] = IntegerRange(current.lower + delta, current.upper + delta)
+    if getattr(event, "calls", ()) or (kind == "Assignment" and _name(node.lvalue) is None):
+        for name in exposed:
+            result.pop(name, None)
     return result
 
 
@@ -322,6 +352,12 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
     if not cfg.nodes or cfg.entry is None:
         return IntegerRangeAnalysis(ast_ctx, fn, cfg, {})
 
+    # Once an address escapes, a call or indirect write can invalidate its fact.
+    exposed = set(getattr(ast_ctx, "global_variables", {}))
+    for node in _descendants(funcdef):
+        if type(node).__name__ == "UnaryOp" and node.op == "&" and _name(node.expr):
+            exposed.add(_name(node.expr))
+
     incoming: Dict[int, Dict[str, IntegerRange]] = {cfg.entry: {}}
     facts_before: Dict[int, Dict[str, IntegerRange]] = {}
     processed: Dict[int, int] = {}
@@ -332,7 +368,7 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
         state = incoming[node_id]
         facts_before[node_id] = dict(state)
         event = cfg.nodes[node_id]
-        outgoing = _transfer(event, state, ast_ctx, fn)
+        outgoing = _transfer(event, state, ast_ctx, fn, exposed)
         condition = _condition(event)
         for index, successor in enumerate(event.successors):
             edge_state = dict(outgoing)
