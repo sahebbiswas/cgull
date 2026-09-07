@@ -36,6 +36,34 @@ void entry(void) {
     assert _format_issues(result) == []
 
 
+def test_bounded_memcpy_does_not_launder_prior_untrusted_destination():
+    code = """
+int printf(const char *fmt, ...);
+void *memcpy(void *dst, const void *src, unsigned long n);
+char *read_user(void);
+void entry(void) {
+    char *data = read_user();
+    memcpy(data, "fixedstringtest", 1);
+    printf(data);
+}
+"""
+    result = _format_scanner().scan_text(code, file_path="issue345.c", quiet=True)
+    assert len(_format_issues(result)) == 1
+
+
+def test_bounded_strncpy_does_not_project_whole_literal_value():
+    code = """
+int printf(const char *fmt, ...);
+char *strncpy(char *dst, const char *src, unsigned long n);
+void entry(char *data) {
+    strncpy(data, "fixedstringtest", 1);
+    printf(data);
+}
+"""
+    result = _format_scanner().scan_text(code, file_path="issue345.c", quiet=True)
+    assert len(_format_issues(result)) == 1
+
+
 def test_unknown_sink_parameter_remains_conservatively_reported():
     code = """
 int printf(const char *fmt, ...);
@@ -131,6 +159,20 @@ def test_output_value_source_requires_declared_output_destination():
                 {
                     "function": "copy_value",
                     "output_value_sources": [[0, 1]],
+                }
+            ]
+        )
+
+
+def test_bounded_output_cannot_declare_whole_value_source():
+    with pytest.raises(CallEffectConfigError, match="cannot declare a whole-value source"):
+        parse_call_effects(
+            [
+                {
+                    "function": "copy_prefix",
+                    "outputs": [0],
+                    "output_value_sources": [[0, 1]],
+                    "size_relationships": [[0, 2]],
                 }
             ]
         )
