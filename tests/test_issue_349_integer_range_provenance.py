@@ -228,3 +228,28 @@ void f(uint32_t n) {
 """
     issues = _scan(code)
     assert [issue.line_number for issue in issues] == [9]
+
+
+def test_switch_join_does_not_trigger_loop_widening():
+    code = """
+typedef unsigned char uint8_t;
+typedef unsigned int uint32_t;
+void f(uint32_t selector) {
+    uint32_t value = 42;
+    switch (selector) {
+    case 0:
+        break;
+    case 1:
+        break;
+    default:
+        break;
+    }
+    uint8_t narrowed = value;
+}
+"""
+    ctx = _parse(code)
+    analysis = analyze_integer_ranges(ctx, "f")
+    declaration = _declaration(ctx, "f", "narrowed")
+    assert analysis is not None
+    assert analysis.range_for_expression(declaration.init, declaration) == IntegerRange(42, 42)
+    assert _scan(code) == []
