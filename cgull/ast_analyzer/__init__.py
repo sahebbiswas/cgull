@@ -7,6 +7,7 @@ historic :mod:`cgull.ast_analyzer` import path stable.
 from .configuration import *
 from .preprocessor import *
 from .types import *
+from .integer_types import *
 from .visitor import *
 from .performance import CASTParser, ASTAnalyzer
 from .configuration import _PRELUDE_LINE_COUNT, _PYCPARSER_PRELUDE

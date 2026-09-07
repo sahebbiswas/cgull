@@ -49,6 +49,7 @@
     {"rule_id": "CGULL-045", "status": "no-Juliet-equivalent", "reason": "Header inclusion guards are a build/preprocessor hygiene policy without a suitable Juliet bad/good oracle."},
     {"rule_id": "CGULL-046", "status": "not-yet-measured", "reason": "No rule-specific Juliet oracle is wired into the canonical benchmark yet."},
     {"rule_id": "CGULL-047", "status": "not-yet-measured", "reason": "CGULL-047 has a dedicated embedded trust-boundary quality corpus, but it is not currently Juliet-backed."},
-    {"rule_id": "CGULL-048", "status": "not-yet-measured", "reason": "The rule targets stack/heap buffer overflow families, but it has not yet been added to rule-specific Juliet attribution."}
+    {"rule_id": "CGULL-048", "status": "not-yet-measured", "reason": "The rule targets stack/heap buffer overflow families, but it has not yet been added to rule-specific Juliet attribution."},
+    {"rule_id": "CGULL-049", "status": "not-yet-measured", "reason": "Targets CWE-197 integer truncation, but no CWE-197 Juliet fixtures/oracle are wired into the canonical benchmark yet."}
   ]
 }
