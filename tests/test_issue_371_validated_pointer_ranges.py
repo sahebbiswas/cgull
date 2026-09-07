@@ -2,6 +2,7 @@ import pytest
 
 from cgull.ast_analyzer import CASTParser
 from cgull.analysis_session import analysis_session_for
+from cgull.cfg.pointer_ranges import PointerRangeFact, join_pointer_facts
 from cgull.semantic_models import parse_semantic_models, SemanticModelConfigError
 from cgull.rules.types_and_arrays import ValidatedPointerRangeRule
 
@@ -105,6 +106,28 @@ def test_multifield_struct_layout_and_sizeof():
     assert not scan('if(!valid(p, sizeof(HEADER))) return; HEADER *h=(HEADER *)p; int x=h->value;',prefix=prefix)
     assert scan('if(!valid(p, 6)) return; HEADER *h=(HEADER *)p; int x=h->value;',prefix=prefix)
     assert not scan('if(!valid(p, sizeof(struct Header))) return; struct Header *h=(struct Header *)p; int x=h->value;',prefix=prefix)
+
+
+def test_nested_anonymous_aggregate_layout_resolves_members():
+    prefix = 'typedef struct { struct { int x; } inner; int tail; } OUTER;'
+    assert not scan(
+        'if(!valid(p,sizeof(OUTER))) return; OUTER *o=(OUTER *)p; int x=o->tail;',
+        prefix=prefix,
+    )
+
+
+def test_file_scope_nested_named_tag_is_collected():
+    prefix = 'struct Outer { struct Inner { int x; } inner; };'
+    assert not scan(
+        'if(!valid(p,sizeof(struct Inner))) return; struct Inner *i=(struct Inner *)p; int x=i->x;',
+        prefix=prefix,
+    )
+
+
+def test_interval_join_discards_zero_length_overlap():
+    left = PointerRangeFact(origin='p', validated_intervals=((0, 8),))
+    right = PointerRangeFact(origin='p', validated_intervals=((8, 16),))
+    assert join_pointer_facts(left, right).validated_intervals == ()
 
 
 def test_modeled_access_and_parameter_typedef_stride():
