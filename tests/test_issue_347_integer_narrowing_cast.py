@@ -55,6 +55,9 @@ def test_shared_integer_width_helper_reuses_resolved_type_sizes():
     assert get_integer_type_byte_size("byte_t", ctx) == 1
     assert get_integer_type_byte_size("double", ctx) is None
     assert get_integer_type_byte_size("void *", ctx) is None
+    assert get_integer_type_byte_size("int[10]", ctx) is None
+    assert get_integer_type_byte_size("char[256]", ctx) is None
     assert is_integer_narrowing_conversion("unsigned int", "unsigned char", ctx) is True
     assert is_integer_narrowing_conversion("unsigned char", "unsigned int", ctx) is False
     assert is_integer_narrowing_conversion("double", "unsigned char", ctx) is None
+    assert is_integer_narrowing_conversion("int[10]", "unsigned char", ctx) is None
