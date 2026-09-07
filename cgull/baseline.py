@@ -29,7 +29,6 @@ from .models import ScanResult, Issue, Severity
 logger = logging.getLogger(__name__)
 
 
-
 class BaselineError(Exception):
     """Raised when a baseline file can't be read or doesn't look like a C-GULL report."""
 
@@ -116,7 +115,7 @@ def apply_baseline(result: ScanResult, baseline_counts: Counter, baseline_rules_
     medium = sum(1 for i in new_issues if i.impact == Severity.MEDIUM)
     low = sum(1 for i in new_issues if i.impact == Severity.LOW)
 
-    return ScanResult(
+    filtered = ScanResult(
         target_path=result.target_path,
         scanned_files_count=result.scanned_files_count,
         total_lines_of_code=result.total_lines_of_code,
@@ -145,3 +144,12 @@ def apply_baseline(result: ScanResult, baseline_counts: Counter, baseline_rules_
         baseline_total_before_filter=result.total_issues_count,
         baseline_rules_count=baseline_rules_count,
     )
+
+    # Scan volume/timing is unchanged by baseline filtering. Only the findings
+    # count follows the filtered result so the final report remains internally
+    # consistent while preserving the original analysis workload metrics.
+    original_telemetry = getattr(result, "telemetry", None)
+    if original_telemetry is not None and hasattr(original_telemetry, "with_findings_count"):
+        filtered.telemetry = original_telemetry.with_findings_count(len(new_issues))
+
+    return filtered
