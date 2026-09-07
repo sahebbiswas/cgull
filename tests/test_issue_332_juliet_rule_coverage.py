@@ -1,11 +1,16 @@
 import json
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from benchmarks.run_juliet import CWE_RULE_MAP
 from cgull.rules import RULE_REGISTRY
 
 
-MATRIX_PATH = Path(__file__).resolve().parents[1] / "benchmarks" / "juliet" / "rule_coverage.json"
+MATRIX_PATH = REPO_ROOT / "benchmarks" / "juliet" / "rule_coverage.json"
 VALID_STATUSES = {"measured", "no-Juliet-equivalent", "not-yet-measured"}
 
 
