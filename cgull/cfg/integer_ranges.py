@@ -324,10 +324,11 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
 
     incoming: Dict[int, Dict[str, IntegerRange]] = {cfg.entry: {}}
     facts_before: Dict[int, Dict[str, IntegerRange]] = {}
-    updates: Dict[int, int] = {}
+    processed: Dict[int, int] = {}
     work = [cfg.entry]
     while work:
         node_id = work.pop(0)
+        processed[node_id] = processed.get(node_id, 0) + 1
         state = incoming[node_id]
         facts_before[node_id] = dict(state)
         event = cfg.nodes[node_id]
@@ -341,11 +342,10 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
                 continue
             prior = incoming.get(successor)
             merged = edge_state if prior is None else _merge(prior, edge_state)
-            if prior is not None and updates.get(successor, 0) >= 2:
+            if prior is not None and processed.get(successor, 0) >= 1:
                 merged = {name: _widen(prior[name], merged[name]) for name in prior.keys() & merged.keys()}
             if prior != merged:
                 incoming[successor] = merged
-                updates[successor] = updates.get(successor, 0) + 1
                 if successor not in work:
                     work.append(successor)
 
