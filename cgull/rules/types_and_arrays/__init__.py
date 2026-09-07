@@ -12,6 +12,7 @@ from .use_of_magic_numbers import UseOfMagicNumbersRule
 from .signed_unsigned_comparison import SignedUnsignedComparisonRule
 from .division_by_zero import DivisionByZeroRule
 from .pointer_subtraction_size import PointerSubtractionSizeRule
+from .integer_narrowing_cast import IntegerNarrowingCastRule
 
 __all__ = [
     "VariableLengthArraysRule",
@@ -24,4 +25,5 @@ __all__ = [
     "SignedUnsignedComparisonRule",
     "DivisionByZeroRule",
     "PointerSubtractionSizeRule",
+    "IntegerNarrowingCastRule",
 ]
