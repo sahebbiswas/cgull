@@ -143,3 +143,20 @@ def test_merge_retains_dependencies_from_both_paths():
 def test_unrelated_mutation_preserves_proof_and_revalidation_restores_it():
     assert not analyze('if(p < base+4) return; flag++; int x=p[-4];')[0]
     assert not analyze('if(p < base+4) return; base++; if(p < base+4) return; int x=p[-4];')[0]
+
+
+@pytest.mark.parametrize('body', [
+    'if(p < base+4) return; mutate(&base); int x=p[-4];',
+    'int n=4; if(p < base+n) return; mutate(&n); int x=p[-4];',
+    'if(p < base+4) return; char **escaped=&base; int x=p[-4];',
+])
+def test_address_taken_dependency_invalidates_guard_proof(body):
+    assert analyze(body)[0]
+
+
+def test_address_taken_unrelated_value_preserves_guard_proof():
+    assert not analyze('if(p < base+4) return; mutate(&flag); int x=p[-4];')[0]
+
+
+def test_address_taken_dependency_inside_loop_invalidates_guard_proof():
+    assert analyze('if(p < base+4) return; while(flag) { mutate(&base); } int x=p[-4];')[0]
