@@ -8,8 +8,8 @@ across every discoverable entry testcase for C-GULL's mapped CWEs.
 
 Split-file Juliet flows are evaluated as testcase groups: the entry file owns
 the bad/good oracle, while findings may occur in any sibling stage belonging to
-the same testcase. This avoids treating delegated sinks as misses simply because
-they live outside the entry file's lexical function ranges.
+the same testcase. Related stages are analyzed through one shared AST/call graph
+so direct-call value facts can propagate across their source-file boundaries.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 from benchmarks.run_juliet import CWE_RULE_MAP, compute_metrics, extract_function_line_ranges
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine
+from cgull.multifile import scan_translation_unit_group
 
 DEFAULT_FLOW_VARIANTS = ("01", "02", "04", "08", "31", "54", "61")
 FLOW_RE = re.compile(r"_(\d{2})(?:[a-z])?\.(?:c|cpp)$", re.IGNORECASE)
@@ -127,8 +128,13 @@ def select_stratified_cases(
     return selected
 
 
-def _issue_in_range(issue, start: int, end: int) -> bool:
-    return issue.line_number is not None and start <= issue.line_number <= end
+def _issue_in_range(issue, start: int, end: int, file_path: Path | None = None) -> bool:
+    if issue.line_number is None or not start <= issue.line_number <= end:
+        return False
+    if file_path is None:
+        return True
+    issue_path = Path(str(issue.file_path)).resolve()
+    return issue_path == file_path.resolve()
 
 
 def _oracle_token(function: str) -> str:
@@ -155,12 +161,20 @@ def _function_matches_oracle(candidate: str, oracle: str) -> bool:
     return token in lower
 
 
-def _result_detects_oracle(result, ranges, relevant_rules, oracle: str) -> bool:
+def _result_detects_oracle(
+    result,
+    ranges,
+    relevant_rules,
+    oracle: str,
+    *,
+    file_path: Path | None = None,
+) -> bool:
     for function, (start, end) in ranges.items():
         if not _function_matches_oracle(function, oracle):
             continue
         if any(
-            issue.rule_id in relevant_rules and _issue_in_range(issue, start, end)
+            issue.rule_id in relevant_rules
+            and _issue_in_range(issue, start, end, file_path=file_path)
             for issue in result.issues
         ):
             return True
@@ -178,25 +192,27 @@ def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
 
     for cwe, entry_path in cases:
         relevant_rules = CWE_RULE_MAP[cwe]
-        member_results = []
-        case_failed = False
-        for member in testcase_members(entry_path):
-            result = scanner.scan_path(str(member))
-            scanned_files += 1
-            if result.files_failed or result.failed_paths or result.get_overall_analysis_status() == "failed":
-                failed_files.append(str(member))
-                case_failed = True
-                continue
-            ranges = extract_function_line_ranges(str(member))
-            member_results.append((result, ranges))
-
-        if case_failed:
+        members = testcase_members(entry_path)
+        scanned_files += len(members)
+        result = scan_translation_unit_group(scanner, members, quiet=True)
+        if result.files_failed or result.failed_paths or result.get_overall_analysis_status() == "failed":
+            failed_files.extend(str(member) for member in members)
             continue
 
+        member_ranges = [
+            (member, extract_function_line_ranges(str(member)))
+            for member in members
+        ]
         for function, vulnerable in infer_oracles(entry_path):
             detected = any(
-                _result_detects_oracle(result, ranges, relevant_rules, function)
-                for result, ranges in member_results
+                _result_detects_oracle(
+                    result,
+                    ranges,
+                    relevant_rules,
+                    function,
+                    file_path=member,
+                )
+                for member, ranges in member_ranges
             )
             evaluated += 1
             if vulnerable and detected:
@@ -218,7 +234,7 @@ def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
         for key in ("tp", "fp", "tn", "fn")
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "selected_files": len(cases),
         "scanned_files": scanned_files,
         "evaluated_functions": evaluated,
