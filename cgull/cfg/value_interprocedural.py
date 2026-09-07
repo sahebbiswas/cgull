@@ -8,14 +8,20 @@ from typing import Dict, Mapping, Optional, Tuple
 
 from pycparser import c_parser
 
-from ..semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
+from ..semantic_models import (
+    EMPTY_SEMANTIC_MODELS,
+    SemanticLocationKind,
+    SemanticModelRegistry,
+)
 from .call_graph import build_translation_unit_call_graph
 from .construction import build_cfg, find_function_def
 from .fixed_point import FixedPointConfig, FixedPointDiagnostic
 from .value_facts import (
+    FormatLiteralness,
     ValueDataflowResult,
     ValueFact,
     ValueFunctionSummary,
+    ValueProvenance,
     ValueSummaryAnalysisResult,
     _canonical_location,
     _expression_fact,
@@ -236,6 +242,14 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
                         _join_facts(a, b, evidence_limit) for a, b in zip(old, actuals)
                     )
             _transfer_event(event, state, registry, summaries, evidence_limit)
+            for call in getattr(event, "calls", ()):
+                _apply_output_effects(
+                    call,
+                    state,
+                    registry,
+                    summaries,
+                    evidence_limit,
+                )
 
         for succ in block.successors:
             if succ not in reachable:
@@ -255,6 +269,69 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
     return ValueDataflowResult(before), tuple(
         (callee, actuals) for (_, callee, _), actuals in sorted(calls.items())
     )
+
+
+def _apply_output_effects(call, state, registry, summaries, evidence_limit):
+    """Project modeled output writes into the caller's value state.
+
+    Generic output effects conservatively invalidate the destination.  When an
+    effect declares a deterministic ``output_value_sources`` mapping, the value
+    fact of the source actual is copied to the output actual instead.  Security
+    source models take precedence and mark modeled output arguments untrusted.
+    """
+    model = registry.for_call(call)
+    effect = getattr(model, "effect", None)
+    source_model = getattr(model, "source", None)
+    actuals = tuple(getattr(call, "actual_arguments", ()) or ())
+
+    untrusted_outputs = set()
+    if source_model is not None:
+        for output in source_model.outputs:
+            if output.kind is SemanticLocationKind.OUTPUT_ARGUMENT:
+                untrusted_outputs.add(output.argument_index)
+
+    value_sources = dict(getattr(effect, "output_value_sources", ()) or ()) if effect else {}
+    output_indexes = set(getattr(effect, "output_parameters", ()) or ()) if effect else set()
+    output_indexes.update(index for index in untrusted_outputs if index is not None)
+
+    for output_index in sorted(output_indexes):
+        if output_index is None or output_index >= len(actuals):
+            continue
+        target = _actual_location(actuals[output_index])
+        if not target:
+            continue
+
+        if output_index in untrusted_outputs:
+            state[target] = ValueFact(
+                ValueProvenance.UNTRUSTED,
+                FormatLiteralness.NON_LITERAL,
+            )
+            continue
+
+        source_index = value_sources.get(output_index)
+        if source_index is not None and source_index < len(actuals):
+            state[target] = _actual_fact(
+                actuals[source_index],
+                state,
+                registry,
+                summaries,
+                evidence_limit,
+            )
+            continue
+
+        state[target] = ValueFact(
+            degradations=frozenset({"OUTPUT_MUTATION"})
+        )
+
+
+def _actual_location(text: str) -> str:
+    """Return a canonical writable location for a call actual when representable."""
+    stripped = text.strip()
+    while stripped.startswith("&"):
+        stripped = stripped[1:].strip()
+    if not stripped:
+        return ""
+    return _canonical_location(stripped)
 
 
 @lru_cache(maxsize=4096)
