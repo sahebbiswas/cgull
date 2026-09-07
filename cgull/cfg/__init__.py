@@ -9,6 +9,7 @@ from .ownership import *
 from .ownership_queries import *
 from .call_graph import *
 from .size_facts import *
+from .integer_ranges import *
 from .construction import _deref_vars, _deref_vars_with_lines
 from ..ast_analyzer import _PRELUDE_LINE_COUNT
 
