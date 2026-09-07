@@ -12,6 +12,7 @@ from . import __version__
 
 import logging
 from .utils import sanitize_terminal_text
+from .telemetry import telemetry_for
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,6 @@ def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
             return None
 
     rendered_replacement = "\n".join(replacement_lines)
-    # BaseRule.create_issue normalizes code_snippet with .strip(), so the
-    # replacement's leading indentation is the only retained source of the
-    # original line's indentation for these full-line regex fixes.
     original_width = replacement_indent + len(snippet)
     deleted_region: Dict[str, Any] = {
         "startLine": max(1, issue.line_number),
@@ -89,6 +87,25 @@ def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
     }
 
 
+def _append_terminal_scan_summary(lines: List[str], result: ScanResult) -> None:
+    telemetry = telemetry_for(result)
+    lines.extend([
+        "",
+        "Scan complete",
+        f"  Files scanned:       {telemetry.files_scanned}",
+        f"  Lines scanned:       {telemetry.unique_source_lines:,}",
+    ])
+    if telemetry.analyzed_lines != telemetry.unique_source_lines:
+        lines.append(f"  Analysis volume:     {telemetry.analyzed_lines:,} lines")
+    lines.extend([
+        f"  Analysis time:       {telemetry.elapsed_seconds:.2f} s",
+        f"  Throughput:          {telemetry.throughput_kloc_per_sec:.2f} KLOC/s",
+        f"  Findings:            {telemetry.findings_count}",
+        f"  Parse fallbacks:     {telemetry.parse_fallback_count}",
+        f"  Scan errors:         {telemetry.scan_error_count}",
+    ])
+
+
 class ReportGenerator:
     """
     Formats ScanResult into various standard security reporting formats.
@@ -98,6 +115,7 @@ class ReportGenerator:
     def to_json(result: ScanResult, pretty: bool = True) -> str:
         """Generates standard JSON security report."""
         data = result.to_dict()
+        data["scan"] = telemetry_for(result).to_dict()
         indent = 2 if pretty else None
         return json.dumps(data, indent=indent)
 
@@ -182,6 +200,7 @@ class ReportGenerator:
             "filesIgnored": ignored,
             "filesFailed": failed,
             "scanErrors": [err.to_dict() for err in result.scan_errors],
+            "scanMetrics": telemetry_for(result).to_dict(),
         }
         inv_obj: Dict[str, Any] = {
             "executionSuccessful": failed == 0,
@@ -225,6 +244,7 @@ class ReportGenerator:
         analyzed = result.files_analyzed or result.scanned_files_count
         ignored = result.files_ignored or len(result.ignored_paths)
         failed = result.files_failed or len(result.failed_paths)
+        telemetry = telemetry_for(result)
 
         lines = [
             f"# 🛡️ C-GULL v{__version__} Security Audit Report",
@@ -246,6 +266,19 @@ class ReportGenerator:
                 f"`{result.baseline_new_count}` new since baseline, `{result.baseline_resolved_count}` resolved since baseline  "
             )
         lines.extend([
+            "",
+            "## Scan Summary",
+            "",
+            "| Metric | Value |",
+            "| :--- | ---: |",
+            f"| Files scanned | {telemetry.files_scanned} |",
+            f"| Lines scanned | {telemetry.unique_source_lines:,} |",
+            f"| Analysis volume | {telemetry.analyzed_lines:,} lines |",
+            f"| Analysis time | {telemetry.elapsed_seconds:.2f} s |",
+            f"| Throughput | {telemetry.throughput_kloc_per_sec:.2f} KLOC/s |",
+            f"| Findings | {telemetry.findings_count} |",
+            f"| Parse fallbacks | {telemetry.parse_fallback_count} |",
+            f"| Scan errors | {telemetry.scan_error_count} |",
             "",
             "## 📊 Executive Summary",
             "",
@@ -373,28 +406,28 @@ class ReportGenerator:
         if not result.issues:
             msg = " ✅ No new vulnerabilities since baseline!" if result.is_baseline_filtered else " ✅ No vulnerabilities found. Clean audit!"
             lines.append(msg)
-            return "\n".join(lines)
-
-        lines.append("")
-        for issue in result.issues:
-            sev_tag = f"[{issue.impact.value.upper()}]"
-            fix_type_label = issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type)
-            cond_tag = _get_condition_tag(issue)
-            if cond_tag:
-                cond_tag = _sanitize_terminal_text(cond_tag)
-            cond_prefix = f"{cond_tag} " if cond_tag else ""
-            lines.append(f" {sev_tag:<8} {issue.file_path}:{issue.line_number} -> {cond_prefix}{issue.rule_name} ({issue.rule_id})")
-            lines.append(f"          Detail: {issue.message}")
-            if issue.code_snippet:
-                lines.append(f"          Code  : {issue.code_snippet}")
-            lines.append(f"          CWE   : {issue.cwe_id}")
-            lines.append(f"          Fix Type: {fix_type_label}")
-            lines.append(f"          Fix   : {issue.remediation}")
-            if issue.auto_fix_replacement:
-                lines.append(f"          Auto-Fix : {issue.auto_fix_replacement}")
-            elif issue.suggested_fix_replacement:
-                lines.append(f"          Suggested: {issue.suggested_fix_replacement}")
+        else:
             lines.append("")
+            for issue in result.issues:
+                sev_tag = f"[{issue.impact.value.upper()}]"
+                fix_type_label = issue.fix_type.value if isinstance(issue.fix_type, FixType) else str(issue.fix_type)
+                cond_tag = _get_condition_tag(issue)
+                if cond_tag:
+                    cond_tag = _sanitize_terminal_text(cond_tag)
+                cond_prefix = f"{cond_tag} " if cond_tag else ""
+                lines.append(f" {sev_tag:<8} {issue.file_path}:{issue.line_number} -> {cond_prefix}{issue.rule_name} ({issue.rule_id})")
+                lines.append(f"          Detail: {issue.message}")
+                if issue.code_snippet:
+                    lines.append(f"          Code  : {issue.code_snippet}")
+                lines.append(f"          CWE   : {issue.cwe_id}")
+                lines.append(f"          Fix Type: {fix_type_label}")
+                lines.append(f"          Fix   : {issue.remediation}")
+                if issue.auto_fix_replacement:
+                    lines.append(f"          Auto-Fix : {issue.auto_fix_replacement}")
+                elif issue.suggested_fix_replacement:
+                    lines.append(f"          Suggested: {issue.suggested_fix_replacement}")
+                lines.append("")
+            lines.append("=======================================================================")
 
-        lines.append("=======================================================================")
+        _append_terminal_scan_summary(lines, result)
         return "\n".join(lines)
