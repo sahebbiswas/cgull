@@ -32,6 +32,7 @@ from cgull.models import AnalysisEngine, Issue
 CWE_RULE_MAP = {
     "CWE-134": {"CGULL-002"},
     "CWE-190": {"CGULL-006"},
+    "CWE-194": {"CGULL-049"},
     "CWE-195": {"CGULL-049"},
     "CWE-196": {"CGULL-049"},
     "CWE-121": {"CGULL-001", "CGULL-007", "CGULL-044"},
@@ -119,6 +120,10 @@ def compute_metrics(tp: int, fp: int, tn: int, fn: int) -> Dict[str, Any]:
 
 
 def is_issue_cwe_match(issue: Issue, target_cwe: str, expected_rules: List[str]) -> bool:
+    # CGULL-049 emits distinct conversion CWEs. A narrowing report must not
+    # count as evidence of sign-extension detection in the same function.
+    if issue.rule_id == "CGULL-049":
+        return issue.cwe_id == target_cwe
     if target_cwe in issue.cwe_id:
         return True
     if issue.rule_id in expected_rules:

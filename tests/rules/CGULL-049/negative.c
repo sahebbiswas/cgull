@@ -24,3 +24,10 @@ void test_safe_signedness(int signed_value, unsigned int unsigned_value) {
     if (unsigned_value > INT_MAX) return;
     int representable = unsigned_value;
 }
+
+void test_nonnegative_widening(signed char byte, unsigned char unsigned_byte, int ordinary) {
+    int safe_unsigned = unsigned_byte;
+    long safe_ordinary = ordinary;
+    if (byte < 0) return;
+    int guarded_byte = byte;
+}

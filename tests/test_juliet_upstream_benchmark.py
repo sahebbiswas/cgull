@@ -138,3 +138,18 @@ def test_markdown_report_exposes_per_cwe_metrics():
     assert "Scanned source files: 3" in rendered
     assert "| CWE | TP | FP | TN | FN | Precision | Recall | F1 |" in rendered
     assert "| CWE-121 | 1 | 0 | 2 | 1 | 1.0000 | 0.5000 | 0.6667 |" in rendered
+
+
+
+def test_conversion_cwe_attribution_does_not_credit_narrowing_as_sign_extension():
+    from benchmarks.run_juliet import is_issue_cwe_match
+    from benchmarks.run_juliet_upstream import _result_detects_oracle
+
+    issue = SimpleNamespace(rule_id="CGULL-049", cwe_id="CWE-197", line_number=2)
+    result = SimpleNamespace(issues=[issue])
+    ranges = {"sample_bad": (1, 4)}
+    assert not is_issue_cwe_match(issue, "CWE-194", ["CGULL-049"])
+    assert not _result_detects_oracle(result, ranges, {"CGULL-049"}, "sample_bad", cwe="CWE-194")
+    issue.cwe_id = "CWE-194"
+    assert is_issue_cwe_match(issue, "CWE-194", ["CGULL-049"])
+    assert _result_detects_oracle(result, ranges, {"CGULL-049"}, "sample_bad", cwe="CWE-194")
