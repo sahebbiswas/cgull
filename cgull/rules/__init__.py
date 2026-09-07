@@ -49,6 +49,7 @@ from .types_and_arrays import (
     SignedUnsignedComparisonRule,
     IncorrectPointerScalingRule,
     IntegerNarrowingCastRule,
+    PointerRangeBoundsRule,
 )
 from .misra_and_style import (
     NakedControlFlowStatementsRule,
@@ -96,6 +97,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     ToctouFileAccessRule,
     StrncpyNullTerminationRule,
     UnvalidatedExternalDataSinkRule,
+    PointerRangeBoundsRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     IntegerNarrowingCastRule,

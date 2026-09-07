@@ -613,3 +613,21 @@ not classify the format as safe.
 - Adding optional evidence kinds or typed convenience views is compatible.
   Changing a join, unknown-call transfer, location identity, or the four query
   operations requires an explicit contract revision and migration note.
+
+## Pointer formation and access observations
+
+`AnalysisSession.pointer_range_analysis.function(name).events` provides immutable
+`PointerRangeEvent` observations captured before statement transfer, retaining
+the AST node for precise source mapping even when statements share a line.
+Each event has a `fact`, `access_width` (zero for formation), and `write` flag.
+Consumers call `fact.definitely_outside(access_width)` rather than interpreting
+`OUTSIDE_PROVEN_RANGE` as a definite violation. That degradation only means a
+safety proof was lost; it can arise from a branch's minimum guaranteed capacity.
+
+`PointerRangeFact.object_extent` is an optional exact extent relative to the
+origin, preserved across constant shifts and equal-origin/equal-extent joins.
+It is separate from `lower_bound`/`upper_bound` accessible capacities and remains
+available after a pointer escapes. Unknown offsets still prevent a definite
+violation. One-past formation is legal; a positive access width must fit inside
+the object. Unsupported control and alias effects suppress events, and loop
+iterations never publish transient diagnostic evidence.

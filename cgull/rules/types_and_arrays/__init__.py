@@ -13,6 +13,7 @@ from .signed_unsigned_comparison import SignedUnsignedComparisonRule
 from .division_by_zero import DivisionByZeroRule
 from .pointer_subtraction_size import PointerSubtractionSizeRule
 from .integer_narrowing_cast import IntegerNarrowingCastRule
+from .pointer_range_bounds import PointerRangeBoundsRule
 
 __all__ = [
     "VariableLengthArraysRule",
@@ -26,4 +27,5 @@ __all__ = [
     "DivisionByZeroRule",
     "PointerSubtractionSizeRule",
     "IntegerNarrowingCastRule",
+    "PointerRangeBoundsRule",
 ]

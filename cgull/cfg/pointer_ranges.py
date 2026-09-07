@@ -9,7 +9,7 @@ proofs rather than manufacturing safety.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Dict, Mapping, Optional, Tuple
 
@@ -65,6 +65,7 @@ class PointerRangeFact:
     provenance: PointerProvenance = PointerProvenance.UNKNOWN
     value_provenance: ValueProvenance = ValueProvenance.UNKNOWN
     degradations: frozenset[str] = frozenset()
+    object_extent: Optional[int] = None
 
     @classmethod
     def object(
@@ -77,6 +78,7 @@ class PointerRangeFact:
         extent = max(0, int(extent))
         return cls(
             origin=_canonical_location(origin),
+            object_extent=extent,
             offset=OffsetInterval.exact(0),
             lower_bound=0,
             upper_bound=extent,
@@ -92,6 +94,16 @@ class PointerRangeFact:
     @property
     def has_accessible_range(self) -> bool:
         return self.lower_bound is not None and self.upper_bound is not None
+
+    def definitely_outside(self, access_width: int = 0) -> bool:
+        """Prove every possible offset violates the object interval.
+
+        Width zero denotes formation, including the legal one-past address.
+        Accessible capacities alone are lower guarantees, not object extents.
+        """
+        if self.object_extent is None or self.offset.is_unknown:
+            return False
+        return self.offset.upper < 0 or self.offset.lower + access_width > self.object_extent
 
     def shifted(self, amount: int) -> "PointerRangeFact":
         """Shift by a byte amount while preserving only already-proven range."""
@@ -166,6 +178,7 @@ def join_pointer_facts(left: PointerRangeFact, right: PointerRangeFact) -> Point
     )
     return PointerRangeFact(
         origin=left.origin if same_origin else None,
+        object_extent=left.object_extent if same_origin and left.object_extent == right.object_extent else None,
         offset=offset,
         lower_bound=lower,
         upper_bound=upper,
@@ -183,7 +196,9 @@ class PointerRangeFunctionResult:
         self,
         snapshots: Mapping[int, Mapping[str, PointerRangeFact]],
         final_facts: Optional[Mapping[str, PointerRangeFact]] = None,
+        events=(),
     ) -> None:
+        self.events = tuple(events)
         self._snapshots = {line: dict(facts) for line, facts in snapshots.items()}
         self._final_facts = dict(final_facts) if final_facts is not None else None
 
@@ -216,12 +231,28 @@ class TranslationUnitPointerRangeResult:
         return result.query(location, line) if result is not None else PointerRangeFact()
 
 
+@dataclass(frozen=True)
+class PointerRangeEvent:
+    node: object
+    fact: PointerRangeFact
+    access_width: int = 0
+    write: bool = False
+
+
+class _Snapshots(dict):
+    def __init__(self):
+        super().__init__()
+        self.events = []
+        self.suppress_events = False
+
+
 @dataclass
 class _State:
     facts: Dict[str, PointerRangeFact]
+    typedefs: dict = field(default_factory=dict)
 
     def copy(self) -> "_State":
-        return _State(dict(self.facts))
+        return _State(dict(self.facts), dict(self.typedefs))
 
 
 def analyze_translation_unit_pointer_ranges(
@@ -240,7 +271,7 @@ def analyze_translation_unit_pointer_ranges(
         if funcdef is None:
             continue
         params = tuple(p.name for p in fn.parameters if p.name)
-        state = _State({})
+        state = _State({}, {n.name: n.type for n in ast_ctx.pycparser_ast.ext if isinstance(n, c_ast.Typedef)})
         extents = (
             getattr(size_analysis, "parameter_extents", {}).get(name, ())
             if size_analysis
@@ -281,9 +312,10 @@ def analyze_translation_unit_pointer_ranges(
                     provenance=provenance,
                     value_provenance=vp,
                 )
-        snapshots: Dict[int, Dict[str, PointerRangeFact]] = {}
+        snapshots = _Snapshots()
+        snapshots.suppress_events = not _supports_definite_events(funcdef, state.typedefs)
         final_state = _analyze_statement(funcdef.body, state, snapshots)
-        results[name] = PointerRangeFunctionResult(snapshots, final_state.facts)
+        results[name] = PointerRangeFunctionResult(snapshots, final_state.facts, snapshots.events)
     return TranslationUnitPointerRangeResult(dict(sorted(results.items())))
 
 
@@ -301,25 +333,34 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
         current = state
         for item in list(node.block_items or ()):
             current = _analyze_statement(item, current, snapshots)
+            if isinstance(item, (c_ast.Return, c_ast.Break, c_ast.Continue)):
+                break
         return current
     if isinstance(node, c_ast.DeclList):
         current = state
         for decl in node.decls or ():
             current = _analyze_statement(decl, current, snapshots)
         return current
+    if isinstance(node, c_ast.Typedef):
+        state.typedefs[node.name] = node.type
+        return state
     if isinstance(node, c_ast.Decl):
+        _observe(node.init, state, snapshots)
         _transfer_decl(node, state)
         _record(node, state, snapshots)
         return state
     if isinstance(node, c_ast.Assignment):
+        _observe(node, state, snapshots)
         _transfer_assignment(node, state)
         _record(node, state, snapshots)
         return state
     if isinstance(node, c_ast.UnaryOp) and node.op in {"p++", "p--", "++", "--"}:
+        _observe(node, state, snapshots)
         _transfer_unary_update(node, state)
         _record(node, state, snapshots)
         return state
     if isinstance(node, c_ast.If):
+        _observe(node.cond, state, snapshots)
         left = _analyze_statement(node.iftrue, state.copy(), snapshots)
         right = (
             _analyze_statement(node.iffalse, state.copy(), snapshots)
@@ -332,6 +373,8 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
     if isinstance(node, (c_ast.While, c_ast.DoWhile, c_ast.For)):
         if isinstance(node, c_ast.For) and node.init is not None:
             state = _analyze_statement(node.init, state, snapshots)
+        previous_suppression = snapshots.suppress_events
+        snapshots.suppress_events = True
         entry = state.copy()
         current = entry.copy()
         converged = False
@@ -356,8 +399,10 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
                 fact = current.facts.get(key)
                 if fact is not None:
                     current.facts[key] = fact.unknown_offset("LOOP_NOT_CONVERGED")
+        snapshots.suppress_events = previous_suppression
         _record(node, current, snapshots)
         return current
+    _observe(node, state, snapshots)
     _record(node, state, snapshots)
     return state
 
@@ -371,7 +416,7 @@ def _join_states(left: _State, right: _State) -> _State:
             facts[key] = PointerRangeFact(
                 degradations=frozenset({"PATH_INCOMPLETE"})
             )
-    return _State(facts)
+    return _State(facts, dict(left.typedefs))
 
 
 def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
@@ -379,14 +424,14 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
     if not name:
         return
     canonical = _canonical_location(name)
-    extent, width = _array_extent_and_width(getattr(node, "type", None))
+    extent, width = _array_extent_and_width(_resolve_type(getattr(node, "type", None), state.typedefs))
     if extent is not None and width is not None:
         state.facts[canonical] = PointerRangeFact.object(
             canonical, extent, element_width=width
         )
         return
-    declared_width = _pointer_element_width(getattr(node, "type", None))
-    if declared_width is None or node.init is None:
+    declared_width = _pointer_element_width(_resolve_type(getattr(node, "type", None), state.typedefs))
+    if declared_width is None:
         return
     fact = _expression_fact(node.init, state)
     fact = replace(fact, element_width=declared_width)
@@ -407,7 +452,11 @@ def _transfer_assignment(node: c_ast.Assignment, state: _State) -> None:
             count = amount if node.op == "+=" else -amount
             state.facts[target] = old.shifted_elements(count)
         return
-    state.facts[target] = _expression_fact(node.rvalue, state)
+    fact = _expression_fact(node.rvalue, state)
+    old = state.facts.get(target)
+    if old is not None and old.element_width is not None:
+        fact = replace(fact, element_width=old.element_width)
+    state.facts[target] = fact
 
 
 def _transfer_unary_update(node: c_ast.UnaryOp, state: _State) -> None:
@@ -428,15 +477,18 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
     if isinstance(node, c_ast.ID):
         return state.facts.get(_canonical_location(node.name), PointerRangeFact())
     if isinstance(node, c_ast.Cast):
-        return _expression_fact(node.expr, state)
+        width = _pointer_element_width(_resolve_type(node.to_type.type, state.typedefs))
+        if width is None:
+            return PointerRangeFact()
+        return replace(_expression_fact(node.expr, state), element_width=width)
     if isinstance(node, c_ast.UnaryOp) and node.op == "&":
-        return _expression_fact(node.expr, state)
+        if isinstance(node.expr, c_ast.ArrayRef):
+            return _index_address(node.expr, state)
+        if isinstance(node.expr, c_ast.UnaryOp) and node.expr.op == "*":
+            return _expression_fact(node.expr.expr, state)
+        return PointerRangeFact()
     if isinstance(node, c_ast.ArrayRef):
-        base = _expression_fact(node.name, state)
-        index = _constant_int(node.subscript)
-        if index is None:
-            return base.unknown_offset("UNKNOWN_INDEX")
-        return base.shifted_elements(index)
+        return PointerRangeFact()
     if isinstance(node, c_ast.BinaryOp) and node.op in {"+", "-"}:
         amount = _constant_int(node.right)
         if amount is not None:
@@ -464,6 +516,7 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
             origin = f"allocation@{getattr(coord, 'line', 0) or 0}"
             return PointerRangeFact(
                 origin=origin,
+                object_extent=extent if extent is not None and extent >= 0 else None,
                 offset=OffsetInterval.exact(0),
                 lower_bound=0 if extent is not None else None,
                 upper_bound=max(0, extent) if extent is not None else None,
@@ -471,6 +524,108 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
                 value_provenance=ValueProvenance.TRUSTED,
             )
     return PointerRangeFact(degradations=frozenset({"UNSUPPORTED_TRANSFORM"}))
+
+
+def _resolve_type(node, typedefs, seen=frozenset()):
+    from copy import copy
+    if isinstance(node, c_ast.IdentifierType) and len(node.names) == 1:
+        name = node.names[0]
+        if name in typedefs and name not in seen:
+            return _resolve_type(typedefs[name], typedefs, seen | {name})
+    if isinstance(node, (c_ast.TypeDecl, c_ast.PtrDecl, c_ast.ArrayDecl)):
+        result = copy(node)
+        result.type = _resolve_type(node.type, typedefs, seen)
+        return result
+    return node
+
+
+def _supports_definite_events(funcdef, typedefs):
+    """Exclude control/alias effects the current statement walk cannot model."""
+    supported = True
+    names = set(typedefs)
+
+    def walk(node, parent=None):
+        nonlocal supported
+        if node is None:
+            return
+        if isinstance(node, (c_ast.Goto, c_ast.Label, c_ast.Switch)):
+            supported = False
+        if isinstance(node, (c_ast.Decl, c_ast.Typedef)) and node.name:
+            if node.name in names:
+                supported = False  # lexical shadowing needs scoped identities
+            names.add(node.name)
+        if isinstance(node, c_ast.Assignment) or (
+            isinstance(node, c_ast.UnaryOp) and node.op in {"p++", "p--", "++", "--"}
+        ):
+            if not isinstance(parent, (c_ast.Compound, c_ast.If, c_ast.For, c_ast.While, c_ast.DoWhile)):
+                supported = False
+        if isinstance(node, c_ast.UnaryOp) and node.op == "&" and isinstance(node.expr, c_ast.ID):
+            supported = False  # address-taken locals may change through aliases
+        for _, child in node.children():
+            walk(child, node)
+
+    walk(funcdef)
+    return supported
+
+
+def _index_address(node, state):
+    base = _expression_fact(node.name, state)
+    index = _constant_int(node.subscript)
+    return base.unknown_offset("UNKNOWN_INDEX") if index is None else base.shifted_elements(index)
+
+
+def _observe(node, state, snapshots):
+    """Record use-site facts before transfer, independent of source-line layout."""
+    if node is None or snapshots.suppress_events:
+        return
+
+    class Visitor(c_ast.NodeVisitor):
+        def emit(self, node, fact, access=False, write=False):
+            width = fact.element_width if access else 0
+            if width is not None:
+                snapshots.events.append(PointerRangeEvent(node, fact, width, write))
+
+        def access(self, node, write=False):
+            if isinstance(node, c_ast.ArrayRef):
+                self.emit(node, _index_address(node, state), True, write)
+                self.visit(node.subscript)
+            elif isinstance(node, c_ast.UnaryOp) and node.op == "*":
+                self.emit(node, _expression_fact(node.expr, state), True, write)
+            else:
+                self.visit(node)
+
+        def visit_ArrayRef(self, node):
+            self.access(node)
+
+        def visit_UnaryOp(self, node):
+            if node.op in {"sizeof", "_Alignof"}:
+                return
+            if node.op == "&":
+                self.emit(node, _expression_fact(node, state))
+            elif node.op == "*":
+                self.access(node)
+            elif node.op in {"p++", "p--", "++", "--"}:
+                self.access(node.expr, True)
+                fact = _expression_fact(node.expr, state)
+                self.emit(node, fact.shifted_elements(1 if "+" in node.op else -1))
+            else:
+                self.generic_visit(node)
+
+        def visit_BinaryOp(self, node):
+            if node.op in {"+", "-"}:
+                self.emit(node, _expression_fact(node, state))
+            self.generic_visit(node)
+
+        def visit_Assignment(self, node):
+            self.access(node.lvalue, True)
+            if node.op in {"+=", "-="}:
+                amount = _constant_int(node.rvalue)
+                if amount is not None:
+                    fact = _expression_fact(node.lvalue, state)
+                    self.emit(node, fact.shifted_elements(amount if node.op == "+=" else -amount))
+            self.visit(node.rvalue)
+
+    Visitor().visit(node)
 
 
 _INTEGER_CONSTANT_TYPES = {
@@ -575,7 +730,13 @@ def _type_width(type_node) -> Optional[int]:
             return 8
         if "long" in names:
             return 8
-        return 4
+        if any(n in names for n in ("int", "signed", "unsigned", "float")):
+            return 4
+        if "double" in names:
+            return 8
+        if "_Bool" in names:
+            return 1
+        return None
     return None
 
 
@@ -583,6 +744,7 @@ __all__ = [
     "OffsetInterval",
     "PointerProvenance",
     "PointerRangeFact",
+    "PointerRangeEvent",
     "PointerRangeFunctionResult",
     "TranslationUnitPointerRangeResult",
     "analyze_translation_unit_pointer_ranges",
