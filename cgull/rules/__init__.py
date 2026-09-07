@@ -50,6 +50,7 @@ from .types_and_arrays import (
     IncorrectPointerScalingRule,
     IntegerNarrowingCastRule,
     PointerRangeBoundsRule,
+    ValidatedPointerRangeRule,
 )
 from .misra_and_style import (
     NakedControlFlowStatementsRule,
@@ -98,6 +99,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     StrncpyNullTerminationRule,
     UnvalidatedExternalDataSinkRule,
     PointerRangeBoundsRule,
+    ValidatedPointerRangeRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     IntegerNarrowingCastRule,

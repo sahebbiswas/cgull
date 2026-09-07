@@ -1,0 +1,6 @@
+[[semantic_models.validators]]
+function = "valid_range"
+target = "arg:0"
+length = "arg:1"
+property = "bounds_checked"
+success = "return_nonzero"

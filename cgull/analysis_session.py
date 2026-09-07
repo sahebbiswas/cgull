@@ -162,6 +162,7 @@ class AnalysisSession:
                 self.ast_context,
                 size_analysis=self.size_analysis,
                 value_analysis=self.value_analysis,
+                semantic_models=self.semantic_models,
             )
         return self._pointer_range_analysis_result
 

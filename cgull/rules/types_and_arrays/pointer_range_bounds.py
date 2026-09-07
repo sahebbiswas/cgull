@@ -1,7 +1,7 @@
 """Report definite pointer formation/access violations from shared range facts."""
 
 from ..base import BaseRule
-from ...analysis_session import analysis_session_for
+from ...semantic_models import SemanticModelRegistry
 from ...ast_analyzer import _map_line
 from ...cfg import _PRELUDE_LINE_COUNT
 from ...models import AnalysisEngine, FixType, RuleCategory, Severity
@@ -22,16 +22,20 @@ class PointerRangeBoundsRule(BaseRule):
     sample_remediated_code = "int a[10]; int *p = a + 3; int *q = p - 3;"
     analysis_engine = AnalysisEngine.AST
 
+    def set_semantic_models(self, registry):
+        if isinstance(registry, SemanticModelRegistry):
+            self._semantic_models = registry
+
     def scan_ast(self, file_path, ast_ctx):
         if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
             return []
-        analysis = analysis_session_for(ast_ctx).pointer_range_analysis
+        analysis = self.get_analysis_session(ast_ctx).pointer_range_analysis
         issues = []
         seen = set()
         for result in analysis.function_results.values():
             for event in result.events:
                 fact = event.fact
-                if not fact.definitely_outside(event.access_width):
+                if event.access_width is None or not fact.definitely_outside(event.access_width):
                     continue
                 coord = getattr(event.node, "coord", None)
                 line = _map_line(max(1, (getattr(coord, "line", 0) or 0) - _PRELUDE_LINE_COUNT), ast_ctx.line_map)
