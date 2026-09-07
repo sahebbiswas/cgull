@@ -2,7 +2,7 @@
 
 The domain records closed integer intervals before CFG events, propagates
 constant/range assignments, and refines successor states with simple branch
-conditions.  Facts are merged across all reaching paths, so a guard only
+conditions. Facts are merged across all reaching paths, so a guard only
 survives when it constrains every path to the queried event.
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, Mapping, Optional
 
 from ..ast_analyzer.integer_types import _resolved_scalar_type, get_integer_type_byte_size
 from .construction import build_cfg, find_function_def
@@ -84,12 +84,7 @@ def _max_upper(left: Optional[int], right: Optional[int]) -> Optional[int]:
 
 
 def integer_type_range(type_name: str, ast_ctx=None) -> Optional[IntegerRange]:
-    """Return the representable range for a known integer type.
-
-    Plain ``char`` and ``time_t`` are intentionally left unresolved because
-    their signedness is implementation-defined. Width is taken from the same
-    target-aware helper used by integer narrowing detection.
-    """
+    """Return the representable range for a known integer type."""
 
     resolved = _resolved_scalar_type(type_name, ast_ctx)
     width_bytes = get_integer_type_byte_size(type_name, ast_ctx)
@@ -97,8 +92,11 @@ def integer_type_range(type_name: str, ast_ctx=None) -> Optional[IntegerRange]:
         return None
 
     normalized = resolved.lower()
+    # These types have implementation-defined signedness in the information
+    # currently available to the analyzer, so do not manufacture a range.
     if normalized in {"char", "time_t"}:
         return None
+
     unsigned = (
         normalized.startswith("unsigned")
         or normalized.startswith("uint")
@@ -148,7 +146,6 @@ def _named_integer_limit(name: str, ast_ctx=None) -> Optional[int]:
 
 def _parse_integer_literal(value: str) -> Optional[int]:
     text = value.strip()
-    # Remove common C integer suffixes without touching hexadecimal digits.
     text = re.sub(r"(?i)(?:u(?:ll|l)?|(?:ll|l)u?)$", "", text)
     try:
         if text.lower().startswith("0x"):
@@ -203,9 +200,11 @@ def _location_name(node) -> Optional[str]:
 def _expression_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) -> Optional[IntegerRange]:
     if node is None:
         return None
+
     kind = type(node).__name__
     if kind == "Cast":
         return _expression_range(node.expr, state, ast_ctx, fn)
+
     if kind == "ID":
         named = _named_integer_limit(str(node.name), ast_ctx)
         if named is not None:
@@ -218,9 +217,11 @@ def _expression_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=
         if static_range is None:
             return fact
         return fact.intersect(static_range)
+
     if kind == "Constant":
         value = _parse_integer_literal(str(getattr(node, "value", "")))
         return IntegerRange(value, value) if value is not None else None
+
     if kind == "UnaryOp":
         operand = _expression_range(node.expr, state, ast_ctx, fn)
         if operand is None:
@@ -239,6 +240,7 @@ def _expression_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=
             value = int(not operand.lower)
             return IntegerRange(value, value)
         return None
+
     if kind == "BinaryOp":
         left = _expression_range(node.left, state, ast_ctx, fn)
         right = _expression_range(node.right, state, ast_ctx, fn)
@@ -254,12 +256,14 @@ def _expression_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=
         if op == "-" and None not in (left.lower, left.upper, right.lower, right.upper):
             return IntegerRange(left.lower - right.upper, left.upper - right.lower)
         return None
+
     if kind == "TernaryOp":
         left = _expression_range(node.iftrue, state, ast_ctx, fn)
         right = _expression_range(node.iffalse, state, ast_ctx, fn)
         if left is None or right is None:
             return None
         return left.hull(right)
+
     return None
 
 
@@ -272,20 +276,25 @@ def _comparison_constraint(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str
 
     left_name = _location_name(node.left)
     right_name = _location_name(node.right)
-    if left_name and not right_name:
-        value_range = _expression_range(node.right, {}, ast_ctx, fn)
+    left_value = _expression_range(node.left, {}, ast_ctx, fn)
+    right_value = _expression_range(node.right, {}, ast_ctx, fn)
+
+    # An identifier may be either a location or a named integer limit such as
+    # UINT8_MAX. Prefer the side whose opposite expression is provably a
+    # singleton; this lets standard limit macros participate in guard proofs
+    # without mistaking ordinary variable-to-variable comparisons for bounds.
+    if left_name and right_value is not None and right_value.is_singleton:
         variable = left_name
+        value_range = right_value
         orientation = op
-    elif right_name and not left_name:
-        value_range = _expression_range(node.left, {}, ast_ctx, fn)
+    elif right_name and left_value is not None and left_value.is_singleton:
         variable = right_name
+        value_range = left_value
         orientation = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "==", "!=": "!="}[op]
     else:
         return {}
-    if value_range is None or not value_range.is_singleton:
-        return {}
-    value = value_range.lower
 
+    value = value_range.lower
     if not truth:
         orientation = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}[orientation]
     if orientation == "<":
@@ -298,8 +307,7 @@ def _comparison_constraint(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str
         return {variable: IntegerRange(lower=value)}
     if orientation == "==":
         return {variable: IntegerRange(value, value)}
-    # ``!=`` produces a non-convex domain, which this interval lattice cannot
-    # represent without becoming unsound. Leave it unknown.
+    # ``!=`` is non-convex and cannot be represented by this interval domain.
     return {}
 
 
@@ -360,7 +368,7 @@ def _apply_constraints(
 
 def _merge_states(left: Mapping[str, IntegerRange], right: Mapping[str, IntegerRange]) -> Dict[str, IntegerRange]:
     # A fact missing on either path is unknown on the join. Keeping only the
-    # intersection of keys is what makes guard suppression dominance-safe.
+    # intersection of keys makes guard suppression dominance-safe.
     return {name: left[name].hull(right[name]) for name in left.keys() & right.keys()}
 
 
