@@ -1,10 +1,10 @@
 """Rule-neutral pointer origin, offset, and accessible-range facts.
 
-This domain is intentionally conservative.  It records a symbolic pointer
-origin, a relative byte offset from that origin, and the bytes that are proven
-accessible immediately before/after the current pointer value.  Unknown or
-unsupported transformations discard accessibility proofs rather than
-manufacturing safety.
+This domain is intentionally conservative. It records a symbolic pointer
+origin, a relative byte offset from that origin, the pointer element stride,
+and the bytes that are proven accessible immediately before/after the current
+pointer value. Unknown or unsupported transformations discard accessibility
+proofs rather than manufacturing safety.
 """
 
 from __future__ import annotations
@@ -61,18 +61,26 @@ class PointerRangeFact:
     offset: OffsetInterval = OffsetInterval()
     lower_bound: Optional[int] = None
     upper_bound: Optional[int] = None
+    element_width: Optional[int] = None
     provenance: PointerProvenance = PointerProvenance.UNKNOWN
     value_provenance: ValueProvenance = ValueProvenance.UNKNOWN
     degradations: frozenset[str] = frozenset()
 
     @classmethod
-    def object(cls, origin: str, extent: int) -> "PointerRangeFact":
+    def object(
+        cls,
+        origin: str,
+        extent: int,
+        *,
+        element_width: int = 1,
+    ) -> "PointerRangeFact":
         extent = max(0, int(extent))
         return cls(
             origin=_canonical_location(origin),
             offset=OffsetInterval.exact(0),
             lower_bound=0,
             upper_bound=extent,
+            element_width=max(1, int(element_width)),
             provenance=PointerProvenance.LOCAL_OBJECT,
             value_provenance=ValueProvenance.TRUSTED,
         )
@@ -86,13 +94,12 @@ class PointerRangeFact:
         return self.lower_bound is not None and self.upper_bound is not None
 
     def shifted(self, amount: int) -> "PointerRangeFact":
+        """Shift by a byte amount while preserving only already-proven range."""
         amount = int(amount)
         new_offset = self.offset.shifted(amount)
         if self.lower_bound is None or self.upper_bound is None:
             return replace(self, offset=new_offset)
 
-        # The shifted pointer must remain inside the range already proven for
-        # the original pointer.  Crossing either edge invalidates the proof.
         if amount < -self.lower_bound or amount > self.upper_bound:
             return replace(
                 self,
@@ -107,6 +114,12 @@ class PointerRangeFact:
             lower_bound=self.lower_bound + amount,
             upper_bound=self.upper_bound - amount,
         )
+
+    def shifted_elements(self, count: int) -> "PointerRangeFact":
+        """Shift by C pointer elements, degrading if the element width is unknown."""
+        if self.element_width is None:
+            return self.unknown_offset("UNKNOWN_ELEMENT_WIDTH")
+        return self.shifted(int(count) * self.element_width)
 
     def unknown_offset(self, reason: str = "UNKNOWN_OFFSET") -> "PointerRangeFact":
         return replace(
@@ -141,14 +154,26 @@ def join_pointer_facts(left: PointerRangeFact, right: PointerRangeFact) -> Point
         if same_origin and left.upper_bound is not None and right.upper_bound is not None
         else None
     )
-    provenance = left.provenance if same_origin and left.provenance is right.provenance else PointerProvenance.UNKNOWN
+    provenance = (
+        left.provenance
+        if same_origin and left.provenance is right.provenance
+        else PointerProvenance.UNKNOWN
+    )
+    element_width = (
+        left.element_width
+        if same_origin and left.element_width == right.element_width
+        else None
+    )
     return PointerRangeFact(
         origin=left.origin if same_origin else None,
         offset=offset,
         lower_bound=lower,
         upper_bound=upper,
+        element_width=element_width,
         provenance=provenance,
-        value_provenance=join_provenance(left.value_provenance, right.value_provenance),
+        value_provenance=join_provenance(
+            left.value_provenance, right.value_provenance
+        ),
         degradations=left.degradations | right.degradations,
     )
 
@@ -158,7 +183,7 @@ class PointerRangeFunctionResult:
         self._snapshots = {line: dict(facts) for line, facts in snapshots.items()}
 
     def query(self, location: str, line: Optional[int] = None) -> PointerRangeFact:
-        """Return the fact at/after the latest transfer not later than ``line``."""
+        """Return the latest fact recorded no later than ``line``."""
         location = _canonical_location(location)
         if not self._snapshots:
             return PointerRangeFact()
@@ -177,7 +202,9 @@ class TranslationUnitPointerRangeResult:
     def function(self, name: str) -> Optional[PointerRangeFunctionResult]:
         return self.function_results.get(name)
 
-    def query(self, function: str, location: str, line: Optional[int] = None) -> PointerRangeFact:
+    def query(
+        self, function: str, location: str, line: Optional[int] = None
+    ) -> PointerRangeFact:
         result = self.function(function)
         return result.query(location, line) if result is not None else PointerRangeFact()
 
@@ -185,10 +212,9 @@ class TranslationUnitPointerRangeResult:
 @dataclass
 class _State:
     facts: Dict[str, PointerRangeFact]
-    element_widths: Dict[str, int]
 
     def copy(self) -> "_State":
-        return _State(dict(self.facts), dict(self.element_widths))
+        return _State(dict(self.facts))
 
 
 def analyze_translation_unit_pointer_ranges(
@@ -197,11 +223,7 @@ def analyze_translation_unit_pointer_ranges(
     size_analysis=None,
     value_analysis=None,
 ) -> TranslationUnitPointerRangeResult:
-    """Build conservative intraprocedural pointer facts for every function.
-
-    Existing size facts seed formal parameter extents, while existing value
-    provenance seeds whether formals are known external/untrusted values.
-    """
+    """Build conservative intraprocedural pointer facts for every function."""
     results: Dict[str, PointerRangeFunctionResult] = {}
     for fn in getattr(ast_ctx, "functions", ()):
         name = getattr(fn, "name", None)
@@ -211,27 +233,44 @@ def analyze_translation_unit_pointer_ranges(
         if funcdef is None:
             continue
         params = tuple(p.name for p in fn.parameters if p.name)
-        state = _State({}, {})
-        extents = getattr(size_analysis, "parameter_extents", {}).get(name, ()) if size_analysis else ()
-        values = getattr(value_analysis, "parameter_facts", {}).get(name, ()) if value_analysis else ()
+        state = _State({})
+        extents = (
+            getattr(size_analysis, "parameter_extents", {}).get(name, ())
+            if size_analysis
+            else ()
+        )
+        values = (
+            getattr(value_analysis, "parameter_facts", {}).get(name, ())
+            if value_analysis
+            else ()
+        )
+        parameter_widths = _parameter_element_widths(funcdef)
         for index, param in enumerate(params):
+            canonical = _canonical_location(param)
             extent = extents[index] if index < len(extents) else SizeFact()
             value = values[index] if index < len(values) else None
             vp = getattr(value, "provenance", ValueProvenance.UNKNOWN)
-            provenance = PointerProvenance.EXTERNAL if vp is ValueProvenance.UNTRUSTED else PointerProvenance.UNKNOWN
+            provenance = (
+                PointerProvenance.EXTERNAL
+                if vp is ValueProvenance.UNTRUSTED
+                else PointerProvenance.UNKNOWN
+            )
+            element_width = parameter_widths.get(param)
             if extent.exact_value is not None:
-                state.facts[_canonical_location(param)] = PointerRangeFact(
-                    origin=_canonical_location(param),
+                state.facts[canonical] = PointerRangeFact(
+                    origin=canonical,
                     offset=OffsetInterval.exact(0),
                     lower_bound=0,
                     upper_bound=extent.exact_value,
+                    element_width=element_width,
                     provenance=provenance,
                     value_provenance=vp,
                 )
             elif provenance is PointerProvenance.EXTERNAL:
-                state.facts[_canonical_location(param)] = PointerRangeFact(
-                    origin=_canonical_location(param),
+                state.facts[canonical] = PointerRangeFact(
+                    origin=canonical,
                     offset=OffsetInterval.exact(0),
+                    element_width=element_width,
                     provenance=provenance,
                     value_provenance=vp,
                 )
@@ -271,7 +310,11 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
         return state
     if isinstance(node, c_ast.If):
         left = _analyze_statement(node.iftrue, state.copy(), snapshots)
-        right = _analyze_statement(node.iffalse, state.copy(), snapshots) if node.iffalse else state.copy()
+        right = (
+            _analyze_statement(node.iffalse, state.copy(), snapshots)
+            if node.iffalse
+            else state.copy()
+        )
         joined = _join_states(left, right)
         _record(node, joined, snapshots)
         return joined
@@ -280,15 +323,28 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
             state = _analyze_statement(node.init, state, snapshots)
         entry = state.copy()
         current = entry.copy()
+        converged = False
+        unstable = set()
         for _ in range(8):
+            previous = current
             body = _analyze_statement(node.stmt, current.copy(), snapshots)
             if isinstance(node, c_ast.For) and isinstance(node.next, c_ast.Assignment):
                 _transfer_assignment(node.next, body)
             joined = _join_states(entry, body)
-            if joined.facts == current.facts:
-                current = joined
-                break
+            unstable = {
+                key
+                for key in set(previous.facts) | set(joined.facts)
+                if previous.facts.get(key) != joined.facts.get(key)
+            }
             current = joined
+            if not unstable:
+                converged = True
+                break
+        if not converged:
+            for key in unstable:
+                fact = current.facts.get(key)
+                if fact is not None:
+                    current.facts[key] = fact.unknown_offset("LOOP_NOT_CONVERGED")
         _record(node, current, snapshots)
         return current
     _record(node, state, snapshots)
@@ -301,9 +357,10 @@ def _join_states(left: _State, right: _State) -> _State:
         if key in left.facts and key in right.facts:
             facts[key] = join_pointer_facts(left.facts[key], right.facts[key])
         else:
-            facts[key] = PointerRangeFact(degradations=frozenset({"PATH_INCOMPLETE"}))
-    widths = {key: value for key, value in left.element_widths.items() if right.element_widths.get(key) == value}
-    return _State(facts, widths)
+            facts[key] = PointerRangeFact(
+                degradations=frozenset({"PATH_INCOMPLETE"})
+            )
+    return _State(facts)
 
 
 def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
@@ -313,12 +370,17 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
     canonical = _canonical_location(name)
     extent, width = _array_extent_and_width(getattr(node, "type", None))
     if extent is not None:
-        state.facts[canonical] = PointerRangeFact.object(canonical, extent)
-        state.element_widths[canonical] = width
+        state.facts[canonical] = PointerRangeFact.object(
+            canonical, extent, element_width=width
+        )
         return
     if node.init is None:
         return
-    state.facts[canonical] = _expression_fact(node.init, state)
+    fact = _expression_fact(node.init, state)
+    declared_width = _pointer_element_width(getattr(node, "type", None))
+    if declared_width is not None and fact.origin is not None:
+        fact = replace(fact, element_width=declared_width)
+    state.facts[canonical] = fact
 
 
 def _transfer_assignment(node: c_ast.Assignment, state: _State) -> None:
@@ -332,7 +394,8 @@ def _transfer_assignment(node: c_ast.Assignment, state: _State) -> None:
         if amount is None:
             state.facts[target] = old.unknown_offset("UNSUPPORTED_ARITHMETIC")
         else:
-            state.facts[target] = old.shifted(amount if node.op == "+=" else -amount)
+            count = amount if node.op == "+=" else -amount
+            state.facts[target] = old.shifted_elements(count)
         return
     state.facts[target] = _expression_fact(node.rvalue, state)
 
@@ -351,17 +414,14 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
         index = _constant_int(node.subscript)
         if index is None:
             return base.unknown_offset("UNKNOWN_INDEX")
-        location = _location(node.name)
-        width = state.element_widths.get(_canonical_location(location), 1) if location else 1
-        return base.shifted(index * width)
+        return base.shifted_elements(index)
     if isinstance(node, c_ast.BinaryOp) and node.op in {"+", "-"}:
         base = _expression_fact(node.left, state)
         amount = _constant_int(node.right)
         if amount is None:
             return base.unknown_offset("UNSUPPORTED_ARITHMETIC")
-        location = _location(node.left)
-        width = state.element_widths.get(_canonical_location(location), 1) if location else 1
-        return base.shifted((amount if node.op == "+" else -amount) * width)
+        count = amount if node.op == "+" else -amount
+        return base.shifted_elements(count)
     if isinstance(node, c_ast.FuncCall):
         callee = _location(node.name)
         if callee in {"malloc", "calloc", "realloc"}:
@@ -386,7 +446,12 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
 
 
 def _constant_int(node) -> Optional[int]:
-    if isinstance(node, c_ast.Constant) and node.type in {"int", "long", "unsigned", "unsigned int"}:
+    if isinstance(node, c_ast.Constant) and node.type in {
+        "int",
+        "long",
+        "unsigned",
+        "unsigned int",
+    }:
         try:
             return int(node.value, 0)
         except ValueError:
@@ -410,7 +475,7 @@ def _location(node) -> Optional[str]:
 
 def _array_extent_and_width(type_node) -> Tuple[Optional[int], int]:
     node = type_node
-    while isinstance(node, (c_ast.TypeDecl, c_ast.PtrDecl)):
+    while isinstance(node, c_ast.TypeDecl):
         node = node.type
     if not isinstance(node, c_ast.ArrayDecl):
         return None, 1
@@ -419,12 +484,34 @@ def _array_extent_and_width(type_node) -> Tuple[Optional[int], int]:
     return (count * width if count is not None else None), width
 
 
+def _pointer_element_width(type_node) -> Optional[int]:
+    node = type_node
+    while isinstance(node, c_ast.TypeDecl):
+        node = node.type
+    if isinstance(node, c_ast.PtrDecl):
+        return _type_width(node.type)
+    return None
+
+
+def _parameter_element_widths(funcdef) -> Dict[str, int]:
+    result: Dict[str, int] = {}
+    args = getattr(getattr(funcdef.decl, "type", None), "args", None)
+    for param in list(getattr(args, "params", ()) or ()):
+        name = getattr(param, "name", None)
+        width = _pointer_element_width(getattr(param, "type", None))
+        if name and width is not None:
+            result[name] = width
+    return result
+
+
 def _type_width(type_node) -> int:
     node = type_node
-    while isinstance(node, (c_ast.TypeDecl, c_ast.PtrDecl)):
-        if isinstance(node, c_ast.PtrDecl):
-            return 8
+    while isinstance(node, c_ast.TypeDecl):
         node = node.type
+    if isinstance(node, c_ast.PtrDecl):
+        return 8
+    if isinstance(node, c_ast.ArrayDecl):
+        return _type_width(node.type)
     if isinstance(node, c_ast.IdentifierType):
         names = tuple(node.names or ())
         if "char" in names:
