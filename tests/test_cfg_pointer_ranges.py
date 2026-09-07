@@ -26,6 +26,7 @@ def test_alias_preserves_origin_offset_and_accessible_range():
     assert q.offset == OffsetInterval.exact(0)
     assert q.lower_bound == 0
     assert q.upper_bound == 32
+    assert q.element_width == 1
     assert q.provenance is PointerProvenance.LOCAL_OBJECT
 
 
@@ -78,6 +79,44 @@ def test_identity_cast_preserves_fact():
     p = analyze_translation_unit_pointer_ranges(ctx).query("caller", "p")
     assert p.origin == "a"
     assert p.upper_bound == 16
+    assert p.element_width == 1
+
+
+def test_non_char_pointer_alias_preserves_element_stride():
+    ctx = build_security_context(
+        r'''
+        void caller(void) {
+            int a[8];
+            int *p = a;
+            int *q = p + 4;
+        }
+        '''
+    )
+    q = analyze_translation_unit_pointer_ranges(ctx).query("caller", "q")
+
+    assert q.origin == "a"
+    assert q.element_width == 4
+    assert q.offset == OffsetInterval.exact(16)
+    assert q.lower_bound == 16
+    assert q.upper_bound == 16
+
+
+def test_compound_pointer_arithmetic_uses_element_stride():
+    ctx = build_security_context(
+        r'''
+        void caller(void) {
+            int a[8];
+            int *p = a;
+            p += 2;
+        }
+        '''
+    )
+    p = analyze_translation_unit_pointer_ranges(ctx).query("caller", "p")
+
+    assert p.element_width == 4
+    assert p.offset == OffsetInterval.exact(8)
+    assert p.lower_bound == 8
+    assert p.upper_bound == 24
 
 
 def test_reassignment_invalidates_stale_proof():
@@ -113,11 +152,11 @@ def test_conflicting_branch_origins_join_to_unknown():
     assert not p.has_accessible_range
 
 
-def test_loop_converges_conservatively():
+def test_non_converged_loop_widens_advancing_pointer_to_unknown():
     ctx = build_security_context(
         r'''
         void caller(int n) {
-            char a[8];
+            char a[32];
             char *p = a;
             while (n--) {
                 p += 1;
@@ -127,10 +166,36 @@ def test_loop_converges_conservatively():
         '''
     )
     p = analyze_translation_unit_pointer_ranges(ctx).query("caller", "p")
+
     assert p.origin == "a"
-    assert p.offset.lower == 0
-    assert p.offset.upper is not None
-    assert p.upper_bound is not None
+    assert p.offset.is_unknown
+    assert not p.has_accessible_range
+    assert "LOOP_NOT_CONVERGED" in p.degradations
+
+
+def test_loop_widening_keeps_unmodified_pointer_precise():
+    ctx = build_security_context(
+        r'''
+        void caller(int n) {
+            char a[32];
+            char b[8];
+            char *p = a;
+            char *stable = b;
+            while (n--) {
+                p += 1;
+            }
+            (void)p;
+            (void)stable;
+        }
+        '''
+    )
+    result = analyze_translation_unit_pointer_ranges(ctx)
+    stable = result.query("caller", "stable")
+
+    assert stable.origin == "b"
+    assert stable.offset == OffsetInterval.exact(0)
+    assert stable.upper_bound == 8
+    assert "LOOP_NOT_CONVERGED" not in stable.degradations
 
 
 def test_unknown_offset_keeps_origin_but_drops_safety_proof():
@@ -150,12 +215,12 @@ def test_unknown_offset_keeps_origin_but_drops_safety_proof():
     assert "UNSUPPORTED_ARITHMETIC" in q.degradations
 
 
-def test_size_analysis_seeds_formal_pointer_extent():
+def test_size_analysis_seeds_formal_pointer_extent_and_stride():
     ctx = build_security_context(
         r'''
-        void consume(char *p) { (void)p; }
+        void consume(int *p) { (void)p; }
         void caller(void) {
-            char a[24];
+            int a[6];
             consume(a);
         }
         '''
@@ -165,6 +230,7 @@ def test_size_analysis_seeds_formal_pointer_extent():
 
     assert fact.origin == "p"
     assert fact.upper_bound == 24
+    assert fact.element_width == 4
 
 
 def test_session_query_is_cached_and_rule_neutral():
@@ -184,12 +250,13 @@ def test_session_query_is_cached_and_rule_neutral():
     assert session.queries.pointer_range("caller", "p").upper_bound == 4
 
 
-def test_join_intersects_accessible_capacity():
-    left = PointerRangeFact.object("a", 16).shifted(4)
-    right = PointerRangeFact.object("a", 16).shifted(8)
+def test_join_intersects_accessible_capacity_and_preserves_stride():
+    left = PointerRangeFact.object("a", 32, element_width=4).shifted(4)
+    right = PointerRangeFact.object("a", 32, element_width=4).shifted(8)
     joined = join_pointer_facts(left, right)
 
     assert joined.origin == "a"
     assert joined.offset == OffsetInterval(4, 8)
     assert joined.lower_bound == 4
-    assert joined.upper_bound == 8
+    assert joined.upper_bound == 24
+    assert joined.element_width == 4
