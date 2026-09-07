@@ -1,4 +1,4 @@
-"""Detect explicit and implicit integer conversions that reduce value width."""
+"""Detect explicit and implicit integer conversions that lose width or change signedness unsafely."""
 
 from typing import List, Optional
 
@@ -10,28 +10,38 @@ from ...ast_analyzer import (
     get_integer_type_byte_size,
     is_integer_narrowing_conversion,
 )
-from ...cfg import _PRELUDE_LINE_COUNT, analyze_integer_ranges, find_function_def
+from ...cfg import _PRELUDE_LINE_COUNT, analyze_integer_ranges, find_function_def, integer_type_range
 from ...models import AnalysisEngine, FixType, Issue, RuleCategory, Severity
 
 
 class IntegerNarrowingCastRule(BaseRule):
     rule_id = "CGULL-049"
-    name = "Integer Narrowing Conversion"
+    name = "Unsafe Integer Conversion"
     impact = Severity.MEDIUM
     category = RuleCategory.ARITHMETIC
-    description = "Detect explicit casts and implicit assignments or argument binding that convert an integer expression to a narrower integer type, which can truncate significant bits."
+    description = "Detect integer truncation (CWE-197), negative signed-to-unsigned conversion (CWE-195), and out-of-range unsigned-to-signed conversion (CWE-196) in casts, initialization, assignment, and direct argument binding."
     implementation_method = "AST conversion detection with CFG-backed integer range provenance and guard suppression"
     implementation_complexity = "Medium"
     chances_of_false_positives = "Low-Medium"
     cwe_id = "CWE-197"
-    remediation_suggestion = "Validate that the source value is representable in the destination type before narrowing, or retain a sufficiently wide integer type."
+    remediation_suggestion = "Validate that the source value is representable in the destination type before conversion, or retain an integer type with sufficient range and appropriate signedness."
     sample_vulnerable_code = "uint32_t wide = read_value();\nuint8_t narrow = wide;"
     sample_remediated_code = "uint32_t wide = read_value();\nif (wide <= UINT8_MAX) { uint8_t narrow = (uint8_t)wide; }"
     analysis_engine = AnalysisEngine.AST
 
     @staticmethod
     def _source_type(ast_ctx: CASTContext, node, fn) -> Optional[str]:
-        return ast_ctx.infer_expr_type(node, fn)
+        inferred = ast_ctx.infer_expr_type(node, fn)
+        if inferred:
+            return inferred
+        if type(node).__name__ == "Constant":
+            return node.type if get_integer_type_byte_size(node.type, ast_ctx) is not None else None
+        if type(node).__name__ == "UnaryOp" and node.op in {"+", "-", "~"}:
+            operand = IntegerNarrowingCastRule._source_type(ast_ctx, node.expr, fn)
+            width = get_integer_type_byte_size(operand, ast_ctx) if operand else None
+            int_width = get_integer_type_byte_size("int", ast_ctx)
+            return "int" if width is not None and width < int_width else operand
+        return None
 
     @staticmethod
     def _destination_type_for_decl(ast_ctx: CASTContext, node, fn) -> Optional[str]:
@@ -67,7 +77,18 @@ class IntegerNarrowingCastRule(BaseRule):
                     if not destination_type:
                         return
                     source_type = rule._source_type(ast_ctx, source_node, fn)
-                    if not source_type or is_integer_narrowing_conversion(source_type, destination_type, ast_ctx) is not True:
+                    if not source_type:
+                        return
+                    source_range = integer_type_range(source_type, ast_ctx)
+                    destination_range = integer_type_range(destination_type, ast_ctx)
+                    signedness_change = (
+                        source_range is not None and destination_range is not None
+                        and (source_range.lower < 0) != (destination_range.lower < 0)
+                    )
+                    narrowing = is_integer_narrowing_conversion(source_type, destination_type, ast_ctx)
+                    if not signedness_change and narrowing is not True:
+                        return
+                    if source_range is not None and destination_range is not None and source_range.fits_within(destination_range):
                         return
                     if range_analysis is not None and range_analysis.proves_expression_fits(
                         source_node, destination_type, node
@@ -84,18 +105,30 @@ class IntegerNarrowingCastRule(BaseRule):
                         snippet = ast_ctx.source_lines[line_no - 1].strip()
                     else:
                         snippet = _format_pycparser_expr(node)
-                    issues.append(rule.create_issue(
+                    if signedness_change:
+                        cwe = "CWE-195" if source_range.lower < 0 else "CWE-196"
+                        risk = (
+                            "may convert a negative value to unsigned"
+                            if cwe == "CWE-195" else "may exceed the signed destination maximum"
+                        )
+                        message = f"{kind} converts '{source_type}' to '{destination_type}', which {risk}."
+                    else:
+                        cwe = "CWE-197"
+                        message = (
+                            f"{kind} narrows '{source_type}' ({source_width * 8}-bit) "
+                            f"to '{destination_type}' ({destination_width * 8}-bit), which may truncate the value."
+                        )
+                    issue = rule.create_issue(
                         file_path=file_path,
                         line_number=line_no,
                         code_snippet=snippet,
-                        message=(
-                            f"{kind} narrows '{source_type}' ({source_width * 8}-bit) "
-                            f"to '{destination_type}' ({destination_width * 8}-bit), which may truncate the value."
-                        ),
+                        message=message,
                         column_number=getattr(getattr(node, "coord", None), "column", 1) or 1,
                         engine="AST",
                         fix_type=FixType.MANUAL_REVIEW,
-                    ))
+                    )
+                    issue.cwe_id = cwe
+                    issues.append(issue)
 
                 def visit_Cast(self, node):
                     self._append_conversion(

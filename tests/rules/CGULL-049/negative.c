@@ -17,3 +17,10 @@ void test_proven_safe_narrowing(uint32_t guarded) {
 void test_non_integer(double value) {
     float narrowed = (float)value;
 }
+
+void test_safe_signedness(int signed_value, unsigned int unsigned_value) {
+    if (signed_value < 0) return;
+    unsigned int nonnegative = signed_value;
+    if (unsigned_value > INT_MAX) return;
+    int representable = unsigned_value;
+}

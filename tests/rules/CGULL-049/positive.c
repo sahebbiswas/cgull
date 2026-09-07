@@ -13,3 +13,8 @@ void test_non_dominating_guard(uint32_t value) {
         log_value(value);
     uint8_t byte = value; // expect: CGULL-049
 }
+
+void test_signedness(int signed_value, unsigned int unsigned_value) {
+    unsigned int negative_risk = signed_value; // expect: CGULL-049
+    int large_risk = unsigned_value; // expect: CGULL-049
+}

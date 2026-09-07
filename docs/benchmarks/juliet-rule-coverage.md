@@ -15,3 +15,7 @@ At the time this matrix was introduced, the active registry contains 48 rules (`
 ## Extending coverage
 
 When adding Juliet coverage for a rule, first confirm that the selected CWE fixtures actually exercise that rule's semantics rather than merely sharing a broad CWE label. Add the rule to `CWE_RULE_MAP`, add or update rule-specific oracle coverage where required, then change the matrix entry to `measured` with the exact CWE set. The tests will reject partial or inconsistent updates.
+
+## Integer conversion measurement
+
+CGULL-049 is measured against the full discoverable upstream CWE-195 and CWE-196 families. See [the signedness evaluation](cgull-049-signedness-350.md) for counts, reproduction steps, and limitations. This status records measurement, not a minimum detection-quality guarantee: CWE-195 library-call conversions remain a known gap. CWE-197 is still unmeasured, and these two upstream families are not part of the vendored focused manifests.

@@ -26,14 +26,14 @@ void f(int wide, unsigned long uwide, uint32_t fixed) {
     assert all(issue.fix_type == FixType.MANUAL_REVIEW for issue in issues)
 
 
-def test_same_width_and_widening_casts_are_not_reported():
+def test_same_signedness_and_safe_widening_casts_are_not_reported():
     code = """
 typedef unsigned char uint8_t;
 typedef unsigned int uint32_t;
 void f(uint8_t small, int value, uint32_t same) {
     uint32_t a = (uint32_t)small;
-    unsigned int b = (unsigned int)value;
-    int c = (int)same;
+    int b = (int)value;
+    unsigned int c = (unsigned int)same;
 }
 """
     assert _scan(code) == []
