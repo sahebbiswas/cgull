@@ -98,6 +98,30 @@ def test_issue_without_line_number_is_not_attributed_to_function():
     assert _issue_in_range(SimpleNamespace(line_number=11), 1, 10) is False
 
 
+def test_issue_file_path_is_member_aware_and_handles_missing_or_relative_paths(tmp_path):
+    member = tmp_path / "flow54b.c"
+    member.write_text("void sink(void) {}\n", encoding="utf-8")
+
+    assert _issue_in_range(
+        SimpleNamespace(line_number=1, file_path=None),
+        1,
+        1,
+        file_path=member,
+    ) is False
+    assert _issue_in_range(
+        SimpleNamespace(line_number=1, file_path="flow54b.c"),
+        1,
+        1,
+        file_path=member,
+    ) is True
+    assert _issue_in_range(
+        SimpleNamespace(line_number=1, file_path="other.c"),
+        1,
+        1,
+        file_path=member,
+    ) is False
+
+
 def test_markdown_report_exposes_per_cwe_metrics():
     report = {
         "selected_files": 2,
