@@ -212,3 +212,19 @@ void f(int32_t x) {
 """
     assert len(_scan(unsafe)) == 1
     assert _scan(safe) == []
+
+
+def test_unbounded_loop_uses_widening_and_still_reports_possible_narrowing():
+    code = """
+typedef unsigned char uint8_t;
+typedef unsigned int uint32_t;
+void f(uint32_t n) {
+    uint32_t i = 0;
+    while (i != n) {
+        i++;
+    }
+    uint8_t narrowed = i;
+}
+"""
+    issues = _scan(code)
+    assert [issue.line_number for issue in issues] == [9]
