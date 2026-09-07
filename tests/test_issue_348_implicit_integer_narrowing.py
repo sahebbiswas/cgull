@@ -39,6 +39,21 @@ void caller(uint32_t wide) {
     assert "parameter 'value'" in issues[0].message
 
 
+def test_unnamed_parameter_uses_positional_label():
+    code = """
+typedef unsigned char uint8_t;
+typedef unsigned int uint32_t;
+void write_reg(uint8_t) { }
+void caller(uint32_t wide) {
+    write_reg(wide);
+}
+"""
+    issues = _scan(code)
+    assert [issue.line_number for issue in issues] == [6]
+    assert "parameter #1" in issues[0].message
+    assert "parameter ''" not in issues[0].message
+
+
 def test_same_width_and_widening_implicit_conversions_are_clean():
     code = """
 typedef unsigned char uint8_t;
