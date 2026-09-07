@@ -48,6 +48,7 @@ from .types_and_arrays import (
     SizeofOnPointerRule,
     SignedUnsignedComparisonRule,
     IncorrectPointerScalingRule,
+    IntegerNarrowingCastRule,
 )
 from .misra_and_style import (
     NakedControlFlowStatementsRule,
@@ -97,6 +98,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     UnvalidatedExternalDataSinkRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
+    IntegerNarrowingCastRule,
     NakedControlFlowStatementsRule,
     UseOfMagicNumbersRule,
     BitwiseOperationsOnSignedIntegersRule,
