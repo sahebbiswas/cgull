@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from . import cli_base as _base
 from .fixes import FixResult, apply_safe_fixes
+from .telemetry import CGullScanner as _TelemetryScanner, ProgressIndicator as _TelemetryProgressIndicator
 
 
 _ORIGINAL_BUILD_PARSER = _base.build_parser
@@ -18,7 +19,8 @@ _ORIGINAL_REPORTER = _base.ReportGenerator
 # Public symbols historically exposed from cgull.cli. Keep these aliases so
 # callers/tests can monkey-patch cgull.cli without knowing about the internal
 # compatibility module used by the fix facade.
-CGullScanner = _base.CGullScanner
+CGullScanner = _TelemetryScanner
+ProgressIndicator = _TelemetryProgressIndicator
 ReportGenerator = _base.ReportGenerator
 
 
@@ -48,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _sync_base_symbols() -> None:
     """Propagate public monkey-patch points into the established CLI module."""
     _base.CGullScanner = CGullScanner
+    _base.ProgressIndicator = ProgressIndicator
     _base.ReportGenerator = ReportGenerator
 
 
