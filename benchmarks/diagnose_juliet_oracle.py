@@ -2,10 +2,11 @@
 """Diagnose lexical bad/good oracle attribution for split-file Juliet cases.
 
 Issue #327 observed exact TP/FP and TN/FN symmetry for CWE-134 and CWE-369.
-This diagnostic intentionally does not run C-GULL. It checks whether the generic
-upstream benchmark's lexical function-range oracle can even observe the sink for
-Juliet flow-54 entry files, whose template moves the sink into sibling source
-files.
+This diagnostic intentionally does not run C-GULL. It checks whether a lexical
+entry-wrapper oracle could observe the sink for Juliet flow-54 entry files,
+whose template moves the sink into sibling source files. The production upstream
+benchmark now analyzes those siblings as one source group and attributes findings
+back to the member that owns the delegated sink.
 """
 
 from __future__ import annotations
@@ -83,15 +84,15 @@ def run_diagnostic(root: Path, per_cwe: int = 25) -> Dict[str, object]:
             bool(item["lexical_oracle_can_own_sink"]) for item in inspected
         )
     return {
-        "schema_version": 1,
-        "purpose": "issue-327-juliet-oracle-attribution",
+        "schema_version": 2,
+        "purpose": "split-file-juliet-oracle-attribution",
         "per_cwe_limit": per_cwe,
         "totals": totals,
         "by_cwe": samples,
         "warnings": warnings,
         "finding": (
-            "generic lexical bad/good function ranges are not a valid oracle for split-file flow-54 "
-            "cases when the CWE sink is delegated to sibling 54b source files"
+            "entry-wrapper-only lexical ranges cannot attribute split-file flow-54 sinks; "
+            "grouped analysis must attribute findings to the sibling stage that owns the sink"
         ),
     }
 
@@ -109,7 +110,7 @@ def format_markdown(report: Dict[str, object]) -> str:
         "",
         str(report["finding"]),
         "",
-        "The upstream benchmark currently scans each entry file independently and attributes findings only by line range inside bad/good wrapper functions. For these split-file cases that attribution cannot observe the sink by construction, so TP/FP/TN/FN symmetry from the generic oracle must not be treated as rule-quality evidence until multi-file attribution is fixed.",
+        "The historical benchmark scanned split-file stages independently, which made entry-wrapper-only attribution unable to observe delegated sinks. The production upstream benchmark now analyzes testcase siblings as one semantic group and matches each finding against the original member file and function range. This diagnostic remains as a guard explaining why member-aware attribution is required.",
         "",
     ]
     warnings = report.get("warnings", [])

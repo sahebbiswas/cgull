@@ -27,6 +27,7 @@ class CallEffectModel:
     return_effect: ReturnEffect = ReturnEffect.NONE
     deallocates: FrozenSet[int] = frozenset()
     output_parameters: FrozenSet[int] = frozenset()
+    output_value_sources: Tuple[Tuple[int, int], ...] = ()
     format_argument: Optional[int] = None
     size_relationships: Tuple[Tuple[int, int], ...] = ()
     sanitizes: FrozenSet[int] = frozenset()
@@ -45,9 +46,28 @@ class CallEffectModel:
         )
         if self.format_argument is not None:
             indexes.add(self.format_argument)
+        bounded_outputs = set()
         for data_index, size_index in self.size_relationships:
             indexes.add(data_index)
             indexes.add(size_index)
+            bounded_outputs.add(data_index)
+        seen_output_sources = set()
+        for output_index, source_index in self.output_value_sources:
+            indexes.add(output_index)
+            indexes.add(source_index)
+            if output_index in seen_output_sources:
+                raise ValueError(
+                    f"output argument position {output_index} has multiple value sources"
+                )
+            seen_output_sources.add(output_index)
+            if output_index not in self.output_parameters:
+                raise ValueError(
+                    f"output value source destination {output_index} must also be declared as an output parameter"
+                )
+            if output_index in bounded_outputs:
+                raise ValueError(
+                    f"bounded output argument position {output_index} cannot declare a whole-value source"
+                )
         if any(isinstance(index, bool) or not isinstance(index, int) or index < 0 for index in indexes):
             raise ValueError("argument positions must be non-negative integers")
         contradictory = self.deallocates & self.output_parameters
@@ -102,6 +122,26 @@ _BUILTIN_EFFECTS = {
         _effect("free", deallocates=frozenset({0})),
         _effect("cfree", deallocates=frozenset({0})),
         _effect("vfree", deallocates=frozenset({0})),
+        _effect(
+            "strcpy",
+            output_parameters=frozenset({0}),
+            output_value_sources=((0, 1),),
+        ),
+        _effect(
+            "strncpy",
+            output_parameters=frozenset({0}),
+            size_relationships=((0, 2),),
+        ),
+        _effect(
+            "memcpy",
+            output_parameters=frozenset({0}),
+            size_relationships=((0, 2),),
+        ),
+        _effect(
+            "memmove",
+            output_parameters=frozenset({0}),
+            size_relationships=((0, 2),),
+        ),
         _effect("scanf", format_argument=0, output_parameters=frozenset({1})),
         _effect("sscanf", format_argument=1, output_parameters=frozenset({2})),
         _effect("fscanf", format_argument=1, output_parameters=frozenset({2})),
@@ -123,8 +163,8 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
 
     overrides: Dict[str, CallEffectModel] = {}
     allowed = {
-        "function", "returns", "deallocates", "outputs", "format_argument",
-        "size_relationships", "sanitizes", "takes_ownership", "escapes",
+        "function", "returns", "deallocates", "outputs", "output_value_sources",
+        "format_argument", "size_relationships", "sanitizes", "takes_ownership", "escapes",
     }
     for index, entry in enumerate(raw):
         if not isinstance(entry, Mapping):
@@ -160,11 +200,30 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
                 if any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in pair):
                     raise ValueError("size_relationship argument positions must be non-negative integers")
                 relationships.append((pair[0], pair[1]))
+
+            output_sources_raw = entry.get("output_value_sources", [])
+            if not isinstance(output_sources_raw, list):
+                raise ValueError(
+                    "output_value_sources must be a list of [output_arg, source_arg] pairs"
+                )
+            output_value_sources = []
+            for pair in output_sources_raw:
+                if not isinstance(pair, list) or len(pair) != 2:
+                    raise ValueError(
+                        "output_value_sources entries must be [output_arg, source_arg] pairs"
+                    )
+                if any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in pair):
+                    raise ValueError(
+                        "output_value_sources argument positions must be non-negative integers"
+                    )
+                output_value_sources.append((pair[0], pair[1]))
+
             overrides[function] = CallEffectModel(
                 function=function,
                 return_effect=returns,
                 deallocates=deallocates,
                 output_parameters=outputs,
+                output_value_sources=tuple(output_value_sources),
                 format_argument=fmt,
                 size_relationships=tuple(relationships),
                 sanitizes=sanitizes,
