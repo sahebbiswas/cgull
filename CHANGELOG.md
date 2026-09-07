@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Extended `CGULL-049` to unexpected sign extension from narrow signed values, with nonnegative-range suppression and explicit uncertainty for plain `char` (#351).
 - Extended `CGULL-049` to unsafe signed/unsigned conversions, with direction-specific CWE attribution and CFG range guard suppression (#350).
 - Extended `CGULL-049` to detect implicit integer narrowing in declaration initialization, ordinary assignment, and direct argument-to-parameter binding when the callee type is available in the current translation unit (#348).
 - Structured CFG call metadata with ordered arguments, result bindings, unresolved indirect-call markers, and original source provenance (#241).

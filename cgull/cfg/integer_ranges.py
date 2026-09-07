@@ -75,6 +75,12 @@ def integer_type_range(type_name: str, ast_ctx=None) -> Optional[IntegerRange]:
     return IntegerRange(0, (1 << bits) - 1) if unsigned else IntegerRange(-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
 
 
+def _portable_char_range(ast_ctx=None) -> Optional[IntegerRange]:
+    """Nonnegative values representable with either plain-char signedness."""
+    width = get_integer_type_byte_size("char", ast_ctx)
+    return IntegerRange(0, (1 << (width * 8 - 1)) - 1) if width is not None else None
+
+
 _LIMIT_RE = re.compile(r"^(U?INT)(8|16|32|64)_(MIN|MAX)$")
 
 
@@ -103,6 +109,16 @@ def _named_limit(name: str, ast_ctx=None) -> Optional[int]:
 
 
 def _literal(text: str) -> Optional[int]:
+    if text.startswith("'"):
+        import ast
+        try:
+            character = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return None
+        # Multi-character and non-ASCII execution encodings are target-specific.
+        if isinstance(character, str) and len(character) == 1 and ord(character) < 128:
+            return ord(character)
+        return None
     text = re.sub(r"(?i)(?:u(?:ll|l)?|(?:ll|l)u?)$", "", text.strip())
     try:
         if text.lower().startswith("0x"):
@@ -147,6 +163,9 @@ def _expr_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) 
         from ..ast_analyzer import _format_pycparser_expr
         destination = integer_type_range(_format_pycparser_expr(node.to_type), ast_ctx)
         source = _expr_range(node.expr, state, ast_ctx, fn)
+        if destination is None and _resolved_scalar_type(_format_pycparser_expr(node.to_type), ast_ctx) == "char":
+            portable = _portable_char_range(ast_ctx)
+            return source if source is not None and portable is not None and source.fits_within(portable) else None
         return source if destination is not None and source is not None and source.fits_within(destination) else destination
     if kind == "ID":
         limit = _named_limit(str(node.name), ast_ctx)
@@ -215,6 +234,10 @@ def _comparison(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str, IntegerRa
         variable_type = ast_ctx.infer_expr_type(variable_node, fn)
         bound_type = getattr(bound_node, "type", None) if type(bound_node).__name__ == "Constant" else ast_ctx.infer_expr_type(bound_node, fn)
         variable_range = integer_type_range(variable_type, ast_ctx) if variable_type else None
+        if variable_type and _resolved_scalar_type(variable_type, ast_ctx) == "char":
+            # Unknown plain char may be signed; unsigned comparisons cannot
+            # establish nonnegativity on every supported target.
+            variable_range = integer_type_range("signed char", ast_ctx)
         bound_range = integer_type_range(bound_type, ast_ctx) if isinstance(bound_type, str) else None
         if variable_range is not None and bound_range is not None and variable_range.lower < 0 and bound_range.lower == 0 and bound_range.upper > variable_range.upper:
             return {}
@@ -291,19 +314,23 @@ def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=())
     if node is None:
         return result
     kind = type(node).__name__
+    written = None
     if kind == "Decl" and getattr(node, "name", None):
+        written = str(node.name)
         fact = _expr_range(node.init, state, ast_ctx, fn) if getattr(node, "init", None) is not None else None
         result[str(node.name)] = fact if fact is not None else result.pop(str(node.name), None)
         if fact is None:
             result.pop(str(node.name), None)
     elif kind == "Assignment":
         target = _name(getattr(node, "lvalue", None))
+        written = target
         if target:
             fact = _expr_range(node.rvalue, state, ast_ctx, fn) if node.op == "=" else None
             if fact is None: result.pop(target, None)
             else: result[target] = fact
     elif kind == "UnaryOp" and node.op in {"p++", "p--", "++", "--"}:
         target = _name(node.expr)
+        written = target
         if target:
             current = _expr_range(node.expr, state, ast_ctx, fn)
             if current is None or current.lower is None or current.upper is None:
@@ -311,6 +338,15 @@ def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=())
             else:
                 delta = 1 if "+" in node.op else -1
                 result[target] = IntegerRange(current.lower + delta, current.upper + delta)
+    if written and written in result:
+        from pycparser import c_ast
+        destination_type = ast_ctx.infer_expr_type(c_ast.ID(written), fn)
+        if _resolved_scalar_type(destination_type, ast_ctx) == "char":
+            portable = _portable_char_range(ast_ctx)
+            # An out-of-range write can become negative on a signed-char target.
+            # Drop its pre-conversion fact instead of proving nonnegativity from it.
+            if portable is None or not result[written].fits_within(portable):
+                result.pop(written, None)
     if getattr(event, "calls", ()) or (kind == "Assignment" and _name(node.lvalue) is None):
         for name in exposed:
             result.pop(name, None)
@@ -339,6 +375,9 @@ class IntegerRangeAnalysis:
 
     def proves_expression_fits(self, expression, destination_type: str, at_node=None) -> bool:
         destination = integer_type_range(destination_type, self.ast_ctx)
+        if destination is None and _resolved_scalar_type(destination_type, self.ast_ctx) == "char":
+            # Values common to signed and unsigned plain-char models are portable.
+            destination = _portable_char_range(self.ast_ctx)
         source = self.range_for_expression(expression, at_node)
         return destination is not None and source is not None and source.fits_within(destination)
 

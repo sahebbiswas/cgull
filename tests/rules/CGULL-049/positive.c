@@ -18,3 +18,9 @@ void test_signedness(int signed_value, unsigned int unsigned_value) {
     unsigned int negative_risk = signed_value; // expect: CGULL-049
     int large_risk = unsigned_value; // expect: CGULL-049
 }
+
+void test_sign_extension(signed char byte, short word, char target_dependent) {
+    int byte_value = byte; // expect: CGULL-049
+    long word_value = word; // expect: CGULL-049
+    int uncertain_value = target_dependent; // expect: CGULL-049
+}

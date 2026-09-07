@@ -18,4 +18,4 @@ When adding Juliet coverage for a rule, first confirm that the selected CWE fixt
 
 ## Integer conversion measurement
 
-CGULL-049 is measured against the full discoverable upstream CWE-195 and CWE-196 families. See [the signedness evaluation](cgull-049-signedness-350.md) for counts, reproduction steps, and limitations. This status records measurement, not a minimum detection-quality guarantee: CWE-195 library-call conversions remain a known gap. CWE-197 is still unmeasured, and these two upstream families are not part of the vendored focused manifests.
+CGULL-049 is measured against the full discoverable upstream CWE-194, CWE-195, and CWE-196 families. See [the sign-extension evaluation](cgull-049-sign-extension-351.md) for counts, reproduction steps, and limitations. This status records measurement, not a minimum detection-quality guarantee: External library argument conversions remain a known gap. CWE-197 is still unmeasured, and these three upstream families are not part of the vendored focused manifests.

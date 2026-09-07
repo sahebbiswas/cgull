@@ -1,0 +1,49 @@
+{
+  "by_cwe": {
+    "CWE-194": {
+      "f1": 0.0,
+      "fn": 768,
+      "fp": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "tn": 2832,
+      "tp": 0
+    },
+    "CWE-195": {
+      "f1": 0.0,
+      "fn": 768,
+      "fp": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "tn": 2832,
+      "tp": 0
+    },
+    "CWE-196": {
+      "f1": 0.9474,
+      "fn": 0,
+      "fp": 2,
+      "precision": 0.9,
+      "recall": 1.0,
+      "tn": 47,
+      "tp": 18
+    }
+  },
+  "evaluated_functions": 7267,
+  "failed_files": [],
+  "overall": {
+    "f1": 0.0229,
+    "fn": 1536,
+    "fp": 2,
+    "precision": 0.9,
+    "recall": 0.0116,
+    "tn": 5711,
+    "tp": 18
+  },
+  "scanned_files": 3378,
+  "schema_version": 3,
+  "selected_files": 2322,
+  "source_revision": "f88433e3443648a17671398797a04ea1f8e1a274",
+  "cgull_version": "0.9.65",
+  "command": "python benchmarks/run_juliet_upstream.py /path/to/juliet --cwe CWE-194 --cwe CWE-195 --cwe CWE-196 --all",
+  "conversion_attribution": "Exact finding CWE required for CGULL-049"
+}

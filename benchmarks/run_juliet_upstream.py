@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from benchmarks.run_juliet import CWE_RULE_MAP, compute_metrics, extract_function_line_ranges
+from benchmarks.run_juliet import CWE_RULE_MAP, compute_metrics, extract_function_line_ranges, is_issue_cwe_match
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine
 from cgull.multifile import scan_translation_unit_group
@@ -173,12 +173,14 @@ def _result_detects_oracle(
     oracle: str,
     *,
     file_path: Path | None = None,
+    cwe: str | None = None,
 ) -> bool:
     for function, (start, end) in ranges.items():
         if not _function_matches_oracle(function, oracle):
             continue
         if any(
             issue.rule_id in relevant_rules
+            and (cwe is None or is_issue_cwe_match(issue, cwe, list(relevant_rules)))
             and _issue_in_range(issue, start, end, file_path=file_path)
             for issue in result.issues
         ):
@@ -216,6 +218,7 @@ def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
                     relevant_rules,
                     function,
                     file_path=member,
+                    cwe=cwe,
                 )
                 for member, ranges in member_ranges
             )
