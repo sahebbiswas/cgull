@@ -24,7 +24,7 @@ class ValidatedPointerRangeRule(PointerRangeBoundsRule):
         for result in self.get_analysis_session(ast_ctx).pointer_range_analysis.function_results.values():
             for event in result.events:
                 fact, width = event.fact, event.access_width
-                if not event.is_access or not fact.validated_intervals:
+                if not event.is_access or not fact.proven_intervals:
                     continue
                 if width is not None and fact.definitely_outside(width):
                     continue  # CGULL-050 provides the stronger object-bound diagnostic.
@@ -32,7 +32,7 @@ class ValidatedPointerRangeRule(PointerRangeBoundsRule):
                 if known and fact.object_extent is not None and fact.offset.lower >= 0 and fact.offset.upper + width <= fact.object_extent:
                     continue
                 intervals = []
-                for lower, upper in sorted(fact.validated_intervals):
+                for lower, upper in sorted(fact.proven_intervals):
                     if intervals and lower <= intervals[-1][1]:
                         intervals[-1] = (intervals[-1][0], max(upper, intervals[-1][1]))
                     else:
@@ -57,7 +57,7 @@ class ValidatedPointerRangeRule(PointerRangeBoundsRule):
                 issues.append(self.create_issue(
                     file_path=file_path, line_number=line, column_number=column,
                     code_snippet=ast_ctx.source_lines[line - 1].strip() if 0 < line <= len(ast_ctx.source_lines) else "",
-                    message=f"Pointer derived from '{fact.origin}' {detail}. Prior validation proves byte intervals {intervals} relative to that origin; it does not establish accessible storage outside them.",
+                    message=f"Pointer derived from '{fact.origin}' {detail}. Prior validation or enclosing guards prove byte intervals {intervals} relative to that origin; it does not establish accessible storage outside them.",
                     engine="AST", fix_type=FixType.MANUAL_REVIEW,
                 ))
         return issues

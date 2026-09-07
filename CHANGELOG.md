@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-07
+
+### Added
+- Shared enclosing-range pointer guard proofs for backward and forward accesses, including reversed comparisons, fail-closed checks, branch joins, and dependency invalidation after mutation. `CGULL-051` now accepts these proofs when checking access coverage (#372).
+
 ## [0.10.0] - 2026-09-07
 
 ### Added

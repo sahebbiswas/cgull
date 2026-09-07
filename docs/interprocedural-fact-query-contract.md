@@ -631,3 +631,34 @@ available after a pointer escapes. Unknown offsets still prevent a definite
 violation. One-past formation is legal; a positive access width must fit inside
 the object. Unsupported control and alias effects suppress events, and loop
 iterations never publish transient diagnostic evidence.
+
+Enclosing-range comparisons also contribute `guarded_intervals` to these shared
+facts. Each interval records origin-relative byte endpoints and the pointer,
+boundary, and constant-size variables on which it depends. `proven_intervals`
+combines this evidence with semantic validator intervals. The
+`backward_accessible_extent` and `forward_accessible_extent` queries include
+applicable enclosing-guard evidence at the current exact offset; zero guarantees
+no bytes in that direction. Existing `lower_bound`/`upper_bound` fields retain
+their object/allocation capacity meaning.
+
+For example, the surviving edge of `if (p < base + 4) return;` proves `[-4, 0)`
+relative to `p`; `if (p + 12 > end) return;` proves `[0, 12)`. `CGULL-051` accepts
+accesses covered by the union of these intervals and successful validator
+intervals. A lower-bound check alone cannot justify reads after `p`, and an
+upper-bound check alone cannot justify reads before it.
+
+Supported forms include compatible pointer comparisons, reversed operands,
+strict comparisons, `p - base >= N`, and `end - p >= N`. Distances may be
+nonnegative literals, known representable scalar constants, or supported
+`sizeof` expressions in pointer arithmetic. Pointer strides convert element
+counts into byte extents. Signed/unsigned pointer-distance comparisons,
+integer-address casts, unknown sizes, incompatible pointer types, and general
+arithmetic remain unproven. Comparisons assume the C enclosing-array semantics;
+they do not establish that arbitrary numerical addresses denote live storage.
+
+Proofs apply only on guaranteed condition edges. Joins intersect evidence from
+both reachable paths and retain all proof dependencies. Mutation invalidates
+dependent evidence, including evidence copied to aliases. Loop mutations in the
+body, condition, or step discard dominating proofs before the loop invariant is
+computed. These proofs are intraprocedural; unsupported control/alias effects
+retain the pointer domain's existing conservative event suppression.

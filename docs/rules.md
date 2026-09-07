@@ -104,6 +104,15 @@ packed layouts, bitfields, and flexible arrays remain unsupported. Validator len
 supported `sizeof` expressions. Unknown lengths establish no concrete interval.
 Pointer member accesses use known field layout where available; unsupported
 layout produces an explicit unknown-width/offset diagnostic. Saved validator
-return variables, general relational bounds guards, integer-address wraparound,
+return variables, integer-address wraparound,
 and interprocedural validation summaries are outside this drop. Findings use
 CWE-119 and require manual review. Juliet coverage is not yet measured.
+
+Enclosing-range guards can also prove accessible bytes. For example,
+`if (p < base + sizeof(int)) return;` establishes enough space before `p` for
+an integer, while `if (p + 16 > end) return;` establishes forward capacity.
+Reversed comparisons and compatible signed pointer-distance forms are supported.
+These proofs apply only on the guarded path and are invalidated when a dependent
+pointer, boundary, or size changes. Unknown/volatile sizes and ambiguous unsigned
+distance comparisons remain unproven. See the
+[shared pointer fact contract](interprocedural-fact-query-contract.md#pointer-formation-and-access-observations).
