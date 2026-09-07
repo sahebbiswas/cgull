@@ -144,6 +144,21 @@ class PointerRangeFact:
         )
 
 
+def _intersect_intervals(
+    left: Tuple[Tuple[int, int], ...],
+    right: Tuple[Tuple[int, int], ...],
+) -> Tuple[Tuple[int, int], ...]:
+    """Keep only byte ranges validated on both reachable paths."""
+    intersections = set()
+    for left_start, left_end in left:
+        for right_start, right_end in right:
+            start = max(left_start, right_start)
+            end = min(left_end, right_end)
+            if start < end:
+                intersections.add((start, end))
+    return tuple(sorted(intersections))
+
+
 def join_pointer_facts(left: PointerRangeFact, right: PointerRangeFact) -> PointerRangeFact:
     """Join reachable paths without strengthening any safety proof."""
     if left == right:
@@ -178,7 +193,11 @@ def join_pointer_facts(left: PointerRangeFact, right: PointerRangeFact) -> Point
         else None
     )
     return PointerRangeFact(
-        validated_intervals=tuple(sorted({(max(a, c), min(b, d)) for a, b in left.validated_intervals for c, d in right.validated_intervals if max(a, c) <= min(b, d)})) if same_origin else (),
+        validated_intervals=(
+            _intersect_intervals(left.validated_intervals, right.validated_intervals)
+            if same_origin
+            else ()
+        ),
         origin=left.origin if same_origin else None,
         object_extent=left.object_extent if same_origin and left.object_extent == right.object_extent else None,
         offset=offset,
@@ -272,6 +291,7 @@ def analyze_translation_unit_pointer_ranges(
     """Build conservative intraprocedural pointer facts for every function."""
     results: Dict[str, PointerRangeFunctionResult] = {}
     typedefs = {n.name: n.type for n in ast_ctx.pycparser_ast.ext if isinstance(n, c_ast.Typedef)}
+
     class StructCollector(c_ast.NodeVisitor):
         def visit_FuncDef(self, node):
             return  # Function-local tags must not leak into other functions.
@@ -279,9 +299,13 @@ def analyze_translation_unit_pointer_ranges(
         def visit_Struct(self, node):
             if node.name and node.decls:
                 typedefs["struct:" + node.name] = node
+            self.generic_visit(node)
+
         def visit_Union(self, node):
             if node.name and node.decls:
                 typedefs["union:" + node.name] = node
+            self.generic_visit(node)
+
     StructCollector().visit(ast_ctx.pycparser_ast)
 
     for fn in getattr(ast_ctx, "functions", ()):
@@ -569,17 +593,21 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
 
 def _resolve_type(node, typedefs, seen=frozenset()):
     from copy import copy
+
     if isinstance(node, (c_ast.Struct, c_ast.Union)):
-        key = ("struct:" if isinstance(node, c_ast.Struct) else "union:") + str(node.name)
-        if key in seen:
-            return node
-        source = node if node.decls else typedefs.get(key, node)
+        key = None
+        if node.name:
+            key = ("struct:" if isinstance(node, c_ast.Struct) else "union:") + node.name
+            if key in seen:
+                return node
+        source = node if node.decls else (typedefs.get(key, node) if key else node)
         result = copy(source)
         if source.decls:
             result.decls = []
+            next_seen = seen | {key} if key else seen
             for member in source.decls:
                 resolved = copy(member)
-                resolved.type = _resolve_type(member.type, typedefs, seen | {key})
+                resolved.type = _resolve_type(member.type, typedefs, next_seen)
                 result.decls.append(resolved)
         return result
     if isinstance(node, c_ast.IdentifierType) and len(node.names) == 1:
@@ -735,8 +763,6 @@ def _validate_condition(node, state, registry, truth):
     model = registry.validators.get(call.name.name)
     if model is None or model.length is None:
         return
-    # Equality to a failing integer does not imply one specific successful
-    # return value on the opposite edge. Restrict exact-return contracts.
     from ..semantic_models import SuccessConditionKind
     if isinstance(node, c_ast.BinaryOp):
         constant = node.right if call is node.left else node.left
@@ -830,7 +856,6 @@ def _aggregate_layout(node):
         members[member.name] = (offset, width)
         size = max(size, offset + width)
     return (size + alignment - 1) // alignment * alignment, alignment, members
-
 
 
 _INTEGER_CONSTANT_TYPES = {
