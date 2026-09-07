@@ -78,17 +78,12 @@ def analyze_translation_unit_value_dataflow(
         for name, fn in fn_meta.items()
     }
 
-    # None is the internal BOTTOM for a parameter that has not yet received a
-    # reachable caller contribution.  Public results materialize it as UNKNOWN.
     incoming: Dict[str, list] = {
         name: [None] * len(parameter_names.get(name, ())) for name in fn_meta
     }
     results: Dict[str, ValueDataflowResult] = {}
     diagnostics = list(summary_result.diagnostics)
 
-    # Public/external entry functions may be called outside the TU.  Seed their
-    # formals conservatively.  Functions with known in-TU callers are seeded by
-    # those callers instead, preserving useful safe/unsafe distinctions.
     for name in sorted(fn_meta):
         if not graph.callers(name):
             incoming[name] = [ValueFact() for _ in incoming[name]]
@@ -154,8 +149,6 @@ def analyze_translation_unit_value_dataflow(
                 )
             )
 
-        # Once the SCC's incoming facts are stable, analyze it one final time so
-        # callers querying a sink inside the component observe the final state.
         for name in component:
             params = parameter_names.get(name, ())
             entry = {
@@ -272,13 +265,7 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
 
 
 def _apply_output_effects(call, state, registry, summaries, evidence_limit):
-    """Project modeled output writes into the caller's value state.
-
-    Generic output effects conservatively invalidate the destination.  When an
-    effect declares a deterministic ``output_value_sources`` mapping, the value
-    fact of the source actual is copied to the output actual instead.  Security
-    source models take precedence and mark modeled output arguments untrusted.
-    """
+    """Project modeled output writes into the caller's value state."""
     model = registry.for_call(call)
     effect = getattr(model, "effect", None)
     source_model = getattr(model, "source", None)
@@ -293,9 +280,14 @@ def _apply_output_effects(call, state, registry, summaries, evidence_limit):
     value_sources = dict(getattr(effect, "output_value_sources", ()) or ()) if effect else {}
     output_indexes = set(getattr(effect, "output_parameters", ()) or ()) if effect else set()
     output_indexes.update(index for index in untrusted_outputs if index is not None)
+    valid_output_indexes = sorted(
+        index
+        for index in output_indexes
+        if isinstance(index, int) and not isinstance(index, bool) and index >= 0
+    )
 
-    for output_index in sorted(output_indexes):
-        if output_index is None or output_index >= len(actuals):
+    for output_index in valid_output_indexes:
+        if output_index >= len(actuals):
             continue
         target = _actual_location(actuals[output_index])
         if not target:
@@ -309,7 +301,11 @@ def _apply_output_effects(call, state, registry, summaries, evidence_limit):
             continue
 
         source_index = value_sources.get(output_index)
-        if source_index is not None and source_index < len(actuals):
+        if (
+            isinstance(source_index, int)
+            and not isinstance(source_index, bool)
+            and 0 <= source_index < len(actuals)
+        ):
             state[target] = _actual_fact(
                 actuals[source_index],
                 state,
@@ -319,9 +315,7 @@ def _apply_output_effects(call, state, registry, summaries, evidence_limit):
             )
             continue
 
-        state[target] = ValueFact(
-            degradations=frozenset({"OUTPUT_MUTATION"})
-        )
+        state[target] = ValueFact(degradations=frozenset({"OUTPUT_MUTATION"}))
 
 
 def _actual_location(text: str) -> str:
@@ -336,14 +330,7 @@ def _actual_location(text: str) -> str:
 
 @lru_cache(maxsize=4096)
 def _parse_actual_expression(text: str):
-    """Parse one CFG actual argument back into an expression AST.
-
-    CFG call metadata intentionally stores stable source spellings.  Re-parsing
-    just the actual expression lets caller-to-formal propagation reuse the same
-    semantic-model and summary-aware evaluator as ordinary assignments, rather
-    than treating call expressions as variable names. Parsed ASTs are immutable
-    for this analysis and cached by their deterministic source spelling.
-    """
+    """Parse one CFG actual argument back into an expression AST."""
     try:
         parsed = _ACTUAL_PARSER.parse(
             f"void __cgull_actual(void) {{ __cgull_sink({text}); }}"
@@ -366,8 +353,5 @@ def _actual_fact(
     if expression is not None:
         return _expression_fact(expression, state, registry, summaries, evidence_limit)
 
-    # Keep a conservative fallback for parser-hostile spellings.  Identity
-    # locations still preserve already-known facts; everything else remains
-    # UNKNOWN instead of accidentally being classified as safe.
     key = _canonical_location(text.strip().lstrip("& "))
     return state.get(key, ValueFact())
