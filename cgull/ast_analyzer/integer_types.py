@@ -17,8 +17,8 @@ _INTEGER_TYPE_RE = re.compile(
 def _resolved_scalar_type(type_str: str, ast_ctx: Optional[CASTContext] = None) -> Optional[str]:
     if not type_str:
         return None
-    type_name = re.sub(r"\[[^\]]*\]", "", type_str).strip()
-    if "*" in type_name:
+    type_name = type_str.strip()
+    if "*" in type_name or "[" in type_name or "]" in type_name:
         return None
     if ast_ctx and ast_ctx.typedef_shapes:
         clean_name = re.sub(r"\b(?:const|volatile)\b", "", type_name).strip()
