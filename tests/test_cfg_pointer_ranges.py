@@ -139,6 +139,84 @@ def test_integer_literal_suffixes_preserve_constant_pointer_offsets():
     assert "UNSUPPORTED_ARITHMETIC" not in q.degradations
 
 
+def test_commutative_constant_plus_pointer_preserves_range():
+    ctx = build_security_context(
+        r'''
+        void caller(void) {
+            int a[8];
+            int *p = a;
+            int *q = 2 + p;
+        }
+        '''
+    )
+    q = analyze_translation_unit_pointer_ranges(ctx).query("caller", "q")
+
+    assert q.origin == "a"
+    assert q.element_width == 4
+    assert q.offset == OffsetInterval.exact(8)
+    assert q.lower_bound == 8
+    assert q.upper_bound == 24
+
+
+def test_pointer_increment_updates_stride():
+    ctx = build_security_context(
+        r'''
+        void caller(void) {
+            int a[8];
+            int *p = a;
+            p++;
+        }
+        '''
+    )
+    p = analyze_translation_unit_pointer_ranges(ctx).query("caller", "p")
+
+    assert p.offset == OffsetInterval.exact(4)
+    assert p.lower_bound == 4
+    assert p.upper_bound == 28
+
+
+def test_for_pointer_increment_widens_non_converged_range():
+    ctx = build_security_context(
+        r'''
+        void caller(int n) {
+            int a[32];
+            int *p = a;
+            for (int i = 0; i < n; ++i) {
+                (void)p;
+                p++;
+            }
+        }
+        '''
+    )
+    p = analyze_translation_unit_pointer_ranges(ctx).query("caller", "p")
+
+    assert p.origin == "a"
+    assert p.offset.is_unknown
+    assert not p.has_accessible_range
+    assert "LOOP_NOT_CONVERGED" in p.degradations
+
+
+def test_multidimensional_array_tracks_total_extent_and_row_stride():
+    ctx = build_security_context(
+        r'''
+        void caller(void) {
+            int a[3][5];
+            int (*p)[5] = a;
+            int (*q)[5] = p + 1;
+        }
+        '''
+    )
+    result = analyze_translation_unit_pointer_ranges(ctx)
+    p = result.query("caller", "p")
+    q = result.query("caller", "q")
+
+    assert p.upper_bound == 60
+    assert p.element_width == 20
+    assert q.offset == OffsetInterval.exact(20)
+    assert q.lower_bound == 20
+    assert q.upper_bound == 40
+
+
 def test_reassignment_invalidates_stale_proof():
     ctx = build_security_context(
         r'''
