@@ -127,12 +127,19 @@ class IntegerNarrowingCastRule(BaseRule):
                         callee = functions_by_name.get(node.name.name)
                         arguments = getattr(node.args, "exprs", None) or []
                         if callee is not None:
-                            for argument, parameter in zip(arguments, callee.parameters):
+                            for index, (argument, parameter) in enumerate(
+                                zip(arguments, callee.parameters), start=1
+                            ):
+                                parameter_label = (
+                                    f"parameter '{parameter.name}'"
+                                    if parameter.name
+                                    else f"parameter #{index}"
+                                )
                                 self._append_conversion(
                                     argument,
                                     parameter.type_name,
                                     argument,
-                                    f"Implicit argument binding for parameter '{parameter.name}'",
+                                    f"Implicit argument binding for {parameter_label}",
                                 )
                     self.generic_visit(node)
 
