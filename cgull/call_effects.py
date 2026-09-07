@@ -46,9 +46,11 @@ class CallEffectModel:
         )
         if self.format_argument is not None:
             indexes.add(self.format_argument)
+        bounded_outputs = set()
         for data_index, size_index in self.size_relationships:
             indexes.add(data_index)
             indexes.add(size_index)
+            bounded_outputs.add(data_index)
         seen_output_sources = set()
         for output_index, source_index in self.output_value_sources:
             indexes.add(output_index)
@@ -61,6 +63,10 @@ class CallEffectModel:
             if output_index not in self.output_parameters:
                 raise ValueError(
                     f"output value source destination {output_index} must also be declared as an output parameter"
+                )
+            if output_index in bounded_outputs:
+                raise ValueError(
+                    f"bounded output argument position {output_index} cannot declare a whole-value source"
                 )
         if any(isinstance(index, bool) or not isinstance(index, int) or index < 0 for index in indexes):
             raise ValueError("argument positions must be non-negative integers")
@@ -124,19 +130,16 @@ _BUILTIN_EFFECTS = {
         _effect(
             "strncpy",
             output_parameters=frozenset({0}),
-            output_value_sources=((0, 1),),
             size_relationships=((0, 2),),
         ),
         _effect(
             "memcpy",
             output_parameters=frozenset({0}),
-            output_value_sources=((0, 1),),
             size_relationships=((0, 2),),
         ),
         _effect(
             "memmove",
             output_parameters=frozenset({0}),
-            output_value_sources=((0, 1),),
             size_relationships=((0, 2),),
         ),
         _effect("scanf", format_argument=0, output_parameters=frozenset({1})),
