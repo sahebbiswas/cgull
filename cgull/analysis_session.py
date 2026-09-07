@@ -34,6 +34,14 @@ class AnalysisQueries:
         """Return cached bounded interprocedural size/extent facts for the TU."""
         return self._session.size_analysis
 
+    def pointer_range_facts(self, function_name: str):
+        """Return cached pointer origin/offset/range facts for one function."""
+        return self._session.pointer_range_analysis.function(function_name)
+
+    def pointer_range(self, function_name: str, location: str, line=None):
+        """Query one pointer range fact at a source event/use line."""
+        return self._session.pointer_range_analysis.query(function_name, location, line)
+
     def ownership_summaries(self):
         """Return cached allocation ownership/effect summaries for the TU."""
         return self._session.ownership_summaries
@@ -60,6 +68,7 @@ class AnalysisSession:
         self._ownership_effects_cache: Dict[str, object] = {}
         self._value_analysis_result = None
         self._size_analysis_result = None
+        self._pointer_range_analysis_result = None
         self._summary_construction_count = 0
         self._queries = AnalysisQueries(self)
 
@@ -145,6 +154,17 @@ class AnalysisSession:
             )
         return self._size_analysis_result
 
+    def _ensure_pointer_range_analysis(self):
+        if self._pointer_range_analysis_result is None:
+            from .cfg.pointer_ranges import analyze_translation_unit_pointer_ranges
+
+            self._pointer_range_analysis_result = analyze_translation_unit_pointer_ranges(
+                self.ast_context,
+                size_analysis=self.size_analysis,
+                value_analysis=self.value_analysis,
+            )
+        return self._pointer_range_analysis_result
+
     @property
     def function_summaries(self):
         return self._ensure_function_summaries().summaries
@@ -178,6 +198,11 @@ class AnalysisSession:
     def size_analysis(self):
         """Lazily computed bounded size/extent analysis shared by all rules."""
         return self._ensure_size_analysis()
+
+    @property
+    def pointer_range_analysis(self):
+        """Lazily computed pointer origin/offset/accessibility facts."""
+        return self._ensure_pointer_range_analysis()
 
     @property
     def summary_construction_count(self) -> int:
