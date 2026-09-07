@@ -33,3 +33,32 @@ The runner selects every discoverable entry for these families, using function-n
 Both the focused and upstream runners require the exact reported CWE for CGULL-049. This rule covers several conversion directions, so matching its rule ID alone can credit a CWE-197 narrowing finding as a CWE-194 sign-extension detection. Regression coverage now prevents that attribution error. Other rules retain their existing multi-CWE mapping behavior.
 
 An initial run using the older rule-only attribution counted 192 CWE-194 true positives. Inspection found narrowing reports at socket-input assignments, rather than sign-extension reports at the intended sink. The results below use the corrected attribution and supersede that preliminary number. They also remeasure CWE-195/CWE-196 under the same attribution policy; CWE-197 remains explicitly unmeasured.
+
+## Corrected results
+
+Selected testcase entries: 2322
+Scanned source files: 3378
+Evaluated bad/good functions: 7267
+Failed files: 0
+
+| CWE | TP | FP | TN | FN | Precision | Recall | F1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CWE-194 | 0 | 0 | 2832 | 768 | 0.0000 | 0.0000 | 0.0000 |
+| CWE-195 | 0 | 0 | 2832 | 768 | 0.0000 | 0.0000 | 0.0000 |
+| CWE-196 | 18 | 2 | 47 | 0 | 0.9000 | 1.0000 | 0.9474 |
+
+Overall precision: 0.9000
+Overall recall: 0.0116
+Overall F1: 0.0229
+
+The machine-readable report is [cgull-049-sign-extension-351.json](cgull-049-sign-extension-351.json). The runner displays precision as zero when there are no predicted positives; mathematically it is undefined in that case. CWE-197 remains **not yet measured**, so no precision/recall/F1 is claimed for that family.
+
+## Interpretation and remaining work
+
+CWE-194 and CWE-195 each have **zero observed upstream recall**, with 768 missed bad-function oracles per family. The implemented cast/assignment/known-parameter behavior is covered by focused regression and behavioral corpus tests, but the upstream cases use external library length conversions such as malloc, memcpy, memmove, and strncpy. Current binding does not resolve those external signatures. The 192 CWE-194 matches from the older rule-only attribution were all removed by requiring CWE-194 findings, and must not be cited as sign-extension detection quality.
+
+A concrete follow-up is declaration-only and standard-library parameter-signature support, evaluated against this corrected baseline. The rule does not add compound assignments, implicit arithmetic promotions, general expression typing, target ABI configuration, or general alias analysis. It also cannot distinguish intentional signed widening from protocol intent solely from a narrow type.
+
+CWE-196 retains 18 true positives, two false positives, and no false negatives (precision 90%, recall 100%, F1 0.9474). The new conversion-attribution policy leaves those measured counts unchanged from #350.
+
+The empirical registry's measured status records that evaluation occurred; it is not a minimum-quality claim. These three upstream families are not vendored focused fixtures. Existing focused Juliet thresholds remain unchanged.
