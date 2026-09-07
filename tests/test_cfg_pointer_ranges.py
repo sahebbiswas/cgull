@@ -119,6 +119,26 @@ def test_compound_pointer_arithmetic_uses_element_stride():
     assert p.upper_bound == 24
 
 
+def test_integer_literal_suffixes_preserve_constant_pointer_offsets():
+    ctx = build_security_context(
+        r'''
+        void caller(void) {
+            int a[16];
+            int *p = a;
+            int *q = p + 2UL;
+            q += 1LL;
+        }
+        '''
+    )
+    q = analyze_translation_unit_pointer_ranges(ctx).query("caller", "q")
+
+    assert q.element_width == 4
+    assert q.offset == OffsetInterval.exact(12)
+    assert q.lower_bound == 12
+    assert q.upper_bound == 52
+    assert "UNSUPPORTED_ARITHMETIC" not in q.degradations
+
+
 def test_reassignment_invalidates_stale_proof():
     ctx = build_security_context(
         r'''
