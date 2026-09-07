@@ -133,8 +133,13 @@ def _issue_in_range(issue, start: int, end: int, file_path: Path | None = None) 
         return False
     if file_path is None:
         return True
-    issue_path = Path(str(issue.file_path)).resolve()
-    return issue_path == file_path.resolve()
+    raw_issue_path = getattr(issue, "file_path", None)
+    if not raw_issue_path:
+        return False
+    issue_path = Path(str(raw_issue_path))
+    if not issue_path.is_absolute():
+        issue_path = file_path.parent / issue_path
+    return issue_path.resolve() == file_path.resolve()
 
 
 def _oracle_token(function: str) -> str:
