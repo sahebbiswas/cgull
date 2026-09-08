@@ -3,7 +3,7 @@
 **Code Guardian for Unchecked Logic & Leaks** — static security analysis for C codebases.
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://github.com/sahebbiswas/cgull/blob/main/LICENSE)
 [![Security Standards](https://img.shields.io/badge/standards-MISRA--C%20%7C%20CWE%20%7C%20CERT--C-orange.svg)](https://cwe.mitre.org/)
 [![Tests](https://github.com/sahebbiswas/cgull/actions/workflows/ci.yml/badge.svg)](https://github.com/sahebbiswas/cgull/actions/workflows/ci.yml)
 
@@ -122,19 +122,19 @@ cgull scan . --fix --write
 
 ## Documentation
 
-The [`docs/`](docs/README.md) directory is the C-GULL knowledgebase. Start with:
+The [documentation knowledgebase](https://github.com/sahebbiswas/cgull/blob/main/docs/README.md) contains the detailed user and maintainer guides. Start with:
 
-- [Getting started](docs/getting-started.md) — installation, defaults, first scan, and adoption path.
-- [Configuration reference](docs/configuration.md) — `.cgull.toml`, `pyproject.toml`, rules, functions, paths, output policy, and semantic models.
-- [Project files and suppressions](docs/project-files.md) — `.cgullignore`, `.cgullincludes`, baselines, include boundaries, and inline suppression.
-- [Analysis model](docs/analysis-model.md) — engines, TU mode, parser tiers, configuration profiles, and interprocedural analysis.
-- [Reporting and CI](docs/reporting-and-ci.md) — report formats, failure policy, baselines, fixes, and CI adoption.
-- [Development integration](docs/development-integration.md) — pre-commit, GitHub Actions, SARIF, and build-aware integration.
-- [Rule reference](docs/rules.md) — rule catalog conventions and configuration by stable rule ID.
-- [Repository extension](docs/repository-extension.md) — architecture and guidance for contributors extending C-GULL.
-- [Embedded security profile](docs/embedded-security-profile.md) — embedded-focused security defaults and guidance.
+- [Getting started](https://github.com/sahebbiswas/cgull/blob/main/docs/getting-started.md) — installation, defaults, first scan, and adoption path.
+- [Configuration reference](https://github.com/sahebbiswas/cgull/blob/main/docs/configuration.md) — `.cgull.toml`, `pyproject.toml`, rules, functions, paths, output policy, and semantic models.
+- [Project files and suppressions](https://github.com/sahebbiswas/cgull/blob/main/docs/project-files.md) — `.cgullignore`, `.cgullincludes`, baselines, include boundaries, and inline suppression.
+- [Analysis model](https://github.com/sahebbiswas/cgull/blob/main/docs/analysis-model.md) — engines, TU mode, parser tiers, configuration profiles, and interprocedural analysis.
+- [Reporting and CI](https://github.com/sahebbiswas/cgull/blob/main/docs/reporting-and-ci.md) — report formats, failure policy, baselines, fixes, and CI adoption.
+- [Development integration](https://github.com/sahebbiswas/cgull/blob/main/docs/development-integration.md) — pre-commit, GitHub Actions, SARIF, and build-aware integration.
+- [Rule reference](https://github.com/sahebbiswas/cgull/blob/main/docs/rules.md) — rule catalog conventions and configuration by stable rule ID.
+- [Repository extension](https://github.com/sahebbiswas/cgull/blob/main/docs/repository-extension.md) — architecture and guidance for contributors extending C-GULL.
+- [Embedded security profile](https://github.com/sahebbiswas/cgull/blob/main/docs/embedded-security-profile.md) — embedded-focused security defaults and guidance.
 
-For changes between releases, see [CHANGELOG.md](CHANGELOG.md). GitHub Releases contain the release-specific summary and generated pull-request list. Maintainers should follow [docs/releasing.md](docs/releasing.md); contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md).
+For changes between releases, see the [changelog](https://github.com/sahebbiswas/cgull/blob/main/CHANGELOG.md). [GitHub Releases](https://github.com/sahebbiswas/cgull/releases) contain release-specific summaries and generated pull-request lists. Maintainers should follow the [release guide](https://github.com/sahebbiswas/cgull/blob/main/docs/releasing.md); contributors should also read [CONTRIBUTING.md](https://github.com/sahebbiswas/cgull/blob/main/CONTRIBUTING.md).
 
 ## Project status
 
@@ -142,4 +142,4 @@ C-GULL is under active development. Static analysis is necessarily conservative 
 
 ## License
 
-C-GULL is licensed under the [Apache License 2.0](LICENSE).
+C-GULL is licensed under the [Apache License 2.0](https://github.com/sahebbiswas/cgull/blob/main/LICENSE).
