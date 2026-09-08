@@ -134,7 +134,7 @@ The [`docs/`](docs/README.md) directory is the C-GULL knowledgebase. Start with:
 - [Repository extension](docs/repository-extension.md) — architecture and guidance for contributors extending C-GULL.
 - [Embedded security profile](docs/embedded-security-profile.md) — embedded-focused security defaults and guidance.
 
-For changes between releases, see [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES.md](RELEASE_NOTES.md). Contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md).
+For changes between releases, see [CHANGELOG.md](CHANGELOG.md). GitHub Releases contain the release-specific summary and generated pull-request list. Maintainers should follow [docs/releasing.md](docs/releasing.md); contributors should also read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Project status
 
