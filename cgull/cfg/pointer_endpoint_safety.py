@@ -4,8 +4,11 @@ from pycparser.c_generator import CGenerator
 from .integer_ranges import IntegerRange
 
 
+_GENERATOR = CGenerator()
+
+
 def key(node):
-    return CGenerator().visit(node)
+    return _GENERATOR.visit(node)
 
 
 def address(node, state):
