@@ -1,0 +1,2196 @@
+{
+  "schema_version": 1,
+  "rule": "CGULL-049",
+  "cases": [
+    {
+      "id": "malloc_prototype",
+      "file": "malloc_prototype/case.c",
+      "api": "malloc",
+      "parameter": 1,
+      "signature_source": "prototype",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 12,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "malloc_local_header",
+      "file": "malloc_local_header/case.c",
+      "api": "malloc",
+      "parameter": 1,
+      "signature_source": "local_header",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 12,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "malloc_fallback",
+      "file": "malloc_fallback/case.c",
+      "api": "malloc",
+      "parameter": 1,
+      "signature_source": "fallback",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 3,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 8,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 18,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 24,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 33,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 37,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 42,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 52,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 58,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 67,
+          "column": 12,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "malloc_compile_database",
+      "file": "malloc_compile_database/case.c",
+      "api": "malloc",
+      "parameter": 1,
+      "signature_source": "compile_database",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 12,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 12,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 12,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "memcpy_prototype",
+      "file": "memcpy_prototype/case.c",
+      "api": "memcpy",
+      "parameter": 3,
+      "signature_source": "prototype",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 22,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "memcpy_local_header",
+      "file": "memcpy_local_header/case.c",
+      "api": "memcpy",
+      "parameter": 3,
+      "signature_source": "local_header",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 22,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "memcpy_fallback",
+      "file": "memcpy_fallback/case.c",
+      "api": "memcpy",
+      "parameter": 3,
+      "signature_source": "fallback",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 3,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 8,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 18,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 24,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 33,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 37,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 42,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 52,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 58,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 67,
+          "column": 22,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "memcpy_compile_database",
+      "file": "memcpy_compile_database/case.c",
+      "api": "memcpy",
+      "parameter": 3,
+      "signature_source": "compile_database",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 22,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 22,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 22,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "memmove_prototype",
+      "file": "memmove_prototype/case.c",
+      "api": "memmove",
+      "parameter": 3,
+      "signature_source": "prototype",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 23,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "memmove_local_header",
+      "file": "memmove_local_header/case.c",
+      "api": "memmove",
+      "parameter": 3,
+      "signature_source": "local_header",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 23,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "memmove_fallback",
+      "file": "memmove_fallback/case.c",
+      "api": "memmove",
+      "parameter": 3,
+      "signature_source": "fallback",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 3,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 8,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 18,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 24,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 33,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 37,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 42,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 52,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 58,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 67,
+          "column": 23,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "memmove_compile_database",
+      "file": "memmove_compile_database/case.c",
+      "api": "memmove",
+      "parameter": 3,
+      "signature_source": "compile_database",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 23,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "strncpy_prototype",
+      "file": "strncpy_prototype/case.c",
+      "api": "strncpy",
+      "parameter": 3,
+      "signature_source": "prototype",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 23,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "strncpy_local_header",
+      "file": "strncpy_local_header/case.c",
+      "api": "strncpy",
+      "parameter": 3,
+      "signature_source": "local_header",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 23,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "strncpy_fallback",
+      "file": "strncpy_fallback/case.c",
+      "api": "strncpy",
+      "parameter": 3,
+      "signature_source": "fallback",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 3,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 8,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 18,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 24,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 33,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 37,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 42,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 52,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 58,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 67,
+          "column": 23,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "strncpy_compile_database",
+      "file": "strncpy_compile_database/case.c",
+      "api": "strncpy",
+      "parameter": 3,
+      "signature_source": "compile_database",
+      "flows": [
+        {
+          "type": "signed char",
+          "flow": "direct",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "alias",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "signed char",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "signed char",
+          "flow": "cast",
+          "expected_cwe": "CWE-194"
+        },
+        {
+          "type": "int",
+          "flow": "direct",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "alias",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "guard",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "partial_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "stale_guard",
+          "expected_cwe": "CWE-195"
+        },
+        {
+          "type": "int",
+          "flow": "constant",
+          "expected_cwe": null
+        },
+        {
+          "type": "int",
+          "flow": "cast",
+          "expected_cwe": "CWE-195"
+        }
+      ],
+      "expected": [
+        {
+          "line": 4,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 9,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 19,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 25,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 34,
+          "column": 23,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 38,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 43,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 53,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 59,
+          "column": 23,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 68,
+          "column": 23,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "custom_classes",
+      "file": "custom_classes/case.c",
+      "signature_source": "custom",
+      "status": "supported",
+      "expected": [
+        {
+          "line": 3,
+          "column": 14,
+          "cwe": "CWE-194"
+        },
+        {
+          "line": 3,
+          "column": 17,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 3,
+          "column": 20,
+          "cwe": "CWE-196"
+        },
+        {
+          "line": 3,
+          "column": 23,
+          "cwe": "CWE-197"
+        }
+      ]
+    },
+    {
+      "id": "compatible",
+      "file": "compatible/case.c",
+      "signature_source": "custom",
+      "status": "supported",
+      "expected": [
+        {
+          "line": 4,
+          "column": 12,
+          "cwe": "CWE-195"
+        }
+      ]
+    },
+    {
+      "id": "override",
+      "file": "override/case.c",
+      "signature_source": "custom",
+      "status": "safe_type",
+      "expected": []
+    },
+    {
+      "id": "conflicting",
+      "file": "conflicting/case.c",
+      "signature_source": "custom",
+      "status": "unresolved_signature",
+      "expected": []
+    },
+    {
+      "id": "shadow",
+      "file": "shadow/case.c",
+      "signature_source": "custom",
+      "status": "unresolved_indirect_call",
+      "expected": []
+    },
+    {
+      "id": "unknown_api",
+      "file": "unknown_api/case.c",
+      "signature_source": "custom",
+      "status": "unresolved_signature",
+      "expected": []
+    },
+    {
+      "id": "unknown_width",
+      "file": "unknown_width/case.c",
+      "signature_source": "custom",
+      "status": "unresolved_width",
+      "expected": []
+    },
+    {
+      "id": "independent_casts",
+      "file": "independent_casts/case.c",
+      "signature_source": "custom",
+      "status": "supported",
+      "expected": [
+        {
+          "line": 3,
+          "column": 14,
+          "cwe": "CWE-195"
+        },
+        {
+          "line": 3,
+          "column": 31,
+          "cwe": "CWE-195"
+        }
+      ]
+    }
+  ]
+}

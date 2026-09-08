@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.8] - 2026-09-08
+
+### Added
+- Manifest-driven external-call conversion integration coverage with exact CWE/argument locations, signature degradation checks, and reproducible upstream evidence for CGULL-049 (#376).
+
 ## [0.10.7] - 2026-09-08
 
 ### Added

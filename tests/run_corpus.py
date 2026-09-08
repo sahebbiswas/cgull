@@ -177,6 +177,32 @@ def run_corpus_scan(
         else:
             log_lines.append(f"WARNING: Rule ID '{rule_id}' directory has test files but zero expectation annotations ('// expect: {rule_id}').")
 
+    # The external-call matrix requires per-TU include configuration and exact
+    # columns/CWEs, beyond the legacy line/rule annotations above.
+    if "CGULL-049" in rule_folders:
+        if __package__:
+            from .run_external_conversion_corpus import CASES, scan_case
+        else:
+            from run_external_conversion_corpus import CASES, scan_case
+        for case in CASES:
+            expected = sorted((e["line"], e["column"], e["cwe"]) for e in case["expected"])
+            actual = scan_case(case)
+            total_files += 1
+            total_expected += len(expected)
+            # Lists preserve multiple independent conversions on the same line.
+            remaining = list(actual)
+            for finding in expected:
+                if finding in remaining:
+                    remaining.remove(finding)
+                    total_matched += 1
+                else:
+                    total_missing += 1
+            total_unexpected += len(remaining)
+            if actual != expected:
+                message = f"  FAIL: external matrix {case['id']}: expected {expected}, got {actual}"
+                failures.append(message)
+                log_lines.append(message)
+
     total_registered_rules = len(RULE_REGISTRY)
     evaluated_rules_count = len(meaningfully_covered_rules)
     behavioral_coverage_pct = (evaluated_rules_count / total_registered_rules * 100.0) if total_registered_rules > 0 else 0.0
