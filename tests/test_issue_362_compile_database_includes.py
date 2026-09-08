@@ -166,6 +166,35 @@ def test_compile_database_header_context_recovers_declaration_only_signature(tmp
     assert "parameter 'value'" in with_database.issues[0].message
 
 
+def test_parallel_scan_uses_same_per_file_config_hook(tmp_path):
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+    (include_dir / "api.h").write_text("void sink(unsigned char value);\n", encoding="utf-8")
+    source = tmp_path / "main.c"
+    source.write_text(
+        "#include <api.h>\n"
+        "int caller(unsigned int value) { sink(value); return 0; }\n",
+        encoding="utf-8",
+    )
+    database = _write_database(
+        tmp_path / "compile_commands.json",
+        [{
+            "directory": str(tmp_path),
+            "file": str(source),
+            "arguments": ["cc", "-I", str(include_dir), "-c", str(source)],
+        }],
+    )
+    config = ScanConfig.create(
+        rules=[IntegerNarrowingCastRule()],
+        engine_mode=AnalysisEngine.AST,
+    )
+
+    result = CompileDatabaseCGullScanner(config=config, compile_database=database).scan_path(
+        str(source), jobs=2, quiet=True
+    )
+    assert [issue.cwe_id for issue in result.issues] == ["CWE-197"]
+
+
 def test_explicit_include_roots_precede_compile_database_roots(tmp_path):
     explicit = tmp_path / "explicit"
     build_root = tmp_path / "build-root"
@@ -202,3 +231,31 @@ def test_explicit_include_roots_precede_compile_database_roots(tmp_path):
     ).scan_path(str(source), quiet=True)
 
     assert result.issues == []
+
+
+def test_cli_loads_compile_database_json_only_once(monkeypatch, tmp_path):
+    import cgull.cli as cli
+
+    source = tmp_path / "main.c"
+    source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    db_path = tmp_path / "compile_commands.json"
+    db_path.write_text(json.dumps([{
+        "directory": str(tmp_path),
+        "file": str(source),
+        "arguments": ["cc", "-DVALUE=7", "-I", str(tmp_path), "-c", str(source)],
+    }]), encoding="utf-8")
+
+    original_loader = cli.load_compile_commands_data
+    calls = []
+
+    def counting_loader(path):
+        calls.append(os.path.realpath(os.fspath(path)))
+        return original_loader(path)
+
+    monkeypatch.setattr(cli, "load_compile_commands_data", counting_loader)
+    args = cli.build_parser().parse_args([
+        "scan", str(source), "--compile-commands", str(db_path), "--mode", "tu", "--quiet"
+    ])
+
+    assert cli.handle_scan(args) == 0
+    assert calls == [os.path.realpath(str(db_path))]
