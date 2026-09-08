@@ -43,10 +43,12 @@ class CFGSourceLocation:
 class CFGCall:
     """Structured call metadata attached to the containing CFG event.
 
-    ``direct_callee`` is populated only for syntactically direct calls. For
-    function pointers and other indirect call expressions, ``callee_expression``
-    retains the source spelling and ``is_indirect`` remains true. Provable
-    bounded targets are recorded separately in ``resolved_callees``.
+    ``direct_callee`` contains the effective singleton callee when one is known:
+    either a syntactically direct function or a provably single resolved indirect
+    target. ``is_indirect`` always preserves the original call syntax, so summary
+    consumers can reuse the historic singleton field without mistaking a function
+    pointer call for a syntactically direct call. ``resolved_callees`` preserves
+    the complete deterministic target set for indirect calls.
     """
 
     direct_callee: Optional[str]
