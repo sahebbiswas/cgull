@@ -4,6 +4,13 @@ Implementation is housed in focused modules while this package keeps the
 historic :mod:`cgull.ast_analyzer` import path stable.
 """
 
+from .pcpp_diagnostics import install_pcpp_diagnostic_suppression
+
+# pcpp's default #error/#warning handling writes directly to stderr.  Install
+# C-GULL's integration hook before importing visitor/CASTParser so parser-owned
+# preprocessors cannot bypass CLI progress/report coordination.
+install_pcpp_diagnostic_suppression()
+
 from .configuration import *
 from .preprocessor import *
 from .types import *
