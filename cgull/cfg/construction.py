@@ -23,6 +23,7 @@ from .ast_events import (
     _simple_null_facts,
 )
 from .dataflow import StructuredCFG
+from .diagnostics import CFGDiagnostic
 from .model import FunctionSummary
 
 
@@ -372,6 +373,34 @@ def build_cfg(
     for goto_node, label_name in pending_gotos:
         if label_name in labels_map:
             cfg.connect(goto_node, labels_map[label_name])
+            continue
+
+        goto_event = cfg.nodes[goto_node]
+        unknown_node = cfg.new_node(
+            "unknown_control_flow",
+            getattr(goto_event, "_ast_node", None),
+            line_map=line_map,
+            expr_str=f"unresolved goto {label_name}",
+        )
+        unknown_event = cfg.nodes[unknown_node]
+        setattr(unknown_event, "is_unknown_control_flow", True)
+        setattr(unknown_event, "unresolved_target", label_name)
+        cfg.connect(goto_node, unknown_node)
+        cfg.diagnostics.append(
+            CFGDiagnostic(
+                code="CFG_UNRESOLVED_GOTO",
+                message=f"Unresolved goto target '{label_name}'; control flow is conservative",
+                source_location=goto_event.source_location,
+                target=label_name,
+            )
+        )
+
+        # The missing label may have been removed by preprocessing/recovery, so
+        # its actual successor cannot be represented by a concrete lexical edge.
+        # Treat the explicit unknown node as a wildcard over existing CFG nodes.
+        for candidate_id in sorted(cfg.nodes):
+            if candidate_id not in {goto_node, unknown_node}:
+                cfg.connect(unknown_node, candidate_id)
 
     cfg.build_basic_blocks()
     return cfg
