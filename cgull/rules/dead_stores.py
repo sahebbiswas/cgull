@@ -1,13 +1,10 @@
 """Fallback control-flow refinements for CGULL-042 dead-store analysis."""
 
 import re
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .misra_and_style import DeadStoresRule as _BaseDeadStoresRule
 from ..utils import mask_string_and_char_literals
-
-
-_IDENTIFIER = r"[A-Za-z_]\w*"
 
 
 def _matching_delimiter(source: str, start: int, opener: str, closer: str) -> Optional[int]:
@@ -100,7 +97,7 @@ def _loop_carried_read_spans(source: str, variable: str) -> List[Tuple[int, int]
     """Return loop-body line spans whose next-iteration expressions read *variable*.
 
     Only while conditions and the condition/iteration clauses of for loops are
-    considered.  A for-loop initializer is intentionally excluded because it
+    considered. A for-loop initializer is intentionally excluded because it
     executes only once and therefore cannot consume a body write on a back-edge.
     do/while needs no special handling: its condition is textually after the body,
     so the existing fallback line-order check already observes that read.
@@ -143,7 +140,7 @@ def _protected_loop_carried_writes(ast_ctx) -> Set[Tuple[int, str]]:
     """Find fallback writes that are consumed on a structured-loop back-edge.
 
     A write is protected only when it is the final textual write to that variable
-    in the enclosing loop body.  This preserves genuine dead-store reports such
+    in the enclosing loop body. This preserves genuine dead-store reports such
     as ``X = 1; X = 2;`` inside ``while (X)``: only the second value can reach the
     next condition evaluation.
     """
