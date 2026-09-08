@@ -9,7 +9,6 @@ from typing import Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 
-
 class Nullness(Enum):
     NULL = "NULL"
     NON_NULL = "NON_NULL"
@@ -41,6 +40,16 @@ class CFGSourceLocation:
 
 
 @dataclass(frozen=True)
+class CFGDiagnostic:
+    """Structured diagnostic emitted while constructing/analyzing a CFG."""
+
+    code: str
+    message: str
+    source_location: Optional[CFGSourceLocation] = None
+    target: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class CFGCall:
     """Structured call metadata attached to the containing CFG event.
 
@@ -61,17 +70,10 @@ class CFGCall:
 @dataclass
 class FunctionSummary:
     freed_params: Set[int] = field(default_factory=set)
-    # Parameter positions whose incoming argument value can be dereferenced
-    # before the callee establishes it is non-NULL.  This follows the
-    # parameter's initial location, not a variable of the same name after an
-    # assignment in the callee.
     unsafe_deref_params: Set[int] = field(default_factory=set)
     return_nullness: Nullness = Nullness.UNKNOWN
     returns_allocation: bool = False
     is_unknown: bool = False
-    # Pointer parameters whose referenced caller-owned object is initialized
-    # on every reachable exit vs on at least one reachable path. Appended to
-    # preserve the positional constructor contract of the older fields.
     must_initialize_params: Set[int] = field(default_factory=set)
     may_initialize_params: Set[int] = field(default_factory=set)
 
@@ -87,21 +89,16 @@ class VariableFacts:
 class BasicBlock:
     block_id: int
     nodes: List["CFGEvent"] = field(default_factory=list)
-    predecessors: List[int] = field(default_factory=list)  # list of block_ids
-    successors: List[int] = field(default_factory=list)    # list of block_ids
-    edge_facts: Dict[int, Tuple[Set[str], Set[str]]] = field(default_factory=dict)  # succ block_id -> (add, remove)
+    predecessors: List[int] = field(default_factory=list)
+    successors: List[int] = field(default_factory=list)
+    edge_facts: Dict[int, Tuple[Set[str], Set[str]]] = field(default_factory=dict)
 
-    # In and Out facts at block entry and block exit
     nullness_in: Dict[str, Nullness] = field(default_factory=dict)
     nullness_out: Dict[str, Nullness] = field(default_factory=dict)
-
     init_in: Dict[str, Initialization] = field(default_factory=dict)
     init_out: Dict[str, Initialization] = field(default_factory=dict)
-
     alloc_in: Dict[str, Allocation] = field(default_factory=dict)
     alloc_out: Dict[str, Allocation] = field(default_factory=dict)
-
-    # Alias and location lifecycle tracking facts
     loc_state_in: Dict[str, Allocation] = field(default_factory=dict)
     loc_state_out: Dict[str, Allocation] = field(default_factory=dict)
     loc_map_in: Dict[str, Set[str]] = field(default_factory=dict)
@@ -129,6 +126,8 @@ class CFGEvent:
     realloc_bindings: Dict[str, str] = field(default_factory=dict)
     calls: Tuple[CFGCall, ...] = ()
     successors: List[int] = field(default_factory=list)
+    is_unknown_control_flow: bool = False
+    unresolved_target: Optional[str] = None
 
     @property
     def primary_call(self) -> Optional[CFGCall]:
@@ -155,5 +154,3 @@ class CFGEvent:
 
     def get_deref_line(self, var_name: str) -> int:
         return self.deref_lines.get(var_name, self.line_number)
-
-
