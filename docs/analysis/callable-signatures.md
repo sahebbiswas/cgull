@@ -50,3 +50,7 @@ Callable signature metadata is intentionally separate from `cgull.semantic_model
 ## Current boundaries
 
 The resolver currently covers direct identifier calls within one parsed translation unit plus the explicit built-in fallback table above. Function-pointer target resolution, cross-translation-unit body analysis, C++ overload resolution, general header discovery, and additional arithmetic-conversion semantics remain separate concerns. Header declarations are available when retained by the existing preprocessing/include pipeline; this query does not independently ingest headers.
+
+## End-to-end validation
+
+See the [external-call integration matrix and upstream audit](../benchmarks/external-conversions-376.md) for exact-CWE pipeline coverage, measured precision/recall, and residual limitations.
