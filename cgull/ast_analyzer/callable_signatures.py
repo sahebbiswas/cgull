@@ -45,15 +45,14 @@ def _parameter_from_ast(ast_ctx: CASTContext, param) -> CallableParameter:
 
 
 def _return_type_from_decl(ast_ctx: CASTContext, decl) -> str:
-    funcdecl = getattr(decl, "type", None)
-    return_node = getattr(funcdecl, "type", None)
+    return_node = getattr(getattr(decl, "type", None), "type", None)
     if return_node is None:
         return ""
-    type_name, is_ptr, is_fp, _is_vol, _is_signed, _is_vla, _dim, is_arr = _format_pycparser_type(
+    type_name, is_ptr, is_fp, _is_vol, _is_signed, _is_vla, _dim, _is_arr = _format_pycparser_type(
         return_node, ast_ctx.unsigned_typedefs
     )
-    if is_ptr or is_fp or is_arr:
-        return type_name
+    if is_ptr or is_fp:
+        return f"{type_name} *"
     return type_name
 
 
