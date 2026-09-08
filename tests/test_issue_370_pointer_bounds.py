@@ -89,7 +89,11 @@ def test_unsupported_flow_and_alias_effects_do_not_claim_definite(body):
 
 def test_caller_minimum_capacity_is_not_an_exact_object_boundary():
     ctx = CASTParser().parse('void f(int *p) { p += 11; } void g(void) {int a[10]; f(a);}')
-    assert PointerRangeBoundsRule().scan_ast('x.c', ctx) == []
+    issues = PointerRangeBoundsRule().scan_ast('x.c', ctx)
+    # #374 diagnoses this call using the actual object's exact extent.
+    assert len(issues) == 1
+    assert "object 'a' (40 bytes)" in issues[0].message
+    assert ctx.analysis_session.pointer_range_analysis.query('f', 'p').object_extent is None
 
 
 def test_unreachable_tail_and_memory_increment():

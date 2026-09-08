@@ -163,6 +163,7 @@ class AnalysisSession:
                 size_analysis=self.size_analysis,
                 value_analysis=self.value_analysis,
                 semantic_models=self.semantic_models,
+                call_graph=self.call_graph,
             )
         return self._pointer_range_analysis_result
 
