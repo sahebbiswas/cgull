@@ -88,6 +88,22 @@ void caller(int n, char *buffer) {
     assert signature.parameters[2].type_name == "size_t"
 
 
+def test_visible_pointer_return_type_matches_builtin_without_duplication():
+    fallback = _signature("""
+void caller(int n) {
+    malloc(n);
+}
+""")
+    visible = _signature("""
+void *malloc(size_t);
+void caller(int n) {
+    malloc(n);
+}
+""")
+    assert fallback is not None and visible is not None
+    assert fallback.return_type == visible.return_type == "void *"
+
+
 def test_unnamed_visible_parameters_match_builtin_destination_types():
     fallback = _issues(_source("memcpy(dst, src, n);"))
     unnamed = _issues(_source("memcpy(dst, src, n);", "void *memcpy(void *, const void *, size_t);"))
