@@ -1,5 +1,7 @@
 """Regression coverage for issue #403 preprocessor diagnostic leakage."""
 
+from io import StringIO
+
 import pytest
 
 
@@ -22,10 +24,13 @@ def test_pcpp_error_is_consumed_without_raw_terminal_output(capsys):
         + "int value;\n",
         "actual/source/config.c",
     )
+    output = StringIO()
+    preprocessor.write(output)
 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+    assert "int value;" in output.getvalue()
     assert preprocessor.return_code == 1
 
 
@@ -36,10 +41,13 @@ def test_pcpp_warning_is_consumed_without_raw_terminal_output(capsys):
         '#warning "configuration is deprecated"\nint value;\n',
         "actual/source/config.c",
     )
+    output = StringIO()
+    preprocessor.write(output)
 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+    assert "int value;" in output.getvalue()
     assert preprocessor.return_code == 0
 
 
