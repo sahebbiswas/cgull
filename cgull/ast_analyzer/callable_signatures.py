@@ -48,11 +48,9 @@ def _return_type_from_decl(ast_ctx: CASTContext, decl) -> str:
     return_node = getattr(getattr(decl, "type", None), "type", None)
     if return_node is None:
         return ""
-    type_name, is_ptr, is_fp, _is_vol, _is_signed, _is_vla, _dim, _is_arr = _format_pycparser_type(
+    type_name, _is_ptr, _is_fp, _is_vol, _is_signed, _is_vla, _dim, _is_arr = _format_pycparser_type(
         return_node, ast_ctx.unsigned_typedefs
     )
-    if is_ptr or is_fp:
-        return f"{type_name} *"
     return type_name
 
 
