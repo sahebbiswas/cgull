@@ -1,25 +1,24 @@
 """Compilation-database include context for translation-unit scanning.
 
 This module intentionally leaves the existing ``parse_compile_commands`` macro
-profile ingestion untouched.  It derives only include-search context and layers
+profile ingestion untouched. It derives only include-search context and layers
 that context onto the scanner per translation unit, so one compile command can
 never change another translation unit's include roots.
 """
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import shlex
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
-from .engine import _emit_error, _scan_file_worker
-from .models import Confidence, ConfigProfile, ParseTier, ParserStatus, ScanConfig, ScanError
-from .telemetry import CGullScanner as _TelemetryCGullScanner, _profile_multiplier
+from .models import ScanConfig
+from .telemetry import CGullScanner as _TelemetryCGullScanner
 
 
 @dataclass(frozen=True)
@@ -31,8 +30,6 @@ class CompileCommandIncludeDatabase:
 
     @classmethod
     def from_file(cls, path: Union[str, os.PathLike[str]]) -> "CompileCommandIncludeDatabase":
-        import json
-
         db_path = Path(path)
         if not db_path.exists():
             raise FileNotFoundError(f"Compile commands file '{db_path}' does not exist.")
@@ -96,6 +93,19 @@ class CompileCommandIncludeDatabase:
 
     def roots_for(self, file_path: str) -> Tuple[str, ...]:
         return self.include_roots_by_file.get(_canonical_path(file_path, os.getcwd()), ())
+
+
+def load_compile_commands_data(path: Union[str, os.PathLike[str]]) -> List[Any]:
+    """Load a compilation database once for callers that need multiple views of it."""
+
+    db_path = Path(path)
+    if not db_path.exists():
+        raise FileNotFoundError(f"Compile commands file '{db_path}' does not exist.")
+    with db_path.open("r", encoding="utf-8", errors="replace") as handle:
+        data = json.load(handle)
+    if not isinstance(data, list):
+        raise ValueError("compile_commands.json top-level JSON must be an array")
+    return data
 
 
 def _entry_arguments(
@@ -277,125 +287,3 @@ class CompileDatabaseCGullScanner(_TelemetryCGullScanner):
         per_file_config = copy.copy(config)
         per_file_config.include_roots = merged_roots
         return per_file_config
-
-    def _scan_single_file_content(self, file_path, content, config=None, **kwargs):
-        if config is not None:
-            config = self._config_for_file(config, file_path)
-        return super()._scan_single_file_content(file_path, content, config=config, **kwargs)
-
-    def _scan_files_parallel(
-        self,
-        files_to_scan: List[str],
-        jobs: int,
-        config: ScanConfig,
-        progress_callback=None,
-        quiet: bool = False,
-        progress_active: bool = False,
-        profiles: Optional[List[ConfigProfile]] = None,
-    ):
-        import pickle
-        import time
-
-        try:
-            pickle.dumps(config)
-            if profiles:
-                pickle.dumps(profiles)
-        except Exception as exc:
-            raise ValueError(
-                f"Configuration/profiles cannot be serialized for parallel worker processes: {exc}. "
-                "Ensure all custom rules and profiles are picklable or use jobs=1 for sequential scanning."
-            ) from exc
-
-        results = []
-        total_files = len(files_to_scan)
-        multiplier = _profile_multiplier(profiles)
-        completed_count = 0
-        pool = ProcessPoolExecutor(max_workers=jobs)
-        futures = {}
-        try:
-            futures = {
-                pool.submit(
-                    _scan_file_worker,
-                    file_path,
-                    self._config_for_file(config, file_path),
-                    profiles,
-                    quiet,
-                    progress_active,
-                ): file_path
-                for file_path in files_to_scan
-            }
-            for future in as_completed(futures):
-                file_path = futures[future]
-                completed_count += 1
-                try:
-                    file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = future.result()
-                    result = (
-                        file_path,
-                        file_issues,
-                        loc,
-                        duration_ms,
-                        parser_status,
-                        parse_tier,
-                        status,
-                        confidence,
-                        scan_err,
-                    )
-                except Exception as exc:
-                    scan_err = ScanError(
-                        file_path=file_path,
-                        error_type=type(exc).__name__,
-                        message=str(exc) or f"Worker execution failed for {file_path}",
-                    )
-                    _emit_error(
-                        file_path,
-                        scan_err.error_type,
-                        scan_err.message,
-                        quiet=quiet,
-                        progress_active=progress_active,
-                    )
-                    result = (
-                        file_path,
-                        [],
-                        0,
-                        0.0,
-                        ParserStatus.PARSE_FAILED.value,
-                        ParseTier.REGEX_FALLBACK.value,
-                        "failed",
-                        Confidence.LIMITED.value,
-                        scan_err,
-                    )
-                results.append(result)
-                _, file_issues, loc, _, parser_status, _, status, _, _ = result
-                self._record_progress_result(
-                    loc=loc,
-                    file_issues=file_issues,
-                    parser_status=parser_status,
-                    status=status,
-                    multiplier=multiplier,
-                    completed=completed_count,
-                    total=total_files,
-                    progress_callback=progress_callback,
-                    current_file=file_path,
-                )
-            pool.shutdown(wait=True)
-        except BaseException:
-            processes = list((getattr(pool, "_processes", {}) or {}).values())
-            for future in futures:
-                future.cancel()
-            for process in processes:
-                if process and process.is_alive():
-                    process.terminate()
-
-            join_deadline = time.monotonic() + 1.0
-            for process in processes:
-                if process:
-                    process.join(timeout=max(0.0, join_deadline - time.monotonic()))
-            for process in processes:
-                if process and process.is_alive() and hasattr(process, "kill"):
-                    process.kill()
-            for process in processes:
-                if process and process.is_alive():
-                    process.join(timeout=0.5)
-            pool.shutdown(wait=True, cancel_futures=True)
-            raise
-        return results
