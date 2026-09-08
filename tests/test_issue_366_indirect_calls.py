@@ -29,7 +29,8 @@ def test_direct_local_initializer_resolves_indirect_call():
     """))
     call = _indirect_calls(graph, "caller")[0]
     assert call.resolved_callees == ("helper",)
-    assert call.direct_callee is None
+    assert call.direct_callee == "helper"
+    assert call.is_indirect
     assert graph.callees("caller") == ("helper",)
 
 
@@ -49,7 +50,9 @@ def test_reassignment_is_flow_sensitive():
     first_call = next(call for call in calls if call.result_target == "a")
     second_call = next(call for call in calls if call is not first_call)
     assert first_call.resolved_callees == ("first",)
+    assert first_call.direct_callee == "first"
     assert second_call.resolved_callees == ("second",)
+    assert second_call.direct_callee == "second"
 
 
 def test_same_target_branch_join_resolves_single_target():
@@ -61,7 +64,9 @@ def test_same_target_branch_join_resolves_single_target():
             return cb(x);
         }
     """))
-    assert _indirect_calls(graph, "caller")[0].resolved_callees == ("helper",)
+    call = _indirect_calls(graph, "caller")[0]
+    assert call.resolved_callees == ("helper",)
+    assert call.direct_callee == "helper"
 
 
 def test_different_branch_targets_form_deterministic_set():
@@ -118,4 +123,5 @@ def test_explicit_pointer_dereference_call_resolves():
     """))
     call = _indirect_calls(graph, "caller")[0]
     assert call.resolved_callees == ("helper",)
-    assert call.direct_callee is None
+    assert call.direct_callee == "helper"
+    assert call.is_indirect
