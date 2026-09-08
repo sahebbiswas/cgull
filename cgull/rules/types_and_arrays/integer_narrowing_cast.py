@@ -230,6 +230,7 @@ class IntegerNarrowingCastRule(BaseRule):
                     *,
                     source_type_override: Optional[str] = None,
                     range_expression=None,
+                    report_sign_extension: bool = True,
                 ) -> bool:
                     if not destination_type:
                         return False
@@ -249,7 +250,8 @@ class IntegerNarrowingCastRule(BaseRule):
                     )
                     plain_char = _resolved_scalar_type(source_type, ast_ctx) == "char"
                     sign_extension = (
-                        source_width < int_width and source_width < destination_width
+                        report_sign_extension
+                        and source_width < int_width and source_width < destination_width
                         and destination_range is not None
                         and (plain_char or source_range is not None and source_range.lower < 0)
                     )
@@ -387,6 +389,7 @@ class IntegerNarrowingCastRule(BaseRule):
                             operation_type,
                             node,
                             f"{kind} operand conversion",
+                            report_sign_extension=False,
                         ):
                             return
 
