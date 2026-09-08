@@ -1,4 +1,4 @@
-"""Deterministic translation-unit call graph construction."""
+"""Deterministic direct-call graph construction for one expanded translation unit."""
 
 from dataclasses import dataclass
 from heapq import heappop, heappush
@@ -14,6 +14,8 @@ from .model import CFGCall, CFGSourceLocation
 
 @dataclass(frozen=True)
 class CallGraphFunction:
+    """One function definition visible in the expanded translation unit."""
+
     name: str
     cfg: StructuredCFG
     linkage: str = "external"
@@ -22,6 +24,8 @@ class CallGraphFunction:
 
 @dataclass(frozen=True)
 class CallGraphEdge:
+    """A call edge emitted by a caller CFG event."""
+
     caller: str
     callee: Optional[str]
     call: CFGCall
@@ -32,44 +36,58 @@ class CallGraphEdge:
 
 
 class TranslationUnitCallGraph:
-    def __init__(self, functions, edges, unresolved_edges, sccs, bottom_up_sccs, construction_seconds):
+    """Immutable, deterministic call graph for exactly one translation unit."""
+
+    def __init__(
+        self,
+        functions: Sequence[CallGraphFunction],
+        edges: Sequence[CallGraphEdge],
+        unresolved_edges: Sequence[CallGraphEdge],
+        sccs: Sequence[Sequence[str]],
+        bottom_up_sccs: Sequence[Sequence[str]],
+        construction_seconds: float,
+    ) -> None:
         self.functions = tuple(functions)
         self.edges = tuple(edges)
         self.unresolved_edges = tuple(unresolved_edges)
-        self.sccs = tuple(tuple(c) for c in sccs)
-        self.bottom_up_sccs = tuple(tuple(c) for c in bottom_up_sccs)
+        self.sccs = tuple(tuple(component) for component in sccs)
+        self.bottom_up_sccs = tuple(tuple(component) for component in bottom_up_sccs)
         self.construction_seconds = construction_seconds
-        self._by_name = {f.name: f for f in self.functions}
-        callees = {name: [] for name in self._by_name}
-        callers = {name: [] for name in self._by_name}
+        self._by_name = {function.name: function for function in self.functions}
+        self._callees = {name: [] for name in self._by_name}
+        self._callers = {name: [] for name in self._by_name}
         for edge in self.edges:
             if edge.callee is not None:
-                callees[edge.caller].append(edge.callee)
-                callers[edge.callee].append(edge.caller)
-        self._callees = {k: tuple(sorted(set(v))) for k, v in callees.items()}
-        self._callers = {k: tuple(sorted(set(v))) for k, v in callers.items()}
-        self._scc_by_function = {name: i for i, component in enumerate(self.sccs) for name in component}
+                self._callees[edge.caller].append(edge.callee)
+                self._callers[edge.callee].append(edge.caller)
+        self._callees = {key: tuple(sorted(set(value))) for key, value in self._callees.items()}
+        self._callers = {key: tuple(sorted(set(value))) for key, value in self._callers.items()}
+        self._scc_by_function = {
+            name: component_index
+            for component_index, component in enumerate(self.sccs)
+            for name in component
+        }
 
-    def function(self, name):
+    def function(self, name: str) -> Optional[CallGraphFunction]:
         return self._by_name.get(name)
 
-    def callers(self, name):
+    def callers(self, name: str) -> Tuple[str, ...]:
         return self._callers.get(name, ())
 
-    def callees(self, name):
+    def callees(self, name: str) -> Tuple[str, ...]:
         return self._callees.get(name, ())
 
-    def scc_for(self, name):
+    def scc_for(self, name: str) -> Tuple[str, ...]:
         index = self._scc_by_function.get(name)
         return self.sccs[index] if index is not None else ()
 
 
 def _call_sort_key(call: CFGCall) -> Tuple[Any, ...]:
-    loc = call.source_location
+    location = call.source_location
     return (
-        loc.file_path if loc and loc.file_path else "",
-        loc.line_number if loc else 0,
-        loc.column_number if loc else 0,
+        location.file_path if location and location.file_path else "",
+        location.line_number if location else 0,
+        location.column_number if location else 0,
         call.direct_callee or "",
         call.callee_expression,
         call.actual_arguments,
@@ -79,52 +97,70 @@ def _call_sort_key(call: CFGCall) -> Tuple[Any, ...]:
     )
 
 
-def _strongly_connected_components(names: Sequence[str], adjacency: Mapping[str, Tuple[str, ...]]):
-    ordered = tuple(sorted(names))
-    seen, finish = set(), []
-    for start in ordered:
+def _strongly_connected_components(names: Sequence[str], adjacency: Mapping[str, Tuple[str, ...]]) -> Tuple[Tuple[str, ...], ...]:
+    """Compute deterministic SCCs without depending on Python recursion depth.
+
+    This is an iterative Kosaraju traversal. Both passes visit nodes and edges in
+    stable lexical order so component membership and ordering are repeatable.
+    """
+    ordered_names = tuple(sorted(names))
+    seen = set()
+    finish_order = []
+
+    # Iterative DFS that records vertices on exit. A 1,000+ function call chain
+    # therefore consumes heap-backed Python containers rather than call frames.
+    for start in ordered_names:
         if start in seen:
             continue
         seen.add(start)
         frames = [(start, 0)]
         while frames:
-            name, index = frames[-1]
+            name, next_index = frames[-1]
             neighbors = adjacency.get(name, ())
-            if index < len(neighbors):
-                nxt = neighbors[index]
-                frames[-1] = (name, index + 1)
-                if nxt not in seen:
-                    seen.add(nxt)
-                    frames.append((nxt, 0))
+            if next_index < len(neighbors):
+                callee = neighbors[next_index]
+                frames[-1] = (name, next_index + 1)
+                if callee not in seen:
+                    seen.add(callee)
+                    frames.append((callee, 0))
             else:
-                finish.append(name)
+                finish_order.append(name)
                 frames.pop()
-    reverse = {name: [] for name in ordered}
-    for caller in ordered:
+
+    reverse = {name: [] for name in ordered_names}
+    for caller in ordered_names:
         for callee in adjacency.get(caller, ()):
             reverse[callee].append(caller)
-    reverse = {name: tuple(sorted(v)) for name, v in reverse.items()}
-    assigned, components = set(), []
-    for start in reversed(finish):
+    stable_reverse = {name: tuple(sorted(callers)) for name, callers in reverse.items()}
+
+    assigned = set()
+    components = []
+    for start in reversed(finish_order):
         if start in assigned:
             continue
         assigned.add(start)
-        component, stack = [], [start]
+        component = []
+        stack = [start]
         while stack:
             name = stack.pop()
             component.append(name)
-            for caller in reversed(reverse[name]):
+            # Push in reverse lexical order so pop() visits lexical order.
+            for caller in reversed(stable_reverse[name]):
                 if caller not in assigned:
                     assigned.add(caller)
                     stack.append(caller)
         components.append(tuple(sorted(component)))
+
     return tuple(sorted(components))
 
 
-def _bottom_up_scc_order(sccs, adjacency):
-    component_of = {name: i for i, component in enumerate(sccs) for name in component}
-    outgoing = {i: set() for i in range(len(sccs))}
-    predecessors = {i: set() for i in range(len(sccs))}
+def _bottom_up_scc_order(
+    sccs: Sequence[Tuple[str, ...]], adjacency: Mapping[str, Tuple[str, ...]]
+) -> Tuple[Tuple[str, ...], ...]:
+    """Return SCCs in deterministic callee-before-caller order."""
+    component_of = {name: index for index, component in enumerate(sccs) for name in component}
+    outgoing = {index: set() for index in range(len(sccs))}
+    predecessors = {index: set() for index in range(len(sccs))}
     for caller, callees in adjacency.items():
         source = component_of[caller]
         for callee in callees:
@@ -132,26 +168,33 @@ def _bottom_up_scc_order(sccs, adjacency):
             if source != target:
                 outgoing[source].add(target)
                 predecessors[target].add(source)
-    degree = {i: len(v) for i, v in outgoing.items()}
+
+    remaining_outdegree = {index: len(targets) for index, targets in outgoing.items()}
     ready = []
-    for i, value in degree.items():
-        if value == 0:
-            heappush(ready, (sccs[i], i))
-    result = []
+    for index, degree in remaining_outdegree.items():
+        if degree == 0:
+            heappush(ready, (sccs[index], index))
+
+    ordered = []
     while ready:
-        _, i = heappop(ready)
-        result.append(sccs[i])
-        for pred in sorted(predecessors[i], key=lambda item: sccs[item]):
-            degree[pred] -= 1
-            if degree[pred] == 0:
-                heappush(ready, (sccs[pred], pred))
-    return tuple(result)
+        _, index = heappop(ready)
+        ordered.append(sccs[index])
+        for predecessor in sorted(predecessors[index], key=lambda item: sccs[item]):
+            remaining_outdegree[predecessor] -= 1
+            if remaining_outdegree[predecessor] == 0:
+                heappush(ready, (sccs[predecessor], predecessor))
+    return tuple(ordered)
 
 
 def build_call_graph(functions: Iterable[CallGraphFunction]) -> TranslationUnitCallGraph:
-    """Build a graph, resolving bounded local function-pointer targets first."""
+    """Build a graph from CFGs belonging to one expanded translation unit.
+
+    Syntactically direct calls and bounded, provable local function-pointer
+    targets are resolved when they name visible definitions. Unknown indirect
+    calls and external direct calls remain unresolved.
+    """
     started = perf_counter()
-    ordered_functions = tuple(sorted(functions, key=lambda f: f.name))
+    ordered_functions = tuple(sorted(functions, key=lambda function: function.name))
     by_name: Dict[str, CallGraphFunction] = {}
     for function in ordered_functions:
         if function.name in by_name:
@@ -161,7 +204,8 @@ def build_call_graph(functions: Iterable[CallGraphFunction]) -> TranslationUnitC
     for function in ordered_functions:
         resolve_indirect_calls(function.cfg, by_name)
 
-    resolved, unresolved = [], []
+    resolved = []
+    unresolved = []
     adjacency = {name: set() for name in by_name}
     for function in ordered_functions:
         calls = [call for node_id in sorted(function.cfg.nodes) for call in function.cfg.nodes[node_id].calls]
@@ -174,36 +218,40 @@ def build_call_graph(functions: Iterable[CallGraphFunction]) -> TranslationUnitC
                 adjacency[function.name].add(callee)
                 resolved.append(CallGraphEdge(function.name, callee, call))
 
-    stable = {name: tuple(sorted(v)) for name, v in adjacency.items()}
-    sccs = _strongly_connected_components(tuple(by_name), stable)
+    stable_adjacency = {name: tuple(sorted(callees)) for name, callees in adjacency.items()}
+    sccs = _strongly_connected_components(tuple(by_name), stable_adjacency)
+    bottom_up = _bottom_up_scc_order(sccs, stable_adjacency)
     return TranslationUnitCallGraph(
         ordered_functions,
         tuple(resolved),
         tuple(unresolved),
         sccs,
-        _bottom_up_scc_order(sccs, stable),
+        bottom_up,
         perf_counter() - started,
     )
 
 
-def _function_source_location(funcdef: Any, line_map) -> CFGSourceLocation:
+def _function_source_location(funcdef: Any, line_map: Optional[Dict[int, Any]]) -> CFGSourceLocation:
     coord = getattr(getattr(funcdef, "decl", None), "coord", None) or getattr(funcdef, "coord", None)
     if coord is None:
-        return CFGSourceLocation(None, 1, 0)
+        return CFGSourceLocation(file_path=None, line_number=1, column_number=0)
     expanded_line = max(1, coord.line - _PRELUDE_LINE_COUNT)
     mapped = line_map.get(expanded_line) if line_map else None
     return CFGSourceLocation(
-        getattr(mapped, "file_path", None) if mapped is not None else getattr(coord, "file", None),
-        _map_line(expanded_line, line_map),
-        getattr(coord, "column", 0) or 0,
+        file_path=getattr(mapped, "file_path", None) if mapped is not None else getattr(coord, "file", None),
+        line_number=_map_line(expanded_line, line_map),
+        column_number=getattr(coord, "column", 0) or 0,
     )
 
 
 def build_translation_unit_call_graph(ast_context: Any) -> TranslationUnitCallGraph:
+    """Build the call graph for all pycparser definitions in ``ast_context``."""
     if not getattr(ast_context, "has_pycparser", False) or getattr(ast_context, "pycparser_ast", None) is None:
         return build_call_graph(())
+
     line_map = getattr(ast_context, "line_map", None)
-    inputs, seen = [], set()
+    inputs = []
+    seen = set()
     for function in sorted(getattr(ast_context, "functions", ()), key=lambda item: item.name):
         if function.name in seen:
             continue
@@ -212,10 +260,12 @@ def build_translation_unit_call_graph(ast_context: Any) -> TranslationUnitCallGr
             continue
         seen.add(function.name)
         storage = set(getattr(getattr(funcdef, "decl", None), "storage", ()) or ())
-        inputs.append(CallGraphFunction(
-            function.name,
-            build_cfg(funcdef, line_map=line_map),
-            "internal" if "static" in storage else "external",
-            _function_source_location(funcdef, line_map),
-        ))
+        inputs.append(
+            CallGraphFunction(
+                name=function.name,
+                cfg=build_cfg(funcdef, line_map=line_map),
+                linkage="internal" if "static" in storage else "external",
+                source_location=_function_source_location(funcdef, line_map),
+            )
+        )
     return build_call_graph(inputs)
