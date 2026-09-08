@@ -198,3 +198,22 @@ def test_dead_stores_fallback_does_not_blanket_suppress_loop_writes():
     lines = issue_lines(issues)
     assert 4 in lines
     assert 5 not in lines
+
+
+def test_dead_stores_fallback_shadowed_local_does_not_inherit_outer_loop_read():
+    code = """int get_new_value(void) { return 1; }
+void f(void) {
+    int X = 2;
+    while (X > 0) {
+        {
+            int X = 0;
+            X = 1;
+        }
+        X = get_new_value();
+    }
+}
+"""
+    issues = scan_dead_stores_fallback(code)
+    lines = issue_lines(issues)
+    assert 7 in lines
+    assert 9 not in lines
