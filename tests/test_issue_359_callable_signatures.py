@@ -1,4 +1,8 @@
-from cgull.ast_analyzer import CASTParser, resolve_direct_call_signature
+from cgull.ast_analyzer import (
+    CASTParser,
+    build_direct_call_signature_index,
+    resolve_direct_call_signature,
+)
 from cgull.cfg import find_function_def
 from cgull.rules.types_and_arrays import IntegerNarrowingCastRule
 
@@ -152,3 +156,31 @@ int caller(unsigned char *p) {
 }
 """
     assert _issues(source) == []
+
+
+def test_reusable_index_resolves_many_calls_without_rewalking_function():
+    from pycparser import c_ast
+
+    source = """
+void sink(unsigned char value);
+int caller(unsigned int x) {
+    sink(x);
+    sink(x);
+    sink(x);
+    return 0;
+}
+"""
+    ctx = CASTParser().parse(source)
+    assert ctx.has_pycparser
+    funcdef = find_function_def(ctx.pycparser_ast, "caller")
+    calls = []
+
+    class V(c_ast.NodeVisitor):
+        def visit_FuncCall(self, node):
+            calls.append(node)
+
+    V().visit(funcdef)
+    index = build_direct_call_signature_index(ctx, funcdef)
+    signatures = [index.resolve(call) for call in calls]
+    assert len(signatures) == 3
+    assert all(signature is not None and signature.parameters[0].type_name == "unsigned char" for signature in signatures)
