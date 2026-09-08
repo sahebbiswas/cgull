@@ -14,7 +14,7 @@ Higher-level analyses may consume the stable CFG API, but construction and gener
 
 ### `model.py`
 
-Defines shared CFG/domain data types such as events, calls, source locations, basic blocks, and fact enums. New graph-independent value objects belong here.
+Defines shared CFG/domain data types such as events, calls, diagnostics, source locations, basic blocks, and fact enums. New graph-independent value objects belong here.
 
 ### `ast_events.py`
 
@@ -30,7 +30,7 @@ Private AST helper names that historically existed in `construction.py` are temp
 
 ### `graph.py`
 
-Owns `StructuredGraph`, CFG node/edge creation, source-location attachment, predecessor/successor topology, and basic-block construction. It is independent of state-domain transfer semantics.
+Owns `StructuredGraph`, CFG node/edge creation, source-location attachment, construction diagnostics, predecessor/successor topology, and basic-block construction. It is independent of state-domain transfer semantics.
 
 ### `domains.py`
 
@@ -47,6 +47,14 @@ Provides the historic `StructuredCFG` compatibility facade by composing `Structu
 ### Specialized analyses
 
 Ownership, value facts, integer/pointer ranges, interprocedural propagation, and security provenance remain separate consumers of the core CFG. They should depend on the stable graph/event API rather than implementation details of construction.
+
+## Unresolved control flow
+
+A direct `goto` whose label is absent is never treated as a path terminator and is not converted into lexical fallthrough. Construction emits a `CFG_UNRESOLVED_GOTO` diagnostic at the `goto` source location, including the missing label, and connects the `goto` to an explicit `unknown_control_flow` event.
+
+That event represents a wildcard successor because the analyzer cannot know where execution would resume in incomplete, configuration-dependent, or parser-recovered input. Nodes reachable through that wildcard are retained as potentially reachable, and core nullness, initialization, allocation, and lifetime facts are degraded to conservative `MAYBE_*` states. This intentionally trades precision for soundness: a missing label must not make C-GULL more confident or suppress a downstream security finding.
+
+Valid forward and backward direct gotos continue to use concrete label edges and do not incur this degradation. Computed goto extensions, `setjmp`/`longjmp`, C++ exception-like control flow, and indirect calls are separate concerns.
 
 ## Adding CFG functionality
 
