@@ -113,15 +113,32 @@ int caller(unsigned int x) { sink(x); return 0; }
 
 def test_compatible_prototype_and_definition_reconcile_deterministically():
     source = """
-void sink(unsigned char value);
-void sink(unsigned char value) { (void)value; }
+void sink(unsigned char);
+void sink(unsigned char defined_name) { (void)defined_name; }
 int caller(unsigned int x) { sink(x); return 0; }
 """
     signature = _call_signature(source)
     assert signature is not None and signature.resolved
     assert signature.has_prototype
+    assert signature.provenance == "definition"
     assert len(signature.parameters) == 1
-    assert len(_issues(source)) == 1
+    assert signature.parameters[0].name == "defined_name"
+    issues = _issues(source)
+    assert len(issues) == 1
+    assert "parameter 'defined_name'" in issues[0].message
+
+
+def test_conflicting_prototype_and_definition_degrade_to_unresolved():
+    source = """
+void sink(unsigned char value);
+void sink(unsigned int value) { (void)value; }
+int caller(unsigned int x) { sink(x); return 0; }
+"""
+    signature = _call_signature(source)
+    assert signature is not None
+    assert not signature.resolved
+    assert signature.provenance == "conflicting-declarations"
+    assert _issues(source) == []
 
 
 def test_variadic_fixed_parameters_are_checked_but_trailing_arguments_are_not_bound():
@@ -184,3 +201,47 @@ int caller(unsigned int x) {
     signatures = [index.resolve(call) for call in calls]
     assert len(signatures) == 3
     assert all(signature is not None and signature.parameters[0].type_name == "unsigned char" for signature in signatures)
+
+
+def test_object_then_function_redeclaration_does_not_crash_index_build():
+    source = """
+int caller(unsigned int x) {
+    int sink = 0;
+    void sink(unsigned char value);
+    sink(x);
+    return sink;
+}
+"""
+    ctx = CASTParser().parse(source)
+    assert ctx.has_pycparser
+    funcdef = find_function_def(ctx.pycparser_ast, "caller")
+    index = build_direct_call_signature_index(ctx, funcdef)
+    assert index is not None
+
+
+def test_call_binding_is_snapshot_before_later_block_redeclaration():
+    from pycparser import c_ast
+
+    source = """
+int caller(unsigned int x) {
+    void sink(unsigned char first);
+    sink(x);
+    void sink(unsigned int later);
+    return 0;
+}
+"""
+    ctx = CASTParser().parse(source)
+    assert ctx.has_pycparser
+    funcdef = find_function_def(ctx.pycparser_ast, "caller")
+    calls = []
+
+    class V(c_ast.NodeVisitor):
+        def visit_FuncCall(self, node):
+            calls.append(node)
+
+    V().visit(funcdef)
+    assert len(calls) == 1
+    signature = build_direct_call_signature_index(ctx, funcdef).resolve(calls[0])
+    assert signature is not None and signature.resolved
+    assert signature.parameters[0].type_name == "unsigned char"
+    assert signature.parameters[0].name == "first"
