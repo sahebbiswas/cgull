@@ -25,7 +25,7 @@ class StructuredCFG(LegacyDataflowMixin, StructuredGraph):
             for node_id, node in self.nodes.items()
             if getattr(node, "is_unknown_control_flow", False)
         }
-        if not unknown_ids or not hasattr(self, "node_facts"):
+        if not unknown_ids or getattr(self, "node_facts", None) is None:
             return
 
         affected_nodes = set(unknown_ids)
