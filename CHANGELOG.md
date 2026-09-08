@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-08
+
+### Added
+- Flow-sensitive resolution of simple local function-pointer targets, including deterministic multi-target joins and integration with the translation-unit call graph while preserving conservative unresolved behavior (#366).
+- Explicit unresolved-`goto` CFG events and structured diagnostics so missing labels no longer silently terminate analysis paths; affected downstream facts degrade conservatively (#363).
+
+### Changed
+- Refactored CFG implementation into functionally cohesive modules for AST event extraction, graph topology, lattice domains, and legacy dataflow while preserving established compatibility imports and behavior (#393).
+- Interprocedural consumers now use resolved possible callees for indirect calls so lifetime, dereference-safety, validator, and related summaries participate after function-pointer resolution (#366).
+
 ## [0.10.8] - 2026-09-08
 
 ### Added
@@ -29,6 +39,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Reject unsafe endpoint arithmetic before establishing enclosing pointer bounds. Constant offsets now require independent capacity evidence; guarded lengths retain branch-local safety facts.
+
+## [0.10.4] - 2026-09-08
+
+### Added
+- Per-translation-unit include-root derivation from `compile_commands.json`, including `-I`/`-isystem`, canonical deduplication, deterministic precedence, and diagnostics for unsupported include-affecting options (#362).
+
+## [0.10.3] - 2026-09-08
+
+### Added
+- `CGULL-049` compound-assignment conversion analysis across arithmetic, shift, and bitwise compound operators using integer promotions and usual arithmetic conversions (#361).
+
+## [0.10.2] - 2026-09-08
+
+### Added
+- Shared declaration-aware direct-call signature resolution for prototype-only callees, preserving parameter types, variadic/prototype status, lexical visibility, shadowing, and conservative conflict degradation (#359).
+- Standard ISO C/POSIX callable signature fallbacks used only when source declarations/definitions are unavailable, enabling external-library argument conversion checks without changing semantic call effects (#360).
 
 ## [0.10.1] - 2026-09-07
 
