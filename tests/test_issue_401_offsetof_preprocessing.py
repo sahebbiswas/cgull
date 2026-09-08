@@ -30,6 +30,35 @@ def test_forced_fallback_without_offsetof_remains_supported():
     assert ctx.parse_tier == ParseTier.DIRECTIVE_STRIPPED.value
 
 
+def test_offsetof_text_in_comments_and_strings_does_not_trigger_coverage_failure():
+    parser = CASTParser()
+    source = r'''
+int f(void) {
+    /* offsetof(Container, member) is documented here. */
+    const char *text = "offsetof(Container, member)";
+    return text != 0;
+}
+'''
+    with patch.object(parser, "_try_pcpp_preprocess", return_value=None):
+        ctx = parser.parse(source)
+
+    assert ctx.has_pycparser
+    assert ctx.parse_tier == ParseTier.DIRECTIVE_STRIPPED.value
+
+
+def test_explicit_user_defined_offsetof_function_is_not_treated_as_macro_degradation():
+    parser = CASTParser()
+    source = """
+#undef offsetof
+int offsetof(int left, int right) { return left + right; }
+int f(void) { return offsetof(1, 2); }
+"""
+    ctx = parser.parse(source)
+
+    assert ctx.has_pycparser
+    assert ctx.parse_tier == ParseTier.PCPP_PYCPARSER.value
+
+
 def test_scan_text_surfaces_structured_coverage_diagnostic():
     scanner = CGullScanner(rules=[], engine_mode=AnalysisEngine.AST)
     with patch.object(scanner.ast_parser, "_try_pcpp_preprocess", return_value=None):
