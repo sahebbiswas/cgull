@@ -250,6 +250,7 @@ class PointerRangeFunctionResult:
         final_facts: Optional[Mapping[str, PointerRangeFact]] = None,
         events=(),
     ) -> None:
+        self.endpoint_checks = tuple(getattr(snapshots, "endpoint_checks", ()))
         self.events = tuple(events)
         self._snapshots = {line: dict(facts) for line, facts in snapshots.items()}
         self._final_facts = dict(final_facts) if final_facts is not None else None
@@ -296,6 +297,7 @@ class _Snapshots(dict):
     def __init__(self):
         super().__init__()
         self.events = []
+        self.endpoint_checks = []
         self.suppress_events = False
         self.semantic_models = None
 
@@ -309,8 +311,20 @@ class _State:
     semantic_models: object = None
     constants: dict = field(default_factory=dict)
 
+    address_order: set = field(default_factory=set)
+    safe_endpoints: set = field(default_factory=set)
+    integer_bounds: dict = field(default_factory=dict)
+    address_values: dict = field(default_factory=dict)
+    address_names: set = field(default_factory=set)
+
     def copy(self) -> "_State":
-        return _State(dict(self.facts), dict(self.typedefs), dict(self.types), self.terminated, self.semantic_models, dict(self.constants))
+        return replace(
+            self, facts=dict(self.facts), typedefs=dict(self.typedefs),
+            types=dict(self.types), constants=dict(self.constants),
+            address_order=set(self.address_order), safe_endpoints=set(self.safe_endpoints),
+            integer_bounds=dict(self.integer_bounds), address_values=dict(self.address_values),
+            address_names=set(self.address_names),
+        )
 
 
 def analyze_translation_unit_pointer_ranges(
@@ -363,6 +377,7 @@ def analyze_translation_unit_pointer_ranges(
         for param in getattr(getattr(funcdef.decl.type, "args", None), "params", ()) or ():
             if getattr(param, "name", None):
                 state.types[param.name] = _resolve_type(param.type, state.typedefs)
+                _remember_address_type(param.name, param.type, state)
         parameter_widths = {param: _pointer_element_width(typ) for param, typ in state.types.items()}
         for index, param in enumerate(params):
             canonical = _canonical_location(param)
@@ -528,7 +543,12 @@ def _join_states(left: _State, right: _State) -> _State:
                 degradations=frozenset({"PATH_INCOMPLETE"})
             )
     return _State(facts, dict(left.typedefs), dict(left.types), semantic_models=left.semantic_models,
-                  constants={k: v for k, v in left.constants.items() if right.constants.get(k) == v})
+                  constants={k: v for k, v in left.constants.items() if right.constants.get(k) == v},
+                  address_order=left.address_order & right.address_order,
+                  safe_endpoints=left.safe_endpoints & right.safe_endpoints,
+                  integer_bounds={k: v.hull(right.integer_bounds[k]) for k, v in left.integer_bounds.items() if k in right.integer_bounds},
+                  address_values={k: tuple(dict.fromkeys(left.address_values.get(k, ()) + right.address_values.get(k, ()))) for k in left.address_values.keys() | right.address_values.keys()},
+                  address_names=left.address_names | right.address_names)
 
 
 def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
@@ -538,6 +558,7 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
     canonical = _canonical_location(name)
     invalidate_pointer_guards(state, canonical)
     state.types[name] = _resolve_type(node.type, state.typedefs)
+    _remember_address_type(name, node.type, state)
     extent, width = _array_extent_and_width(_resolve_type(getattr(node, "type", None), state.typedefs))
     if extent is not None and width is not None:
         state.facts[canonical] = PointerRangeFact.object(
@@ -546,8 +567,10 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
         return
     declared_width = _pointer_element_width(_resolve_type(getattr(node, "type", None), state.typedefs))
     if not isinstance(_unwrap_type(state.types[name]), c_ast.PtrDecl):
+        _remember_address(name, node.init, state)
         _remember_constant(name, node.init, state)
         return
+    _remember_address(name, node.init, state)
     fact = _expression_fact(node.init, state)
     fact = replace(fact, element_width=declared_width)
     state.facts[canonical] = fact
@@ -558,9 +581,17 @@ def _transfer_assignment(node: c_ast.Assignment, state: _State) -> None:
     if not target:
         return
     target = _canonical_location(target)
+    from .pointer_endpoint_safety import address, unsafe_endpoints
+    hazards = None
+    if node.op in {'+=', '-='} and address(node.lvalue, state):
+        expression = c_ast.BinaryOp(node.op[0], node.lvalue, node.rvalue, coord=node.coord)
+        hazards = tuple(unsafe_endpoints(expression, state))
     invalidate_pointer_guards(state, target)
+    if hazards is not None:
+        state.address_values[target] = hazards
     if not isinstance(_unwrap_type(state.types.get(target)), c_ast.PtrDecl):
         if node.op == "=":
+            _remember_address(target, node.rvalue, state)
             _remember_constant(target, node.rvalue, state)
         return
     if node.op in {"+=", "-="}:
@@ -572,6 +603,7 @@ def _transfer_assignment(node: c_ast.Assignment, state: _State) -> None:
             count = amount if node.op == "+=" else -amount
             state.facts[target] = old.shifted_elements(count)
         return
+    _remember_address(target, node.rvalue, state)
     fact = _expression_fact(node.rvalue, state)
     old = state.facts.get(target)
     if old is not None and old.element_width is not None:
@@ -823,6 +855,8 @@ def _observe(node, state, snapshots):
             self.visit(node.rvalue)
 
     Visitor().visit(node)
+    from .pointer_endpoint_safety import observe_checks
+    snapshots.endpoint_checks.extend(observe_checks(node, state, snapshots.semantic_models))
 
 
 def _validate_condition(node, state, registry, truth):
@@ -843,7 +877,9 @@ def _validate_condition(node, state, registry, truth):
             _validate_condition(node.left, state, registry, truth)
             _validate_condition(node.right, state, registry, truth)
         return
+    from .pointer_endpoint_safety import refine_safety
     refine_pointer_comparison(node, state, truth)
+    refine_safety(node, state, truth)
     if registry is None:
         return
     call = node if isinstance(node, c_ast.FuncCall) else None
@@ -1094,3 +1130,21 @@ __all__ = [
     "analyze_translation_unit_pointer_ranges",
     "join_pointer_facts",
 ]
+
+
+def _remember_address(name, node, state):
+    from .pointer_endpoint_safety import address, unsafe_endpoints
+    typ = _unwrap_type(state.types.get(name))
+    names = getattr(typ, 'names', ())
+    if not isinstance(typ, c_ast.PtrDecl) and ('unsigned' not in names or 'long' not in names):
+        return
+    base = node.left if isinstance(node, c_ast.BinaryOp) and node.op in {'+', '-'} else node
+    if address(node, state) or address(base, state):
+        state.address_values[name] = tuple(unsafe_endpoints(node, state))
+
+
+def _remember_address_type(name, typ, state):
+    names = getattr(_unwrap_type(typ), 'names', ())
+    resolved = getattr(_unwrap_type(state.types.get(name)), 'names', ())
+    if any(n in {'uintptr_t', 'UINTN'} for n in names) and 'unsigned' in resolved and 'long' in resolved:
+        state.address_names.add(name)

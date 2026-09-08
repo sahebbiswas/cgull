@@ -8,12 +8,12 @@ void positive(char *p, char *dst) {
 }
 void upper_only(char *p, char *end) {
     if (!valid_range(p, 16)) return;
-    if (p + 20 > end) return;
+    if (end - p < 20) return;
     char header = p[-1]; // expect: CGULL-051
 }
 void stale_lower(char *p, char *base) {
     if (!valid_range(p, 16)) return;
-    if (p < base + 4) return;
+    if (p - base < 4) return;
     base++;
     char header = p[-4]; // expect: CGULL-051
 }

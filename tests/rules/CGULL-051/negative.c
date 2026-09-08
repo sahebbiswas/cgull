@@ -11,7 +11,7 @@ void unchecked(char *p) {
 }
 void enclosing_header(char *p, char *base, char *end) {
     if (!valid_range(p, 16)) return;
-    if (p < base + sizeof(int) || p + 20 > end) return;
+    if (p - base < 4 || end - p < 20) return;
     int header = *(int *)(p - sizeof(int));
     char tail = p[19];
 }
