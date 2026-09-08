@@ -7,7 +7,7 @@ knowledge of AST event extraction or state-domain transfer semantics.
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
-from .model import BasicBlock, CFGEvent, CFGSourceLocation
+from .model import BasicBlock, CFGDiagnostic, CFGEvent, CFGSourceLocation
 
 
 class StructuredGraph:
@@ -18,6 +18,7 @@ class StructuredGraph:
         self._next_id = 0
         self.blocks: Dict[int, BasicBlock] = {}
         self.node_to_block: Dict[int, int] = {}
+        self.diagnostics: List[CFGDiagnostic] = []
 
     def add_node(self, node: CFGEvent) -> int:
         self.nodes[node.node_id] = node
