@@ -2,7 +2,7 @@
 
 from copy import copy
 import re
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .misra_and_style import DeadStoresRule as _BaseDeadStoresRule
 from ..utils import mask_string_and_char_literals
@@ -156,6 +156,20 @@ def _raw_function_variables(fn):
     return list(fn.variables)
 
 
+def _eligible_variables(fn):
+    """Mirror the base rule's local-variable eligibility without collapsing scope."""
+    param_names = {p.name for p in fn.parameters if p.name}
+    result = []
+    for c_var in _raw_function_variables(fn):
+        name = getattr(c_var, "name", None)
+        if not name or name in param_names or name.startswith("__"):
+            continue
+        if c_var.is_volatile or c_var.address_taken:
+            continue
+        result.append(c_var)
+    return result
+
+
 def _protected_loop_carried_writes(ast_ctx) -> Set[ProtectedWrite]:
     """Find fallback writes consumed by the next structured-loop iteration.
 
@@ -170,15 +184,7 @@ def _protected_loop_carried_writes(ast_ctx) -> Set[ProtectedWrite]:
     loops = _collect_loop_infos(source)
 
     for fn in getattr(ast_ctx, "functions", []):
-        param_names = {p.name for p in fn.parameters if p.name}
-        variables = [
-            c_var
-            for c_var in _raw_function_variables(fn)
-            if getattr(c_var, "name", None)
-            and c_var.name not in param_names
-            and not c_var.name.startswith("__")
-        ]
-
+        variables = _eligible_variables(fn)
         fn_start = int(getattr(fn, "start_line", 0) or 0)
         fn_end = int(getattr(fn, "end_line", 0) or 0)
         for header_line, start_line, end_line, read_names in loops:
@@ -212,12 +218,6 @@ def _protected_loop_carried_writes(ast_ctx) -> Set[ProtectedWrite]:
     return protected
 
 
-def _issue_variable_name(issue) -> Optional[str]:
-    """Recover the local name from the base CGULL-042 message for filtering."""
-    match = re.search(r"local variable '([^']+)'", getattr(issue, "message", ""))
-    return match.group(1) if match else None
-
-
 def _issue_signature(issue):
     """Stable signature used when supplementing base findings for shadowed bindings."""
     return (
@@ -228,81 +228,129 @@ def _issue_signature(issue):
     )
 
 
+def _write_bindings(ast_ctx) -> Dict[int, List[object]]:
+    """Map each physical write line to the concrete eligible lexical bindings."""
+    by_line: Dict[int, List[object]] = {}
+    for fn in getattr(ast_ctx, "functions", []):
+        for c_var in _eligible_variables(fn):
+            for line_no in set(getattr(c_var, "assigned_lines", []) or []):
+                by_line.setdefault(line_no, []).append(c_var)
+    return by_line
+
+
+def _shadowed_bindings(ast_ctx) -> List[Tuple[object, object]]:
+    """Return ``(function, binding)`` pairs for names declared in multiple scopes."""
+    shadowed = []
+    for fn in getattr(ast_ctx, "functions", []):
+        groups: Dict[str, List[object]] = {}
+        for c_var in _eligible_variables(fn):
+            groups.setdefault(c_var.name, []).append(c_var)
+        for bindings in groups.values():
+            if len(bindings) > 1:
+                shadowed.extend((fn, c_var) for c_var in bindings)
+    return shadowed
+
+
 class DeadStoresRule(_BaseDeadStoresRule):
     """CGULL-042 with loop-aware precision for the lexical fallback tier."""
 
-    def _base_scan_for_binding(self, file_path, ast_ctx, fn, c_var):
-        """Reuse the base lexical implementation for one concrete scoped binding."""
+    def _base_scan_for_bindings(self, file_path, ast_ctx, fn_bindings):
+        """Run the canonical base fallback once for a batch of concrete bindings."""
         scoped_ctx = copy(ast_ctx)
-        scoped_fn = copy(fn)
-        scoped_fn.variables = {c_var.name: c_var}
-        scoped_ctx.functions = [scoped_fn]
+        scoped_functions = []
+        for fn, c_var in fn_bindings:
+            scoped_fn = copy(fn)
+            scoped_fn.variables = {c_var.name: c_var}
+            scoped_functions.append(scoped_fn)
+        scoped_ctx.functions = scoped_functions
         scoped_ctx.has_pycparser = False
         scoped_ctx.pycparser_ast = None
         return super().scan_ast(file_path, scoped_ctx)
 
-    def _filter_loop_protected(self, issues, protected, binding=None):
-        filtered = []
-        if binding is not None:
-            key = _variable_key(binding)
-            for issue in issues:
-                line_no = getattr(issue, "line_number", None)
-                if (key, line_no) in protected:
-                    continue
-                filtered.append(issue)
-            return filtered
-
-        # The ordinary base pass has already collapsed same-named bindings. For
-        # its findings, line/name is sufficient to identify the protected write;
-        # shadowed bindings are re-evaluated individually below using full identity.
-        protected_line_names = {(line_no, key[0]) for key, line_no in protected}
-        for issue in issues:
-            line_no = getattr(issue, "line_number", None)
-            name = _issue_variable_name(issue)
-            if name is not None and (line_no, name) in protected_line_names:
-                continue
-            filtered.append(issue)
-        return filtered
+    def _base_scan_for_binding(self, file_path, ast_ctx, fn, c_var):
+        """Rare collision fallback for bindings sharing one physical write line."""
+        return self._base_scan_for_bindings(file_path, ast_ctx, [(fn, c_var)])
 
     def scan_ast(self, file_path, ast_ctx):
         if getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None:
             return super().scan_ast(file_path, ast_ctx)
 
         protected = _protected_loop_carried_writes(ast_ctx)
+        write_bindings = _write_bindings(ast_ctx)
+        shadowed_pairs = _shadowed_bindings(ast_ctx)
+        shadowed_keys = {_variable_key(c_var) for _fn, c_var in shadowed_pairs}
 
-        # Delegate the complete lexical algorithm (eligibility filters, read/write
-        # ordering, issue text, and fix metadata) to the base rule. This keeps the
-        # refinement from duplicating or drifting from the canonical fallback.
-        issues = self._filter_loop_protected(
-            super().scan_ast(file_path, ast_ctx),
-            protected,
-        )
-
-        # ScopedVarDict exposes all bindings through dict.values(), while the base
-        # fallback intentionally collapses them by name. Re-run only shadowed
-        # bindings through that same base implementation so loop protection remains
-        # scope-aware without copying the lexical dead-store algorithm here.
-        existing = {_issue_signature(issue) for issue in issues}
-        for fn in getattr(ast_ctx, "functions", []):
-            groups = {}
-            for c_var in _raw_function_variables(fn):
-                name = getattr(c_var, "name", None)
-                if name:
-                    groups.setdefault(name, []).append(c_var)
-
-            for bindings in groups.values():
-                if len(bindings) < 2:
+        # Start from the canonical base result, but identify findings structurally
+        # by their write line and CVariable binding instead of parsing issue prose.
+        # Findings for shadowed bindings are replaced by the scoped batch below.
+        issues = []
+        ambiguous_lines = set()
+        for issue in super().scan_ast(file_path, ast_ctx):
+            line_no = getattr(issue, "line_number", None)
+            candidates = write_bindings.get(line_no, [])
+            if len(candidates) == 1:
+                key = _variable_key(candidates[0])
+                if key in shadowed_keys or (key, line_no) in protected:
                     continue
-                for c_var in bindings:
-                    binding_issues = self._filter_loop_protected(
-                        self._base_scan_for_binding(file_path, ast_ctx, fn, c_var),
-                        protected,
-                        binding=c_var,
-                    )
-                    for issue in binding_issues:
-                        signature = _issue_signature(issue)
-                        if signature not in existing:
-                            issues.append(issue)
-                            existing.add(signature)
+                issues.append(issue)
+            elif len(candidates) > 1:
+                # A compact source line may contain writes to multiple bindings.
+                # Re-evaluate those bindings explicitly below rather than guessing
+                # identity from the issue's human-readable message.
+                ambiguous_lines.add(line_no)
+            else:
+                issues.append(issue)
+
+        # Most shadowed bindings have distinct write lines. Analyze all of them in
+        # one base-rule invocation, avoiding the former N full fallback scans. Only
+        # bindings that share a physical write line take the rare individual path.
+        collision_keys = {
+            _variable_key(c_var)
+            for line_no in ambiguous_lines
+            for c_var in write_bindings.get(line_no, [])
+        }
+        batch_pairs = [
+            (fn, c_var)
+            for fn, c_var in shadowed_pairs
+            if _variable_key(c_var) not in collision_keys
+        ]
+        batch_line_binding = {}
+        for _fn, c_var in batch_pairs:
+            for line_no in set(getattr(c_var, "assigned_lines", []) or []):
+                batch_line_binding[line_no] = c_var
+
+        existing = {_issue_signature(issue) for issue in issues}
+        if batch_pairs:
+            for issue in self._base_scan_for_bindings(file_path, ast_ctx, batch_pairs):
+                line_no = getattr(issue, "line_number", None)
+                c_var = batch_line_binding.get(line_no)
+                if c_var is None or (_variable_key(c_var), line_no) in protected:
+                    continue
+                signature = _issue_signature(issue)
+                if signature not in existing:
+                    issues.append(issue)
+                    existing.add(signature)
+
+        # Same-line writes are intentionally uncommon; preserve exact identity by
+        # evaluating only those colliding bindings individually.
+        collision_pairs = []
+        seen_collision_keys = set()
+        for fn in getattr(ast_ctx, "functions", []):
+            for c_var in _eligible_variables(fn):
+                key = _variable_key(c_var)
+                if key in collision_keys and key not in seen_collision_keys:
+                    collision_pairs.append((fn, c_var))
+                    seen_collision_keys.add(key)
+
+        for fn, c_var in collision_pairs:
+            key = _variable_key(c_var)
+            for issue in self._base_scan_for_binding(file_path, ast_ctx, fn, c_var):
+                line_no = getattr(issue, "line_number", None)
+                if (key, line_no) in protected:
+                    continue
+                signature = _issue_signature(issue)
+                if signature not in existing:
+                    issues.append(issue)
+                    existing.add(signature)
 
         return issues
