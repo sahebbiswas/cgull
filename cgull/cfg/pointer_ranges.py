@@ -716,7 +716,7 @@ def _index_address(node, state):
 
 
 def _invalidate_address_taken(node, state):
-    """Drop proofs/constants that may be invalidated through an escaped address."""
+    """Drop facts that may be invalidated through an escaped address."""
     if node is None:
         return
 
@@ -725,7 +725,19 @@ def _invalidate_address_taken(node, state):
             if candidate.op == "&":
                 target = _location(candidate.expr)
                 if target:
-                    invalidate_pointer_guards(state, _canonical_location(target))
+                    canonical = _canonical_location(target)
+                    invalidate_pointer_guards(state, canonical)
+                    fact = state.facts.get(canonical)
+                    typ = _unwrap_type(state.types.get(target))
+                    if fact is not None and isinstance(typ, c_ast.PtrDecl):
+                        # The pointer object itself may be overwritten through
+                        # the escaped pointer-to-pointer. Preserve only its
+                        # static element width; all value-bound range evidence
+                        # is stale until a later explicit assignment/refinement.
+                        state.facts[canonical] = PointerRangeFact(
+                            element_width=fact.element_width,
+                            degradations=fact.degradations | {"ADDRESS_ESCAPED"},
+                        )
                 return
             self.generic_visit(candidate)
 
