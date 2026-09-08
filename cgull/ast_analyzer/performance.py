@@ -15,8 +15,59 @@ from .types import CFunction, CParameter, CVariable, _map_line, resolve_typedef_
 from .visitor import CASTParser as _LegacyCASTParser
 
 
+class CoverageDegradedError(RuntimeError):
+    """Raised when required preprocessing coverage cannot be guaranteed."""
+
+
+def _has_unexpanded_offsetof(pycparser_ast) -> bool:
+    """Return True when a parsed AST still contains a real ``offsetof`` call."""
+    if pycparser_ast is None:
+        return False
+
+    try:
+        from pycparser import c_ast
+    except ImportError:
+        return False
+
+    class Visitor(c_ast.NodeVisitor):
+        def __init__(self):
+            self.found = False
+
+        def visit_FuncCall(self, node):
+            if isinstance(node.name, c_ast.ID) and node.name.name == "offsetof":
+                self.found = True
+                return
+            self.generic_visit(node)
+
+    visitor = Visitor()
+    visitor.visit(pycparser_ast)
+    return visitor.found
+
+
 class CASTParser(_LegacyCASTParser):
-    """CAST parser with optimized regex-fallback extraction bookkeeping."""
+    """CAST parser with optimized extraction and preprocessing coverage guards."""
+
+    def parse(self, source_code, defined_syms=None, line_map=None):
+        ctx = super().parse(source_code, defined_syms=defined_syms, line_map=line_map)
+
+        # ``offsetof`` is a macro in supported C environments.  If it remains
+        # visible in source but parsing fell below the pcpp+pycparser tier, the
+        # security-relevant container/layout recovery path is no longer
+        # trustworthy.  Likewise, if a pcpp parse succeeds but still leaves an
+        # actual FuncCall named offsetof in the AST, preprocessing was incomplete.
+        source_has_offsetof = bool(re.search(r"\boffsetof\s*\(", source_code))
+        coverage_degraded = (
+            source_has_offsetof and ctx.parse_tier != "pcpp+pycparser"
+        ) or _has_unexpanded_offsetof(ctx.pycparser_ast)
+        if coverage_degraded:
+            raise CoverageDegradedError(
+                "AST preprocessing/layout precision degraded: offsetof(...) "
+                "reached analysis unexpanded or preprocessing fell back before "
+                "macro expansion. Container-recovery and member-layout security "
+                "checks cannot be considered complete."
+            )
+
+        return ctx
 
     def _extract_functions(
         self,
@@ -203,4 +254,4 @@ class CASTParser(_LegacyCASTParser):
 
 ASTAnalyzer = CASTParser
 
-__all__ = ["CASTParser", "ASTAnalyzer"]
+__all__ = ["CASTParser", "ASTAnalyzer", "CoverageDegradedError"]
