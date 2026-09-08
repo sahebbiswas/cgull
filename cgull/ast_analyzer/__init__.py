@@ -10,7 +10,7 @@ from .types import *
 from .integer_types import *
 from .visitor import *
 from .callable_signatures import *
-from .performance import CASTParser, ASTAnalyzer
+from .coverage import CASTParser, ASTAnalyzer, CoverageDegradedError
 from .configuration import _PRELUDE_LINE_COUNT, _PYCPARSER_PRELUDE
 from .preprocessor import _normalize_macro_dict
 from .types import _extract_identifiers_from_ast, _format_pycparser_expr, _format_pycparser_type, _map_line
