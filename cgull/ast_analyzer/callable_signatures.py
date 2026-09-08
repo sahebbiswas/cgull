@@ -3,12 +3,13 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
+from .standard_signatures import StandardCallableSignature, standard_callable_signature
 from .types import CASTContext, _format_pycparser_type, resolve_typedef_shape
 
 
 @dataclass(frozen=True)
 class CallableParameter:
-    """A fixed parameter in a visible callable declaration."""
+    """A fixed parameter in a visible or modeled callable declaration."""
 
     name: str
     type_name: str
@@ -27,6 +28,7 @@ class CallableSignature:
     provenance: str = "declaration"
     resolved: bool = True
     reason: Optional[str] = None
+    return_type: str = ""
 
 
 def _parameter_from_ast(ast_ctx: CASTContext, param) -> CallableParameter:
@@ -42,12 +44,32 @@ def _parameter_from_ast(ast_ctx: CASTContext, param) -> CallableParameter:
     )
 
 
+def _return_type_from_decl(ast_ctx: CASTContext, decl) -> str:
+    funcdecl = getattr(decl, "type", None)
+    return_node = getattr(funcdecl, "type", None)
+    if return_node is None:
+        return ""
+    type_name, is_ptr, is_fp, _is_vol, _is_signed, _is_vla, _dim, is_arr = _format_pycparser_type(
+        return_node, ast_ctx.unsigned_typedefs
+    )
+    if is_ptr or is_fp or is_arr:
+        return type_name
+    return type_name
+
+
 def _signature_from_decl(ast_ctx: CASTContext, decl, provenance: str) -> CallableSignature:
     from pycparser import c_ast
 
+    return_type = _return_type_from_decl(ast_ctx, decl)
     args = getattr(decl.type, "args", None)
     if args is None:
-        return CallableSignature(name=decl.name, parameters=(), has_prototype=False, provenance=provenance)
+        return CallableSignature(
+            name=decl.name,
+            parameters=(),
+            has_prototype=False,
+            provenance=provenance,
+            return_type=return_type,
+        )
 
     raw_params = list(getattr(args, "params", None) or [])
     if len(raw_params) == 1 and not isinstance(raw_params[0], c_ast.EllipsisParam):
@@ -57,7 +79,13 @@ def _signature_from_decl(ast_ctx: CASTContext, decl, provenance: str) -> Callabl
                 p0.type, ast_ctx.unsigned_typedefs
             )
             if p0_type == "void" and not p0_ptr and not p0_fp and not p0_arr and not getattr(p0, "name", None):
-                return CallableSignature(name=decl.name, parameters=(), has_prototype=True, provenance=provenance)
+                return CallableSignature(
+                    name=decl.name,
+                    parameters=(),
+                    has_prototype=True,
+                    provenance=provenance,
+                    return_type=return_type,
+                )
 
     params: List[CallableParameter] = []
     variadic = False
@@ -72,6 +100,26 @@ def _signature_from_decl(ast_ctx: CASTContext, decl, provenance: str) -> Callabl
         variadic=variadic,
         has_prototype=True,
         provenance=provenance,
+        return_type=return_type,
+    )
+
+
+def _signature_from_standard(model: StandardCallableSignature) -> CallableSignature:
+    return CallableSignature(
+        name=model.name,
+        return_type=model.return_type,
+        parameters=tuple(
+            CallableParameter(
+                name=param.name,
+                type_name=param.type_name,
+                is_pointer=param.is_pointer,
+                is_array=param.is_array,
+            )
+            for param in model.parameters
+        ),
+        variadic=model.variadic,
+        has_prototype=True,
+        provenance=model.provenance,
     )
 
 
@@ -186,11 +234,22 @@ class DirectCallSignatureIndex:
         name = call_node.name.name
         block = self._calls.get(id(call_node))
         if block is False:
+            # A same-named local object or function pointer is an explicit rejection,
+            # not an absent declaration.  Never fall through to a built-in model.
             return None
         if block:
             return _reconcile(name, block)
+
         candidates = list(self._globals.get(name) or []) + list(self._definitions.get(name) or [])
-        return _reconcile(name, candidates)
+        source_signature = _reconcile(name, candidates)
+        if source_signature is not None:
+            # Resolved, unspecified-parameter, and conflicting source declarations
+            # all outrank built-ins.  A rejected/ambiguous source declaration must
+            # never be silently replaced by a standard-library shape.
+            return source_signature
+
+        model = standard_callable_signature(name)
+        return _signature_from_standard(model) if model is not None else None
 
 
 def build_direct_call_signature_index(ast_ctx: CASTContext, funcdef) -> DirectCallSignatureIndex:
