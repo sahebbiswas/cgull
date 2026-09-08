@@ -62,10 +62,10 @@ from .misra_and_style import (
     UnusedArgumentsRule,
     MissingAssertionsRule,
     UnusedLocalVariablesRule,
-    DeadStoresRule,
     VariableShadowingRule,
     MissingInclusionGuardRule,
 )
+from .dead_stores import DeadStoresRule
 from .trust_boundary import UnvalidatedExternalDataSinkRule
 
 ALL_RULES: List[Type[BaseRule]] = [
