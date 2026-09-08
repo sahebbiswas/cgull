@@ -99,6 +99,49 @@ def test_unresolved_goto_degrades_lifetime_for_uaf_and_double_free_sinks():
     assert cfg.query_allocation("p", source_last_free.node_id) == Allocation.MAYBE_FREED
 
 
+def test_unresolved_goto_preserves_facts_before_the_jump():
+    cfg = _cfg_for(
+        """
+        void f(int cond) {
+            int *p = 0;
+            use_int(p == 0);
+            if (cond)
+                goto missing;
+            *p = 1;
+        }
+        """
+    )
+
+    before = _node(cfg, "use_int(p == 0)")
+    after = _node(cfg, "*p = 1")
+
+    assert cfg.query_nullness("p", before.node_id) == Nullness.NULL
+    assert cfg.query_nullness("p", after.node_id) == Nullness.MAYBE_NULL
+
+
+def test_multiple_unresolved_gotos_add_constant_graph_fanout():
+    cfg = _cfg_for(
+        """
+        void f(int a, int b, int *p) {
+            if (a) goto first_missing;
+            if (b) goto second_missing;
+            *p = 1;
+        }
+        """
+    )
+
+    unknowns = [
+        node
+        for node in cfg.nodes.values()
+        if getattr(node, "is_unknown_control_flow", False)
+    ]
+    assert len(unknowns) == 2
+    assert all(len(node.successors) <= 1 for node in unknowns)
+
+    edge_count = sum(len(node.successors) for node in cfg.nodes.values())
+    assert edge_count <= len(cfg.nodes) + 4
+
+
 def test_unresolved_goto_output_is_deterministic():
     source = """
         void f(int *p) {
