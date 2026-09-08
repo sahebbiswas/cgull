@@ -56,8 +56,8 @@ def analyze_translation_unit_value_dataflow(
     """Propagate caller actuals to formals in deterministic caller-first SCC order.
 
     Return facts are evaluated with the context-independent summary transfer in
-    :mod:`value_facts`.  Parameter facts are then joined across all direct
-    callers.  Recursive SCCs iterate until stable; unresolved external entry
+    :mod:`value_facts`. Parameter facts are then joined across all resolvable
+    callers. Recursive SCCs iterate until stable; unresolved external entry
     parameters remain ``UNKNOWN`` rather than being inferred safe.
     """
     config = fixed_point_config or FixedPointConfig()
@@ -103,6 +103,7 @@ def analyze_translation_unit_value_dataflow(
                     for param, fact in zip(params, incoming.get(name, ()))
                     if fact is not None
                 }
+                graph_function = graph.function(name)
                 result, call_facts = _analyze_one(
                     ast_ctx,
                     name,
@@ -110,6 +111,7 @@ def analyze_translation_unit_value_dataflow(
                     semantic_models,
                     summary_result.summaries,
                     config.max_provenance,
+                    cfg=graph_function.cfg if graph_function is not None else None,
                 )
                 if result is not None:
                     results[name] = result
@@ -156,6 +158,7 @@ def analyze_translation_unit_value_dataflow(
                 for param, fact in zip(params, incoming.get(name, ()))
                 if fact is not None
             }
+            graph_function = graph.function(name)
             result, _ = _analyze_one(
                 ast_ctx,
                 name,
@@ -163,6 +166,7 @@ def analyze_translation_unit_value_dataflow(
                 semantic_models,
                 summary_result.summaries,
                 config.max_provenance,
+                cfg=graph_function.cfg if graph_function is not None else None,
             )
             if result is not None:
                 results[name] = result
@@ -179,11 +183,12 @@ def analyze_translation_unit_value_dataflow(
     )
 
 
-def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_limit):
-    funcdef = find_function_def(getattr(ast_ctx, "pycparser_ast", None), function_name)
-    if funcdef is None:
-        return None, ()
-    cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_limit, *, cfg=None):
+    if cfg is None:
+        funcdef = find_function_def(getattr(ast_ctx, "pycparser_ast", None), function_name)
+        if funcdef is None:
+            return None, ()
+        cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
     if not cfg.blocks:
         cfg.build_basic_blocks()
     if not cfg.blocks:
@@ -214,26 +219,25 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
         for event in block.nodes:
             before[event.node_id] = dict(state)
             for call in getattr(event, "calls", ()):
-                if not call.direct_callee:
-                    continue
-                actuals = tuple(
-                    _actual_fact(
-                        text,
-                        state,
-                        registry,
-                        summaries,
-                        evidence_limit,
+                for callee in call.possible_callees:
+                    actuals = tuple(
+                        _actual_fact(
+                            text,
+                            state,
+                            registry,
+                            summaries,
+                            evidence_limit,
+                        )
+                        for text in call.actual_arguments
                     )
-                    for text in call.actual_arguments
-                )
-                key = (event.node_id, call.direct_callee, call.actual_arguments)
-                old = calls.get(key)
-                if old is None:
-                    calls[key] = actuals
-                else:
-                    calls[key] = tuple(
-                        _join_facts(a, b, evidence_limit) for a, b in zip(old, actuals)
-                    )
+                    key = (event.node_id, callee, call.actual_arguments)
+                    old = calls.get(key)
+                    if old is None:
+                        calls[key] = actuals
+                    else:
+                        calls[key] = tuple(
+                            _join_facts(a, b, evidence_limit) for a, b in zip(old, actuals)
+                        )
             _transfer_event(event, state, registry, summaries, evidence_limit)
             for call in getattr(event, "calls", ()):
                 _apply_output_effects(
