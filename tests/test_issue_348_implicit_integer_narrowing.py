@@ -109,7 +109,7 @@ void f(uint32_t wide) {
     assert all(issue.message.startswith("Explicit integer cast") for issue in issues)
 
 
-def test_compound_assignment_is_not_speculated_about_in_drop_two():
+def test_compound_assignment_is_covered_by_followup_semantics():
     code = """
 typedef unsigned char uint8_t;
 typedef unsigned int uint32_t;
@@ -117,4 +117,6 @@ void f(uint8_t small, uint32_t wide) {
     small += wide;
 }
 """
-    assert _scan(code) == []
+    issues = _scan(code)
+    assert [issue.line_number for issue in issues] == [5]
+    assert "Compound assignment '+=' to 'small'" in issues[0].message
