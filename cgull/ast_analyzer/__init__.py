@@ -9,6 +9,7 @@ from .preprocessor import *
 from .types import *
 from .integer_types import *
 from .visitor import *
+from .callable_signatures import *
 from .performance import CASTParser, ASTAnalyzer
 from .configuration import _PRELUDE_LINE_COUNT, _PYCPARSER_PRELUDE
 from .preprocessor import _normalize_macro_dict
