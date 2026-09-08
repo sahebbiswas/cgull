@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
 from .construction import build_cfg, find_function_def
 from .dataflow import StructuredCFG
+from .indirect_calls import resolve_indirect_calls
 from .model import CFGCall, CFGSourceLocation
 
 
@@ -92,6 +93,7 @@ def _call_sort_key(call: CFGCall) -> Tuple[Any, ...]:
         call.actual_arguments,
         call.result_target or "",
         call.is_indirect,
+        call.resolved_callees,
     )
 
 
@@ -187,8 +189,9 @@ def _bottom_up_scc_order(
 def build_call_graph(functions: Iterable[CallGraphFunction]) -> TranslationUnitCallGraph:
     """Build a graph from CFGs belonging to one expanded translation unit.
 
-    Only syntactically direct calls whose spelling names a visible definition are
-    resolved. External direct calls and every indirect call remain unresolved.
+    Syntactically direct calls and bounded, provable local function-pointer
+    targets are resolved when they name visible definitions. Unknown indirect
+    calls and external direct calls remain unresolved.
     """
     started = perf_counter()
     ordered_functions = tuple(sorted(functions, key=lambda function: function.name))
@@ -198,18 +201,22 @@ def build_call_graph(functions: Iterable[CallGraphFunction]) -> TranslationUnitC
             raise ValueError(f"duplicate function definition in translation unit: {function.name}")
         by_name[function.name] = function
 
+    for function in ordered_functions:
+        resolve_indirect_calls(function.cfg, by_name)
+
     resolved = []
     unresolved = []
     adjacency = {name: set() for name in by_name}
     for function in ordered_functions:
         calls = [call for node_id in sorted(function.cfg.nodes) for call in function.cfg.nodes[node_id].calls]
         for call in sorted(calls, key=_call_sort_key):
-            callee = None
-            if not call.is_indirect and call.direct_callee in by_name:
-                callee = call.direct_callee
+            targets = tuple(target for target in call.possible_callees if target in by_name)
+            if not targets:
+                unresolved.append(CallGraphEdge(function.name, None, call))
+                continue
+            for callee in targets:
                 adjacency[function.name].add(callee)
-            edge = CallGraphEdge(function.name, callee, call)
-            (resolved if callee is not None else unresolved).append(edge)
+                resolved.append(CallGraphEdge(function.name, callee, call))
 
     stable_adjacency = {name: tuple(sorted(callees)) for name, callees in adjacency.items()}
     sccs = _strongly_connected_components(tuple(by_name), stable_adjacency)
@@ -238,7 +245,7 @@ def _function_source_location(funcdef: Any, line_map: Optional[Dict[int, Any]]) 
 
 
 def build_translation_unit_call_graph(ast_context: Any) -> TranslationUnitCallGraph:
-    """Build the direct-call graph for all pycparser definitions in ``ast_context``."""
+    """Build the call graph for all pycparser definitions in ``ast_context``."""
     if not getattr(ast_context, "has_pycparser", False) or getattr(ast_context, "pycparser_ast", None) is None:
         return build_call_graph(())
 

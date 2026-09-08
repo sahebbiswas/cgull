@@ -9,7 +9,6 @@ from typing import Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 
-
 class Nullness(Enum):
     NULL = "NULL"
     NON_NULL = "NON_NULL"
@@ -44,10 +43,12 @@ class CFGSourceLocation:
 class CFGCall:
     """Structured call metadata attached to the containing CFG event.
 
-    ``direct_callee`` is populated only for syntactically direct calls.  For
-    function pointers and other indirect call expressions, ``callee_expression``
-    retains the source spelling and ``is_indirect`` is true so later call-graph
-    construction can record an unresolved edge instead of dropping the call.
+    ``direct_callee`` contains the effective singleton callee when one is known:
+    either a syntactically direct function or a provably single resolved indirect
+    target. ``is_indirect`` always preserves the original call syntax, so summary
+    consumers can reuse the historic singleton field without mistaking a function
+    pointer call for a syntactically direct call. ``resolved_callees`` preserves
+    the complete deterministic target set for indirect calls.
     """
 
     direct_callee: Optional[str]
@@ -56,13 +57,21 @@ class CFGCall:
     result_target: Optional[str] = None
     source_location: Optional[CFGSourceLocation] = None
     is_indirect: bool = False
+    resolved_callees: Tuple[str, ...] = ()
+
+    @property
+    def possible_callees(self) -> Tuple[str, ...]:
+        """Return deterministic resolved targets without losing call syntax."""
+        if self.resolved_callees:
+            return self.resolved_callees
+        return (self.direct_callee,) if self.direct_callee else ()
 
 
 @dataclass
 class FunctionSummary:
     freed_params: Set[int] = field(default_factory=set)
     # Parameter positions whose incoming argument value can be dereferenced
-    # before the callee establishes it is non-NULL.  This follows the
+    # before the callee establishes it is non-NULL. This follows the
     # parameter's initial location, not a variable of the same name after an
     # assignment in the callee.
     unsafe_deref_params: Set[int] = field(default_factory=set)
@@ -155,5 +164,3 @@ class CFGEvent:
 
     def get_deref_line(self, var_name: str) -> int:
         return self.deref_lines.get(var_name, self.line_number)
-
-

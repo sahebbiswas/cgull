@@ -21,6 +21,7 @@ from ..semantic_models import (
     ValidationProperty,
 )
 from .construction import build_cfg, find_function_def
+from .indirect_calls import resolve_indirect_calls
 
 
 class Provenance(str, Enum):
@@ -142,6 +143,7 @@ def analyze_security_dataflow(
 ) -> SecurityDataflowResult:
     """Compute provenance and guaranteed validation facts on ``cfg``."""
     summaries = summaries or {}
+    resolve_indirect_calls(cfg, summaries)
     if not cfg.blocks:
         cfg.build_basic_blocks()
     if not cfg.blocks:
@@ -330,9 +332,7 @@ def _transfer_event(node, provenance, validations, registry, summaries) -> None:
                     provenance[target] = Provenance.UNTRUSTED
                     validations.pop(target, None)
 
-        summary = summaries.get(call.direct_callee) if call.direct_callee else None
-        if summary is not None:
-            _apply_summary_call(call, summary, provenance, validations)
+        if _apply_possible_summary_calls(call, summaries, provenance, validations):
             continue
 
         if not model.is_modeled:
@@ -343,6 +343,33 @@ def _transfer_event(node, provenance, validations, registry, summaries) -> None:
             for actual in call.actual_arguments:
                 if actual.lstrip().startswith("&"):
                     validations.pop(_canonical_location(actual.lstrip("& ")), None)
+
+
+def _apply_possible_summary_calls(call, summaries, provenance, validations) -> bool:
+    """Apply all possible summaries and conservatively join the resulting states."""
+    callees = call.possible_callees
+    if not callees:
+        return False
+    candidate_summaries = [summaries.get(callee) for callee in callees]
+    if any(summary is None for summary in candidate_summaries):
+        return False
+
+    states = []
+    for summary in candidate_summaries:
+        candidate_provenance = dict(provenance)
+        candidate_validations = dict(validations)
+        _apply_summary_call(call, summary, candidate_provenance, candidate_validations)
+        states.append((candidate_provenance, candidate_validations))
+
+    merged_provenance, merged_validations = states[0]
+    for candidate_provenance, candidate_validations in states[1:]:
+        merged_provenance = _merge_provenance_maps(merged_provenance, candidate_provenance)
+        merged_validations = _merge_validation_maps(merged_validations, candidate_validations)
+    provenance.clear()
+    provenance.update(merged_provenance)
+    validations.clear()
+    validations.update(merged_validations)
+    return True
 
 
 def _apply_summary_call(call, summary, provenance, validations) -> None:
@@ -489,16 +516,26 @@ def _apply_validator_edge(node, successor_index, validations, registry, summarie
             index = validator.target.argument_index
             if index is not None:
                 effects.append((index, validator.property, validator.success))
-        summary = summaries.get(call.direct_callee) if call.direct_callee else None
-        if summary is not None:
-            effects.extend(
-                (effect.parameter_index, effect.property, effect.success)
-                for effect in summary.validator_effects
+
+        summary_effect_sets = []
+        for callee in call.possible_callees:
+            summary = summaries.get(callee)
+            if summary is None:
+                summary_effect_sets = []
+                break
+            summary_effect_sets.append(
+                {
+                    (effect.parameter_index, effect.property, effect.success)
+                    for effect in summary.validator_effects
+                }
             )
+        if summary_effect_sets:
+            common_effects = set.intersection(*summary_effect_sets)
+            effects.extend(sorted(common_effects, key=lambda item: (item[0], item[1].value, item[2].kind.value, item[2].value or 0)))
 
         for index, prop, success in effects:
             true_success, false_success = _condition_guarantees_success(
-                cond, call.direct_callee or "", success
+                cond, call.callee_expression, success
             )
             if not ((edge_is_true and true_success) or ((not edge_is_true) and false_success)):
                 continue
