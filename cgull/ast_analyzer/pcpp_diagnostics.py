@@ -1,7 +1,7 @@
 """C-GULL integration helpers for pcpp diagnostic handling.
 
-pcpp handles ``#error`` and ``#warning`` in ``on_directive_handle`` and its
-base implementation writes directly to ``sys.stderr``.  That bypasses
+pcpp handles ``#error`` and ``#warning`` in ``on_directive_unknown`` and its
+base implementation writes directly to ``sys.stderr``. That bypasses
 C-GULL's CLI/progress renderer and can corrupt both live progress output and
 structured reports.
 
@@ -26,7 +26,7 @@ def install_pcpp_diagnostic_suppression() -> None:
     the base hook here keeps the existing parser implementation focused while
     ensuring every C-GULL-owned pcpp instance has coordinated output behavior.
 
-    The wrapper is idempotent and delegates every non-diagnostic directive to
+    The wrapper is idempotent and delegates every other unknown directive to
     pcpp unchanged.
     """
 
@@ -36,12 +36,12 @@ def install_pcpp_diagnostic_suppression() -> None:
         return
 
     original: Optional[Callable[..., Any]] = getattr(
-        pcpp.Preprocessor, "on_directive_handle", None
+        pcpp.Preprocessor, "on_directive_unknown", None
     )
     if original is None or getattr(original, _INSTALLED_MARKER, False):
         return
 
-    def _cgull_on_directive_handle(self, directive, toks, ifpassthru, precedingtoks):
+    def _cgull_on_directive_unknown(self, directive, toks, ifpassthru, precedingtoks):
         directive_name = getattr(directive, "value", None)
         if directive_name == "error":
             # Match pcpp's default semantics without its direct stderr write.
@@ -51,5 +51,5 @@ def install_pcpp_diagnostic_suppression() -> None:
             return True
         return original(self, directive, toks, ifpassthru, precedingtoks)
 
-    setattr(_cgull_on_directive_handle, _INSTALLED_MARKER, True)
-    pcpp.Preprocessor.on_directive_handle = _cgull_on_directive_handle
+    setattr(_cgull_on_directive_unknown, _INSTALLED_MARKER, True)
+    pcpp.Preprocessor.on_directive_unknown = _cgull_on_directive_unknown
