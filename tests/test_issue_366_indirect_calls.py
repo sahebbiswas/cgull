@@ -29,7 +29,7 @@ def test_direct_local_initializer_resolves_indirect_call():
     """))
     call = _indirect_calls(graph, "caller")[0]
     assert call.resolved_callees == ("helper",)
-    assert call.direct_callee == "helper"
+    assert call.direct_callee is None
     assert graph.callees("caller") == ("helper",)
 
 
@@ -44,8 +44,9 @@ def test_reassignment_is_flow_sensitive():
             return a + cb(x);
         }
     """))
-    calls = sorted(_indirect_calls(graph, "caller"), key=lambda call: call.source_location.line_number)
-    assert [call.resolved_callees for call in calls] == [("first",), ("second",)]
+    calls = {call.result_target: call for call in _indirect_calls(graph, "caller")}
+    assert calls["a"].resolved_callees == ("first",)
+    assert calls["return"].resolved_callees == ("second",)
 
 
 def test_same_target_branch_join_resolves_single_target():
@@ -84,3 +85,34 @@ def test_unknown_function_pointer_parameter_stays_unresolved():
     assert call.resolved_callees == ()
     assert call.direct_callee is None
     assert len(graph.unresolved_edges) == 1
+
+
+def test_entry_loop_back_edge_keeps_function_pointer_parameter_unknown():
+    graph = build_call_graph(_functions("""
+        int helper(int x) { return x; }
+        int caller(int (*cb)(int), int x) {
+            while (x--) cb = helper;
+            return cb(x);
+        }
+    """))
+    call = _indirect_calls(graph, "caller")[0]
+    assert call.resolved_callees == ()
+    assert len(graph.unresolved_edges) == 1
+
+
+def test_address_of_function_initializer_resolves():
+    graph = build_call_graph(_functions("""
+        int helper(int x) { return x; }
+        int caller(int x) { int (*cb)(int) = &helper; return cb(x); }
+    """))
+    assert _indirect_calls(graph, "caller")[0].resolved_callees == ("helper",)
+
+
+def test_explicit_pointer_dereference_call_resolves():
+    graph = build_call_graph(_functions("""
+        int helper(int x) { return x; }
+        int caller(int x) { int (*cb)(int) = helper; return (*cb)(x); }
+    """))
+    call = _indirect_calls(graph, "caller")[0]
+    assert call.resolved_callees == ("helper",)
+    assert call.direct_callee is None
