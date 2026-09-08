@@ -53,6 +53,32 @@ A rule's CWE metadata describes the weakness class it is intended to identify. B
 
 For contributor guidance on adding or changing rules, see [Repository extension](repository-extension.md).
 
+## CGULL-049: unsafe integer conversion
+
+CGULL-049 reports value-changing integer conversions across explicit casts,
+declaration initializers, ordinary assignments, direct argument binding, and C
+compound assignments. Compound-assignment coverage includes `+=`, `-=`, `*=`,
+`/=`, `%=`, `<<=`, `>>=`, `&=`, `^=`, and `|=`.
+
+For compound assignments, the rule models the C integer promotions and usual
+arithmetic conversions used by the operator, then checks conversion of the
+operation result back to the left-hand-side type. This lets it identify both
+unsafe operand signedness changes and result truncation that are hidden by the
+compact compound syntax. Shift assignments use the promoted left operand as the
+operation result type, matching C shift semantics.
+
+Diagnostics retain the existing conversion classes: unexpected sign extension
+uses CWE-194, negative signed-to-unsigned conversion uses CWE-195,
+out-of-range unsigned-to-signed conversion uses CWE-196, and width-reducing
+truncation uses CWE-197. CFG-backed range facts suppress a finding only when the
+actual value being converted is proven representable in the destination type.
+An independently reportable explicit cast inside a compound assignment owns the
+diagnostic so the enclosing compound operation does not duplicate it.
+
+The rule is intentionally limited to integer semantics. Floating-point
+conversions, vector types, overloaded C++ operators, and unresolved/non-integer
+compound operations are not inferred.
+
 ## CGULL-050: pointer outside object bounds
 
 This AST rule reports constant pointer derivations that are definitely outside
