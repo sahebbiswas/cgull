@@ -16,6 +16,7 @@ from .ast_events import (
     _find_ternary_op,
     _find_value_producing_call,
     _function_pointer_names,
+    _guarded_expression_uses,
     _ids,
     _is_nullish,
     _replace_ast_node,
