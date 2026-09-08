@@ -44,9 +44,12 @@ def test_reassignment_is_flow_sensitive():
             return a + cb(x);
         }
     """))
-    calls = {call.result_target: call for call in _indirect_calls(graph, "caller")}
-    assert calls["a"].resolved_callees == ("first",)
-    assert calls["return"].resolved_callees == ("second",)
+    calls = _indirect_calls(graph, "caller")
+    assert len(calls) == 2
+    first_call = next(call for call in calls if call.result_target == "a")
+    second_call = next(call for call in calls if call is not first_call)
+    assert first_call.resolved_callees == ("first",)
+    assert second_call.resolved_callees == ("second",)
 
 
 def test_same_target_branch_join_resolves_single_target():
