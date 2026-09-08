@@ -10,13 +10,94 @@ from bisect import bisect_left
 import re
 from typing import Any, Dict, List, Optional, Set
 
+from ..utils import mask_string_and_char_literals, strip_comments_keep_lines
 from .configuration import _STATEMENT_KEYWORDS, is_unsigned_type
 from .types import CFunction, CParameter, CVariable, _map_line, resolve_typedef_shape
 from .visitor import CASTParser as _LegacyCASTParser
 
 
+class CoverageDegradedError(RuntimeError):
+    """Raised when required preprocessing coverage cannot be guaranteed."""
+
+
+def _masked_source_code(source_code: str) -> str:
+    """Return source with comments and literal contents hidden from code matching."""
+    _, comment_free = strip_comments_keep_lines(source_code)
+    return "\n".join(mask_string_and_char_literals(line) for line in comment_free.splitlines())
+
+
+def _declares_offsetof_function(masked_source: str) -> bool:
+    """Return True for an explicit user function declaration/definition named offsetof."""
+    declaration = re.compile(
+        r"(?m)^[ \t]*(?!(?:return|if|for|while|switch|sizeof)\b)"
+        r"(?:[A-Za-z_]\w*[ \t*]+)+offsetof\s*\([^;{}]*\)\s*(?:;|\{)"
+    )
+    return bool(declaration.search(masked_source))
+
+
+def _source_has_builtin_offsetof_use(source_code: str) -> bool:
+    """Detect genuine code uses of offsetof while excluding literals and user functions."""
+    masked_source = _masked_source_code(source_code)
+    if _declares_offsetof_function(masked_source):
+        return False
+    return bool(re.search(r"\boffsetof\s*\(", masked_source))
+
+
+def _has_unexpanded_offsetof(pycparser_ast) -> bool:
+    """Return True when a parsed AST contains an unresolved macro-style offsetof call."""
+    if pycparser_ast is None:
+        return False
+
+    try:
+        from pycparser import c_ast
+    except ImportError:
+        return False
+
+    class Visitor(c_ast.NodeVisitor):
+        def __init__(self):
+            self.found_call = False
+            self.has_function_declaration = False
+
+        def visit_Decl(self, node):
+            if node.name == "offsetof" and isinstance(node.type, c_ast.FuncDecl):
+                self.has_function_declaration = True
+            self.generic_visit(node)
+
+        def visit_FuncCall(self, node):
+            if isinstance(node.name, c_ast.ID) and node.name.name == "offsetof":
+                self.found_call = True
+                return
+            self.generic_visit(node)
+
+    visitor = Visitor()
+    visitor.visit(pycparser_ast)
+    return visitor.found_call and not visitor.has_function_declaration
+
+
 class CASTParser(_LegacyCASTParser):
-    """CAST parser with optimized regex-fallback extraction bookkeeping."""
+    """CAST parser with optimized extraction and preprocessing coverage guards."""
+
+    def parse(self, source_code, defined_syms=None, line_map=None):
+        ctx = super().parse(source_code, defined_syms=defined_syms, line_map=line_map)
+
+        # ``offsetof`` is a macro in supported C environments.  If a genuine
+        # macro-style use remains in code but parsing fell below the
+        # pcpp+pycparser tier, the security-relevant container/layout recovery
+        # path is no longer trustworthy.  Comments, literals, and explicit
+        # user-defined functions named ``offsetof`` are excluded.
+        source_has_offsetof = _source_has_builtin_offsetof_use(source_code)
+        coverage_degraded = (
+            source_has_offsetof and ctx.parse_tier != "pcpp+pycparser"
+        ) or _has_unexpanded_offsetof(ctx.pycparser_ast)
+        if coverage_degraded:
+            raise CoverageDegradedError(
+                "AST preprocessing/layout precision degraded: offsetof(...) "
+                "reached analysis unexpanded or preprocessing fell back before "
+                "macro expansion. Container-recovery and member-layout security "
+                "checks cannot be considered complete."
+            )
+
+        return ctx
 
     def _extract_functions(
         self,
@@ -203,4 +284,4 @@ class CASTParser(_LegacyCASTParser):
 
 ASTAnalyzer = CASTParser
 
-__all__ = ["CASTParser", "ASTAnalyzer"]
+__all__ = ["CASTParser", "ASTAnalyzer", "CoverageDegradedError"]
