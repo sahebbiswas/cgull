@@ -41,7 +41,7 @@ def build_cfg(
     cfg = StructuredCFG()
     function_pointers = _function_pointer_names(funcdef)
     labels_map: Dict[str, int] = {}
-    pending_gotos: List[Tuple[int, str]] = []
+    pending_gotos: List[Tuple[int, str, Optional[int]]] = []
 
     def make_event(stmt) -> int:
         (
@@ -361,7 +361,7 @@ def build_cfg(
                 line_map=line_map,
                 expr_str=f"goto {stmt.name}",
             )
-            pending_gotos.append((goto_node, stmt.name))
+            pending_gotos.append((goto_node, stmt.name, next_entry))
             return goto_node
 
         node = make_event(stmt)
@@ -370,7 +370,7 @@ def build_cfg(
 
     cfg.entry = build_stmt(funcdef.body, None, None, None)
 
-    for goto_node, label_name in pending_gotos:
+    for goto_node, label_name, resume_entry in pending_gotos:
         if label_name in labels_map:
             cfg.connect(goto_node, labels_map[label_name])
             continue
@@ -395,12 +395,12 @@ def build_cfg(
             )
         )
 
-        # The missing label may have been removed by preprocessing/recovery, so
-        # its actual successor cannot be represented by a concrete lexical edge.
-        # Treat the explicit unknown node as a wildcard over existing CFG nodes.
-        for candidate_id in sorted(cfg.nodes):
-            if candidate_id not in {goto_node, unknown_node}:
-                cfg.connect(unknown_node, candidate_id)
+        # The actual label target is unknown, but analysis must not terminate at
+        # the unresolved jump. Route through the explicit unknown-control-flow
+        # event to the structured continuation boundary captured at construction
+        # time. This keeps the uncertainty forward-scoped without inventing a
+        # concrete label target or creating an O(N) wildcard fan-out.
+        cfg.connect(unknown_node, resume_entry)
 
     cfg.build_basic_blocks()
     return cfg
