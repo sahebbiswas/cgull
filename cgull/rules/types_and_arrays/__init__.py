@@ -18,7 +18,10 @@ from .validated_pointer_range import ValidatedPointerRangeRule
 
 from .pointer_endpoint_wraparound import PointerEndpointWraparoundRule
 
+from .pointer_provenance import PointerProvenanceRule
+
 __all__ = [
+    "PointerProvenanceRule",
     "PointerEndpointWraparoundRule",
     "VariableLengthArraysRule",
     "IncorrectPointerScalingRule",
