@@ -7,6 +7,7 @@ from ...ast_analyzer import (
     CASTContext,
     _format_pycparser_expr,
     _map_line,
+    build_direct_call_signature_index,
     get_integer_type_byte_size,
     is_integer_narrowing_conversion,
 )
@@ -36,8 +37,6 @@ class IntegerNarrowingCastRule(BaseRule):
         if inferred:
             return inferred
         if type(node).__name__ == "Constant":
-            # pycparser labels character tokens as char; C character constants
-            # have type int and are not narrow byte objects being widened.
             if node.type == "char":
                 return "int"
             return node.type if get_integer_type_byte_size(node.type, ast_ctx) is not None else None
@@ -68,13 +67,13 @@ class IntegerNarrowingCastRule(BaseRule):
         from pycparser import c_ast
 
         issues: List[Issue] = []
-        functions_by_name = {candidate.name: candidate for candidate in ast_ctx.functions}
 
         for fn in ast_ctx.functions:
             funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
             if funcdef is None:
                 continue
             range_analysis = analyze_integer_ranges(ast_ctx, fn.name)
+            signature_index = build_direct_call_signature_index(ast_ctx, funcdef)
             rule = self
 
             class ConversionVisitor(c_ast.NodeVisitor):
@@ -199,12 +198,14 @@ class IntegerNarrowingCastRule(BaseRule):
 
                 def visit_FuncCall(self, node):
                     if isinstance(node.name, c_ast.ID) and node.args is not None:
-                        callee = functions_by_name.get(node.name.name)
+                        signature = signature_index.resolve(node)
                         arguments = getattr(node.args, "exprs", None) or []
-                        if callee is not None:
+                        if signature is not None and signature.resolved and signature.has_prototype:
                             for index, (argument, parameter) in enumerate(
-                                zip(arguments, callee.parameters), start=1
+                                zip(arguments, signature.parameters), start=1
                             ):
+                                if parameter.is_pointer or parameter.is_array:
+                                    continue
                                 parameter_label = (
                                     f"parameter '{parameter.name}'"
                                     if parameter.name
