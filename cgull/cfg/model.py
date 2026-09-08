@@ -5,9 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple
 
-
 logger = logging.getLogger(__name__)
-
 
 
 class Nullness(Enum):
@@ -34,7 +32,6 @@ class Allocation(Enum):
 @dataclass(frozen=True)
 class CFGSourceLocation:
     """Original source location for a CFG event or nested call."""
-
     file_path: Optional[str]
     line_number: int
     column_number: int = 0
@@ -44,34 +41,34 @@ class CFGSourceLocation:
 class CFGCall:
     """Structured call metadata attached to the containing CFG event.
 
-    ``direct_callee`` is populated only for syntactically direct calls.  For
-    function pointers and other indirect call expressions, ``callee_expression``
-    retains the source spelling and ``is_indirect`` is true so later call-graph
-    construction can record an unresolved edge instead of dropping the call.
+    ``direct_callee`` is populated for syntactically direct calls and for a
+    provably single resolved indirect target. ``resolved_callees`` preserves
+    the complete deterministic target set for indirect calls. ``is_indirect``
+    describes the original call syntax and therefore remains true after
+    resolution.
     """
-
     direct_callee: Optional[str]
     callee_expression: str
     actual_arguments: Tuple[str, ...] = ()
     result_target: Optional[str] = None
     source_location: Optional[CFGSourceLocation] = None
     is_indirect: bool = False
+    resolved_callees: Tuple[str, ...] = ()
+
+    @property
+    def possible_callees(self) -> Tuple[str, ...]:
+        if self.resolved_callees:
+            return self.resolved_callees
+        return (self.direct_callee,) if self.direct_callee else ()
 
 
 @dataclass
 class FunctionSummary:
     freed_params: Set[int] = field(default_factory=set)
-    # Parameter positions whose incoming argument value can be dereferenced
-    # before the callee establishes it is non-NULL.  This follows the
-    # parameter's initial location, not a variable of the same name after an
-    # assignment in the callee.
     unsafe_deref_params: Set[int] = field(default_factory=set)
     return_nullness: Nullness = Nullness.UNKNOWN
     returns_allocation: bool = False
     is_unknown: bool = False
-    # Pointer parameters whose referenced caller-owned object is initialized
-    # on every reachable exit vs on at least one reachable path. Appended to
-    # preserve the positional constructor contract of the older fields.
     must_initialize_params: Set[int] = field(default_factory=set)
     may_initialize_params: Set[int] = field(default_factory=set)
 
@@ -87,21 +84,15 @@ class VariableFacts:
 class BasicBlock:
     block_id: int
     nodes: List["CFGEvent"] = field(default_factory=list)
-    predecessors: List[int] = field(default_factory=list)  # list of block_ids
-    successors: List[int] = field(default_factory=list)    # list of block_ids
-    edge_facts: Dict[int, Tuple[Set[str], Set[str]]] = field(default_factory=dict)  # succ block_id -> (add, remove)
-
-    # In and Out facts at block entry and block exit
+    predecessors: List[int] = field(default_factory=list)
+    successors: List[int] = field(default_factory=list)
+    edge_facts: Dict[int, Tuple[Set[str], Set[str]]] = field(default_factory=dict)
     nullness_in: Dict[str, Nullness] = field(default_factory=dict)
     nullness_out: Dict[str, Nullness] = field(default_factory=dict)
-
     init_in: Dict[str, Initialization] = field(default_factory=dict)
     init_out: Dict[str, Initialization] = field(default_factory=dict)
-
     alloc_in: Dict[str, Allocation] = field(default_factory=dict)
     alloc_out: Dict[str, Allocation] = field(default_factory=dict)
-
-    # Alias and location lifecycle tracking facts
     loc_state_in: Dict[str, Allocation] = field(default_factory=dict)
     loc_state_out: Dict[str, Allocation] = field(default_factory=dict)
     loc_map_in: Dict[str, Set[str]] = field(default_factory=dict)
@@ -132,7 +123,6 @@ class CFGEvent:
 
     @property
     def primary_call(self) -> Optional[CFGCall]:
-        """The value-producing call, or the first call for a call statement."""
         for call in self.calls:
             if call.result_target is not None:
                 return call
@@ -155,5 +145,3 @@ class CFGEvent:
 
     def get_deref_line(self, var_name: str) -> int:
         return self.deref_lines.get(var_name, self.line_number)
-
-
