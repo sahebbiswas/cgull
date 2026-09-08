@@ -86,10 +86,13 @@ def test_unresolved_goto_degrades_lifetime_for_uaf_and_double_free_sinks():
     )
 
     use = _node(cfg, "p[0] = 'x'")
-    second_free = [node for node in cfg.nodes.values() if node.kind == "free"][-1]
+    source_last_free = min(
+        (node for node in cfg.nodes.values() if node.kind == "free"),
+        key=lambda node: node.node_id,
+    )
 
     assert cfg.query_allocation("p", use.node_id) == Allocation.MAYBE_FREED
-    assert cfg.query_allocation("p", second_free.node_id) == Allocation.MAYBE_FREED
+    assert cfg.query_allocation("p", source_last_free.node_id) == Allocation.MAYBE_FREED
 
 
 def test_unresolved_goto_output_is_deterministic():
