@@ -13,8 +13,10 @@ def test_ast_dependencies_are_core_runtime_dependencies():
     )
 
     assert project_block is not None
-    assert re.search(r'^dependencies\s*=\s*\[[^]]*"pycparser>=2\.21"', project_block.group(1), re.MULTILINE | re.DOTALL)
-    assert re.search(r'^dependencies\s*=\s*\[[^]]*"pcpp>=1\.30"', project_block.group(1), re.MULTILINE | re.DOTALL)
+    dependencies_line = re.search(r"(?m)^dependencies\s*=\s*(\[[^\n]*\])", project_block.group(1))
+    assert dependencies_line is not None
+    assert '"pycparser>=2.21"' in dependencies_line.group(1)
+    assert '"pcpp>=1.30"' in dependencies_line.group(1)
 
 
 def test_requirements_do_not_describe_pcpp_as_optional():
