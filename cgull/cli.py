@@ -5,11 +5,18 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
-from typing import List, Optional
+import os
+from typing import List, Optional, Tuple
 
 from . import cli_base as _base
+from .compile_database import (
+    CompileCommandIncludeDatabase,
+    CompileDatabaseCGullScanner,
+    activate_compile_command_database,
+    load_compile_commands_data,
+)
 from .fixes import FixResult, apply_safe_fixes
-from .telemetry import CGullScanner as _TelemetryScanner, ProgressIndicator as _TelemetryProgressIndicator
+from .telemetry import ProgressIndicator as _TelemetryProgressIndicator
 
 
 _ORIGINAL_BUILD_PARSER = _base.build_parser
@@ -19,7 +26,7 @@ _ORIGINAL_REPORTER = _base.ReportGenerator
 # Public symbols historically exposed from cgull.cli. Keep these aliases so
 # callers/tests can monkey-patch cgull.cli without knowing about the internal
 # compatibility module used by the fix facade.
-CGullScanner = _TelemetryScanner
+CGullScanner = CompileDatabaseCGullScanner
 ProgressIndicator = _TelemetryProgressIndicator
 ReportGenerator = _base.ReportGenerator
 
@@ -52,6 +59,92 @@ def _sync_base_symbols() -> None:
     _base.CGullScanner = CGullScanner
     _base.ProgressIndicator = ProgressIndicator
     _base.ReportGenerator = ReportGenerator
+
+
+def _primary_target(args) -> str:
+    targets = getattr(args, "target", ".")
+    if isinstance(targets, str):
+        targets = [targets]
+    if len(targets) == 1:
+        return targets[0]
+    if targets:
+        try:
+            return os.path.commonpath([os.path.abspath(target) for target in targets])
+        except ValueError:
+            pass
+    return "."
+
+
+def _compile_database_for_args(
+    args,
+) -> Tuple[Optional[CompileCommandIncludeDatabase], Optional[List[object]], Optional[str]]:
+    """Resolve and parse the compilation database once for both include and macro views."""
+    explicit_path = getattr(args, "compile_commands", None)
+    compile_commands_path = explicit_path
+
+    if not compile_commands_path:
+        from .ast_analyzer import find_compile_commands
+
+        primary_target = _primary_target(args)
+        config = _base.load_config(
+            config_path=getattr(args, "config", None),
+            target_path=primary_target,
+        )
+        if not config.error:
+            compile_commands_path = find_compile_commands(
+                primary_target,
+                config_dir=config.config_dir,
+            )
+
+    if not compile_commands_path or not os.path.exists(compile_commands_path):
+        return None, None, None
+
+    try:
+        data = load_compile_commands_data(compile_commands_path)
+        database = CompileCommandIncludeDatabase.from_data(
+            data,
+            database_dir=os.path.dirname(os.path.realpath(compile_commands_path)),
+        )
+    except Exception:
+        # cli_base owns the established error policy for explicit and
+        # auto-discovered compile databases, including macro ingestion. Let it
+        # report/ignore the parse failure exactly as before.
+        return None, None, None
+
+    for warning in database.warnings:
+        _base.print(f"Warning: {warning}", file=_base.sys.stderr)
+    return database, data, os.path.realpath(compile_commands_path)
+
+
+@contextlib.contextmanager
+def _shared_compile_commands_parse(data: Optional[List[object]], path: Optional[str]):
+    """Feed cli_base the already-loaded JSON instead of reopening the same database."""
+    if data is None or path is None:
+        yield
+        return
+
+    from . import ast_analyzer
+
+    original_parse = ast_analyzer.parse_compile_commands
+
+    def parse_compile_commands_once(filepath_or_data):
+        if isinstance(filepath_or_data, (str, os.PathLike)):
+            if os.path.realpath(os.fspath(filepath_or_data)) == path:
+                return original_parse(data)
+        return original_parse(filepath_or_data)
+
+    ast_analyzer.parse_compile_commands = parse_compile_commands_once
+    try:
+        yield
+    finally:
+        ast_analyzer.parse_compile_commands = original_parse
+
+
+def _run_original_scan(args):
+    database, data, compile_commands_path = _compile_database_for_args(args)
+    with activate_compile_command_database(database), _shared_compile_commands_parse(data, compile_commands_path):
+        _sync_base_symbols()
+        return _ORIGINAL_HANDLE_SCAN(args)
 
 
 def _run_scan_and_capture(args, *, suppress_output: bool):
@@ -97,9 +190,9 @@ def _run_scan_and_capture(args, *, suppress_output: bool):
     try:
         if suppress_output:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                rc = _ORIGINAL_HANDLE_SCAN(internal)
+                rc = _run_original_scan(internal)
         else:
-            rc = _ORIGINAL_HANDLE_SCAN(internal)
+            rc = _run_original_scan(internal)
     finally:
         _base.ReportGenerator = previous
 
@@ -131,8 +224,7 @@ def handle_scan(args) -> int:
         _base.print("Error: --write requires --fix.", file=_base.sys.stderr)
         return 2
     if not getattr(args, "fix", False):
-        _sync_base_symbols()
-        return _ORIGINAL_HANDLE_SCAN(args)
+        return _run_original_scan(args)
 
     if not getattr(args, "write", False):
         rc, result = _run_scan_and_capture(args, suppress_output=False)
@@ -155,15 +247,12 @@ def handle_scan(args) -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Run the CLI while preserving the established injectable argv API."""
-    # _base.main resolves build_parser/handle_scan from its own globals. Sync
-    # them on every call so monkey-patching cgull.cli.handle_scan keeps working.
     _base.build_parser = build_parser
     _base.handle_scan = handle_scan
     _sync_base_symbols()
     return _base.main(argv)
 
 
-# Re-export established CLI helpers for compatibility with direct imports.
 handle_flags = _base.handle_flags
 handle_rules = _base.handle_rules
 handle_init_ignore = _base.handle_init_ignore

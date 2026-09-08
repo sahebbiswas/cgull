@@ -322,6 +322,10 @@ class CGullScanner(_BaseCGullScanner):
         if progress_callback:
             progress_callback(completed, total, current_file)
 
+    def _config_for_file(self, config: ScanConfig, file_path: str) -> ScanConfig:
+        """Return scan configuration for one file; subclasses may add per-TU context."""
+        return config
+
     def scan_path(
         self,
         *args,
@@ -425,7 +429,7 @@ class CGullScanner(_BaseCGullScanner):
                 file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(
                     file_path,
                     content,
-                    config=config,
+                    config=self._config_for_file(config, file_path),
                     profiles=profiles,
                     quiet=quiet,
                     progress_active=progress_active,
@@ -494,7 +498,14 @@ class CGullScanner(_BaseCGullScanner):
         futures = {}
         try:
             futures = {
-                pool.submit(_scan_file_worker, file_path, config, profiles, quiet, progress_active): file_path
+                pool.submit(
+                    _scan_file_worker,
+                    file_path,
+                    self._config_for_file(config, file_path),
+                    profiles,
+                    quiet,
+                    progress_active,
+                ): file_path
                 for file_path in files_to_scan
             }
             for future in as_completed(futures):
