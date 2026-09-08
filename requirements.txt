@@ -1,6 +1,6 @@
 # C-GULL Core Requirements
-# The core static analyzer runs on Python 3.10+ standard library with zero mandatory external dependencies.
-# Optional AST enhancements:
+# AST parsing and preprocessing are runtime requirements. Security-relevant
+# analyses (including offsetof/container recovery) rely on macro expansion;
+# silently omitting these dependencies can reduce coverage.
 pycparser>=2.21
-# Optional C preprocessor for macro expansion (improves AST success rate):
 pcpp>=1.30
