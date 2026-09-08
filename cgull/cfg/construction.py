@@ -23,6 +23,7 @@ from .ast_events import (
     _simple_null_facts,
 )
 from .dataflow import StructuredCFG
+from .diagnostics import CFGDiagnostic
 from .model import FunctionSummary
 
 
@@ -40,7 +41,7 @@ def build_cfg(
     cfg = StructuredCFG()
     function_pointers = _function_pointer_names(funcdef)
     labels_map: Dict[str, int] = {}
-    pending_gotos: List[Tuple[int, str]] = []
+    pending_gotos: List[Tuple[int, str, Optional[int]]] = []
 
     def make_event(stmt) -> int:
         (
@@ -360,7 +361,7 @@ def build_cfg(
                 line_map=line_map,
                 expr_str=f"goto {stmt.name}",
             )
-            pending_gotos.append((goto_node, stmt.name))
+            pending_gotos.append((goto_node, stmt.name, next_entry))
             return goto_node
 
         node = make_event(stmt)
@@ -369,9 +370,37 @@ def build_cfg(
 
     cfg.entry = build_stmt(funcdef.body, None, None, None)
 
-    for goto_node, label_name in pending_gotos:
+    for goto_node, label_name, resume_entry in pending_gotos:
         if label_name in labels_map:
             cfg.connect(goto_node, labels_map[label_name])
+            continue
+
+        goto_event = cfg.nodes[goto_node]
+        unknown_node = cfg.new_node(
+            "unknown_control_flow",
+            getattr(goto_event, "_ast_node", None),
+            line_map=line_map,
+            expr_str=f"unresolved goto {label_name}",
+        )
+        unknown_event = cfg.nodes[unknown_node]
+        setattr(unknown_event, "is_unknown_control_flow", True)
+        setattr(unknown_event, "unresolved_target", label_name)
+        cfg.connect(goto_node, unknown_node)
+        cfg.diagnostics.append(
+            CFGDiagnostic(
+                code="CFG_UNRESOLVED_GOTO",
+                message=f"Unresolved goto target '{label_name}'; control flow is conservative",
+                source_location=goto_event.source_location,
+                target=label_name,
+            )
+        )
+
+        # The actual label target is unknown, but analysis must not terminate at
+        # the unresolved jump. Route through the explicit unknown-control-flow
+        # event to the structured continuation boundary captured at construction
+        # time. This keeps the uncertainty forward-scoped without inventing a
+        # concrete label target or creating an O(N) wildcard fan-out.
+        cfg.connect(unknown_node, resume_entry)
 
     cfg.build_basic_blocks()
     return cfg

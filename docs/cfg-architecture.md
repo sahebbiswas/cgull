@@ -30,7 +30,7 @@ Private AST helper names that historically existed in `construction.py` are temp
 
 ### `graph.py`
 
-Owns `StructuredGraph`, CFG node/edge creation, source-location attachment, predecessor/successor topology, and basic-block construction. It is independent of state-domain transfer semantics.
+Owns `StructuredGraph`, CFG node/edge creation, source-location attachment, construction diagnostics, predecessor/successor topology, and basic-block construction. It is independent of state-domain transfer semantics.
 
 ### `domains.py`
 
@@ -47,6 +47,14 @@ Provides the historic `StructuredCFG` compatibility facade by composing `Structu
 ### Specialized analyses
 
 Ownership, value facts, integer/pointer ranges, interprocedural propagation, and security provenance remain separate consumers of the core CFG. They should depend on the stable graph/event API rather than implementation details of construction.
+
+## Unresolved control flow
+
+A direct `goto` whose label is absent is never treated as a path terminator and is not converted into a concrete label edge. Construction emits a `CFG_UNRESOLVED_GOTO` diagnostic at the `goto` source location, including the missing label, and connects the `goto` to an explicit `unknown_control_flow` event.
+
+The unknown event resumes at the structured continuation boundary captured when the `goto` is constructed. Nodes reachable from that boundary remain potentially reachable, and core nullness, initialization, allocation, and lifetime facts are degraded to conservative `MAYBE_*` states. This keeps uncertainty scoped to program points after the unresolved jump, preserves facts established before the goto, and avoids whole-function wildcard fan-out while still ensuring that a missing label cannot make C-GULL more confident or suppress a downstream security finding.
+
+Valid forward and backward direct gotos continue to use concrete label edges and do not incur this degradation. Computed goto extensions, `setjmp`/`longjmp`, C++ exception-like control flow, and indirect calls are separate concerns.
 
 ## Adding CFG functionality
 
