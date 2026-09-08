@@ -13,7 +13,7 @@ class PointerRangeBoundsRule(BaseRule):
     impact = Severity.HIGH
     category = RuleCategory.MEMORY
     description = "Detect pointer derivations and accesses provably outside the originating object."
-    implementation_method = "Shared intraprocedural pointer origin, byte offset, and object extent facts"
+    implementation_method = "Shared pointer facts and interprocedural byte-range requirements"
     implementation_complexity = "Medium"
     chances_of_false_positives = "Low"
     cwe_id = "CWE-823"
@@ -50,7 +50,7 @@ class PointerRangeBoundsRule(BaseRule):
                 issue = self.create_issue(
                     file_path=file_path, line_number=line, column_number=column,
                     code_snippet=ast_ctx.source_lines[line - 1].strip() if 0 < line <= len(ast_ctx.source_lines) else "",
-                    message=f"{action} at byte offset {offset} is outside object '{fact.origin}' ({fact.object_extent} bytes)." + (f" Access width: {event.access_width} bytes." if event.access_width else ""),
+                    message=f"{action} at byte offset {offset} is outside object '{fact.origin}' ({fact.object_extent} bytes)." + (f" Access width: {event.access_width} bytes." if event.access_width else "") + (f" Required by call to '{event.callee}'." if event.callee else ""),
                     engine="AST", fix_type=FixType.MANUAL_REVIEW,
                 )
                 issue.cwe_id = cwe

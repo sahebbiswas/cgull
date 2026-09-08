@@ -660,7 +660,7 @@ Proofs apply only on guaranteed condition edges. Joins intersect evidence from
 both reachable paths and retain all proof dependencies. Mutation invalidates
 dependent evidence, including evidence copied to aliases. Loop mutations in the
 body, condition, or step discard dominating proofs before the loop invariant is
-computed. These proofs are intraprocedural; unsupported control/alias effects
+computed. Proof refinement is intraprocedural; unsupported control/alias effects
 retain the pointer domain's existing conservative event suppression.
 
 
@@ -680,3 +680,39 @@ receive address treatment under the existing scalar-width model. Unsupported
 casts and symbolic forms do not manufacture pointer-range proofs. Numeric
 length bounds use the shared `IntegerRange` domain; reassignment, address
 escape, and path joins discard evidence that no longer holds.
+
+### Pointer requirements across calls (#374)
+
+`AnalysisSession.pointer_range_analysis.requirements` maps function names to
+cached `PointerRangeSummary` values. Each requirement identifies a formal by
+position, a byte-offset interval, an access width, read/write/formation flags,
+and any intervals established inside the callee. It describes a requirement,
+not a guarantee that every caller satisfies it.
+
+The existing SCC engine computes these summaries bottom-up, including recursive
+components. At every direct call, the analysis binds requirements to the actual
+pointer's pre-transfer facts. `call_events[caller]` exposes the resulting events,
+including caller provenance, object extents, and validated/enclosing intervals.
+Aliases and pointer casts preserve the binding; wrapper offsets compose in
+bytes. Mixed callers are evaluated separately. Existing size-analysis entry
+capacities remain lower guarantees and never become exact object extents.
+
+For example, a requirement to read four bytes at offset -4 is safe for
+`inner(buffer + 8)` with a 64-byte buffer, but exceeds a validation of only
+`[0, 16)` at `inner(external_pointer)`. The latter produces `CGULL-051` at the
+call. `CGULL-050` instead diagnoses calls whose requirements definitely exceed
+the actual object's exact bounds. Requirements flow through multiple wrappers.
+
+Formal-dependent events in internal functions with known callers are evaluated
+at their callers. Public functions and functions whose addresses escape retain
+unknown entry contexts as well. Local-object violations stay at the original
+access. The existing `function(name).query(...)` remains an intraprocedural
+query; `call_events` is the context-specific view.
+
+Unknown or indirect callees supply no inferred range guarantees. Unsupported
+control flow retains the pointer domain's event suppression. Requirements are
+bounded to 128 distinct entries and byte offsets/widths within signed 64-bit magnitude;
+overflow becomes an unknown summary. Recursive iteration exhaustion also
+degrades to unknown and exposes the shared engine's convergence diagnostic.
+Unknown requirements cannot prove access safety. Symbolic lengths, arbitrary
+return-pointer transformations, and cross-TU resolution remain unsupported.

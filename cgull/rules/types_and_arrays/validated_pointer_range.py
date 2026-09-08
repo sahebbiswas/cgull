@@ -57,7 +57,7 @@ class ValidatedPointerRangeRule(PointerRangeBoundsRule):
                 issues.append(self.create_issue(
                     file_path=file_path, line_number=line, column_number=column,
                     code_snippet=ast_ctx.source_lines[line - 1].strip() if 0 < line <= len(ast_ctx.source_lines) else "",
-                    message=f"Pointer derived from '{fact.origin}' {detail}. Prior validation or enclosing guards prove byte intervals {intervals} relative to that origin; it does not establish accessible storage outside them.",
+                    message=f"Pointer derived from '{fact.origin}' {detail}. Prior validation or enclosing guards prove byte intervals {intervals} relative to that origin; it does not establish accessible storage outside them." + (f" Required by call to '{event.callee}'." if event.callee else ""),
                     engine="AST", fix_type=FixType.MANUAL_REVIEW,
                 ))
         return issues

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-09-08
+
+### Added
+- Cached pointer-range requirements across direct calls and wrappers, evaluated against each caller's object bounds, validated intervals, enclosing guards, and provenance. Shared SCC fixed-point evaluation bounds recursion and preserves mixed safe/unsafe call contexts (#374).
+
 ## [0.10.5] - 2026-09-08
 
 ### Added

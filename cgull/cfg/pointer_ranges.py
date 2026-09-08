@@ -251,6 +251,7 @@ class PointerRangeFunctionResult:
         events=(),
     ) -> None:
         self.endpoint_checks = tuple(getattr(snapshots, "endpoint_checks", ()))
+        self.calls = tuple(getattr(snapshots, "calls", ()))
         self.events = tuple(events)
         self._snapshots = {line: dict(facts) for line, facts in snapshots.items()}
         self._final_facts = dict(final_facts) if final_facts is not None else None
@@ -273,6 +274,10 @@ class PointerRangeFunctionResult:
 @dataclass(frozen=True)
 class TranslationUnitPointerRangeResult:
     function_results: Mapping[str, PointerRangeFunctionResult]
+    requirements: Mapping = field(default_factory=dict)
+    call_events: Mapping = field(default_factory=dict)
+    diagnostics: tuple = ()
+    iterations_by_scc: Mapping = field(default_factory=dict)
 
     def function(self, name: str) -> Optional[PointerRangeFunctionResult]:
         return self.function_results.get(name)
@@ -291,6 +296,7 @@ class PointerRangeEvent:
     access_width: Optional[int] = 0
     write: bool = False
     is_access: bool = False
+    callee: Optional[str] = None
 
 
 class _Snapshots(dict):
@@ -298,6 +304,7 @@ class _Snapshots(dict):
         super().__init__()
         self.events = []
         self.endpoint_checks = []
+        self.calls = []
         self.suppress_events = False
         self.semantic_models = None
 
@@ -333,8 +340,9 @@ def analyze_translation_unit_pointer_ranges(
     size_analysis=None,
     value_analysis=None,
     semantic_models=None,
+    call_graph=None,
 ) -> TranslationUnitPointerRangeResult:
-    """Build conservative intraprocedural pointer facts for every function."""
+    """Build local pointer facts and cached call-specific range requirements."""
     results: Dict[str, PointerRangeFunctionResult] = {}
     typedefs = {n.name: n.type for n in ast_ctx.pycparser_ast.ext if isinstance(n, c_ast.Typedef)}
 
@@ -413,7 +421,8 @@ def analyze_translation_unit_pointer_ranges(
         snapshots.suppress_events = not _supports_definite_events(funcdef, state.typedefs)
         final_state = _analyze_statement(funcdef.body, state, snapshots)
         results[name] = PointerRangeFunctionResult(snapshots, final_state.facts, snapshots.events)
-    return TranslationUnitPointerRangeResult(dict(sorted(results.items())))
+    from .pointer_interprocedural import propagate_pointer_requirements
+    return propagate_pointer_requirements(ast_ctx, results, call_graph=call_graph)
 
 
 def _record(node, state: _State, snapshots) -> None:
@@ -811,6 +820,11 @@ def _observe(node, state, snapshots):
             registry = snapshots.semantic_models
             name = _location(node.name)
             args = list(getattr(node.args, "exprs", ()) or ())
+            # Capture actuals before transfer and branch joins, including aliases
+            # and casts. A local identifier can shadow a direct function name.
+            direct = name not in state.types or isinstance(state.types[name], c_ast.FuncDecl)
+            callee = name if isinstance(node.name, c_ast.ID) and direct else None
+            snapshots.calls.append((node, callee, tuple(_expression_fact(arg, state) for arg in args)))
             effect = registry.call_effects.effects.get(name) if registry else None
             pairs = set(effect.size_relationships if effect else ())
             if name in {"memcpy", "memmove", "memcmp"}:
