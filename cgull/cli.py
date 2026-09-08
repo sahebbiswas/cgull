@@ -5,11 +5,17 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import os
 from typing import List, Optional
 
 from . import cli_base as _base
+from .compile_database import (
+    CompileCommandIncludeDatabase,
+    CompileDatabaseCGullScanner,
+    activate_compile_command_database,
+)
 from .fixes import FixResult, apply_safe_fixes
-from .telemetry import CGullScanner as _TelemetryScanner, ProgressIndicator as _TelemetryProgressIndicator
+from .telemetry import ProgressIndicator as _TelemetryProgressIndicator
 
 
 _ORIGINAL_BUILD_PARSER = _base.build_parser
@@ -19,7 +25,7 @@ _ORIGINAL_REPORTER = _base.ReportGenerator
 # Public symbols historically exposed from cgull.cli. Keep these aliases so
 # callers/tests can monkey-patch cgull.cli without knowing about the internal
 # compatibility module used by the fix facade.
-CGullScanner = _TelemetryScanner
+CGullScanner = CompileDatabaseCGullScanner
 ProgressIndicator = _TelemetryProgressIndicator
 ReportGenerator = _base.ReportGenerator
 
@@ -52,6 +58,62 @@ def _sync_base_symbols() -> None:
     _base.CGullScanner = CGullScanner
     _base.ProgressIndicator = ProgressIndicator
     _base.ReportGenerator = ReportGenerator
+
+
+def _primary_target(args) -> str:
+    targets = getattr(args, "target", ".")
+    if isinstance(targets, str):
+        targets = [targets]
+    if len(targets) == 1:
+        return targets[0]
+    if targets:
+        try:
+            return os.path.commonpath([os.path.abspath(target) for target in targets])
+        except ValueError:
+            pass
+    return "."
+
+
+def _compile_database_for_args(args) -> Optional[CompileCommandIncludeDatabase]:
+    """Resolve the same explicit/auto-discovered compilation database as cli_base."""
+    explicit_path = getattr(args, "compile_commands", None)
+    compile_commands_path = explicit_path
+
+    if not compile_commands_path:
+        from .ast_analyzer import find_compile_commands
+
+        primary_target = _primary_target(args)
+        config = _base.load_config(
+            config_path=getattr(args, "config", None),
+            target_path=primary_target,
+        )
+        if not config.error:
+            compile_commands_path = find_compile_commands(
+                primary_target,
+                config_dir=config.config_dir,
+            )
+
+    if not compile_commands_path or not os.path.exists(compile_commands_path):
+        return None
+
+    try:
+        database = CompileCommandIncludeDatabase.from_file(compile_commands_path)
+    except Exception:
+        # cli_base owns the established error policy for explicit and
+        # auto-discovered compile databases, including macro ingestion. Let it
+        # report/ignore the parse failure exactly as before.
+        return None
+
+    for warning in database.warnings:
+        _base.print(f"Warning: {warning}", file=_base.sys.stderr)
+    return database
+
+
+def _run_original_scan(args):
+    database = _compile_database_for_args(args)
+    with activate_compile_command_database(database):
+        _sync_base_symbols()
+        return _ORIGINAL_HANDLE_SCAN(args)
 
 
 def _run_scan_and_capture(args, *, suppress_output: bool):
@@ -97,9 +159,9 @@ def _run_scan_and_capture(args, *, suppress_output: bool):
     try:
         if suppress_output:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                rc = _ORIGINAL_HANDLE_SCAN(internal)
+                rc = _run_original_scan(internal)
         else:
-            rc = _ORIGINAL_HANDLE_SCAN(internal)
+            rc = _run_original_scan(internal)
     finally:
         _base.ReportGenerator = previous
 
@@ -131,8 +193,7 @@ def handle_scan(args) -> int:
         _base.print("Error: --write requires --fix.", file=_base.sys.stderr)
         return 2
     if not getattr(args, "fix", False):
-        _sync_base_symbols()
-        return _ORIGINAL_HANDLE_SCAN(args)
+        return _run_original_scan(args)
 
     if not getattr(args, "write", False):
         rc, result = _run_scan_and_capture(args, suppress_output=False)
