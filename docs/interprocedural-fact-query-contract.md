@@ -641,8 +641,8 @@ applicable enclosing-guard evidence at the current exact offset; zero guarantees
 no bytes in that direction. Existing `lower_bound`/`upper_bound` fields retain
 their object/allocation capacity meaning.
 
-For example, the surviving edge of `if (p < base + 4) return;` proves `[-4, 0)`
-relative to `p`; `if (p + 12 > end) return;` proves `[0, 12)`. `CGULL-051` accepts
+For example, the surviving edge of `if (p - base < 4) return;` proves `[-4, 0)`
+relative to `p`; `if (end - p < 12) return;` proves `[0, 12)`. `CGULL-051` accepts
 accesses covered by the union of these intervals and successful validator
 intervals. A lower-bound check alone cannot justify reads after `p`, and an
 upper-bound check alone cannot justify reads before it.
@@ -662,3 +662,21 @@ dependent evidence, including evidence copied to aliases. Loop mutations in the
 body, condition, or step discard dominating proofs before the loop invariant is
 computed. These proofs are intraprocedural; unsupported control/alias effects
 retain the pointer domain's existing conservative event suppression.
+
+
+### Endpoint arithmetic safety (#373)
+
+An endpoint comparison cannot establish its own non-wrapping evidence.
+`p + 12 <= end` and `base <= p - 4` refine bounds only when existing
+object capacity, validated intervals, or dominating distance checks already
+prove the arithmetic safe. A small constant by itself is insufficient.
+`CGULL-052` consumes rejected endpoint checks from the same shared analysis.
+
+Unsigned distance checks such as `len <= (size_t)(end - p)` require a prior
+`p <= end` edge, including short-circuit and fail-closed forms. Compatible
+signed pointer differences retain #372's enclosing-array interpretation.
+Unsigned `uintptr_t`/`UINTN` types and explicit unsigned-long pointer casts
+receive address treatment under the existing scalar-width model. Unsupported
+casts and symbolic forms do not manufacture pointer-range proofs. Numeric
+length bounds use the shared `IntegerRange` domain; reassignment, address
+escape, and path joins discard evidence that no longer holds.

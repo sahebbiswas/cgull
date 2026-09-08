@@ -16,7 +16,10 @@ from .integer_narrowing_cast import IntegerNarrowingCastRule
 from .pointer_range_bounds import PointerRangeBoundsRule
 from .validated_pointer_range import ValidatedPointerRangeRule
 
+from .pointer_endpoint_wraparound import PointerEndpointWraparoundRule
+
 __all__ = [
+    "PointerEndpointWraparoundRule",
     "VariableLengthArraysRule",
     "IncorrectPointerScalingRule",
     "SizeofOnPointerRule",

@@ -142,3 +142,26 @@ These proofs apply only on the guarded path and are invalidated when a dependent
 pointer, boundary, or size changes. Unknown/volatile sizes and ambiguous unsigned
 distance comparisons remain unproven. See the
 [shared pointer fact contract](interprocedural-fact-query-contract.md#pointer-formation-and-access-observations).
+
+
+## CGULL-052: unsafe pointer range endpoint
+
+Reports bounds comparisons that rely on address addition/subtraction without
+independent non-wrapping evidence, including integer-address temporaries.
+Ordinary pointer arithmetic outside a range comparison is not reported by this
+rule. Small constants still need known object/validated capacity.
+
+```c
+// Reported: len is unconstrained.
+return p + len <= end;
+
+// Accepted: subtraction is reached only after endpoint ordering succeeds.
+if (p > end) return false;
+return len <= (size_t)(end - p);
+```
+
+Facts are branch-local and invalidated by reassignment or address escape.
+Like the shared pointer analysis, unsupported control flow (including goto,
+switch and shadowed identifiers) does not produce definite events. Arbitrary
+pointer/integer provenance recovery and target ABI inference remain outside
+this rule's scope.

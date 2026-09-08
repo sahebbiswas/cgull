@@ -33,6 +33,12 @@ def invalidate_pointer_guards(state, target):
         if intervals != fact.guarded_intervals:
             state.facts[name] = replace(fact, guarded_intervals=intervals)
     state.constants.pop(target, None)
+    # Relational evidence refers to values, never to variable storage.
+    from .pointer_endpoint_safety import depends_on
+    state.address_order = {proof for proof in state.address_order if not depends_on(proof, target)}
+    state.safe_endpoints = {proof for proof in state.safe_endpoints if not depends_on(proof, target)}
+    state.integer_bounds.pop(target, None)
+    state.address_values.pop(target, None)
 
 
 def _dependencies(node):
@@ -101,6 +107,9 @@ def _signed_distance(node, state):
 def refine_pointer_comparison(node, state, truth):
     """Refine one relational leaf on its guaranteed true/false edge."""
     if not isinstance(node, c_ast.BinaryOp) or node.op not in {'<', '<=', '>', '>='}:
+        return
+    from .pointer_endpoint_safety import unsafe_endpoints
+    if unsafe_endpoints(node, state):
         return
     op, left, right = node.op, node.left, node.right
     if not truth:

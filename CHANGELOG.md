@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-09-08
+
+### Added
+- `CGULL-052` detects pointer range comparisons relying on unproven endpoint arithmetic, including unsigned address temporaries and unordered unsigned distance checks (#373).
+
+### Fixed
+- Reject unsafe endpoint arithmetic before establishing enclosing pointer bounds. Constant offsets now require independent capacity evidence; guarded lengths retain branch-local safety facts.
+
 ## [0.10.1] - 2026-09-07
 
 ### Added

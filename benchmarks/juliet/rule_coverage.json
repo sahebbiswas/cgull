@@ -51,6 +51,7 @@
     {"rule_id": "CGULL-047", "status": "not-yet-measured", "reason": "CGULL-047 has a dedicated embedded trust-boundary quality corpus, but it is not currently Juliet-backed."},
     {"rule_id": "CGULL-048", "status": "not-yet-measured", "reason": "The rule targets stack/heap buffer overflow families, but it has not yet been added to rule-specific Juliet attribution."},
     {"rule_id": "CGULL-049", "status": "measured", "juliet_cwes": ["CWE-194", "CWE-195", "CWE-196"], "measurement_scope": "Full upstream Juliet 1.3 CWE-194/CWE-195/CWE-196 families; see docs/benchmarks/cgull-049-sign-extension-351.md. External library argument conversions remain a known gap; CWE-197 remains unmeasured. These families are not vendored focused fixtures."},
+    {"rule_id": "CGULL-052", "status": "not-yet-measured", "reason": "Focused endpoint arithmetic regressions; no Juliet attribution measured."},
     {"rule_id": "CGULL-051", "status": "not-yet-measured", "reason": "Configured validated pointer interval regressions only; no Juliet validator-contract attribution has been measured."},
     {"rule_id": "CGULL-050", "status": "not-yet-measured", "reason": "Focused pointer formation/access corpus only; Juliet CWE-823/125/787 attribution has not been measured."}
   ]

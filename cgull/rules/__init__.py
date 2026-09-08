@@ -51,6 +51,7 @@ from .types_and_arrays import (
     IntegerNarrowingCastRule,
     PointerRangeBoundsRule,
     ValidatedPointerRangeRule,
+    PointerEndpointWraparoundRule,
 )
 from .misra_and_style import (
     NakedControlFlowStatementsRule,
@@ -100,6 +101,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     UnvalidatedExternalDataSinkRule,
     PointerRangeBoundsRule,
     ValidatedPointerRangeRule,
+    PointerEndpointWraparoundRule,
     # Medium Impact
     UnsafeIntegerConversionsRule,
     IntegerNarrowingCastRule,
