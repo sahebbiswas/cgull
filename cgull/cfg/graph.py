@@ -34,16 +34,18 @@ class StructuredGraph:
         line = 1
         source_path = None
         column = 0
-        if ast_node is not None and getattr(ast_node, "coord", None):
-            exp_line = max(1, ast_node.coord.line - _PRELUDE_LINE_COUNT)
+        coord = getattr(ast_node, "coord", None) if ast_node is not None else None
+        coord_line = getattr(coord, "line", None) if coord is not None else None
+        if coord_line is not None:
+            exp_line = max(1, coord_line - _PRELUDE_LINE_COUNT)
             line = _map_line(exp_line, line_map)
             mapped = line_map.get(exp_line) if line_map else None
             source_path = (
                 getattr(mapped, "file_path", None)
                 if mapped is not None
-                else getattr(ast_node.coord, "file", None)
+                else getattr(coord, "file", None)
             )
-            column = getattr(ast_node.coord, "column", 0) or 0
+            column = getattr(coord, "column", 0) or 0
         source_location = CFGSourceLocation(
             file_path=source_path,
             line_number=line,
