@@ -30,6 +30,10 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/sahebbiswas/cgull"
+Documentation = "https://github.com/sahebbiswas/cgull/blob/main/docs/README.md"
+Source = "https://github.com/sahebbiswas/cgull"
+Issues = "https://github.com/sahebbiswas/cgull/issues"
+Changelog = "https://github.com/sahebbiswas/cgull/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 ast = ["pycparser>=2.21", "pcpp>=1.30"]
