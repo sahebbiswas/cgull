@@ -9,26 +9,38 @@ jobs:
     name: Build and publish to PyPI
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
+      id-token: write
       contents: read
-    
+
     steps:
     - uses: actions/checkout@v7
-    
+      with:
+        ref: ${{ github.event.release.tag_name }}
+
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
         python-version: "3.x"
-        
-    - name: Install pypa/build
-      run: >-
-        python -m
-        pip install
-        build
-        --user
-        
-    - name: Build a binary wheel and a source tarball
+
+    - name: Validate release tag matches package version
+      env:
+        RELEASE_TAG: ${{ github.event.release.tag_name }}
+      run: |
+        PACKAGE_VERSION=$(python -c 'import cgull; print(cgull.__version__)')
+        EXPECTED_TAG="v${PACKAGE_VERSION}"
+        if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ]; then
+          echo "Release tag '$RELEASE_TAG' does not match package version '$PACKAGE_VERSION' (expected '$EXPECTED_TAG')." >&2
+          exit 1
+        fi
+
+    - name: Install build tooling
+      run: python -m pip install --user build twine
+
+    - name: Build wheel and source distribution
       run: python -m build
-      
-    - name: Publish distribution 📦 to PyPI
+
+    - name: Validate distribution metadata and README
+      run: python -m twine check dist/*
+
+    - name: Publish distribution to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
