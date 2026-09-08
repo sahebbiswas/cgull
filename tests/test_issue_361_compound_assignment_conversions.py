@@ -29,6 +29,20 @@ void f(uint8_t small, uint32_t wide) {{
     assert f"Compound assignment '{operator}' to 'small'" in issues[0].message
 
 
+@pytest.mark.parametrize("ctype", ["short", "signed char"])
+def test_signed_operand_promotion_is_not_reported_as_sign_extension(ctype):
+    code = f"""
+void f({ctype} a, {ctype} b) {{
+    a += b;
+}}
+"""
+    issues = _scan(code)
+    assert len(issues) == 1
+    assert issues[0].cwe_id == "CWE-197"
+    assert "result conversion" in issues[0].message
+    assert "operand conversion" not in issues[0].message
+
+
 def test_detects_wider_signed_rhs_converted_back_to_narrow_signed_lhs():
     code = """
 void f(signed char small, int wide) {
