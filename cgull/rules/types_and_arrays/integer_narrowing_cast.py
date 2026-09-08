@@ -7,9 +7,9 @@ from ...ast_analyzer import (
     CASTContext,
     _format_pycparser_expr,
     _map_line,
+    build_direct_call_signature_index,
     get_integer_type_byte_size,
     is_integer_narrowing_conversion,
-    resolve_direct_call_signature,
 )
 from ...ast_analyzer.integer_types import _resolved_scalar_type
 from ...cfg import _PRELUDE_LINE_COUNT, analyze_integer_ranges, find_function_def, integer_type_range
@@ -73,6 +73,7 @@ class IntegerNarrowingCastRule(BaseRule):
             if funcdef is None:
                 continue
             range_analysis = analyze_integer_ranges(ast_ctx, fn.name)
+            signature_index = build_direct_call_signature_index(ast_ctx, funcdef)
             rule = self
 
             class ConversionVisitor(c_ast.NodeVisitor):
@@ -197,7 +198,7 @@ class IntegerNarrowingCastRule(BaseRule):
 
                 def visit_FuncCall(self, node):
                     if isinstance(node.name, c_ast.ID) and node.args is not None:
-                        signature = resolve_direct_call_signature(ast_ctx, funcdef, node)
+                        signature = signature_index.resolve(node)
                         arguments = getattr(node.args, "exprs", None) or []
                         if signature is not None and signature.resolved and signature.has_prototype:
                             for index, (argument, parameter) in enumerate(
