@@ -25,6 +25,8 @@ class PointerRangeRequirement:
     write: bool = False
     is_access: bool = False
     intervals: tuple = ()
+    degradations: frozenset = frozenset()
+    recovery_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,7 @@ class _Requirements(FiniteLattice):
 def _sort_key(requirement):
     return (requirement.parameter, repr(requirement.offset),
             repr(requirement.width), requirement.write, requirement.is_access,
-            requirement.intervals)
+            requirement.intervals, tuple(sorted(requirement.degradations)), requirement.recovery_type or "")
 
 
 def _requirement(event, parameters):
@@ -70,6 +72,8 @@ def _requirement(event, parameters):
         parameters.index(event.fact.origin), event.fact.offset,
         event.access_width, event.write, event.is_access,
         tuple(sorted(set(event.fact.proven_intervals))),
+        event.fact.degradations & {"PROVENANCE_LOST", "UNPROVEN_CONTAINER"},
+        event.fact.recovery_type,
     )
 
 
@@ -80,6 +84,10 @@ def _bind(requirement, actual, node):
         coord = getattr(node, 'coord', None)
         actual = replace(actual, origin=f"argument@{coord}:{requirement.parameter}",
                          offset=OffsetInterval.exact(0))
+    if "PROVENANCE_LOST" in requirement.degradations:
+        from .pointer_transformations import lost_fact
+        actual = lost_fact(actual)
+    actual = replace(actual, degradations=actual.degradations | requirement.degradations)
     offset = requirement.offset
     if offset.is_exact:
         fact = actual.shifted(offset.lower)
@@ -90,6 +98,12 @@ def _bind(requirement, actual, node):
         ), lower_bound=None, upper_bound=None)
     else:
         fact = actual.unknown_offset("UNKNOWN_CALLEE_REQUIREMENT")
+    if 'UNPROVEN_CONTAINER' in requirement.degradations:
+        if (requirement.recovery_type and actual.containing_type == requirement.recovery_type
+                and fact.offset.exact_value == 0 and fact.object_extent is not None):
+            fact = replace(fact, degradations=fact.degradations - {'UNPROVEN_CONTAINER'})
+        else:
+            fact = replace(fact, recovery_type=requirement.recovery_type)
     # Callee validators/guards prove intervals relative to its entry value.
     # Their local dependencies cannot escape into the caller's namespace.
     intervals = set(actual.proven_intervals)

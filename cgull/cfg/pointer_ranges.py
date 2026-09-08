@@ -71,6 +71,8 @@ class PointerRangeFact:
     degradations: frozenset[str] = frozenset()
     validated_intervals: Tuple[Tuple[int, int], ...] = ()
     object_extent: Optional[int] = None
+    containing_type: Optional[str] = None
+    recovery_type: Optional[str] = None
     guarded_intervals: Tuple[GuardedInterval, ...] = ()
 
     @property
@@ -229,6 +231,8 @@ def join_pointer_facts(left: PointerRangeFact, right: PointerRangeFact) -> Point
             if same_origin
             else ()
         ),
+        recovery_type=left.recovery_type if left.recovery_type == right.recovery_type else None,
+        containing_type=left.containing_type if same_origin and left.containing_type == right.containing_type else None,
         origin=left.origin if same_origin else None,
         object_extent=left.object_extent if same_origin and left.object_extent == right.object_extent else None,
         offset=offset,
@@ -576,6 +580,8 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
         return
     declared_width = _pointer_element_width(_resolve_type(getattr(node, "type", None), state.typedefs))
     if not isinstance(_unwrap_type(state.types[name]), c_ast.PtrDecl):
+        from .pointer_transformations import integer_fact
+        state.facts[canonical] = integer_fact(node.init, state.types[name], state)
         _remember_address(name, node.init, state)
         _remember_constant(name, node.init, state)
         return
@@ -599,6 +605,9 @@ def _transfer_assignment(node: c_ast.Assignment, state: _State) -> None:
     if hazards is not None:
         state.address_values[target] = hazards
     if not isinstance(_unwrap_type(state.types.get(target)), c_ast.PtrDecl):
+        from .pointer_transformations import integer_fact
+        expression = node.rvalue if node.op == "=" else c_ast.BinaryOp(node.op[:-1], node.lvalue, node.rvalue)
+        state.facts[target] = integer_fact(expression, state.types.get(target), state)
         if node.op == "=":
             _remember_address(target, node.rvalue, state)
             _remember_constant(target, node.rvalue, state)
@@ -630,7 +639,8 @@ def _transfer_unary_update(node: c_ast.UnaryOp, state: _State) -> None:
     if old is None:
         return
     count = 1 if node.op in {"p++", "++"} else -1
-    state.facts[target] = old.shifted_elements(count)
+    from .pointer_transformations import offset_fact
+    state.facts[target] = offset_fact(old, count, isinstance(_unwrap_type(state.types.get(target)), c_ast.PtrDecl))
 
 
 def _expression_fact(node, state: _State) -> PointerRangeFact:
@@ -640,30 +650,55 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
         return state.facts.get(_canonical_location(node.name), PointerRangeFact())
     if isinstance(node, c_ast.Cast):
         width = _pointer_element_width(_resolve_type(node.to_type.type, state.typedefs))
-        if not isinstance(_unwrap_type(_resolve_type(node.to_type.type, state.typedefs)), c_ast.PtrDecl):
-            return PointerRangeFact()
-        return replace(_expression_fact(node.expr, state), element_width=width)
+        from .pointer_transformations import cast_fact
+        return cast_fact(node, state, width)
     if isinstance(node, c_ast.UnaryOp) and node.op == "&":
         if isinstance(node.expr, c_ast.ArrayRef):
             return _index_address(node.expr, state)
         if isinstance(node.expr, c_ast.UnaryOp) and node.expr.op == "*":
             return _expression_fact(node.expr.expr, state)
+        from .pointer_transformations import object_address
+        return object_address(node.expr, state)
+    if isinstance(node, c_ast.StructRef):
+        from .pointer_transformations import member_type, object_address
+        if isinstance(ranges_type := _unwrap_type(member_type(node, state)), c_ast.ArrayDecl):
+            return replace(object_address(node, state), element_width=_type_width(ranges_type.type))
         return PointerRangeFact()
     if isinstance(node, c_ast.ArrayRef):
         return PointerRangeFact()
     if isinstance(node, c_ast.BinaryOp) and node.op in {"+", "-"}:
+        from .pointer_transformations import pointer_expression, lost_fact
+        if node.op == "-" and pointer_expression(node.left, state) and pointer_expression(node.right, state):
+            return PointerRangeFact()  # A difference is an integer, never a pointer alias.
         amount = _constant_size(node.right, state)
         if amount is not None:
             base = _expression_fact(node.left, state)
             count = amount if node.op == "+" else -amount
-            return base.shifted_elements(count)
+            from .pointer_transformations import offset_fact
+            fact = offset_fact(base, count, pointer_expression(node.left, state))
+            if node.op == "-":
+                from .pointer_transformations import recover_fact
+                fact = recover_fact(fact, node.right, state)
+            return fact
         if node.op == "+":
             amount = _constant_size(node.left, state)
             if amount is not None:
                 base = _expression_fact(node.right, state)
-                return base.shifted_elements(amount)
+                from .pointer_transformations import offset_fact
+                return offset_fact(base, amount, pointer_expression(node.right, state))
         base = _expression_fact(node.left, state)
-        return base.unknown_offset("UNSUPPORTED_ARITHMETIC")
+        fact = lost_fact(base) if not pointer_expression(node.left, state) else base.unknown_offset("UNSUPPORTED_ARITHMETIC")
+        if node.op == "-":
+            from .pointer_transformations import recover_fact
+            fact = recover_fact(fact, node.right, state)
+        return fact
+    if (isinstance(node, c_ast.BinaryOp) and node.op in {"*", "/", "%", "&", "|", "^", "<<", ">>"}) or (
+        isinstance(node, c_ast.UnaryOp) and node.op in {"+", "-", "~"}
+    ):
+        from .pointer_transformations import lost_fact
+        facts = [_expression_fact(child, state) for _, child in node.children()]
+        base = next((f for f in facts if f.origin or "PROVENANCE_LOST" in f.degradations), PointerRangeFact())
+        return lost_fact(base)
     if isinstance(node, c_ast.FuncCall):
         callee = _location(node.name)
         registry = state.semantic_models
@@ -680,7 +715,7 @@ def _expression_fact(node, state: _State) -> PointerRangeFact:
             elif args:
                 extent = _constant_int(args[-1])
             coord = getattr(node, "coord", None)
-            origin = f"allocation@{getattr(coord, 'line', 0) or 0}"
+            origin = f"allocation@{getattr(coord, 'line', 0) or 0}:{getattr(coord, 'column', 0) or 0}"
             return PointerRangeFact(
                 origin=origin,
                 object_extent=extent if extent is not None and extent >= 0 else None,
@@ -770,7 +805,8 @@ def _invalidate_address_taken(node, state):
                     invalidate_pointer_guards(state, canonical)
                     fact = state.facts.get(canonical)
                     typ = _unwrap_type(state.types.get(target))
-                    if fact is not None and isinstance(typ, c_ast.PtrDecl):
+                    from .pointer_transformations import address_integer
+                    if fact is not None and (isinstance(typ, c_ast.PtrDecl) or address_integer(typ)):
                         # The pointer object itself may be overwritten through
                         # the escaped pointer-to-pointer. Preserve only its
                         # static element width; all value-bound range evidence
@@ -855,7 +891,11 @@ def _observe(node, state, snapshots):
                 self.generic_visit(node)
 
         def visit_BinaryOp(self, node):
-            if node.op in {"+", "-"}:
+            from .pointer_transformations import subtraction_fact
+            difference = subtraction_fact(node, state)
+            if difference is not None:
+                self.emit(node, difference)
+            elif node.op in {"+", "-"}:
                 self.emit(node, _expression_fact(node, state))
             self.generic_visit(node)
 
@@ -966,6 +1006,10 @@ def _remember_constant(name, node, state):
 
 
 def _constant_size(node, state):
+    from .pointer_transformations import offsetof_value
+    member_offset = offsetof_value(node, state)
+    if member_offset is not None:
+        return member_offset
     if isinstance(node, c_ast.ID):
         return state.constants.get(node.name)
     if isinstance(node, c_ast.UnaryOp) and node.op == "sizeof":

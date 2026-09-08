@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-09-08
+
+### Added
+- `CGULL-053` reports distinct-object pointer subtraction and memory uses after lossy address transformations or unproven container recovery. Shared range facts preserve supported identity/constant-offset round trips and proven member containment, including direct-call access requirements (#375).
+
 ## [0.10.6] - 2026-09-08
 
 ### Added

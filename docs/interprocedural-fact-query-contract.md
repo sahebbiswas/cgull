@@ -716,3 +716,19 @@ overflow becomes an unknown summary. Recursive iteration exhaustion also
 degrades to unknown and exposes the shared engine's convergence diagnostic.
 Unknown requirements cannot prove access safety. Symbolic lengths, arbitrary
 return-pointer transformations, and cross-TU resolution remain unsupported.
+
+### Provenance-preserving transformations (#375)
+
+`PointerRangeFact` also carries optional `containing_type` evidence for a
+recognized member address and `recovery_type` for an unproven containing-object
+claim. Joins retain containment evidence only when both paths agree.
+`PROVENANCE_LOST` clears offsets, capacities, object extents, and validated/guarded
+intervals. Its retained `origin` is only a symbolic formal dependency for binding
+call requirements; consumers must not interpret it as proven object identity.
+`UNPROVEN_CONTAINER` distinguishes assumed container recovery from proof.
+
+Pointer-range requirements propagate those degradation reasons and recovery
+claims through the existing SCC engine. Binding may discharge a container claim
+against a matching caller member fact. Neither numeric validation nor an
+identity cast removes provenance loss. CGULL-053 consumes the resulting use-site
+events; subtraction events require two distinct concrete object origins.

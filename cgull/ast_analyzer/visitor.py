@@ -1119,6 +1119,7 @@ class CASTParser:
 
         try:
             preprocessor = _SilentPreprocessor()
+            preprocessor.define("offsetof(T, m) ((size_t)&(((T *)0)->m))")
             if defined_syms:
                 if isinstance(defined_syms, (set, list, tuple, frozenset)):
                     for s in defined_syms:

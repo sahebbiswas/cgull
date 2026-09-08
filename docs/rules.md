@@ -165,3 +165,32 @@ Like the shared pointer analysis, unsupported control flow (including goto,
 switch and shadowed identifiers) does not produce definite events. Arbitrary
 pointer/integer provenance recovery and target ABI inference remain outside
 this rule's scope.
+
+## CGULL-053: unproven pointer provenance
+
+Reports subtraction between pointers to distinct known objects (CWE-469), and
+memory accesses after provenance loss or unproven `container_of` recovery
+(CWE-823). Casts alone do not produce a finding. Unknown pointer origins do not
+establish that two pointers belong to different objects.
+
+The shared pointer-range model retains identity through address-width unsigned
+integer casts (`uintptr_t`, equivalent typedefs, and unsigned long types under
+its existing 64-bit width model). Constant integer offsets retain evidence only
+within a known object; bitwise operations, narrowing, and unsupported arithmetic
+discard object extents and validation guarantees. Pointer differences are never
+reused as pointer aliases. CGULL-046 continues to check element-to-byte scaling;
+both rules can report when subtraction has two independent defects.
+
+Natural-layout member addresses and expanded `offsetof` support conventional
+`container_of` recovery. The pcpp path supplies a default `offsetof` expansion;
+source macro definitions can override it. A proven member relationship survives
+aliases and pointer casts. An external member pointer alone supplies no enclosing
+object proof. Direct-call requirements carry provenance weakening to callers and
+can discharge container recovery against a known caller member relationship.
+
+Limitations follow the shared domain: unsupported control flow suppresses events,
+unknown/packed/bitfield layouts do not establish containment, arbitrary pointer
+tagging is unsupported, and this is not a general alignment or points-to rule.
+Known misaligned offsets into suitably aligned local objects weaken provenance;
+unknown alignment never creates a new guarantee. Inferred pointer return values
+and cross-call comparisons of two formal pointer origins are not modeled.
