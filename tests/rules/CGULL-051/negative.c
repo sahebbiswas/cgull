@@ -9,3 +9,9 @@ void unchecked(char *p) {
     valid_range(p, 16);
     char x = p[-1];
 }
+void enclosing_header(char *p, char *base, char *end) {
+    if (!valid_range(p, 16)) return;
+    if (p < base + sizeof(int) || p + 20 > end) return;
+    int header = *(int *)(p - sizeof(int));
+    char tail = p[19];
+}

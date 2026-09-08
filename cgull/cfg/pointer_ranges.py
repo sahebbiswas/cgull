@@ -17,6 +17,10 @@ from pycparser import c_ast
 
 from .construction import find_function_def
 from .size_facts import SizeFact
+from .pointer_guards import (
+    GuardedInterval, invalidate_pointer_guards, join_guarded_intervals,
+    refine_pointer_comparison, _volatile_type,
+)
 from .value_facts import ValueProvenance, _canonical_location, join_provenance
 
 
@@ -67,6 +71,32 @@ class PointerRangeFact:
     degradations: frozenset[str] = frozenset()
     validated_intervals: Tuple[Tuple[int, int], ...] = ()
     object_extent: Optional[int] = None
+    guarded_intervals: Tuple[GuardedInterval, ...] = ()
+
+    @property
+    def proven_intervals(self) -> Tuple[Tuple[int, int], ...]:
+        """Validator and enclosing-guard evidence, in origin-relative bytes."""
+        return self.validated_intervals + tuple((p.lower, p.upper) for p in self.guarded_intervals)
+
+    @property
+    def backward_accessible_extent(self) -> Optional[int]:
+        if not self.offset.is_exact:
+            return self.lower_bound
+        bounds = [self.offset.lower - p.lower for p in self.guarded_intervals
+                  if p.lower <= self.offset.lower <= p.upper]
+        if self.lower_bound is not None:
+            bounds.append(self.lower_bound)
+        return max(bounds) if bounds else None
+
+    @property
+    def forward_accessible_extent(self) -> Optional[int]:
+        if not self.offset.is_exact:
+            return self.upper_bound
+        bounds = [p.upper - self.offset.lower for p in self.guarded_intervals
+                  if p.lower <= self.offset.lower <= p.upper]
+        if self.upper_bound is not None:
+            bounds.append(self.upper_bound)
+        return max(bounds) if bounds else None
 
     @classmethod
     def object(
@@ -193,6 +223,7 @@ def join_pointer_facts(left: PointerRangeFact, right: PointerRangeFact) -> Point
         else None
     )
     return PointerRangeFact(
+        guarded_intervals=join_guarded_intervals(left.guarded_intervals, right.guarded_intervals) if same_origin else (),
         validated_intervals=(
             _intersect_intervals(left.validated_intervals, right.validated_intervals)
             if same_origin
@@ -276,9 +307,10 @@ class _State:
     types: dict = field(default_factory=dict)
     terminated: bool = False
     semantic_models: object = None
+    constants: dict = field(default_factory=dict)
 
     def copy(self) -> "_State":
-        return _State(dict(self.facts), dict(self.typedefs), dict(self.types), self.terminated, self.semantic_models)
+        return _State(dict(self.facts), dict(self.typedefs), dict(self.types), self.terminated, self.semantic_models, dict(self.constants))
 
 
 def analyze_translation_unit_pointer_ranges(
@@ -426,6 +458,26 @@ def _analyze_statement(node, state: _State, snapshots) -> _State:
     if isinstance(node, (c_ast.While, c_ast.DoWhile, c_ast.For)):
         if isinstance(node, c_ast.For) and node.init is not None:
             state = _analyze_statement(node.init, state, snapshots)
+        # Any loop iteration (including a condition/step expression) can
+        # invalidate a dominating enclosing-range proof. Kill dependencies
+        # before computing the loop invariant; never publish first-trip safety.
+        _invalidate_address_taken(node, state)
+
+        class LoopMutations(c_ast.NodeVisitor):
+            def visit_Assignment(self, update):
+                target = _location(update.lvalue)
+                if target:
+                    invalidate_pointer_guards(state, _canonical_location(target))
+                self.generic_visit(update)
+
+            def visit_UnaryOp(self, update):
+                if update.op in {"p++", "p--", "++", "--"}:
+                    target = _location(update.expr)
+                    if target:
+                        invalidate_pointer_guards(state, _canonical_location(target))
+                self.generic_visit(update)
+
+        LoopMutations().visit(node)
         previous_suppression = snapshots.suppress_events
         snapshots.suppress_events = True
         entry = state.copy()
@@ -475,7 +527,8 @@ def _join_states(left: _State, right: _State) -> _State:
             facts[key] = PointerRangeFact(
                 degradations=frozenset({"PATH_INCOMPLETE"})
             )
-    return _State(facts, dict(left.typedefs), dict(left.types), semantic_models=left.semantic_models)
+    return _State(facts, dict(left.typedefs), dict(left.types), semantic_models=left.semantic_models,
+                  constants={k: v for k, v in left.constants.items() if right.constants.get(k) == v})
 
 
 def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
@@ -483,6 +536,7 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
     if not name:
         return
     canonical = _canonical_location(name)
+    invalidate_pointer_guards(state, canonical)
     state.types[name] = _resolve_type(node.type, state.typedefs)
     extent, width = _array_extent_and_width(_resolve_type(getattr(node, "type", None), state.typedefs))
     if extent is not None and width is not None:
@@ -492,6 +546,7 @@ def _transfer_decl(node: c_ast.Decl, state: _State) -> None:
         return
     declared_width = _pointer_element_width(_resolve_type(getattr(node, "type", None), state.typedefs))
     if not isinstance(_unwrap_type(state.types[name]), c_ast.PtrDecl):
+        _remember_constant(name, node.init, state)
         return
     fact = _expression_fact(node.init, state)
     fact = replace(fact, element_width=declared_width)
@@ -503,6 +558,11 @@ def _transfer_assignment(node: c_ast.Assignment, state: _State) -> None:
     if not target:
         return
     target = _canonical_location(target)
+    invalidate_pointer_guards(state, target)
+    if not isinstance(_unwrap_type(state.types.get(target)), c_ast.PtrDecl):
+        if node.op == "=":
+            _remember_constant(target, node.rvalue, state)
+        return
     if node.op in {"+=", "-="}:
         old = state.facts.get(target, PointerRangeFact())
         amount = _constant_size(node.rvalue, state)
@@ -524,6 +584,7 @@ def _transfer_unary_update(node: c_ast.UnaryOp, state: _State) -> None:
     if not target:
         return
     target = _canonical_location(target)
+    invalidate_pointer_guards(state, target)
     old = state.facts.get(target)
     if old is None:
         return
@@ -641,8 +702,6 @@ def _supports_definite_events(funcdef, typedefs):
         ):
             if not isinstance(parent, (c_ast.Compound, c_ast.If, c_ast.For, c_ast.While, c_ast.DoWhile)):
                 supported = False
-        if isinstance(node, c_ast.UnaryOp) and node.op == "&" and isinstance(node.expr, c_ast.ID):
-            supported = False  # address-taken locals may change through aliases
         for _, child in node.children():
             walk(child, node)
 
@@ -656,9 +715,41 @@ def _index_address(node, state):
     return base.unknown_offset("UNKNOWN_INDEX") if index is None else base.shifted_elements(index)
 
 
+def _invalidate_address_taken(node, state):
+    """Drop facts that may be invalidated through an escaped address."""
+    if node is None:
+        return
+
+    class Visitor(c_ast.NodeVisitor):
+        def visit_UnaryOp(self, candidate):
+            if candidate.op == "&":
+                target = _location(candidate.expr)
+                if target:
+                    canonical = _canonical_location(target)
+                    invalidate_pointer_guards(state, canonical)
+                    fact = state.facts.get(canonical)
+                    typ = _unwrap_type(state.types.get(target))
+                    if fact is not None and isinstance(typ, c_ast.PtrDecl):
+                        # The pointer object itself may be overwritten through
+                        # the escaped pointer-to-pointer. Preserve only its
+                        # static element width; all value-bound range evidence
+                        # is stale until a later explicit assignment/refinement.
+                        state.facts[canonical] = PointerRangeFact(
+                            element_width=fact.element_width,
+                            degradations=fact.degradations | {"ADDRESS_ESCAPED"},
+                        )
+                return
+            self.generic_visit(candidate)
+
+    Visitor().visit(node)
+
+
 def _observe(node, state, snapshots):
     """Record use-site facts before transfer, independent of source-line layout."""
-    if node is None or snapshots.suppress_events:
+    if node is None:
+        return
+    _invalidate_address_taken(node, state)
+    if snapshots.suppress_events:
         return
 
     class Visitor(c_ast.NodeVisitor):
@@ -735,13 +826,13 @@ def _observe(node, state, snapshots):
 
 
 def _validate_condition(node, state, registry, truth):
-    """Apply the shared #272 success contract to a specific direct call.
+    """Refine shared relational bounds and #272 validator success contracts.
 
     Split only edges that guarantee evaluation and success. In particular,
     repeated calls to the same API must never validate each other's arguments.
     """
     from .security_dataflow import _condition_guarantees_success
-    if registry is None or node is None:
+    if node is None:
         return
     if isinstance(node, c_ast.Cast):
         return _validate_condition(node.expr, state, registry, truth)
@@ -751,6 +842,9 @@ def _validate_condition(node, state, registry, truth):
         if (node.op == "&&" and truth) or (node.op == "||" and not truth):
             _validate_condition(node.left, state, registry, truth)
             _validate_condition(node.right, state, registry, truth)
+        return
+    refine_pointer_comparison(node, state, truth)
+    if registry is None:
         return
     call = node if isinstance(node, c_ast.FuncCall) else None
     if isinstance(node, c_ast.BinaryOp) and node.op in {"==", "!="}:
@@ -806,7 +900,24 @@ def _expression_type(node, state):
     return None
 
 
+def _remember_constant(name, node, state):
+    if _volatile_type(state.types.get(name)):
+        return
+    value = _constant_size(node, state)
+    typ = _unwrap_type(state.types.get(name))
+    names = getattr(typ, "names", ())
+    width = _type_width(typ)
+    if value is None or width is None or not any(n in names for n in ("int", "short", "long", "signed", "unsigned")):
+        return
+    bits = width * 8
+    lower, upper = (0, (1 << bits) - 1) if "unsigned" in names else (-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
+    if lower <= value <= upper:
+        state.constants[name] = value
+
+
 def _constant_size(node, state):
+    if isinstance(node, c_ast.ID):
+        return state.constants.get(node.name)
     if isinstance(node, c_ast.UnaryOp) and node.op == "sizeof":
         typ = _resolve_type(node.expr.type, state.typedefs) if isinstance(node.expr, c_ast.Typename) else _expression_type(node.expr, state)
         return _type_width(typ)
