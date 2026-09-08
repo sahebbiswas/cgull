@@ -77,11 +77,11 @@ def test_dead_stores_fallback_mode_address_taken_and_reads():
 
 def test_dead_stores_cfg_while_loop_carried_call_argument_is_not_dead():
     code = """int someapi(int x) { return x > 0; }
-int get_new_value(int x) { return x - 1; }
+int get_new_value(void) { return 1; }
 void f(void) {
     int X = 3;
     while (someapi(X)) {
-        X = get_new_value(X);
+        X = get_new_value();
     }
 }
 """
@@ -90,6 +90,20 @@ void f(void) {
 
 
 def test_dead_stores_fallback_while_loop_carried_call_argument_is_not_dead():
+    code = """int someapi(int x) { return x > 0; }
+int get_new_value(void) { return 1; }
+void f(void) {
+    int X = 3;
+    while (someapi(X)) {
+        X = get_new_value();
+    }
+}
+"""
+    issues = scan_dead_stores_fallback(code)
+    assert 6 not in issue_lines(issues)
+
+
+def test_dead_stores_fallback_issue_example_with_rhs_read_is_not_dead():
     code = """int someapi(int x) { return x > 0; }
 int get_new_value(int x) { return x - 1; }
 void f(void) {
@@ -104,24 +118,25 @@ void f(void) {
 
 
 def test_dead_stores_fallback_direct_while_condition_read_is_not_dead():
-    code = """void f(void) {
+    code = """int get_new_value(void) { return 1; }
+void f(void) {
     int X = 3;
     while (X > 0) {
-        X = X - 1;
+        X = get_new_value();
     }
 }
 """
     issues = scan_dead_stores_fallback(code)
-    assert 4 not in issue_lines(issues)
+    assert 5 not in issue_lines(issues)
 
 
 def test_dead_stores_fallback_do_while_condition_read_is_not_dead():
     code = """int someapi(int x) { return x > 0; }
-int get_new_value(int x) { return x - 1; }
+int get_new_value(void) { return 1; }
 void f(void) {
     int X = 3;
     do {
-        X = get_new_value(X);
+        X = get_new_value();
     } while (someapi(X));
 }
 """
@@ -131,11 +146,11 @@ void f(void) {
 
 def test_dead_stores_fallback_for_condition_read_is_not_dead():
     code = """int someapi(int x) { return x > 0; }
-int get_new_value(int x) { return x - 1; }
+int get_new_value(void) { return 1; }
 void f(void) {
     int X = 3;
     for (; someapi(X); ) {
-        X = get_new_value(X);
+        X = get_new_value();
     }
 }
 """
