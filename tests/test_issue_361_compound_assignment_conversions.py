@@ -95,7 +95,8 @@ void f(uint8_t value, unsigned int shift) {
 """
     issues = _scan(code)
     assert len(issues) == 1
-    assert issues[0].cwe_id == "CWE-197"
+    assert issues[0].cwe_id == "CWE-195"
+    assert "negative value to unsigned" in issues[0].message
     assert "'int'" in issues[0].message
     assert "'uint8_t'" in issues[0].message
 
