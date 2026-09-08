@@ -106,13 +106,7 @@ def _reconcile(name: str, signatures: Sequence[CallableSignature]) -> Optional[C
         if candidate.has_prototype and not chosen.has_prototype:
             chosen = candidate
         elif candidate.provenance == "definition" and chosen.provenance != "definition":
-            chosen = CallableSignature(
-                name=chosen.name,
-                parameters=chosen.parameters,
-                variadic=chosen.variadic,
-                has_prototype=chosen.has_prototype,
-                provenance="definition",
-            )
+            chosen = candidate
     return chosen
 
 
@@ -167,16 +161,18 @@ class DirectCallSignatureIndex:
                 for item in node.block_items or []:
                     if isinstance(item, c_ast.Decl) and getattr(item, "name", None):
                         if isinstance(item.type, c_ast.FuncDecl):
-                            scopes[-1].setdefault(item.name, []).append(
-                                _signature_from_decl(self.ast_ctx, item, "block-declaration")
-                            )
+                            existing = scopes[-1].get(item.name)
+                            if not isinstance(existing, list):
+                                existing = scopes[-1][item.name] = []
+                            existing.append(_signature_from_decl(self.ast_ctx, item, "block-declaration"))
                         else:
                             scopes[-1][item.name] = False
                     walk(item)
                 scopes.pop()
                 return
             if isinstance(node, c_ast.FuncCall) and isinstance(getattr(node, "name", None), c_ast.ID):
-                self._calls[id(node)] = visible_binding(node.name.name)
+                binding = visible_binding(node.name.name)
+                self._calls[id(node)] = tuple(binding) if isinstance(binding, list) else binding
             for _child_name, child in node.children():
                 walk(child)
 
@@ -193,7 +189,7 @@ class DirectCallSignatureIndex:
             return None
         if block:
             return _reconcile(name, block)
-        candidates = self._globals.get(name) or self._definitions.get(name) or []
+        candidates = list(self._globals.get(name) or []) + list(self._definitions.get(name) or [])
         return _reconcile(name, candidates)
 
 
