@@ -6,13 +6,14 @@ import argparse
 import contextlib
 import io
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import cli_base as _base
 from .compile_database import (
     CompileCommandIncludeDatabase,
     CompileDatabaseCGullScanner,
     activate_compile_command_database,
+    load_compile_commands_data,
 )
 from .fixes import FixResult, apply_safe_fixes
 from .telemetry import ProgressIndicator as _TelemetryProgressIndicator
@@ -74,8 +75,10 @@ def _primary_target(args) -> str:
     return "."
 
 
-def _compile_database_for_args(args) -> Optional[CompileCommandIncludeDatabase]:
-    """Resolve the same explicit/auto-discovered compilation database as cli_base."""
+def _compile_database_for_args(
+    args,
+) -> Tuple[Optional[CompileCommandIncludeDatabase], Optional[List[object]], Optional[str]]:
+    """Resolve and parse the compilation database once for both include and macro views."""
     explicit_path = getattr(args, "compile_commands", None)
     compile_commands_path = explicit_path
 
@@ -94,24 +97,52 @@ def _compile_database_for_args(args) -> Optional[CompileCommandIncludeDatabase]:
             )
 
     if not compile_commands_path or not os.path.exists(compile_commands_path):
-        return None
+        return None, None, None
 
     try:
-        database = CompileCommandIncludeDatabase.from_file(compile_commands_path)
+        data = load_compile_commands_data(compile_commands_path)
+        database = CompileCommandIncludeDatabase.from_data(
+            data,
+            database_dir=os.path.dirname(os.path.realpath(compile_commands_path)),
+        )
     except Exception:
         # cli_base owns the established error policy for explicit and
         # auto-discovered compile databases, including macro ingestion. Let it
         # report/ignore the parse failure exactly as before.
-        return None
+        return None, None, None
 
     for warning in database.warnings:
         _base.print(f"Warning: {warning}", file=_base.sys.stderr)
-    return database
+    return database, data, os.path.realpath(compile_commands_path)
+
+
+@contextlib.contextmanager
+def _shared_compile_commands_parse(data: Optional[List[object]], path: Optional[str]):
+    """Feed cli_base the already-loaded JSON instead of reopening the same database."""
+    if data is None or path is None:
+        yield
+        return
+
+    from . import ast_analyzer
+
+    original_parse = ast_analyzer.parse_compile_commands
+
+    def parse_compile_commands_once(filepath_or_data):
+        if isinstance(filepath_or_data, (str, os.PathLike)):
+            if os.path.realpath(os.fspath(filepath_or_data)) == path:
+                return original_parse(data)
+        return original_parse(filepath_or_data)
+
+    ast_analyzer.parse_compile_commands = parse_compile_commands_once
+    try:
+        yield
+    finally:
+        ast_analyzer.parse_compile_commands = original_parse
 
 
 def _run_original_scan(args):
-    database = _compile_database_for_args(args)
-    with activate_compile_command_database(database):
+    database, data, compile_commands_path = _compile_database_for_args(args)
+    with activate_compile_command_database(database), _shared_compile_commands_parse(data, compile_commands_path):
         _sync_base_symbols()
         return _ORIGINAL_HANDLE_SCAN(args)
 
@@ -216,15 +247,12 @@ def handle_scan(args) -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Run the CLI while preserving the established injectable argv API."""
-    # _base.main resolves build_parser/handle_scan from its own globals. Sync
-    # them on every call so monkey-patching cgull.cli.handle_scan keeps working.
     _base.build_parser = build_parser
     _base.handle_scan = handle_scan
     _sync_base_symbols()
     return _base.main(argv)
 
 
-# Re-export established CLI helpers for compatibility with direct imports.
 handle_flags = _base.handle_flags
 handle_rules = _base.handle_rules
 handle_init_ignore = _base.handle_init_ignore
