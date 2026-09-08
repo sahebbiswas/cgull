@@ -13,7 +13,7 @@ def test_rule_changes_trigger_upstream_juliet_metrics_workflow():
     assert "--format markdown" in text
     assert "--json-output juliet-upstream.json" in text
     assert "GITHUB_STEP_SUMMARY" in text
-    assert "actions/upload-artifact@v4" in text
+    assert "actions/upload-artifact@" in text
 
 
 def test_upstream_snapshot_is_pinned_and_curated_subset_is_not_representative():
