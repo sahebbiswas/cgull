@@ -28,9 +28,6 @@ from .models import (
 from .utils import ProgressIndicator as _BaseProgressIndicator
 
 
-# Very fast scans can complete inside one platform timer tick. Keep canonical
-# elapsed time positive for non-empty analysis so downstream consumers can
-# safely recompute throughput, while still avoiding NaN/inf values.
 _MIN_ELAPSED_SECONDS = 1e-6
 
 
@@ -59,8 +56,6 @@ class ScanTelemetry:
             "files_scanned": self.files_scanned,
             "unique_source_lines": self.unique_source_lines,
             "analyzed_lines": self.analyzed_lines,
-            # Preserve enough precision that a valid non-empty scan never
-            # serializes as zero elapsed time. Human reporters round separately.
             "elapsed_seconds": self.elapsed_seconds,
             "throughput_kloc_per_sec": self.throughput_kloc_per_sec,
             "findings_count": self.findings_count,
@@ -109,14 +104,10 @@ def telemetry_for(result: ScanResult) -> ScanTelemetry:
 def _profile_multiplier(profiles: Optional[List[ConfigProfile]]) -> int:
     if not profiles:
         return 1
-    # ConfigProfile is hashable and profile scanning itself deduplicates while
-    # preserving order, so use the same semantic count for analysis volume.
     return max(1, len(set(profiles)))
 
 
 class _ProgressUpdateAdapter:
-    """Callable legacy progress callback with an explicit telemetry channel."""
-
     def __init__(self, owner: "ProgressIndicator") -> None:
         self._owner = owner
 
@@ -130,17 +121,9 @@ class _ProgressUpdateAdapter:
 class ProgressIndicator(_BaseProgressIndicator):
     """Existing in-place progress indicator enhanced with scan telemetry."""
 
-    def __init__(
-        self,
-        stream: Optional[TextIO] = None,
-        quiet: bool = False,
-        bar_width: int = 20,
-    ) -> None:
+    def __init__(self, stream: Optional[TextIO] = None, quiet: bool = False, bar_width: int = 20) -> None:
         super().__init__(stream=stream, quiet=quiet, bar_width=bar_width)
         self.telemetry = ScanTelemetry()
-        # cli_base passes ``progress.update`` to the scanner. Shadow the class
-        # method with a callable adapter so telemetry is an explicit callback
-        # protocol rather than inferred from a bound method's ``__self__``.
         self.update = _ProgressUpdateAdapter(self)  # type: ignore[method-assign]
 
     def update_telemetry(self, telemetry: ScanTelemetry) -> None:
@@ -149,14 +132,12 @@ class ProgressIndicator(_BaseProgressIndicator):
     def _render(self, completed: int, total: int, current_file: str = "") -> None:
         if self.quiet:
             return
-
         if total <= 0:
             percentage = 100
             filled_len = self.bar_width
         else:
             percentage = min(100, int((completed / total) * 100))
             filled_len = min(self.bar_width, int(self.bar_width * completed / total))
-
         bar = "█" * filled_len + "░" * (self.bar_width - filled_len)
         parts = [f"Scanning [{bar}] {percentage}% ({completed}/{total} files)"]
         if self.telemetry.analyzed_lines > 0:
@@ -166,7 +147,6 @@ class ProgressIndicator(_BaseProgressIndicator):
         if current_file:
             parts.append(str(current_file))
         line = "  •  ".join(parts)
-
         padded_line = line.ljust(self.last_line_len)
         self.stream.write(f"\r{padded_line}")
         self.stream.flush()
@@ -174,8 +154,6 @@ class ProgressIndicator(_BaseProgressIndicator):
 
 
 class _CountingIgnoreFilter:
-    """Delegate ignore decisions while recording ignored physical files once."""
-
     def __init__(self, delegate: CGullIgnoreFilter, ignored_files: set[str]) -> None:
         self._delegate = delegate
         self._ignored_files = ignored_files
@@ -218,12 +196,8 @@ class CGullScanner(_BaseCGullScanner):
             self.ignore_filter._ignored_files = self._telemetry_ignored_files
             return
         if self.ignore_filter is not None:
-            self.ignore_filter = _CountingIgnoreFilter(
-                self.ignore_filter,
-                self._telemetry_ignored_files,
-            )
+            self.ignore_filter = _CountingIgnoreFilter(self.ignore_filter, self._telemetry_ignored_files)
             return
-
         raw_targets = list(target_path) if isinstance(target_path, (list, tuple)) else [target_path]
         abs_targets = [os.path.abspath(path) for path in raw_targets]
         if len(abs_targets) == 1:
@@ -235,24 +209,14 @@ class CGullScanner(_BaseCGullScanner):
                 base_dir = common_path if os.path.isdir(common_path) else os.path.dirname(common_path)
             except ValueError:
                 base_dir = os.getcwd()
-
-        delegate = CGullIgnoreFilter(
-            base_dir=base_dir,
-            custom_patterns=custom_ignore_patterns,
-        )
-        self.ignore_filter = _CountingIgnoreFilter(
-            delegate,
-            self._telemetry_ignored_files,
-        )
+        delegate = CGullIgnoreFilter(base_dir=base_dir, custom_patterns=custom_ignore_patterns)
+        self.ignore_filter = _CountingIgnoreFilter(delegate, self._telemetry_ignored_files)
 
     def _snapshot(self) -> ScanTelemetry:
         started = getattr(self, "_telemetry_started_at", time.monotonic())
         analyzed_lines = getattr(self, "_telemetry_analyzed_lines", 0)
         return ScanTelemetry(
-            files_discovered=(
-                getattr(self, "_telemetry_total_files", 0)
-                + len(getattr(self, "_telemetry_ignored_files", set()))
-            ),
+            files_discovered=getattr(self, "_telemetry_total_files", 0) + len(getattr(self, "_telemetry_ignored_files", set())),
             files_scanned=getattr(self, "_telemetry_files_scanned", 0),
             unique_source_lines=getattr(self, "_telemetry_unique_lines", 0),
             analyzed_lines=analyzed_lines,
@@ -268,12 +232,9 @@ class CGullScanner(_BaseCGullScanner):
         canonical_path = os.path.normcase(os.path.realpath(raw_path)) if raw_path else ""
         snippet = " ".join(str(getattr(issue, "code_snippet", "")).split())
         return (
-            getattr(issue, "rule_id", ""),
-            canonical_path,
-            getattr(issue, "line_number", 0),
-            getattr(issue, "column_number", 1),
-            getattr(issue, "message", ""),
-            snippet,
+            getattr(issue, "rule_id", ""), canonical_path,
+            getattr(issue, "line_number", 0), getattr(issue, "column_number", 1),
+            getattr(issue, "message", ""), snippet,
         )
 
     def _record_live_findings(self, file_issues: List[Any], status: str) -> None:
@@ -290,19 +251,8 @@ class CGullScanner(_BaseCGullScanner):
                 self._telemetry_issue_keys.add(key)
             self._telemetry_findings += 1
 
-    def _record_progress_result(
-        self,
-        *,
-        loc: int,
-        file_issues: List[Any],
-        parser_status: str,
-        status: str,
-        multiplier: int,
-        completed: int,
-        total: int,
-        progress_callback,
-        current_file: str,
-    ) -> None:
+    def _record_progress_result(self, *, loc: int, file_issues: List[Any], parser_status: str, status: str,
+                                multiplier: int, completed: int, total: int, progress_callback, current_file: str) -> None:
         self._telemetry_progress_completed = completed
         self._telemetry_total_files = total
         self._telemetry_unique_lines += max(0, loc)
@@ -314,7 +264,6 @@ class CGullScanner(_BaseCGullScanner):
                 self._telemetry_fallbacks += 1
         else:
             self._telemetry_errors += 1
-
         snapshot = self._snapshot()
         telemetry_callback = getattr(self, "_telemetry_callback", None)
         if callable(telemetry_callback):
@@ -322,14 +271,12 @@ class CGullScanner(_BaseCGullScanner):
         if progress_callback:
             progress_callback(completed, total, current_file)
 
-    def scan_path(
-        self,
-        *args,
-        telemetry_callback: Optional[Callable[[ScanTelemetry], None]] = None,
-        **kwargs,
-    ) -> ScanResult:
-        self._begin_telemetry()
+    def _config_for_file(self, config: ScanConfig, file_path: str) -> ScanConfig:
+        """Return scan configuration for one file; subclasses may add per-TU context."""
+        return config
 
+    def scan_path(self, *args, telemetry_callback: Optional[Callable[[ScanTelemetry], None]] = None, **kwargs) -> ScanResult:
+        self._begin_telemetry()
         target_path = kwargs.get("target_path")
         if target_path is None and args:
             target_path = args[0]
@@ -338,43 +285,26 @@ class CGullScanner(_BaseCGullScanner):
             custom_ignore_patterns = args[2]
         if target_path is not None:
             self._prepare_counting_ignore_filter(target_path, custom_ignore_patterns)
-
         progress_callback = kwargs.get("progress_callback")
         if progress_callback is None and len(args) >= 5:
             progress_callback = args[4]
         if telemetry_callback is not None:
             self._telemetry_callback = telemetry_callback
         else:
-            # The standard ProgressIndicator exposes telemetry directly on its
-            # callable adapter. Other callers can pass telemetry_callback=...
-            # explicitly without needing a bound-method callback.
             progress_telemetry = getattr(progress_callback, "update_telemetry", None)
             if callable(progress_telemetry):
                 self._telemetry_callback = progress_telemetry
-
         result = super().scan_path(*args, **kwargs)
-        analyzed_lines = max(
-            max(0, result.total_lines_of_code),
-            getattr(self, "_telemetry_analyzed_lines", 0),
-        )
-        elapsed = _safe_elapsed(
-            time.monotonic() - self._telemetry_started_at,
-            analyzed_lines,
-        )
+        analyzed_lines = max(max(0, result.total_lines_of_code), getattr(self, "_telemetry_analyzed_lines", 0))
+        elapsed = _safe_elapsed(time.monotonic() - self._telemetry_started_at, analyzed_lines)
         final = ScanTelemetry(
-            files_discovered=result.files_discovered
-            or (result.scanned_files_count + len(result.ignored_paths) + len(result.failed_paths)),
+            files_discovered=result.files_discovered or (result.scanned_files_count + len(result.ignored_paths) + len(result.failed_paths)),
             files_scanned=result.files_analyzed or result.scanned_files_count,
             unique_source_lines=max(0, result.total_lines_of_code),
             analyzed_lines=analyzed_lines,
             elapsed_seconds=elapsed,
             findings_count=result.total_issues_count,
-            parse_fallback_count=sum(
-                1
-                for summary in result.file_summaries
-                if summary.status == "success"
-                and summary.parser == ParserStatus.FALLBACK_PARSER.value
-            ),
+            parse_fallback_count=sum(1 for summary in result.file_summaries if summary.status == "success" and summary.parser == ParserStatus.FALLBACK_PARSER.value),
             scan_error_count=len(result.scan_errors),
         )
         result.telemetry = final
@@ -396,25 +326,14 @@ class CGullScanner(_BaseCGullScanner):
             analyzed_lines=analyzed_lines,
             elapsed_seconds=_safe_elapsed(time.monotonic() - started, analyzed_lines),
             findings_count=result.total_issues_count,
-            parse_fallback_count=sum(
-                1
-                for summary in result.file_summaries
-                if summary.status == "success"
-                and summary.parser == ParserStatus.FALLBACK_PARSER.value
-            ),
+            parse_fallback_count=sum(1 for summary in result.file_summaries if summary.status == "success" and summary.parser == ParserStatus.FALLBACK_PARSER.value),
             scan_error_count=len(result.scan_errors),
         )
         return result
 
-    def _scan_files_sequential(
-        self,
-        files_to_scan: List[str],
-        config: ScanConfig,
-        progress_callback=None,
-        quiet: bool = False,
-        progress_active: bool = False,
-        profiles: Optional[List[ConfigProfile]] = None,
-    ):
+    def _scan_files_sequential(self, files_to_scan: List[str], config: ScanConfig, progress_callback=None,
+                               quiet: bool = False, progress_active: bool = False,
+                               profiles: Optional[List[ConfigProfile]] = None):
         results = []
         total_files = len(files_to_scan)
         multiplier = _profile_multiplier(profiles)
@@ -423,59 +342,25 @@ class CGullScanner(_BaseCGullScanner):
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
                 file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(
-                    file_path,
-                    content,
-                    config=config,
-                    profiles=profiles,
-                    quiet=quiet,
-                    progress_active=progress_active,
+                    file_path, content, config=self._config_for_file(config, file_path), profiles=profiles,
+                    quiet=quiet, progress_active=progress_active,
                 )
                 result = (file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err)
             except Exception as e:
-                scan_err = ScanError(
-                    file_path=file_path,
-                    error_type=type(e).__name__,
-                    message=str(e) or f"Failed to read file: {file_path}",
-                )
+                scan_err = ScanError(file_path=file_path, error_type=type(e).__name__, message=str(e) or f"Failed to read file: {file_path}")
                 _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
-                result = (
-                    file_path,
-                    [],
-                    0,
-                    0.0,
-                    ParserStatus.PARSE_FAILED.value,
-                    ParseTier.REGEX_FALLBACK.value,
-                    "failed",
-                    Confidence.LIMITED.value,
-                    scan_err,
-                )
+                result = (file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err)
             results.append(result)
             _, file_issues, loc, _, parser_status, _, status, _, _ = result
-            self._record_progress_result(
-                loc=loc,
-                file_issues=file_issues,
-                parser_status=parser_status,
-                status=status,
-                multiplier=multiplier,
-                completed=idx,
-                total=total_files,
-                progress_callback=progress_callback,
-                current_file=file_path,
-            )
+            self._record_progress_result(loc=loc, file_issues=file_issues, parser_status=parser_status, status=status,
+                                         multiplier=multiplier, completed=idx, total=total_files,
+                                         progress_callback=progress_callback, current_file=file_path)
         return results
 
-    def _scan_files_parallel(
-        self,
-        files_to_scan: List[str],
-        jobs: int,
-        config: ScanConfig,
-        progress_callback=None,
-        quiet: bool = False,
-        progress_active: bool = False,
-        profiles: Optional[List[ConfigProfile]] = None,
-    ):
+    def _scan_files_parallel(self, files_to_scan: List[str], jobs: int, config: ScanConfig, progress_callback=None,
+                             quiet: bool = False, progress_active: bool = False,
+                             profiles: Optional[List[ConfigProfile]] = None):
         import pickle
-
         try:
             pickle.dumps(config)
             if profiles:
@@ -483,9 +368,8 @@ class CGullScanner(_BaseCGullScanner):
         except Exception as e:
             raise ValueError(
                 f"Configuration/profiles cannot be serialized for parallel worker processes: {e}. "
-                "Ensure all custom rules and profiles are picklable or use jobs=1 for sequential scanning."
+                f"Ensure all custom rules and profiles are picklable or use jobs=1 for sequential scanning."
             ) from e
-
         results = []
         total_files = len(files_to_scan)
         multiplier = _profile_multiplier(profiles)
@@ -494,7 +378,7 @@ class CGullScanner(_BaseCGullScanner):
         futures = {}
         try:
             futures = {
-                pool.submit(_scan_file_worker, file_path, config, profiles, quiet, progress_active): file_path
+                pool.submit(_scan_file_worker, file_path, self._config_for_file(config, file_path), profiles, quiet, progress_active): file_path
                 for file_path in files_to_scan
             }
             for future in as_completed(futures):
@@ -504,36 +388,14 @@ class CGullScanner(_BaseCGullScanner):
                     file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = future.result()
                     result = (file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err)
                 except Exception as e:
-                    scan_err = ScanError(
-                        file_path=file_path,
-                        error_type=type(e).__name__,
-                        message=str(e) or f"Worker execution failed for {file_path}",
-                    )
+                    scan_err = ScanError(file_path=file_path, error_type=type(e).__name__, message=str(e) or f"Worker execution failed for {file_path}")
                     _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
-                    result = (
-                        file_path,
-                        [],
-                        0,
-                        0.0,
-                        ParserStatus.PARSE_FAILED.value,
-                        ParseTier.REGEX_FALLBACK.value,
-                        "failed",
-                        Confidence.LIMITED.value,
-                        scan_err,
-                    )
+                    result = (file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err)
                 results.append(result)
                 _, file_issues, loc, _, parser_status, _, status, _, _ = result
-                self._record_progress_result(
-                    loc=loc,
-                    file_issues=file_issues,
-                    parser_status=parser_status,
-                    status=status,
-                    multiplier=multiplier,
-                    completed=completed_count,
-                    total=total_files,
-                    progress_callback=progress_callback,
-                    current_file=file_path,
-                )
+                self._record_progress_result(loc=loc, file_issues=file_issues, parser_status=parser_status, status=status,
+                                             multiplier=multiplier, completed=completed_count, total=total_files,
+                                             progress_callback=progress_callback, current_file=file_path)
             pool.shutdown(wait=True)
         except BaseException:
             procs = list((getattr(pool, "_processes", {}) or {}).values())
@@ -542,7 +404,6 @@ class CGullScanner(_BaseCGullScanner):
             for process in procs:
                 if process and process.is_alive():
                     process.terminate()
-
             join_deadline = time.monotonic() + 1.0
             for process in procs:
                 if process:
