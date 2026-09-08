@@ -20,6 +20,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 
 | Topic | Document |
 | --- | --- |
+| Release versioning, changelog, GitHub Release, and PyPI checklist | [Releasing C-GULL](releasing.md) |
 | Repository architecture, adding rules, extending semantic models, tests, and benchmarks | [Repository extension](repository-extension.md) |
 | Interprocedural architecture | [Interprocedural analysis](interprocedural-analysis.md) |
 | Interprocedural fact/query contract | [Interprocedural fact query contract](interprocedural-fact-query-contract.md) |
