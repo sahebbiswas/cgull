@@ -17,10 +17,31 @@ def _is_function_pointer_type(type_node) -> bool:
 
 
 def _id_name(node):
-    while node is not None and type(node).__name__ == "Cast":
-        node = node.expr
+    while node is not None:
+        kind = type(node).__name__
+        if kind == "Cast":
+            node = node.expr
+            continue
+        if kind == "UnaryOp" and getattr(node, "op", None) == "&":
+            node = node.expr
+            continue
+        break
     if node is not None and type(node).__name__ == "ID":
         return str(node.name)
+    return None
+
+
+def _pointer_name_from_call_expression(expression: str) -> Optional[str]:
+    """Return the local pointer identifier for simple indirect call spellings."""
+    expr = expression.strip()
+    if expr.isidentifier():
+        return expr
+    if expr.startswith("(*") and expr.endswith(")"):
+        candidate = expr[2:-1].strip()
+        return candidate if candidate.isidentifier() else None
+    if expr.startswith("*"):
+        candidate = expr[1:].strip()
+        return candidate if candidate.isidentifier() else None
     return None
 
 
@@ -78,8 +99,10 @@ def resolve_indirect_calls(cfg, visible_functions):
             pointer_names.add(str(ast_node.name))
     for event in cfg.nodes.values():
         for call in event.calls:
-            if call.is_indirect and call.callee_expression.isidentifier():
-                pointer_names.add(call.callee_expression)
+            if call.is_indirect:
+                pointer_name = _pointer_name_from_call_expression(call.callee_expression)
+                if pointer_name:
+                    pointer_names.add(pointer_name)
     if not pointer_names:
         return cfg
 
@@ -97,9 +120,10 @@ def resolve_indirect_calls(cfg, visible_functions):
         for node_id in sorted(cfg.nodes):
             incoming = {}
             for name in pointer_names:
-                incoming[name] = _join(outs[p].get(name, frozenset()) for p in preds[node_id])
-            if node_id == cfg.entry and not preds[node_id]:
-                incoming = {name: None for name in pointer_names}
+                values = [outs[p].get(name, frozenset()) for p in preds[node_id]]
+                if node_id == cfg.entry:
+                    values.append(None)
+                incoming[name] = _join(values)
             outgoing = _transfer(getattr(cfg.nodes[node_id], "_ast_node", None), incoming, pointer_names, visible)
             if incoming != ins[node_id] or outgoing != outs[node_id]:
                 ins[node_id] = incoming
@@ -110,11 +134,13 @@ def resolve_indirect_calls(cfg, visible_functions):
         rewritten = []
         for call in event.calls:
             targets = ()
-            if call.is_indirect and call.callee_expression in pointer_names:
-                value = ins[node_id].get(call.callee_expression)
-                if value:
-                    targets = tuple(sorted(value))
-            rewritten.append(replace(call, direct_callee=targets[0] if len(targets) == 1 else call.direct_callee, resolved_callees=targets))
+            if call.is_indirect:
+                pointer_name = _pointer_name_from_call_expression(call.callee_expression)
+                if pointer_name in pointer_names:
+                    value = ins[node_id].get(pointer_name)
+                    if value:
+                        targets = tuple(sorted(value))
+            rewritten.append(replace(call, resolved_callees=targets))
         event.calls = tuple(rewritten)
     return cfg
 
