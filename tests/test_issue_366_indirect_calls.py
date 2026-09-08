@@ -1,7 +1,12 @@
 from pycparser import c_parser
 
+from benchmarks.security_fact_support import build_security_context, build_security_models
 from cgull.cfg.call_graph import CallGraphFunction, build_call_graph
-from cgull.cfg.construction import build_cfg
+from cgull.cfg.construction import build_cfg, find_function_def
+from cgull.cfg.security_dataflow import analyze_function_security_dataflow
+from cgull.cfg.value_facts import FormatLiteralness, ValueProvenance
+from cgull.cfg.value_interprocedural import analyze_translation_unit_value_dataflow
+from cgull.semantic_models import ValidationProperty
 
 
 def _functions(source):
@@ -125,3 +130,40 @@ def test_explicit_pointer_dereference_call_resolves():
     assert call.resolved_callees == ("helper",)
     assert call.direct_callee == "helper"
     assert call.is_indirect
+
+
+def test_value_actuals_propagate_through_resolved_indirect_call():
+    ctx = build_security_context(r'''
+        void consume(char *value) { (void)value; }
+        void caller(void) {
+            void (*cb)(char *) = consume;
+            cb("fixed");
+        }
+    ''')
+    result = analyze_translation_unit_value_dataflow(ctx)
+    incoming = result.parameter_facts["consume"][0]
+    assert incoming.provenance is ValueProvenance.TRUSTED
+    assert incoming.format_literalness is FormatLiteralness.LITERAL
+
+
+def test_validator_summary_applies_through_resolved_indirect_call():
+    ctx = build_security_context(r'''
+        int validate(char *value);
+        void sink(char *value);
+        int checked(char *value) { return validate(value); }
+        void caller(char *value) {
+            int (*cb)(char *) = checked;
+            if (cb(value)) sink(value);
+        }
+    ''')
+    models = build_security_models()
+    result = analyze_function_security_dataflow(ctx, "caller", models)
+    cfg = build_cfg(find_function_def(ctx.pycparser_ast, "caller"))
+    sink = next(
+        node
+        for node in cfg.nodes.values()
+        if any(call.direct_callee == "sink" for call in node.calls)
+    )
+    assert ValidationProperty.BOUNDS_CHECKED in result.query_validation_properties(
+        "value", sink.node_id
+    )
