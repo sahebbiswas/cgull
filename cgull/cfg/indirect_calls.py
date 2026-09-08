@@ -140,7 +140,13 @@ def resolve_indirect_calls(cfg, visible_functions):
                     value = ins[node_id].get(pointer_name)
                     if value:
                         targets = tuple(sorted(value))
-            rewritten.append(replace(call, resolved_callees=targets))
+            rewritten.append(
+                replace(
+                    call,
+                    direct_callee=targets[0] if len(targets) == 1 else None,
+                    resolved_callees=targets,
+                )
+            )
         event.calls = tuple(rewritten)
     return cfg
 
