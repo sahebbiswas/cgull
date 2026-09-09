@@ -477,6 +477,10 @@ class DeadStoresRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         from ..cfg import build_cfg, find_function_def
+        from .dead_store_initializers import (
+            pure_declaration_coordinates, suppress_cfg_initializer,
+            suppress_lexical_initializer,
+        )
 
         summaries = None
         if hasattr(ast_ctx, "functions") and ast_ctx.functions:
@@ -506,6 +510,7 @@ class DeadStoresRule(BaseRule):
 
             if cfg is not None and cfg.nodes:
                 # AST/CFG path reachability check
+                pure_coordinates = pure_declaration_coordinates(funcdef)
                 initial_initialized = set(p.name for p in fn.parameters if p.name) | set(getattr(ast_ctx, "global_variables", {}).keys()) | {var.name for var in fn.variables.values() if getattr(var, "has_initializer", False) and var.name}
                 cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
 
@@ -542,6 +547,8 @@ class DeadStoresRule(BaseRule):
                                     worklist.append(succ)
 
                         if not read_reachable:
+                            if suppress_cfg_initializer(cfg, node, v_name, pure_coordinates):
+                                continue
                             c_var = local_vars[v_name]
                             line_no = node.line_number
                             snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{v_name} = ...;"
@@ -562,6 +569,8 @@ class DeadStoresRule(BaseRule):
                     if not c_var.read_lines:
                         # If assigned_lines is non-empty, every assignment is a dead store
                         for line_no in c_var.assigned_lines:
+                            if suppress_lexical_initializer(ast_ctx, c_var, line_no):
+                                continue
                             snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{v_name} = ...;"
                             issues.append(self.create_issue(
                                 file_path=file_path,
@@ -581,6 +590,8 @@ class DeadStoresRule(BaseRule):
                             # Is there a read between w_line and next_w_line?
                             has_read = any(w_line <= r_line < next_w_line for r_line in all_reads)
                             if not has_read:
+                                if suppress_lexical_initializer(ast_ctx, c_var, w_line):
+                                    continue
                                 snippet = ast_ctx.source_lines[w_line - 1].strip() if 1 <= w_line <= len(ast_ctx.source_lines) else f"{v_name} = ...;"
                                 issues.append(self.create_issue(
                                     file_path=file_path,

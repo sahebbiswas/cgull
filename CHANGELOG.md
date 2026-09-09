@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- CGULL-042 suppresses proven-pure declaration initializers overwritten before use, while retaining side-effecting initializers, later dead assignments, and scope-exit findings (#407). Lexical fallback suppression is limited to unambiguous straight-line overwrites.
+
 ## [0.11.0] - 2026-09-08
 
 ### Added
