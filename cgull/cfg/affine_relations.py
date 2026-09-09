@@ -120,11 +120,12 @@ class AffineFacts:
             base_value = facts.constant(base)
             if base_value is not None:
                 constants[symbol] = base_value + offset
-            relations.add(_canonical(symbol, base, offset))
-            # Preserve transitive equalities already known for the RHS base.
-            for other, base_to_other in facts.symbols_related_to(base):
-                if other != symbol:
-                    relations.add(_canonical(symbol, other, offset + base_to_other))
+            if base != symbol:
+                relations.add(_canonical(symbol, base, offset))
+                # Preserve transitive equalities already known for the RHS base.
+                for other, base_to_other in facts.symbols_related_to(base):
+                    if other != symbol:
+                        relations.add(_canonical(symbol, other, offset + base_to_other))
         return AffineFacts(frozenset(constants.items()), frozenset(relations))
 
     def shift(self, symbol: str, amount: int) -> "AffineFacts":
@@ -155,6 +156,18 @@ def transfer_affine(node, writes, facts: AffineFacts, *, has_unknown_call: bool 
     """
     if has_unknown_call:
         return AffineFacts()
+
+    if isinstance(node, c_ast.DeclList):
+        current = facts
+        handled = set()
+        for decl in node.decls or ():
+            if decl.name:
+                handled.add(decl.name)
+            current = transfer_affine(decl, {decl.name} if decl.name else set(), current)
+        for symbol in writes:
+            if symbol not in handled:
+                current = current.forget(symbol)
+        return current
 
     handled = set()
     if isinstance(node, c_ast.Decl) and node.name:
