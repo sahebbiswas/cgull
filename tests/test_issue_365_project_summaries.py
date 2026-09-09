@@ -239,3 +239,26 @@ def test_profile_reachability_in_public_scan(tmp_path, jobs):
     assert not result.scan_errors
     assert len(result.issues) == 1
     assert result.issues[0].reachable_under == ["+free"]
+
+
+def test_preparation_diagnostic_failure_clears_state_before_scanner_reuse(tmp_path, monkeypatch):
+    from cgull.engine import logger
+
+    # Duplicate definitions produce a diagnostic after prepared units are stored.
+    for name in ("a.c", "b.c"):
+        (tmp_path / name).write_text("int duplicate(void) { return 0; }")
+    scanner = CGullScanner(rules=[UseAfterFreeRule()], engine_mode=AnalysisEngine.AST)
+
+    def fail_diagnostic(*args, **kwargs):
+        assert scanner._project_units
+        raise RuntimeError("diagnostic handler failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(logger, "log", fail_diagnostic)
+        with pytest.raises(RuntimeError, match="diagnostic handler failed"):
+            scanner.scan_path(str(tmp_path), quiet=True)
+
+    assert scanner._project_units == {}
+    result = scanner.scan_path(str(tmp_path), quiet=True)
+    assert not result.scan_errors
+    assert scanner._project_units == {}

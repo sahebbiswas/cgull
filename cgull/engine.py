@@ -356,17 +356,17 @@ class CGullScanner:
 
         self._project_units = {}
         self.project_diagnostics = ()
-        if len(files_to_scan) > 1 and config.engine_mode != AnalysisEngine.REGEX:
-            self._project_units, self.project_diagnostics = prepare_project(
-                files_to_scan,
-                lambda path: self._config_for_file(config, path),
-                profiles,
-            )
-            for diagnostic in self.project_diagnostics:
-                logger.log(logging.INFO if quiet else logging.WARNING, "%s", diagnostic)
-
-        progress_active = (progress_callback is not None) and (not quiet)
         try:
+            if len(files_to_scan) > 1 and config.engine_mode != AnalysisEngine.REGEX:
+                self._project_units, self.project_diagnostics = prepare_project(
+                    files_to_scan,
+                    lambda path: self._config_for_file(config, path),
+                    profiles,
+                )
+                for diagnostic in self.project_diagnostics:
+                    logger.log(logging.INFO if quiet else logging.WARNING, "%s", diagnostic)
+
+            progress_active = (progress_callback is not None) and (not quiet)
             if resolved_jobs > 1:
                 results = self._scan_files_parallel(files_to_scan, resolved_jobs, config, progress_callback, quiet=quiet, progress_active=progress_active, profiles=profiles)
             else:
