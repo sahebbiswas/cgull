@@ -15,13 +15,16 @@
 #define BUFFER_MAX_LEN   64U
 #define MAX_TIMEOUT      100
 
-// Safe constant-time comparison
-static int secure_memcmp(const void *a, const void *b, size_t len) {
-    const unsigned char *ua = (const unsigned char *)a;
-    const unsigned char *ub = (const unsigned char *)b;
+// Safe constant-time comparison. The static array parameters make the
+// minimum len-element capacity contract explicit to callers and analyzers.
+static int secure_memcmp(
+    size_t len,
+    const unsigned char a[static len],
+    const unsigned char b[static len]
+) {
     unsigned char result = 0;
     for (size_t i = 0; i < len; i++) {
-        result |= (ua[i] ^ ub[i]);
+        result |= (a[i] ^ b[i]);
     }
     return result;
 }
@@ -36,7 +39,11 @@ uint32_t check_admin_token(const char *provided_token, const char *master_token)
     if (provided_token == NULL || master_token == NULL) {
         return STATUS_AUTH_FAIL;
     }
-    if (secure_memcmp(provided_token, master_token, 32) == 0) {
+    if (secure_memcmp(
+            32U,
+            (const unsigned char *)provided_token,
+            (const unsigned char *)master_token
+        ) == 0) {
         return STATUS_AUTH_OK;
     }
     return STATUS_AUTH_FAIL;

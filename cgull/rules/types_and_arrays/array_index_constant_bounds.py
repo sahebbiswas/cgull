@@ -1,4 +1,4 @@
-"""Constant-expression extensions for CGULL-007 array bounds checks."""
+"""Constant-expression and capacity-contract extensions for CGULL-007."""
 
 import re
 from typing import Optional
@@ -8,17 +8,7 @@ from ...models import FixType
 
 
 class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
-    """Extend CGULL-007 with AST evaluation of negative constant subscripts.
-
-    pycparser represents ``-1`` as ``UnaryOp('-', Constant('1'))`` and folds
-    parentheses into the expression tree, so string-to-int conversion misses
-    both unary-negative and arithmetic constant expressions. This evaluator
-    handles integer constants plus unary ``+``/``-`` and a conservative set of
-    integer binary operators. Unsigned casts deliberately return unknown here
-    so a wrapped value such as ``(unsigned)-1`` is not mislabeled as negative.
-    Only negative values are added here; existing CGULL-007 logic remains
-    authoritative for non-negative constant bounds.
-    """
+    """Extend CGULL-007 with constant and explicit symbolic capacity proofs."""
 
     @staticmethod
     def _cast_is_unsigned(node) -> bool:
@@ -101,10 +91,84 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
             return None
         return value if value >= 0 else None
 
+    def _contract_safe_accesses(self, ast_ctx):
+        """Return structured access keys proven safe by explicit capacities."""
+        if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
+            return set()
+
+        from pycparser import c_ast
+        from ...ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr, is_unsigned_type
+        from ...cfg import _PRELUDE_LINE_COUNT, build_cfg, find_function_def
+        from .array_bounds_guards import access_events, guarded_access
+        from .buffer_capacity_contracts import capacity_in_states, function_contracts
+
+        safe = set()
+        for fn in ast_ctx.functions:
+            funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+            if funcdef is None:
+                continue
+            cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+            events = access_events(cfg)
+            element_sizes = {
+                param.name: self._element_size(param.type_name, ast_ctx)
+                for param in fn.parameters
+                if param.name
+            }
+            initial = function_contracts(self, fn, funcdef, element_sizes)
+            if not initial:
+                continue
+            capacities = capacity_in_states(cfg, initial)
+
+            def signed(name: str) -> bool:
+                var = fn.variables.get(name) or ast_ctx.global_variables.get(name)
+                if var:
+                    return var.is_signed
+                for param in fn.parameters:
+                    if param.name == name:
+                        return not is_unsigned_type(
+                            param.type_name, getattr(ast_ctx, "unsigned_typedefs", None)
+                        )
+                return True
+
+            class ContractVisitor(c_ast.NodeVisitor):
+                def visit_ArrayRef(v_self, node):
+                    target = events.get(id(node))
+                    arr_name = _format_pycparser_expr(node.name)
+                    bound = capacities.get(target, {}).get(arr_name) if target is not None else None
+                    if bound is not None:
+                        for index in _extract_identifiers_from_ast(node.subscript, ignore_callees=True):
+                            if guarded_access(cfg, target, node, index, bound, signed(index)):
+                                line = (
+                                    node.coord.line - _PRELUDE_LINE_COUNT
+                                    if node.coord
+                                    else fn.start_line
+                                )
+                                safe.add((line, arr_name, index))
+                    v_self.generic_visit(node)
+
+            ContractVisitor().visit(funcdef)
+        return safe
+
     def scan_ast(self, file_path, ast_ctx):
         issues = super().scan_ast(file_path, ast_ctx)
         if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
             return issues
+
+        # The base rule intentionally treats unknown pointer extents as unknown.
+        # Remove only findings for accesses proven by an explicit capacity
+        # contract. This keeps the no-contract case conservative.
+        contract_safe = self._contract_safe_accesses(ast_ctx)
+        if contract_safe:
+            unchecked = re.compile(
+                r"^Unchecked Array Indexing: variable '([^']+)' is used as an index for '([^']+)'"
+            )
+            filtered = []
+            for issue in issues:
+                match = unchecked.match(issue.message)
+                if match and (issue.line_number, match.group(2), match.group(1)) in contract_safe:
+                    continue
+                filtered.append(issue)
+            issues = filtered
 
         from pycparser import c_ast
         from ...ast_analyzer import _format_pycparser_expr

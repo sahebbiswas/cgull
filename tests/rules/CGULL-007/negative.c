@@ -24,22 +24,22 @@ void test_fp_declaration_with_initializer(void) {
     (void)dataBuffer;
 }
 
-/* False-Positive Regression: memset/memcpy style loop using size_t */
-void test_memset_size_t_loop(uint8_t *ptr, size_t size) {
+/* Explicit capacity contract: memset/memcpy style loop using size_t */
+void test_memset_size_t_loop(size_t size, uint8_t ptr[static size]) {
     for (size_t i = 0; i < size; i++) {
         ptr[i] = 0;
     }
 }
 
-/* False-Positive Regression: memset/memcpy style loop using uint8_t index */
-void test_memset_uint8_t_loop(uint8_t *ptr, uint8_t size) {
+/* Explicit capacity contract: memset/memcpy style loop using uint8_t index */
+void test_memset_uint8_t_loop(uint8_t size, uint8_t ptr[static size]) {
     for (uint8_t i = 0; i < size; i++) {
         ptr[i] = 0;
     }
 }
 
-/* False-Positive Regression: memset/memcpy style loop using unsigned int index */
-void test_memset_unsigned_int_loop(uint8_t *ptr, unsigned int size) {
+/* Explicit capacity contract: memset/memcpy style loop using unsigned int index */
+void test_memset_unsigned_int_loop(unsigned int size, uint8_t ptr[static size]) {
     for (unsigned int i = 0; i < size; i++) {
         ptr[i] = 0;
     }
