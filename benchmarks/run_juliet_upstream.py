@@ -7,8 +7,11 @@ manifest. It supports both a deterministic stratified PR sample and a full run
 across every discoverable entry testcase for C-GULL's mapped CWEs.
 
 Split-file Juliet flows are evaluated as testcase groups: the entry file owns
-the bad/good oracle, while findings may occur in any sibling stage belonging to
-the same testcase. Related stages are analyzed through one shared AST/call graph
+the bad/good oracle where available, while findings may occur in any sibling
+stage belonging to the same testcase. If a split entry omits its vulnerable
+wrapper, a canonical bad oracle from a sibling stage is added once. Delegated
+good helpers are never promoted to additional oracles merely because they live
+in sibling stages. Related stages are analyzed through one shared AST/call graph
 so direct-call value facts can propagate across their source-file boundaries.
 """
 
@@ -84,6 +87,32 @@ def testcase_members(entry_path: Path) -> List[Path]:
     return members or [entry_path]
 
 
+def _testcase_oracles(entry_path: Path) -> List[Tuple[str, bool]]:
+    """Return testcase oracle roots without turning sibling helpers into oracles.
+
+    Juliet normally keeps the bad/good wrappers in the entry stage. A few split
+    flows place the canonical vulnerable wrapper in a sibling instead. Preserve
+    the entry stage's historical good-wrapper accounting, and only supplement it
+    with canonical sibling bad roots when the entry itself has no vulnerable
+    oracle. This avoids double-counting delegated goodSink/badSink helpers as
+    independent testcase outcomes.
+    """
+    oracles = infer_oracles(entry_path)
+    if any(vulnerable for _, vulnerable in oracles):
+        return oracles
+
+    seen = {name for name, _ in oracles}
+    for member in testcase_members(entry_path):
+        if member == entry_path:
+            continue
+        for name, vulnerable in infer_oracles(member):
+            if not vulnerable or name in seen:
+                continue
+            oracles.append((name, True))
+            seen.add(name)
+    return oracles
+
+
 def discover_candidates(suite_root: Path, cwe: str) -> List[Path]:
     directory = _cwe_directory(suite_root, cwe)
     if directory is None:
@@ -96,7 +125,7 @@ def discover_candidates(suite_root: Path, cwe: str) -> List[Path]:
         stage = stem_match.group("stage") if stem_match else None
         if stage is not None and stage.lower() != "a":
             continue
-        if infer_oracles(path):
+        if _testcase_oracles(path):
             candidates.append(path)
     return candidates
 
@@ -160,7 +189,7 @@ def _function_matches_oracle(candidate: str, oracle: str) -> bool:
     token = _oracle_token(oracle)
     lower = candidate.lower()
     if token == "bad":
-        return lower == "bad" or "_bad" in lower
+        return lower == "bad" or lower == "badsink" or "_bad" in lower
     if token == "good":
         return lower == "good" or lower.startswith("good") or "_good" in lower
     return token in lower
@@ -210,7 +239,7 @@ def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
             (member, extract_function_line_ranges(str(member)))
             for member in members
         ]
-        for function, vulnerable in infer_oracles(entry_path):
+        for function, vulnerable in _testcase_oracles(entry_path):
             detected = any(
                 _result_detects_oracle(
                     result,
