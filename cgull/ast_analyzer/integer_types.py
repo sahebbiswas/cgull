@@ -12,6 +12,7 @@ _INTEGER_TYPE_RE = re.compile(
     r"u?int(?:8|16|32|64)_t|size_t|ssize_t|intptr_t|uintptr_t|ptrdiff_t|time_t)$",
     re.IGNORECASE,
 )
+_BASE_INFER_EXPR_TYPE = CASTContext.infer_expr_type
 
 
 def _resolved_scalar_type(type_str: str, ast_ctx: Optional[CASTContext] = None) -> Optional[str]:
@@ -59,30 +60,12 @@ def _integer_rank(type_name: str, ast_ctx: CASTContext) -> Optional[int]:
     normalized = resolved.lower()
     normalized = normalized.replace("signed ", "").replace("unsigned ", "")
     aliases = {
-        "char": 1,
-        "int8_t": 1,
-        "uint8_t": 1,
-        "short": 2,
-        "short int": 2,
-        "int16_t": 2,
-        "uint16_t": 2,
-        "int": 3,
-        "signed": 3,
-        "unsigned": 3,
-        "int32_t": 3,
-        "uint32_t": 3,
-        "long": 4,
-        "long int": 4,
-        "size_t": 4,
-        "ssize_t": 4,
-        "intptr_t": 4,
-        "uintptr_t": 4,
-        "ptrdiff_t": 4,
-        "time_t": 4,
-        "long long": 5,
-        "long long int": 5,
-        "int64_t": 5,
-        "uint64_t": 5,
+        "char": 1, "int8_t": 1, "uint8_t": 1,
+        "short": 2, "short int": 2, "int16_t": 2, "uint16_t": 2,
+        "int": 3, "signed": 3, "unsigned": 3, "int32_t": 3, "uint32_t": 3,
+        "long": 4, "long int": 4, "size_t": 4, "ssize_t": 4,
+        "intptr_t": 4, "uintptr_t": 4, "ptrdiff_t": 4, "time_t": 4,
+        "long long": 5, "long long int": 5, "int64_t": 5, "uint64_t": 5,
     }
     rank = aliases.get(normalized)
     if rank is not None:
@@ -110,29 +93,16 @@ def _unsigned_counterpart(type_name: str, ast_ctx: CASTContext) -> Optional[str]
     if not resolved:
         return None
     aliases = {
-        "char": "unsigned char",
-        "signed char": "unsigned char",
-        "short": "unsigned short",
-        "short int": "unsigned short",
-        "signed short": "unsigned short",
-        "signed short int": "unsigned short",
-        "int": "unsigned int",
-        "signed": "unsigned int",
-        "signed int": "unsigned int",
-        "long": "unsigned long",
-        "long int": "unsigned long",
-        "signed long": "unsigned long",
-        "signed long int": "unsigned long",
-        "long long": "unsigned long long",
-        "long long int": "unsigned long long",
-        "signed long long": "unsigned long long",
-        "signed long long int": "unsigned long long",
-        "int8_t": "uint8_t",
-        "int16_t": "uint16_t",
-        "int32_t": "uint32_t",
-        "int64_t": "uint64_t",
-        "ssize_t": "size_t",
-        "intptr_t": "uintptr_t",
+        "char": "unsigned char", "signed char": "unsigned char",
+        "short": "unsigned short", "short int": "unsigned short",
+        "signed short": "unsigned short", "signed short int": "unsigned short",
+        "int": "unsigned int", "signed": "unsigned int", "signed int": "unsigned int",
+        "long": "unsigned long", "long int": "unsigned long",
+        "signed long": "unsigned long", "signed long int": "unsigned long",
+        "long long": "unsigned long long", "long long int": "unsigned long long",
+        "signed long long": "unsigned long long", "signed long long int": "unsigned long long",
+        "int8_t": "uint8_t", "int16_t": "uint16_t", "int32_t": "uint32_t", "int64_t": "uint64_t",
+        "ssize_t": "size_t", "intptr_t": "uintptr_t",
     }
     return aliases.get(resolved.lower())
 
@@ -149,19 +119,13 @@ def integer_promotion(type_name: str, ast_ctx: CASTContext) -> Optional[str]:
         return type_name
     unsigned = _is_unsigned_integer(type_name, ast_ctx)
     if unsigned is None:
-        # Plain char signedness is implementation-defined, but either form fits
-        # in int on the supported targets when char is narrower than int.
         return "int" if width < int_width else None
     if not unsigned or width < int_width:
         return "int"
     return "unsigned int"
 
 
-def usual_arithmetic_type(
-    left_type: str,
-    right_type: str,
-    ast_ctx: CASTContext,
-) -> Optional[str]:
+def usual_arithmetic_type(left_type: str, right_type: str, ast_ctx: CASTContext) -> Optional[str]:
     """Return the integer result type after promotions/usual arithmetic conversions."""
     left = integer_promotion(left_type, ast_ctx)
     right = integer_promotion(right_type, ast_ctx)
@@ -175,12 +139,10 @@ def usual_arithmetic_type(
         return None
     if left_unsigned == right_unsigned:
         return left if left_rank >= right_rank else right
-
     unsigned_type, unsigned_rank = (left, left_rank) if left_unsigned else (right, right_rank)
     signed_type, signed_rank = (right, right_rank) if left_unsigned else (left, left_rank)
     if unsigned_rank >= signed_rank:
         return unsigned_type
-
     unsigned_width = get_integer_type_byte_size(unsigned_type, ast_ctx)
     signed_width = get_integer_type_byte_size(signed_type, ast_ctx)
     if unsigned_width is None or signed_width is None:
@@ -190,36 +152,26 @@ def usual_arithmetic_type(
     return _unsigned_counterpart(signed_type, ast_ctx)
 
 
-def infer_integer_expression_type(
-    ast_ctx: CASTContext,
-    node: Any,
-    fn: Any = None,
-) -> Optional[str]:
-    """Infer the C integer type of an expression using promotions and conversions.
+def infer_integer_expression_type(ast_ctx: CASTContext, node: Any, fn: Any = None) -> Optional[str]:
+    """Infer a C integer expression type using promotions and usual conversions.
 
     Unsupported or non-integer expressions return ``None`` rather than guessing.
-    This deliberately models only type semantics; value/range safety remains the
-    responsibility of CFG-backed range analysis.
+    Value/range safety intentionally remains in CFG-backed range analysis.
     """
     if node is None:
         return None
-
     kind = type(node).__name__
     if kind == "Cast":
         from .types import _format_pycparser_expr
-
         target = _format_pycparser_expr(node.to_type)
         return target if get_integer_type_byte_size(target, ast_ctx) is not None else None
-
     if kind == "Constant":
         if node.type == "char":
             return "int"
         return node.type if get_integer_type_byte_size(node.type, ast_ctx) is not None else None
-
     if kind == "UnaryOp" and node.op in {"+", "-", "~"}:
         operand = infer_integer_expression_type(ast_ctx, node.expr, fn)
         return integer_promotion(operand, ast_ctx) if operand else None
-
     if kind == "BinaryOp":
         if node.op in {"&&", "||", "==", "!=", "<", "<=", ">", ">="}:
             return "int"
@@ -232,15 +184,27 @@ def infer_integer_expression_type(
         if node.op in {"+", "-", "*", "/", "%", "&", "^", "|"}:
             return usual_arithmetic_type(left, right, ast_ctx)
         return None
-
     if kind == "TernaryOp":
         left = infer_integer_expression_type(ast_ctx, node.iftrue, fn)
         right = infer_integer_expression_type(ast_ctx, node.iffalse, fn)
         if not left or not right:
             return None
         return usual_arithmetic_type(left, right, ast_ctx)
-
-    inferred = ast_ctx.infer_expr_type(node, fn)
+    inferred = _BASE_INFER_EXPR_TYPE(ast_ctx, node, fn)
     if inferred and get_integer_type_byte_size(inferred, ast_ctx) is not None:
         return inferred
     return None
+
+
+def _infer_expr_type_with_integer_expressions(self: CASTContext, node: Any, fn: Any = None) -> Optional[str]:
+    """Extend CASTContext's existing inference only when its base logic is unresolved."""
+    inferred = _BASE_INFER_EXPR_TYPE(self, node, fn)
+    if inferred is not None:
+        return inferred
+    return infer_integer_expression_type(self, node, fn)
+
+
+# Keep the historic CASTContext API while making integer expression typing shared
+# by all consumers. The wrapper delegates to the original implementation first,
+# so existing pointer/member/array inference behavior is unchanged.
+CASTContext.infer_expr_type = _infer_expr_type_with_integer_expressions
