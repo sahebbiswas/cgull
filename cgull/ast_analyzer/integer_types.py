@@ -12,7 +12,6 @@ _INTEGER_TYPE_RE = re.compile(
     r"u?int(?:8|16|32|64)_t|size_t|ssize_t|intptr_t|uintptr_t|ptrdiff_t|time_t)$",
     re.IGNORECASE,
 )
-_BASE_INFER_EXPR_TYPE = CASTContext.infer_expr_type
 
 
 def _resolved_scalar_type(type_str: str, ast_ctx: Optional[CASTContext] = None) -> Optional[str]:
@@ -156,7 +155,8 @@ def infer_integer_expression_type(ast_ctx: CASTContext, node: Any, fn: Any = Non
     """Infer a C integer expression type using promotions and usual conversions.
 
     Unsupported or non-integer expressions return ``None`` rather than guessing.
-    Value/range safety intentionally remains in CFG-backed range analysis.
+    Value/range safety intentionally remains in CFG-backed range analysis. This
+    helper is opt-in: it does not modify ``CASTContext.infer_expr_type``.
     """
     if node is None:
         return None
@@ -190,21 +190,7 @@ def infer_integer_expression_type(ast_ctx: CASTContext, node: Any, fn: Any = Non
         if not left or not right:
             return None
         return usual_arithmetic_type(left, right, ast_ctx)
-    inferred = _BASE_INFER_EXPR_TYPE(ast_ctx, node, fn)
+    inferred = ast_ctx.infer_expr_type(node, fn)
     if inferred and get_integer_type_byte_size(inferred, ast_ctx) is not None:
         return inferred
     return None
-
-
-def _infer_expr_type_with_integer_expressions(self: CASTContext, node: Any, fn: Any = None) -> Optional[str]:
-    """Extend CASTContext's existing inference only when its base logic is unresolved."""
-    inferred = _BASE_INFER_EXPR_TYPE(self, node, fn)
-    if inferred is not None:
-        return inferred
-    return infer_integer_expression_type(self, node, fn)
-
-
-# Keep the historic CASTContext API while making integer expression typing shared
-# by all consumers. The wrapper delegates to the original implementation first,
-# so existing pointer/member/array inference behavior is unchanged.
-CASTContext.infer_expr_type = _infer_expr_type_with_integer_expressions
