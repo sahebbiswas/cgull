@@ -30,6 +30,7 @@ class CallEffectModel:
     output_value_sources: Tuple[Tuple[int, int], ...] = ()
     format_argument: Optional[int] = None
     size_relationships: Tuple[Tuple[int, int], ...] = ()
+    buffer_capacities: Tuple[Tuple[int, int, str], ...] = ()
     sanitizes: FrozenSet[int] = frozenset()
     takes_ownership: FrozenSet[int] = frozenset()
     escapes: FrozenSet[int] = frozenset()
@@ -51,6 +52,11 @@ class CallEffectModel:
             indexes.add(data_index)
             indexes.add(size_index)
             bounded_outputs.add(data_index)
+        for buffer_index, size_index, unit in self.buffer_capacities:
+            indexes.add(buffer_index)
+            indexes.add(size_index)
+            if unit not in {"elements", "bytes"}:
+                raise ValueError("buffer capacity unit must be 'elements' or 'bytes'")
         seen_output_sources = set()
         for output_index, source_index in self.output_value_sources:
             indexes.add(output_index)
@@ -164,7 +170,8 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
     overrides: Dict[str, CallEffectModel] = {}
     allowed = {
         "function", "returns", "deallocates", "outputs", "output_value_sources",
-        "format_argument", "size_relationships", "sanitizes", "takes_ownership", "escapes",
+        "format_argument", "size_relationships", "buffer_capacities", "sanitizes",
+        "takes_ownership", "escapes",
     }
     for index, entry in enumerate(raw):
         if not isinstance(entry, Mapping):
@@ -201,6 +208,31 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
                     raise ValueError("size_relationship argument positions must be non-negative integers")
                 relationships.append((pair[0], pair[1]))
 
+            capacities_raw = entry.get("buffer_capacities", [])
+            if not isinstance(capacities_raw, list):
+                raise ValueError("buffer_capacities must be a list of tables")
+            capacities = []
+            for relation in capacities_raw:
+                if not isinstance(relation, Mapping):
+                    raise ValueError(
+                        "buffer_capacities entries must be {buffer = N, size = N, unit = 'elements|bytes'}"
+                    )
+                if set(relation) != {"buffer", "size", "unit"}:
+                    raise ValueError(
+                        "buffer_capacities entries require exactly buffer, size, and unit"
+                    )
+                buffer_index = relation["buffer"]
+                size_index = relation["size"]
+                unit = str(relation["unit"]).strip().lower()
+                if any(
+                    isinstance(value, bool) or not isinstance(value, int) or value < 0
+                    for value in (buffer_index, size_index)
+                ):
+                    raise ValueError("buffer capacity argument positions must be non-negative integers")
+                if unit not in {"elements", "bytes"}:
+                    raise ValueError("buffer capacity unit must be 'elements' or 'bytes'")
+                capacities.append((buffer_index, size_index, unit))
+
             output_sources_raw = entry.get("output_value_sources", [])
             if not isinstance(output_sources_raw, list):
                 raise ValueError(
@@ -226,6 +258,7 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
                 output_value_sources=tuple(output_value_sources),
                 format_argument=fmt,
                 size_relationships=tuple(relationships),
+                buffer_capacities=tuple(capacities),
                 sanitizes=sanitizes,
                 takes_ownership=takes_ownership,
                 escapes=escapes,
