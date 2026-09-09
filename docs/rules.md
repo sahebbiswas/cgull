@@ -194,3 +194,9 @@ tagging is unsupported, and this is not a general alignment or points-to rule.
 Known misaligned offsets into suitably aligned local objects weaken provenance;
 unknown alignment never creates a new guarantee. Inferred pointer return values
 and cross-call comparisons of two formal pointer origins are not modeled.
+
+## Defensive local initialization (CGULL-042)
+
+CGULL-042 skips a declaration initializer when it can prove the initializer is side-effect-free and every path overwrites the value before use or scope exit. This includes literal values, null pointer constants, simple object addresses, and constant aggregate initializers. Calls, mutations, and unproven reads remain eligible for findings, as do later redundant assignments and initializers unused until scope exit.
+
+Lexical fallback applies this policy only to unambiguous straight-line overwrites. Complex control flow, unexpanded symbolic expressions, and ambiguous same-line writes may retain findings.
