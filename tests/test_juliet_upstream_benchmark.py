@@ -5,6 +5,7 @@ from benchmarks.run_juliet_upstream import (
     DEFAULT_FLOW_VARIANTS,
     _function_matches_oracle,
     _issue_in_range,
+    _testcase_oracles,
     discover_candidates,
     flow_variant,
     format_markdown,
@@ -85,9 +86,49 @@ def test_split_file_testcase_members_are_grouped(tmp_path):
     assert unrelated not in juliet_testcase_members(entry)
 
 
+def test_split_file_oracles_supplement_missing_bad_root_without_counting_sibling_good_helpers(tmp_path):
+    cwe_dir = "CWE194_Unexpected_Sign_Extension"
+    entry = _write_case(tmp_path, cwe_dir, "CWE194_Unexpected_Sign_Extension__foo_54a.c")
+    sibling = _write_case(tmp_path, cwe_dir, "CWE194_Unexpected_Sign_Extension__foo_54b.c")
+    entry.write_text(
+        "void goodG2B(void) {\n"
+        "    int x = 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    sibling.write_text(
+        "void sample_bad(void) {\n"
+        "    int x = 0;\n"
+        "}\n"
+        "void goodG2BSink(void) {\n"
+        "    int x = 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    assert _testcase_oracles(entry) == [("goodG2B", False), ("sample_bad", True)]
+    assert discover_candidates(tmp_path, "CWE-194") == [entry]
+
+
+def test_entry_bad_oracle_remains_authoritative_for_split_group(tmp_path):
+    cwe_dir = "CWE194_Unexpected_Sign_Extension"
+    entry = _write_case(tmp_path, cwe_dir, "CWE194_Unexpected_Sign_Extension__foo_54a.c")
+    sibling = _write_case(tmp_path, cwe_dir, "CWE194_Unexpected_Sign_Extension__foo_54b.c")
+    sibling.write_text(
+        "void sibling_bad(void) {\n"
+        "    int x = 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    assert _testcase_oracles(entry) == [("sample_bad", True), ("sample_good", False)]
+
+
 def test_oracle_family_matches_delegated_sink_names():
     assert _function_matches_oracle("CWE369_example_54b_badSink", "bad")
+    assert _function_matches_oracle("badSink", "bad")
     assert _function_matches_oracle("CWE369_example_54b_goodG2BSink", "goodG2B")
+    assert not _function_matches_oracle("notbadSink", "bad")
     assert not _function_matches_oracle("CWE369_example_54b_goodG2BSink", "bad")
     assert not _function_matches_oracle("CWE369_example_54b_goodB2GSink", "goodG2B")
 
@@ -138,7 +179,6 @@ def test_markdown_report_exposes_per_cwe_metrics():
     assert "Scanned source files: 3" in rendered
     assert "| CWE | TP | FP | TN | FN | Precision | Recall | F1 |" in rendered
     assert "| CWE-121 | 1 | 0 | 2 | 1 | 1.0000 | 0.5000 | 0.6667 |" in rendered
-
 
 
 def test_conversion_cwe_attribution_does_not_credit_narrowing_as_sign_extension():
