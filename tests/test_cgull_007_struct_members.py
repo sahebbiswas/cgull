@@ -13,7 +13,7 @@ def test_canonical_repro_cgull_007():
         int i;
         for (i = 0; i < len; i++) {
             if (i >= 0 && i < 500) {   /* wrong bound: real capacity is 100 */
-                a->array_a[i] = src[i];
+                a->array_a[i] = 0;
             }
         }
     }
@@ -40,14 +40,14 @@ def test_struct_member_variants_v1_to_v7():
     void fun_v1_bad(struct A *a, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
-            a->array_a[i] = src[i];
+            a->array_a[i] = 0;
         }
     }
     void fun_v1_good(struct A *a, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
             if (i >= 0 && i < 100) {
-                a->array_a[i] = src[i];
+                a->array_a[i] = 0;
             }
         }
     }
@@ -56,14 +56,14 @@ def test_struct_member_variants_v1_to_v7():
     void fun_v2_bad(struct A a_val, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
-            a_val.array_a[i] = src[i];
+            a_val.array_a[i] = 0;
         }
     }
     void fun_v2_good(struct A a_val, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
             if (i >= 0 && i < 100) {
-                a_val.array_a[i] = src[i];
+                a_val.array_a[i] = 0;
             }
         }
     }
@@ -72,14 +72,14 @@ def test_struct_member_variants_v1_to_v7():
     void fun_v3_bad(struct A *a, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
-            a->in.inner_buf[i] = src[i];
+            a->in.inner_buf[i] = 0;
         }
     }
     void fun_v3_good(struct A *a, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
             if (i >= 0 && i < 50) {
-                a->in.inner_buf[i] = src[i];
+                a->in.inner_buf[i] = 0;
             }
         }
     }
@@ -88,14 +88,14 @@ def test_struct_member_variants_v1_to_v7():
     void fun_v4_bad(struct A *a, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
-            a->in_ptr->inner_buf[i] = src[i];
+            a->in_ptr->inner_buf[i] = 0;
         }
     }
     void fun_v4_good(struct A *a, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
             if (i >= 0 && i < 50) {
-                a->in_ptr->inner_buf[i] = src[i];
+                a->in_ptr->inner_buf[i] = 0;
             }
         }
     }
@@ -104,14 +104,14 @@ def test_struct_member_variants_v1_to_v7():
     void fun_v5_bad(struct A arr[10], const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
-            arr[0].array_a[i] = src[i];
+            arr[0].array_a[i] = 0;
         }
     }
     void fun_v5_good(struct A arr[10], const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
             if (i >= 0 && i < 100) {
-                arr[0].array_a[i] = src[i];
+                arr[0].array_a[i] = 0;
             }
         }
     }
@@ -120,14 +120,14 @@ def test_struct_member_variants_v1_to_v7():
     void fun_v6_bad(struct A *parr[10], const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
-            parr[0]->array_a[i] = src[i];
+            parr[0]->array_a[i] = 0;
         }
     }
     void fun_v6_good(struct A *parr[10], const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
             if (i >= 0 && i < 100) {
-                parr[0]->array_a[i] = src[i];
+                parr[0]->array_a[i] = 0;
             }
         }
     }
@@ -136,14 +136,14 @@ def test_struct_member_variants_v1_to_v7():
     void fun_v7_bad(A_t *b, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
-            b->array_a[i] = src[i];
+            b->array_a[i] = 0;
         }
     }
     void fun_v7_good(A_t *b, const char *src, int len) {
         int i;
         for (i = 0; i < len; i++) {
             if (i >= 0 && i < 100) {
-                b->array_a[i] = src[i];
+                b->array_a[i] = 0;
             }
         }
     }
