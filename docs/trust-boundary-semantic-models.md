@@ -91,6 +91,43 @@ A representative platform mapping might look like:
 
 Keep models narrow and auditable. If an API's semantics depend on flags, callback state, complex aliasing, or unsupported protocol state, leave it unmodeled until the analyzer can represent that condition safely.
 
+## Buffer capacity contracts
+
+`CGULL-007` can consume an explicit relationship between a pointer parameter and a
+size parameter. Add `buffer_capacities` to the function's call-effect model:
+
+```toml
+[[semantic_models.effects]]
+function = "process_bytes"
+buffer_capacities = [
+  { buffer = 0, size = 1, unit = "elements" }
+]
+```
+
+Argument positions are zero-based. `unit = "elements"` means parameter 1 is the
+number of elements addressable through parameter 0, so a strict guard such as
+`i < length` can prove `buffer[i]` safe. `unit = "bytes"` is intentionally more
+conservative: a direct symbolic index proof is accepted only when the indexed
+element is one byte wide. Wider pointee types require an explicit element-count
+contract rather than assuming bytes and elements are interchangeable.
+
+C array parameters can express the same relation directly without project
+configuration:
+
+```c
+void process_bytes(size_t length, unsigned char data[static length]) {
+    for (size_t i = 0; i < length; ++i) {
+        data[i] = 0;
+    }
+}
+```
+
+C-GULL does not infer capacity from names such as `data`, `size`, or `length`.
+A pointer plus an unrelated symbolic comparison remains unproven. Simple local
+pointer aliases preserve a capacity fact when all incoming CFG paths agree;
+reassigning either the pointer or its contracted size invalidates the fact.
+`i <= length` is not a valid proof for an exact `length`-element capacity.
+
 ## Pointer interval validators
 
 Add `length = "arg:N"` to a `bounds_checked` validator to establish an accessible
