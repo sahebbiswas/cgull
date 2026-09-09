@@ -396,37 +396,6 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
 
             return has_lower and has_upper
 
-        def is_guarded_on_all_cfg_paths(cfg, target_node_id: int, idx_var: str, arr_size: Optional[int], is_signed: bool) -> bool:
-            if cfg.entry is None or target_node_id not in cfg.nodes:
-                return False
-            visited = set()
-            queue = [(cfg.entry, False)]
-            path_reached = False
-
-            while queue:
-                curr_id, guarded = queue.pop(0)
-                if (curr_id, guarded) in visited:
-                    continue
-                visited.add((curr_id, guarded))
-
-                if curr_id == target_node_id:
-                    path_reached = True
-                    if not guarded:
-                        return False
-                    continue
-
-                node = cfg.nodes[curr_id]
-                new_guarded = guarded
-                if idx_var in node.writes:
-                    new_guarded = False
-                elif is_bounds_check_for_var(node.expr_str, idx_var, arr_size, is_signed):
-                    new_guarded = True
-
-                for succ_id in node.successors:
-                    queue.append((succ_id, new_guarded))
-
-            return path_reached
-
         def cfg_capacity_in_states(cfg, fn) -> Dict[int, Dict[str, int]]:
             """Compute heap capacities reaching each CFG node conservatively.
 
@@ -558,6 +527,8 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 from ...ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr
                 reported_lines = set()
                 capacity_in = cfg_capacity_in_states(cfg, fn)
+                from .array_bounds_guards import access_events, guarded_access
+                event_for_access = access_events(cfg)
 
                 class ArrayCheckVisitor(c_ast.NodeVisitor):
                     def visit_ArrayRef(v_self, node):
@@ -567,8 +538,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                         sub_ids = _extract_identifiers_from_ast(node.subscript, ignore_callees=True)
 
                         # Find corresponding CFG node
-                        cfg_nodes_for_line = [nid for nid, cfg_n in cfg.nodes.items() if cfg_n.line_number == line_no]
-                        target_node_id = cfg_nodes_for_line[0] if cfg_nodes_for_line else None
+                        target_node_id = event_for_access.get(id(node))
                         cfg_capacity = capacity_in.get(target_node_id, {}).get(arr_name) if target_node_id is not None else None
                         arr_size = cfg_capacity if cfg_capacity is not None else get_array_declared_size(
                             arr_name, fn, line_no=line_no, node=node, allow_heap=False,
@@ -602,15 +572,9 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
 
                             is_signed = is_index_var_signed(idx_var, fn)
 
-                            if target_node_id is not None:
-                                guarded = is_guarded_on_all_cfg_paths(cfg, target_node_id, idx_var, arr_size, is_signed)
-                            else:
-                                guarded = False
-                                for nid, cfg_node in cfg.nodes.items():
-                                    if cfg_node.line_number <= line_no:
-                                        if is_bounds_check_for_var(cfg_node.expr_str, idx_var, arr_size, is_signed):
-                                            guarded = True
-                                            break
+                            guarded = guarded_access(
+                                cfg, target_node_id, node, idx_var, arr_size, is_signed,
+                            )
 
                             if not guarded:
                                 snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{arr_name}[{sub_expr}]"

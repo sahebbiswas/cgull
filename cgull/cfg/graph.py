@@ -15,6 +15,7 @@ class StructuredGraph:
     def __init__(self) -> None:
         self.nodes: Dict[int, CFGEvent] = {}
         self.edge_facts: Dict[Tuple[int, int], Tuple[Set[str], Set[str]]] = {}
+        self.edge_truth: Dict[Tuple[int, int], Optional[bool]] = {}
         self.entry: Optional[int] = None
         self._next_id = 0
         self.blocks: Dict[int, BasicBlock] = {}
@@ -70,12 +71,19 @@ class StructuredGraph:
         *,
         add: Iterable[str] = (),
         remove: Iterable[str] = (),
+        truth: Optional[bool] = None,
     ) -> None:
         if dst is None:
             return
         if dst not in self.nodes[src].successors:
             self.nodes[src].successors.append(dst)
-        self.edge_facts[(src, dst)] = (set(add), set(remove))
+        edge = (src, dst)
+        # Coalesced true/false edges do not establish either predicate.
+        if edge in self.edge_truth and self.edge_truth[edge] != truth:
+            self.edge_truth[edge] = None
+        else:
+            self.edge_truth[edge] = truth
+        self.edge_facts[edge] = (set(add), set(remove))
 
     def build_basic_blocks(self) -> Dict[int, BasicBlock]:
         if not self.nodes:

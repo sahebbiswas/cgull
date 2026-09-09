@@ -76,3 +76,19 @@ void test_tn_malloc_checked_index(int idx) {
         data[idx] = 'X';
     }
 }
+
+/* Short-circuit guards apply before the right operand and in the body. */
+void test_tn_short_circuit_while(unsigned idx) {
+    int data[16] = {0};
+    while (idx < 16 && data[idx]) {
+        data[idx] = 0;
+        ++idx;
+    }
+}
+
+void test_tn_short_circuit_signed(int idx) {
+    int data[16] = {0};
+    if (idx >= 0 && idx < 16 && data[idx]) {
+        data[idx] = 0;
+    }
+}

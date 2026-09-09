@@ -106,3 +106,17 @@ void test_tp_malloc_incorrect_guard(int idx) {
         data[idx] = 'X'; // expect: CGULL-007
     }
 }
+
+void test_tp_short_circuit_reversed(unsigned idx) {
+    int data[16] = {0};
+    if (data[idx] && idx < 16) { // expect: CGULL-007
+        data[idx] = 0;
+    }
+}
+
+void test_tp_short_circuit_insufficient(unsigned idx) {
+    int data[16] = {0};
+    if (idx < 16 + 1 && data[idx]) { // expect: CGULL-007
+        data[idx] = 0; // expect: CGULL-007
+    }
+}
