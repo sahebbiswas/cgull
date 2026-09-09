@@ -44,7 +44,10 @@ def test_narrow_operands_are_promoted_before_result_conversion(tmp_path):
         "    unsigned char result = a + b;\n"
         "}\n",
     )
-    assert _cwes(issues) == [(4, "CWE-197")]
+    # Both operands promote to int before addition. CGULL-049 intentionally
+    # gives signedness-change classification precedence over width narrowing,
+    # so the subsequent int -> unsigned char conversion is CWE-195.
+    assert _cwes(issues) == [(4, "CWE-195")]
 
 
 def test_guarded_arithmetic_range_suppresses_signed_to_unsigned_finding(tmp_path):
