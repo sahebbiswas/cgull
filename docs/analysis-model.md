@@ -91,6 +91,8 @@ cgull scan . --compile-commands build/compile_commands.json
 
 C-GULL has a shared interprocedural analysis layer for facts that must cross function boundaries, including call effects, ownership, provenance, and other rule-specific queries. Analysis sessions cache shared translation-unit facts so multiple rules can reuse the same work.
 
+Multi-file AST/hybrid scans also import compatible direct-call summaries across TUs for memory, ownership, value, and trust analysis. See [project-level direct-call summaries](analysis/project-summaries.md) for linkage, configuration isolation, recursive limits, and unsupported cases.
+
 For implementation details and extension contracts, see:
 
 - [Interprocedural analysis](interprocedural-analysis.md)

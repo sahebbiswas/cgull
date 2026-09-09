@@ -189,6 +189,9 @@ def analyze_value_summaries_detailed(
     if not fn_map or not getattr(ast_ctx, "has_pycparser", False) or ast_ctx.pycparser_ast is None:
         return ValueSummaryAnalysisResult({name: ValueFunctionSummary(is_unknown=True) for name in sorted(fn_map)})
 
+    from ..summary_imports import imported_summaries
+
+    external = imported_summaries(ast_ctx, "value")
     graph = call_graph or build_translation_unit_call_graph(ast_ctx)
     counts = {name: len([p for p in fn.parameters if p.name]) for name, fn in fn_map.items()}
     lattice = _ValueSummaryLattice(counts)
@@ -201,11 +204,11 @@ def analyze_value_summaries_detailed(
         if funcdef is None:
             return lattice.unknown(name, facts[name])
         params = tuple(p.name for p in fn.parameters if p.name)
-        return _summarize_function(funcdef, params, facts, semantic_models, config.max_provenance)
+        return _summarize_function(funcdef, params, {**external, **facts}, semantic_models, config.max_provenance)
 
     result = engine.run(transfer)
     return ValueSummaryAnalysisResult(
-        summaries=dict(sorted(result.facts.items())),
+        summaries=dict(sorted({**external, **result.facts}.items())),
         diagnostics=result.diagnostics,
         iterations_by_scc=result.iterations_by_scc,
     )

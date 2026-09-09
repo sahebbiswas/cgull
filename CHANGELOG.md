@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Multi-file AST/hybrid scans share compatible direct-call memory, ownership, value, and security summaries across translation units, with isolated configuration profiles, deterministic recursive convergence, and conservative linkage/conflict handling (#365).
 - CGULL-007 consumes explicit buffer-capacity contracts from semantic call-effect models and C `T buffer[static length]` parameters, propagating proven capacities through simple pointer aliases while conservatively distinguishing element and byte counts (#404).
 
 ### Fixed

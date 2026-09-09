@@ -429,7 +429,7 @@ class CGullScanner(_BaseCGullScanner):
                 file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(
                     file_path,
                     content,
-                    config=self._config_for_file(config, file_path),
+                    config=self._prepared_config_for_file(config, file_path),
                     profiles=profiles,
                     quiet=quiet,
                     progress_active=progress_active,
@@ -501,7 +501,7 @@ class CGullScanner(_BaseCGullScanner):
                 pool.submit(
                     _scan_file_worker,
                     file_path,
-                    self._config_for_file(config, file_path),
+                    self._prepared_config_for_file(config, file_path),
                     profiles,
                     quiet,
                     progress_active,

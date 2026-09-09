@@ -2,6 +2,9 @@
 
 ## Status and motivation
 
+This is the historical first-milestone design. For the implemented cross-TU
+extension in #365, see [project-level direct-call summaries](analysis/project-summaries.md).
+
 This document scopes a milestone, not a single pull request. C-GULL's CFG is
 flow-sensitive within a function and already computes a small fixed-point set
 of intra-file function summaries (`freed_params`, return nullness, and whether

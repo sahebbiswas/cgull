@@ -179,6 +179,8 @@ class ScanConfig:
     include_roots: List[str] = field(default_factory=list)
     dedup_headers: bool = True
     mode: ScanMode = ScanMode.FILE
+    # Internal, per-file parsed inputs passed to workers; not a user option.
+    prepared_units: Dict[Any, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def create(

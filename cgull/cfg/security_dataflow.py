@@ -231,9 +231,10 @@ def analyze_security_summaries(
         name: find_function_def(ast_ctx.pycparser_ast, name) for name in fn_map
     }
     global_names = frozenset(getattr(ast_ctx, "global_variables", {}).keys())
-    summaries: Dict[str, SecurityFunctionSummary] = {
-        name: SecurityFunctionSummary() for name in fn_map
-    }
+    from ..summary_imports import imported_summaries
+
+    summaries: Dict[str, SecurityFunctionSummary] = dict(imported_summaries(ast_ctx, "security"))
+    summaries.update({name: SecurityFunctionSummary() for name in fn_map})
     max_iters = max(1, len(fn_map) * 4 + 8)
     for _ in range(max_iters):
         changed = False

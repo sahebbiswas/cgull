@@ -475,6 +475,9 @@ def analyze_ownership_summaries_detailed(
     if not fn_map or not getattr(ast_ctx, "has_pycparser", False) or ast_ctx.pycparser_ast is None:
         return OwnershipSummaryAnalysisResult({})
 
+    from ..summary_imports import imported_summaries
+
+    external = imported_summaries(ast_ctx, "ownership")
     registry = call_effects or BUILTIN_CALL_EFFECTS
     function_summaries = analyze_function_summaries(ast_ctx, call_effects=registry)
     graph = call_graph or build_translation_unit_call_graph(ast_ctx)
@@ -489,7 +492,7 @@ def analyze_ownership_summaries_detailed(
         return _analyze_one_function(
             ast_ctx,
             fn_map[name],
-            _current_summaries(facts),
+            {**external, **_current_summaries(facts)},
             function_summaries,
             registry,
         )
@@ -500,7 +503,7 @@ def analyze_ownership_summaries_detailed(
         for name in sorted(fn_map)
     }
     return OwnershipSummaryAnalysisResult(
-        summaries=summaries,
+        summaries={**external, **summaries},
         diagnostics=result.diagnostics,
         iterations_by_scc=result.iterations_by_scc,
     )
