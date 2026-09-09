@@ -215,6 +215,7 @@ def build_cfg(
                 build_stmt(
                     stmt.iftrue, next_entry, break_target, continue_target
                 ),
+                truth=True,
                 add=true_add,
                 remove={*true_remove},
             )
@@ -227,6 +228,7 @@ def build_cfg(
                         break_target,
                         continue_target,
                     ),
+                    truth=False,
                     add=false_add,
                     remove={*false_remove},
                 )
@@ -234,6 +236,7 @@ def build_cfg(
                 cfg.connect(
                     cond,
                     next_entry,
+                    truth=False,
                     add=false_add,
                     remove={*false_remove},
                 )
@@ -252,9 +255,9 @@ def build_cfg(
                 body = build_stmt(stmt.stmt, cond, next_entry, cond)
                 true_add, true_remove = _simple_null_facts(stmt.cond)
                 false_add, false_remove = true_remove, true_add
-                cfg.connect(cond, body, add=true_add, remove=true_remove)
+                cfg.connect(cond, body, add=true_add, remove=true_remove, truth=True)
                 cfg.connect(
-                    cond, next_entry, add=false_add, remove=false_remove
+                    cond, next_entry, add=false_add, remove=false_remove, truth=False
                 )
                 return cond
             cond = cfg.new_node(
@@ -268,8 +271,8 @@ def build_cfg(
             body = build_stmt(stmt.stmt, cond, next_entry, cond)
             true_add, true_remove = _simple_null_facts(stmt.cond)
             false_add, false_remove = true_remove, true_add
-            cfg.connect(cond, body, add=true_add, remove=true_remove)
-            cfg.connect(cond, next_entry, add=false_add, remove=false_remove)
+            cfg.connect(cond, body, add=true_add, remove=true_remove, truth=True)
+            cfg.connect(cond, next_entry, add=false_add, remove=false_remove, truth=False)
             return body
 
         if kind == "For":
@@ -293,8 +296,8 @@ def build_cfg(
             )
             true_add, true_remove = _simple_null_facts(cond_expr)
             false_add, false_remove = true_remove, true_add
-            cfg.connect(cond, body, add=true_add, remove=true_remove)
-            cfg.connect(cond, next_entry, add=false_add, remove=false_remove)
+            cfg.connect(cond, body, add=true_add, remove=true_remove, truth=True)
+            cfg.connect(cond, next_entry, add=false_add, remove=false_remove, truth=False)
             if stmt.init is not None:
                 init_node = make_event(stmt.init)
                 cfg.connect(init_node, cond)
