@@ -11,7 +11,7 @@ from ...ast_analyzer import (
     get_integer_type_byte_size,
     is_integer_narrowing_conversion,
 )
-from ...ast_analyzer.integer_types import _resolved_scalar_type
+from ...ast_analyzer.integer_types import _resolved_scalar_type, infer_integer_expression_type
 from ...cfg import _PRELUDE_LINE_COUNT, analyze_integer_ranges, find_function_def, integer_type_range
 from ...models import AnalysisEngine, Confidence, FixType, Issue, RuleCategory, Severity
 
@@ -38,19 +38,7 @@ class IntegerNarrowingCastRule(BaseRule):
 
     @staticmethod
     def _source_type(ast_ctx: CASTContext, node, fn) -> Optional[str]:
-        inferred = ast_ctx.infer_expr_type(node, fn)
-        if inferred:
-            return inferred
-        if type(node).__name__ == "Constant":
-            if node.type == "char":
-                return "int"
-            return node.type if get_integer_type_byte_size(node.type, ast_ctx) is not None else None
-        if type(node).__name__ == "UnaryOp" and node.op in {"+", "-", "~"}:
-            operand = IntegerNarrowingCastRule._source_type(ast_ctx, node.expr, fn)
-            width = get_integer_type_byte_size(operand, ast_ctx) if operand else None
-            int_width = get_integer_type_byte_size("int", ast_ctx)
-            return "int" if width is not None and width < int_width else operand
-        return None
+        return infer_integer_expression_type(ast_ctx, node, fn)
 
     @staticmethod
     def _destination_type_for_decl(ast_ctx: CASTContext, node, fn) -> Optional[str]:
