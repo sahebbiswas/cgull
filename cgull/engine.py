@@ -352,11 +352,27 @@ class CGullScanner:
             ParserStatus.PARSE_FAILED.value: 0,
         }
 
-        progress_active = (progress_callback is not None) and (not quiet)
-        if resolved_jobs > 1:
-            results = self._scan_files_parallel(files_to_scan, resolved_jobs, config, progress_callback, quiet=quiet, progress_active=progress_active, profiles=profiles)
-        else:
-            results = self._scan_files_sequential(files_to_scan, config, progress_callback, quiet=quiet, progress_active=progress_active, profiles=profiles)
+        from .project_analysis import prepare_project
+
+        self._project_units = {}
+        self.project_diagnostics = ()
+        try:
+            if len(files_to_scan) > 1 and config.engine_mode != AnalysisEngine.REGEX:
+                self._project_units, self.project_diagnostics = prepare_project(
+                    files_to_scan,
+                    lambda path: self._config_for_file(config, path),
+                    profiles,
+                )
+                for diagnostic in self.project_diagnostics:
+                    logger.log(logging.INFO if quiet else logging.WARNING, "%s", diagnostic)
+
+            progress_active = (progress_callback is not None) and (not quiet)
+            if resolved_jobs > 1:
+                results = self._scan_files_parallel(files_to_scan, resolved_jobs, config, progress_callback, quiet=quiet, progress_active=progress_active, profiles=profiles)
+            else:
+                results = self._scan_files_sequential(files_to_scan, config, progress_callback, quiet=quiet, progress_active=progress_active, profiles=profiles)
+        finally:
+            self._project_units = {}
 
         analyzed_count = 0
         failed_count = 0
@@ -515,6 +531,19 @@ class CGullScanner:
             rules_applied=len(self.rules),
         )
 
+    def _config_for_file(self, config, file_path):
+        return config
+
+    def _prepared_config_for_file(self, config, file_path):
+        import copy
+
+        config = self._config_for_file(config, file_path)
+        prepared = getattr(self, "_project_units", {}).get(file_path)
+        if prepared:
+            config = copy.copy(config)
+            config.prepared_units = prepared
+        return config
+
     def _scan_files_sequential(
         self,
         files_to_scan: List[str],
@@ -530,7 +559,7 @@ class CGullScanner:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(file_path, content, config=config, profiles=profiles, quiet=quiet, progress_active=progress_active)
+                file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(file_path, content, config=self._prepared_config_for_file(config, file_path), profiles=profiles, quiet=quiet, progress_active=progress_active)
                 results.append((file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err))
             except Exception as e:
                 scan_err = ScanError(
@@ -572,7 +601,7 @@ class CGullScanner:
         futures = {}
         try:
             futures = {
-                pool.submit(_scan_file_worker, file_path, config, profiles, quiet, progress_active): file_path
+                pool.submit(_scan_file_worker, file_path, self._prepared_config_for_file(config, file_path), profiles, quiet, progress_active): file_path
                 for file_path in files_to_scan
             }
             for future in as_completed(futures):
@@ -829,7 +858,12 @@ def _scan_file_content(
     source_dir = os.path.dirname(os.path.abspath(file_path)) if file_path and file_path != "source.c" else os.getcwd()
     resolver = IncludeResolver(include_roots=inc_roots, base_dir=source_dir)
     expander = TUIncludeExpander(resolver=resolver, defined_syms=config.defined_syms if config else None)
-    tu = expander.expand(content, source_path=file_path)
+    from .project_analysis import profile_key
+
+    prepared = config.prepared_units.get(profile_key(config.defined_syms)) if config else None
+    if prepared is not None and prepared.source != content:
+        prepared = None
+    tu = prepared.expanded if prepared else expander.expand(content, source_path=file_path)
     content = tu.expanded_text
     line_map = tu.line_map
 
@@ -910,7 +944,7 @@ def _scan_file_content(
             parse_tier = ParseTier.REGEX_FALLBACK.value
             confidence_val = Confidence.LIMITED.value
         else:
-            ast_ctx = ast_parser.parse(content, defined_syms=config.defined_syms if config else None)
+            ast_ctx = prepared.context if prepared else ast_parser.parse(content, defined_syms=config.defined_syms if config else None)
             clean_lines = ast_ctx.clean_source.splitlines()
             clean_code = ast_ctx.clean_source
             parser_status = ast_ctx.parser_status
@@ -1051,6 +1085,8 @@ def _scan_file_content_profiles(
             dedup_headers=base_dedup_headers,
             mode=base_mode,
         )
+
+        variant_config.prepared_units = config.prepared_units if config else {}
 
         v_issues, v_loc, v_dur, v_parser_status, v_parse_tier, v_status, v_confidence, v_err = _scan_file_content(
             content=content,

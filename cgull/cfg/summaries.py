@@ -473,6 +473,9 @@ def analyze_function_summaries_detailed(
         realloc_funcs=realloc_funcs,
         call_effects=call_effects,
     )
+    from ..summary_imports import imported_summaries
+
+    builtins.update(imported_summaries(ast_ctx, "function"))
     functions = [fn for fn in getattr(ast_ctx, "functions", ()) if getattr(fn, "name", None)]
     fn_map = {fn.name: fn for fn in functions}
     if not fn_map:
