@@ -1,6 +1,9 @@
 """Focused regression tests for issue #405 / CGULL-007."""
 
+from pycparser import c_ast
+
 from cgull.ast_analyzer import CASTParser
+from cgull.cfg.affine_relations import AffineFacts
 from cgull.rules.types_and_arrays import ArrayIndexOutOfBoundsRule
 
 
@@ -138,3 +141,12 @@ def test_signed_index_still_requires_lower_bound_proof():
     }
     """
     assert _cgull_007(code)
+
+
+def test_assignment_from_self_does_not_record_self_relation():
+    facts = AffineFacts().assign("i", c_ast.Constant("int", "0"))
+    rhs = c_ast.BinaryOp("+", c_ast.ID("i"), c_ast.Constant("int", "1"))
+
+    updated = facts.assign("i", rhs)
+
+    assert all(first != second for first, second, _ in updated.relations)
