@@ -12,7 +12,7 @@ from pycparser import c_ast
 
 def event_expression(event):
     node = getattr(event, "_ast_node", None)
-    if isinstance(node, (c_ast.If, c_ast.While, c_ast.DoWhile, c_ast.For)):
+    if isinstance(node, (c_ast.If, c_ast.While, c_ast.DoWhile, c_ast.For, c_ast.Switch)):
         return node.cond
     return node
 

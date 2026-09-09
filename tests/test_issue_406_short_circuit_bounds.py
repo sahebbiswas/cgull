@@ -86,3 +86,41 @@ def test_loop_backedge_cannot_reuse_stale_guard():
     issues = scan("data[A] && A < MAX_LENGTH", body="++A;")
     assert {i.line_number for i in issues} == {4}
 
+
+@pytest.mark.parametrize("effect", ["log_message();", "++A;"])
+def test_switch_other_case_effects_do_not_erase_guard(effect):
+    body = f"""switch (enabled) {{
+        case 0: data[A] = 0; break;
+        default: {effect} break;
+    }}"""
+    assert scan("A < MAX_LENGTH", kind="if", body=body) == []
+
+
+@pytest.mark.parametrize("effect", ["log_message();", "++A;"])
+def test_switch_later_effects_do_not_erase_guard(effect):
+    body = f"""switch (data[A] != 0) {{
+        case 0: data[A] = 0; {effect} break;
+        default: break;
+    }}"""
+    assert scan("A < MAX_LENGTH", kind="if", body=body) == []
+
+
+@pytest.mark.parametrize("selector", ["++A", "mutate(&A)"])
+def test_switch_selector_effects_still_invalidate_guard(selector):
+    body = f"""switch ({selector}) {{
+        case 0: data[A] = 0; break;
+        default: break;
+    }}"""
+    issues = scan("A < MAX_LENGTH", kind="if", body=body)
+    assert len(issues) == 1
+    assert issues[0].line_number == 6
+
+
+def test_switch_case_mutation_still_invalidates_guard():
+    body = """switch (enabled) {
+        case 0: ++A;
+        default: data[A] = 0; break;
+    }"""
+    issues = scan("A < MAX_LENGTH", kind="if", body=body)
+    assert len(issues) == 1
+    assert issues[0].line_number == 7
