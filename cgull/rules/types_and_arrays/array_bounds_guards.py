@@ -6,8 +6,12 @@ by intersection; mutations and calls discard proofs before later operands.
 
 from collections import deque
 import re
+from typing import Optional, Union
 
 from pycparser import c_ast
+
+
+Capacity = Optional[Union[int, str]]
 
 
 def event_expression(event):
@@ -65,14 +69,25 @@ def _effects(node, index):
     return any(_effects(child, index) for _, child in node.children())
 
 
-def guarded_access(cfg, target_id, access, index, capacity, signed):
-    """Prove both bounds at this exact access on every reachable CFG path."""
+def _writes_symbol(event, symbol: Optional[str]) -> bool:
+    return bool(symbol and symbol in getattr(event, "writes", set()))
+
+
+def guarded_access(cfg, target_id, access, index, capacity: Capacity, signed):
+    """Prove both bounds at this exact access on every reachable CFG path.
+
+    ``capacity`` is either a concrete element count or the name of a scalar
+    whose value is explicitly contracted to be the indexed object's element
+    capacity. Unknown pointer extents are represented by ``None`` and do not
+    make arbitrary symbolic comparisons into bounds proofs.
+    """
     if cfg.entry is None or target_id is None:
         return False
     # A bound on A alone does not prove A + offset or a cast is in range.
     if not isinstance(access.subscript, c_ast.ID) or access.subscript.name != index:
         return False
     empty = (not signed, False)
+    capacity_symbol = capacity if isinstance(capacity, str) else None
 
     def join(a, b):
         return (a[0] and b[0], a[1] and b[1])
@@ -103,10 +118,12 @@ def guarded_access(cfg, target_id, access, index, capacity, signed):
         lower, upper = facts
         limit = _integer(right)
         if limit is None:
-            # An external pointer's unknown extent retains the historical
-            # explicit symbolic-check policy. This cannot prove a check
-            # against a known array/heap capacity.
-            if capacity is None and isinstance(right, c_ast.ID) and op in {"<", "<="}:
+            if (
+                capacity_symbol is not None
+                and isinstance(right, c_ast.ID)
+                and right.name == capacity_symbol
+                and op == "<"
+            ):
                 return lower, True
             return facts
         if not signed and limit < 0:
@@ -116,9 +133,9 @@ def guarded_access(cfg, target_id, access, index, capacity, signed):
         if op in {">=", ">", "=="}:
             lower |= limit + (op == ">") >= 0
         if op in {"<", "<=", "=="}:
-            # Preserve explicit-check recognition for pointers whose extent
-            # is unknown; known extents always require a compatible limit.
-            upper |= capacity is None or limit + (op != "<") <= capacity
+            # Concrete capacities require a compatible numeric limit. Unknown
+            # capacities no longer accept arbitrary symbolic upper bounds.
+            upper |= isinstance(capacity, int) and limit + (op != "<") <= capacity
         return lower, upper
 
     def at_access(expr, facts):
@@ -179,6 +196,12 @@ def guarded_access(cfg, target_id, access, index, capacity, signed):
                     join(refine(expr, True, facts), refine(expr, False, facts)))
                 queue.append((successor, out))
         else:
-            out = empty if index in event.writes or _effects(expr, index) else facts
+            if index in event.writes or _effects(expr, index):
+                out = empty
+            elif _writes_symbol(event, capacity_symbol):
+                # Reassigning the contracted length invalidates the relation.
+                out = (facts[0], False)
+            else:
+                out = facts
             queue.extend((successor, out) for successor in event.successors)
     return reached
