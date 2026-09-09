@@ -7,13 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.7] - 2026-09-09
+
 ### Added
-- Multi-file AST/hybrid scans share compatible direct-call memory, ownership, value, and security summaries across translation units, with isolated configuration profiles, deterministic recursive convergence, and conservative linkage/conflict handling (#365).
-- CGULL-007 consumes explicit buffer-capacity contracts from semantic call-effect models and C `T buffer[static length]` parameters, propagating proven capacities through simple pointer aliases while conservatively distinguishing element and byte counts (#404).
+- Make `pycparser` and `pcpp` core runtime dependencies so normal installs retain macro-expanded AST coverage, and surface surviving unexpanded `offsetof(...)` calls as structured coverage-degradation errors (#401, #408).
+- Add explicit semantic-model and C `T buffer[static length]` capacity contracts for CGULL-007, including conservative alias propagation and element/byte unit handling (#404, #413).
+- Add conservative affine relation facts so CGULL-007 can prove bounds for related loop induction variables without assuming independently updated variables remain equivalent (#405, #414).
+- Share compatible direct-call memory, ownership, value, and security summaries across scanned translation units with deterministic convergence and conservative linkage/configuration isolation (#365, #415).
+- Infer promoted integer expression types for CGULL-049 conversion sinks, covering arithmetic, shifts, casts, comparisons, and conditional expressions using C integer promotions and usual arithmetic conversions (#390, #417).
 
 ### Fixed
-- CGULL-007 respects ordered short-circuit bounds guards at condition and body accesses, tracks true/false CFG edges, and rejects insufficient limits or invalidated index proofs (#406).
-- CGULL-042 suppresses proven-pure declaration initializers overwritten before use, while retaining side-effecting initializers, later dead assignments, and scope-exit findings (#407). Lexical fallback suppression is limited to unambiguous straight-line overwrites.
+- Preserve loop-carried reads in CGULL-042 lexical fallback analysis so assignments feeding `while`/`for` loop conditions are not incorrectly reported as dead stores (#402, #409).
+- Route pcpp `#error`/`#warning` diagnostics through C-GULL's structured diagnostics instead of allowing raw preprocessor output to corrupt CLI/structured output (#403, #410).
+- Suppress proven-pure defensive declaration initializers in CGULL-042 only when every path overwrites them before use, while preserving side effects and genuine later dead stores (#407, #411).
+- Respect ordered short-circuit bounds guards in CGULL-007, track CFG edge polarity, and invalidate stale index proofs after relevant mutations or calls (#406, #412).
+- Correct Juliet attribution for unprefixed `badSink` helpers and split-flow oracle discovery without relaxing exact-CWE matching or double-counting good helpers (#388, #416).
 
 ## [0.11.0] - 2026-09-08
 
