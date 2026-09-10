@@ -8,15 +8,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from ..models import ConfigProfile
 from .configuration_space import WitnessStatus, derive_branch_witnesses
 from .directives import parse_conditional_directives
-from .expressions import (
-    Defined,
-    Expression,
-    Predicate,
-    Variable,
-    conjunction,
-    expression_atoms,
-    negate,
-)
+from .expressions import Defined, Expression, Predicate, Variable, expression_atoms
 from .robdd import AnalysisLimitExceeded, BDD, ResourceLimits
 
 
@@ -42,6 +34,14 @@ class ConfigReductionResult:
     stats: ConfigReductionStats
 
 
+@dataclass(frozen=True)
+class _BranchModel:
+    source_index: int
+    offset: int
+    bdd: BDD
+    root: int
+
+
 def _flags_key(profile: ConfigProfile) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((str(key), repr(value)) for key, value in profile.flags.items()))
 
@@ -63,34 +63,64 @@ def _known_macro_value(flags: Mapping[str, Any], name: str) -> bool | None:
     return None
 
 
-def _profile_constraint(expression: Expression, flags: Mapping[str, Any]) -> Expression:
-    terms: list[Expression] = []
-    for atom in expression_atoms(expression):
-        known: bool | None
-        if isinstance(atom, Defined):
-            known = atom.name in flags and flags[atom.name] is not False
-        elif isinstance(atom, Variable):
-            known = _known_macro_value(flags, atom.name)
-        elif isinstance(atom, Predicate):
-            known = None
-        else:
-            known = None
-        if known is not None:
-            terms.append(atom if known else negate(atom))
-    return conjunction(*terms)
-
-
-def _branch_possible(
-    expression: Expression,
-    profile: ConfigProfile,
-    limits: ResourceLimits | None,
-) -> bool | None:
-    constrained = conjunction(expression, _profile_constraint(expression, profile.flags))
-    try:
-        bdd = BDD(expression_atoms(constrained), limits=limits)
-        return bdd.build(constrained) != 0
-    except AnalysisLimitExceeded:
+def _atom_value(atom, flags: Mapping[str, Any]) -> bool | None:
+    if isinstance(atom, Defined):
+        return atom.name in flags and flags[atom.name] is not False
+    if isinstance(atom, Variable):
+        return _known_macro_value(flags, atom.name)
+    if isinstance(atom, Predicate):
+        # Opaque value-bearing conditions remain free symbolic predicates.
         return None
+    return None
+
+
+def _branch_possible(model: _BranchModel, profile: ConfigProfile) -> bool:
+    """Evaluate a profile as a partial assignment over one compiled BDD.
+
+    Known macro atoms follow one edge. Opaque/unknown atoms existentially follow
+    either edge, answering whether the modeled branch can be active without
+    inventing a concrete integer value for an opaque predicate.
+    """
+
+    memo: dict[int, bool] = {0: False, 1: True}
+
+    def possible(node: int) -> bool:
+        cached = memo.get(node)
+        if cached is not None:
+            return cached
+        item = model.bdd.nodes[node]
+        assert item is not None
+        variable, low, high = item
+        value = _atom_value(model.bdd.atoms[variable], profile.flags)
+        if value is None:
+            result = possible(low) or possible(high)
+        else:
+            result = possible(high if value else low)
+        memo[node] = result
+        return result
+
+    return possible(model.root)
+
+
+def _duplicate_only_result(
+    ordered_profiles: Sequence[ConfigProfile],
+) -> ConfigReductionResult:
+    """Conservatively collapse only identical effective flag maps."""
+
+    seen_flags: set[tuple[tuple[str, str], ...]] = set()
+    retained: list[ConfigProfile] = []
+    for profile in ordered_profiles:
+        key = _flags_key(profile)
+        if key in seen_flags:
+            continue
+        seen_flags.add(key)
+        retained.append(profile)
+    candidates = len(ordered_profiles)
+    removed = candidates - len(retained)
+    return ConfigReductionResult(
+        tuple(retained),
+        ConfigReductionStats(candidates, len(retained), removed, 0),
+    )
 
 
 def reduce_generated_profiles(
@@ -104,9 +134,11 @@ def reduce_generated_profiles(
     Profiles are sorted by effective flag-map and name before reduction, making
     representative choice independent of input ordering. A profile signature is
     the set of reachable modeled branches across all supplied source strings.
-    Opaque predicates remain free Boolean atoms. If malformed structure or a
-    resource limit prevents a safe equivalence proof, that profile is retained
-    conservatively instead of being merged.
+    Each effective branch condition is compiled to a BDD once and reused for all
+    profiles. Opaque predicates remain free Boolean atoms. If malformed structure
+    or a resource limit prevents a safe equivalence proof, reduction falls back
+    to exact flag-map deduplication rather than dropping a potentially distinct
+    generated variant.
 
     This helper is intentionally for generated/derived profiles. Explicit user
     profiles should bypass it so user-requested scans remain authoritative.
@@ -128,60 +160,50 @@ def reduce_generated_profiles(
             if witness.status in (WitnessStatus.UNSUPPORTED, WitnessStatus.LIMIT_EXCEEDED):
                 unsafe = True
                 continue
-            if witness.status is WitnessStatus.SATISFIABLE and witness.effective_condition is not None:
-                branch_expressions.append((
-                    source_index,
-                    witness.branch.directive.source_range.start.offset,
-                    witness.effective_condition,
-                ))
+            if (
+                witness.status is WitnessStatus.SATISFIABLE
+                and witness.effective_condition is not None
+            ):
+                branch_expressions.append(
+                    (
+                        source_index,
+                        witness.branch.directive.source_range.start.offset,
+                        witness.effective_condition,
+                    )
+                )
 
     if unsafe or not branch_expressions:
-        # Exact duplicate effective flag maps are safe even when symbolic branch
-        # reasoning cannot prove broader equivalence. Profile names are merely
-        # presentation labels and therefore do not distinguish scan behavior.
-        seen_flags: set[tuple[tuple[str, str], ...]] = set()
-        retained: list[ConfigProfile] = []
-        for profile in ordered_profiles:
-            key = _flags_key(profile)
-            if key in seen_flags:
-                continue
-            seen_flags.add(key)
-            retained.append(profile)
-        removed = candidates - len(retained)
-        return ConfigReductionResult(
-            tuple(retained),
-            ConfigReductionStats(candidates, len(retained), removed, 0),
-        )
+        return _duplicate_only_result(ordered_profiles)
+
+    models: list[_BranchModel] = []
+    try:
+        for source_index, offset, expression in branch_expressions:
+            bdd = BDD(expression_atoms(expression), limits=limits)
+            models.append(_BranchModel(source_index, offset, bdd, bdd.build(expression)))
+    except AnalysisLimitExceeded:
+        return _duplicate_only_result(ordered_profiles)
 
     signatures: dict[tuple[tuple[int, int], ...], ConfigProfile] = {}
-    conservative: list[ConfigProfile] = []
     empty_profiles: list[ConfigProfile] = []
 
     for profile in ordered_profiles:
-        active: list[tuple[int, int]] = []
-        indeterminate = False
-        for source_index, offset, expression in branch_expressions:
-            possible = _branch_possible(expression, profile, limits)
-            if possible is None:
-                indeterminate = True
-                break
-            if possible:
-                active.append((source_index, offset))
-        if indeterminate:
-            conservative.append(profile)
-            continue
-        signature = tuple(active)
-        if not signature:
+        active = tuple(
+            (model.source_index, model.offset)
+            for model in models
+            if _branch_possible(model, profile)
+        )
+        if not active:
             empty_profiles.append(profile)
             continue
-        signatures.setdefault(signature, profile)
+        signatures.setdefault(active, profile)
 
-    retained = list(signatures.values()) + conservative
+    retained = list(signatures.values())
     unreachable_removed = 0
     if empty_profiles:
         if retained:
             unreachable_removed = len(empty_profiles)
         else:
+            # Keep one deterministic profile so unconditional source still scans.
             retained.append(empty_profiles[0])
             unreachable_removed = len(empty_profiles) - 1
 
