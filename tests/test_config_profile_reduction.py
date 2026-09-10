@@ -75,17 +75,35 @@ int b_only;
 
     result = reduce_generated_profiles([source], candidates)
 
-    # The no-flag profile reaches no modeled branch and is unnecessary once
-    # other variants scan the unconditional regions. The three reachable
-    # conditional behaviors remain distinct and covered.
+    # All four candidates have distinct modeled behavior here: the no-flag
+    # configuration is the stable representative of the empty-signature class.
     assert result.stats.candidate_count == 4
-    assert result.stats.retained_count == 3
-    assert result.stats.unreachable_removed == 1
+    assert result.stats.retained_count == 4
+    assert result.stats.removed_count == 0
     assert {frozenset(p.flags) for p in result.profiles} == {
+        frozenset(),
         frozenset({"A"}),
         frozenset({"B"}),
         frozenset({"A", "B"}),
     }
+
+
+def test_empty_branch_signature_is_deduplicated_not_discarded():
+    source = "#if defined(A) && defined(B)\nint both;\n#endif\n"
+    candidates = [
+        _profile("none"),
+        _profile("a", "A"),
+        _profile("b", "B"),
+        _profile("ab", "A", "B"),
+    ]
+
+    result = reduce_generated_profiles([source], candidates)
+
+    assert result.stats.candidate_count == 4
+    assert result.stats.retained_count == 2
+    assert result.stats.equivalent_removed == 2
+    assert result.stats.unreachable_removed == 0
+    assert [dict(profile.flags) for profile in result.profiles] == [{}, {"A": None, "B": None}]
 
 
 def test_opaque_predicates_are_not_fabricated_as_macro_values():
@@ -165,6 +183,31 @@ void f(char *d, char *s) {
         (issue.rule_id, issue.line_number, issue.code_snippet.strip())
         for issue in full.issues
     }
+
+
+def test_generated_reduction_preserves_conditional_reachable_under_label():
+    source = """\
+void f(char *d, char *s) {
+#if defined(A) && defined(B)
+    strcpy(d, s);
+#endif
+}
+"""
+    scanner = CGullScanner(
+        rules=[BannedFunctionsRule()],
+        engine_mode=AnalysisEngine.HYBRID,
+    )
+
+    result = scanner.scan_text(
+        source,
+        config_strategy="pairwise",
+        exhaustive_threshold=10,
+    )
+
+    assert result.config_reduction_stats.candidate_count == 4
+    assert result.config_reduction_stats.retained_count == 2
+    assert len(result.issues) == 1
+    assert result.issues[0].reachable_under == ["+A, B"]
 
 
 def test_explicit_profiles_remain_authoritative_and_are_not_reduced():
