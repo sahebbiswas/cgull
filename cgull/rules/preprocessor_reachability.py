@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
-
+from ..ast_analyzer import CASTContext
 from ..models import AnalysisEngine, Issue, RuleCategory, Severity
 from ..preprocessor import (
     FALSE,
@@ -41,26 +40,18 @@ class PreprocessorReachabilityRule(BaseRule):
     )
     sample_vulnerable_code = "#if A\n#elif A\nint unreachable;\n#endif"
     sample_remediated_code = "#if A\nint enabled;\n#endif"
-    analysis_engine = AnalysisEngine.HYBRID
+    analysis_engine = AnalysisEngine.AST
 
-    def scan_line(
-        self,
-        file_path: str,
-        line_number: int,
-        line_content: str,
-        full_code: str,
-        source_lines: List[str],
-        masked_line_content: str = "",
-    ) -> List[Issue]:
-        # The engine invokes lightweight rules once per physical line.  This is
-        # a whole-file structural analysis, so run it exactly once.
-        if line_number != 1:
-            return []
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> list[Issue]:
+        # raw_source retains the complete directive structure. clean_source may
+        # already have selected/stripped branches and is unsuitable here.
+        return self._scan_source(file_path, ast_ctx.raw_source)
 
-        tree = parse_conditional_directives(full_code)
+    def _scan_source(self, file_path: str, source: str) -> list[Issue]:
+        tree = parse_conditional_directives(source)
         issues: list[Issue] = []
         for block in tree.blocks:
-            self._analyze_block(file_path, full_code, block, TRUE, issues)
+            self._analyze_block(file_path, source, block, TRUE, issues)
         return issues
 
     def _analyze_block(
@@ -86,7 +77,7 @@ class PreprocessorReachabilityRule(BaseRule):
                             source,
                             branch,
                             "Preprocessor #else branch is unreachable because "
-                            f"the surrounding/earlier branch context is impossible "
+                            "the surrounding/earlier branch context is impossible "
                             f"({format_expression(effective)}).",
                         )
                     )
@@ -95,7 +86,7 @@ class PreprocessorReachabilityRule(BaseRule):
                 continue
 
             condition = directive.condition
-            # Malformed conditions carry no symbolic expression.  Do not make
+            # Malformed conditions carry no symbolic expression. Do not make
             # claims about this branch or later siblings because their exact
             # chain context is then unknown.
             if condition is None:
@@ -110,7 +101,7 @@ class PreprocessorReachabilityRule(BaseRule):
                         branch,
                         "Preprocessor branch is unreachable: its condition "
                         f"'{directive.condition_text}' cannot be true when this "
-                        f"branch is reached (effective condition: "
+                        "branch is reached (effective condition: "
                         f"{format_expression(effective)}).",
                     )
                 )
