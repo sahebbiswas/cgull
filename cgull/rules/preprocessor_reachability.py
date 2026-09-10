@@ -70,7 +70,8 @@ class PreprocessorReachabilityRule(BaseRule):
 
             if directive.kind == "else":
                 effective = remaining
-                if not satisfiable(effective):
+                reachable = satisfiable(effective)
+                if not reachable:
                     issues.append(
                         self._issue(
                             file_path,
@@ -81,7 +82,8 @@ class PreprocessorReachabilityRule(BaseRule):
                             f"({format_expression(effective)}).",
                         )
                     )
-                self._analyze_children(file_path, source, branch.children, effective, issues)
+                else:
+                    self._analyze_children(file_path, source, branch.children, effective, issues)
                 covered = TRUE
                 continue
 
@@ -93,7 +95,8 @@ class PreprocessorReachabilityRule(BaseRule):
                 return
 
             effective = conjunction(remaining, condition)
-            if not satisfiable(effective):
+            reachable = satisfiable(effective)
+            if not reachable:
                 issues.append(
                     self._issue(
                         file_path,
@@ -105,20 +108,24 @@ class PreprocessorReachabilityRule(BaseRule):
                         f"{format_expression(effective)}).",
                     )
                 )
-            elif implies(remaining, condition):
-                issues.append(
-                    self._issue(
-                        file_path,
-                        source,
-                        branch,
-                        "Preprocessor condition "
-                        f"'{directive.condition_text}' is redundant: whenever this "
-                        "branch is reached, the surrounding/earlier branch context "
-                        f"already guarantees it ({format_expression(remaining)}).",
+            else:
+                if implies(remaining, condition):
+                    issues.append(
+                        self._issue(
+                            file_path,
+                            source,
+                            branch,
+                            "Preprocessor condition "
+                            f"'{directive.condition_text}' is redundant: whenever this "
+                            "branch is reached, the surrounding/earlier branch context "
+                            f"already guarantees it ({format_expression(remaining)}).",
+                        )
                     )
-                )
+                # Once the enclosing branch is proven unreachable, one diagnostic
+                # identifies the root cause. Avoid cascading findings from every
+                # nested conditional under a context that can never execute.
+                self._analyze_children(file_path, source, branch.children, effective, issues)
 
-            self._analyze_children(file_path, source, branch.children, effective, issues)
             covered = disjunction(covered, condition)
 
     def _analyze_children(
