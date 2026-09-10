@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Sequence, Any
+from typing import Any, Iterable, Mapping, Sequence
 
 from ..models import ConfigProfile
 from .configuration_space import WitnessStatus, derive_branch_witnesses
 from .directives import parse_conditional_directives
-from .expressions import Defined, Expression, Predicate, Variable, conjunction, expression_atoms, negate
+from .expressions import (
+    Defined,
+    Expression,
+    Predicate,
+    Variable,
+    conjunction,
+    expression_atoms,
+    negate,
+)
 from .robdd import AnalysisLimitExceeded, BDD, ResourceLimits
 
 
@@ -34,11 +42,12 @@ class ConfigReductionResult:
     stats: ConfigReductionStats
 
 
+def _flags_key(profile: ConfigProfile) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((str(key), repr(value)) for key, value in profile.flags.items()))
+
+
 def _profile_key(profile: ConfigProfile) -> tuple:
-    return (
-        tuple(sorted((str(k), repr(v)) for k, v in profile.flags.items())),
-        profile.name,
-    )
+    return (_flags_key(profile), profile.name)
 
 
 def _known_macro_value(flags: Mapping[str, Any], name: str) -> bool | None:
@@ -127,14 +136,16 @@ def reduce_generated_profiles(
                 ))
 
     if unsafe or not branch_expressions:
-        # Exact duplicate flag maps are still safe to collapse because ConfigProfile
-        # equality itself is defined by effective flags, not presentation name.
-        seen_flags: set[ConfigProfile] = set()
+        # Exact duplicate effective flag maps are safe even when symbolic branch
+        # reasoning cannot prove broader equivalence. Profile names are merely
+        # presentation labels and therefore do not distinguish scan behavior.
+        seen_flags: set[tuple[tuple[str, str], ...]] = set()
         retained: list[ConfigProfile] = []
         for profile in ordered_profiles:
-            if profile in seen_flags:
+            key = _flags_key(profile)
+            if key in seen_flags:
                 continue
-            seen_flags.add(profile)
+            seen_flags.add(key)
             retained.append(profile)
         removed = candidates - len(retained)
         return ConfigReductionResult(
