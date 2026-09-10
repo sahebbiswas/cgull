@@ -151,3 +151,19 @@ def test_progress_safe_stderr_does_not_overwrite_partial_line_diagnostic():
     rendered = terminal.getvalue()
     assert rendered.endswith(diagnostic)
     assert not rendered.endswith("\rScanning [████] 50% (1/2 files)")
+
+
+def test_progress_safe_stderr_preserves_consecutive_partial_chunks():
+    terminal = TTYStringIO()
+    stream = _ProgressSafeStderr(terminal)
+    stream.write("\rScanning [████] 50% (1/2 files)")
+
+    first = "partial diagnostic: "
+    second = "continued"
+    assert stream.write(first) == len(first)
+    assert stream.write(second) == len(second)
+
+    rendered = terminal.getvalue()
+    assert rendered.endswith(first + second)
+    assert rendered.count(first) == 1
+    assert rendered.count(second) == 1
