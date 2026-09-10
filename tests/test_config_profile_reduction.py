@@ -1,7 +1,10 @@
 """Configuration-space reduction keeps branch coverage while dropping duplicate work."""
 
+from cgull import AnalysisEngine, CGullScanner
 from cgull.models import ConfigProfile
 from cgull.preprocessor import reduce_generated_profiles
+from cgull.rules.banned_functions import BannedFunctionsRule
+from cgull.telemetry import telemetry_for
 
 
 def _profile(name, *defined):
@@ -118,3 +121,62 @@ def test_exact_duplicate_flag_maps_are_safe_even_without_modeled_branches():
     assert result.stats.retained_count == 1
     assert result.stats.equivalent_removed == 1
     assert result.profiles[0].name == "a"
+
+
+def test_generated_scan_reduces_actual_variant_count_without_losing_branch_findings():
+    source = """\
+void f(char *d, char *s) {
+#if defined(A)
+    strcpy(d, s);
+#elif defined(B)
+    strcat(d, s);
+#else
+    gets(d);
+#endif
+}
+"""
+    explicit = [
+        _profile("none"),
+        _profile("a", "A"),
+        _profile("b", "B"),
+        _profile("ab", "A", "B"),
+    ]
+    scanner = CGullScanner(
+        rules=[BannedFunctionsRule()],
+        engine_mode=AnalysisEngine.HYBRID,
+    )
+
+    full = scanner.scan_text(source, profiles=explicit)
+    reduced = scanner.scan_text(
+        source,
+        config_strategy="exhaustive",
+        exhaustive_threshold=10,
+    )
+
+    stats = reduced.config_reduction_stats
+    assert (stats.candidate_count, stats.retained_count) == (4, 3)
+    assert stats.equivalent_removed == 1
+    assert telemetry_for(reduced).analyzed_lines == reduced.total_lines_of_code * 3
+    assert telemetry_for(full).analyzed_lines == full.total_lines_of_code * 4
+    assert {
+        (issue.rule_id, issue.line_number, issue.code_snippet.strip())
+        for issue in reduced.issues
+    } == {
+        (issue.rule_id, issue.line_number, issue.code_snippet.strip())
+        for issue in full.issues
+    }
+
+
+def test_explicit_profiles_remain_authoritative_and_are_not_reduced():
+    source = "#if defined(A)\nint a;\n#else\nint b;\n#endif\n"
+    explicit = [
+        _profile("none"),
+        _profile("a", "A"),
+        _profile("a-alias", "A"),
+    ]
+    scanner = CGullScanner(rules=[])
+
+    result = scanner.scan_text(source, profiles=explicit)
+
+    assert not hasattr(result, "config_reduction_stats")
+    assert telemetry_for(result).analyzed_lines == result.total_lines_of_code * 3
