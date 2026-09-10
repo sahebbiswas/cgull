@@ -93,7 +93,7 @@ class PreprocessorSimplificationRule(BaseRule):
     implementation_method = "Conditional directive IR and exact Boolean reasoning"
     implementation_complexity = "Medium"
     chances_of_false_positives = "Low"
-    cwe_id = None
+    cwe_id = "CWE-000"
     remediation_suggestion = (
         "Replace the condition with the suggested equivalent expression when it "
         "improves readability without obscuring configuration intent."
