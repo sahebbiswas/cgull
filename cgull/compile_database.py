@@ -17,7 +17,8 @@ from pathlib import Path
 import shlex
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
-from .models import ScanConfig
+from .models import ConfigProfile, ScanConfig
+from .preprocessor import ConfigReductionStats, reduce_generated_profiles
 from .telemetry import CGullScanner as _TelemetryCGullScanner
 
 
@@ -267,6 +268,110 @@ class CompileDatabaseCGullScanner(_TelemetryCGullScanner):
     def __init__(self, *args, compile_database: Optional[CompileCommandIncludeDatabase] = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.compile_database = compile_database if compile_database is not None else _ACTIVE_DATABASE.get()
+        self._reduce_generated_profiles_enabled = False
+        self._config_reduction_stats: Optional[ConfigReductionStats] = None
+        self._reduced_profiles_cache: Optional[List[ConfigProfile]] = None
+
+    @staticmethod
+    def _positional_profiles(args: tuple[Any, ...]) -> Optional[List[ConfigProfile]]:
+        # Base scan_path positional layout: target, ignore, patterns, jobs,
+        # progress, quiet, profiles, strategy, threshold, seed_profiles.
+        return args[6] if len(args) >= 7 else None
+
+    def scan_path(self, *args, **kwargs):
+        explicit_profiles = kwargs.get("profiles")
+        if "profiles" not in kwargs:
+            explicit_profiles = self._positional_profiles(args)
+        requested_strategy = kwargs.get("config_strategy")
+        if requested_strategy is None and len(args) >= 8:
+            requested_strategy = args[7]
+        configured_strategy = getattr(self.config, "config_strategy", "one-at-a-time")
+
+        self._reduce_generated_profiles_enabled = (
+            explicit_profiles is None
+            and (requested_strategy is not None or configured_strategy != "one-at-a-time")
+        )
+        self._config_reduction_stats = None
+        self._reduced_profiles_cache = None
+        try:
+            result = super().scan_path(*args, **kwargs)
+        finally:
+            self._reduce_generated_profiles_enabled = False
+
+        if self._config_reduction_stats is not None:
+            # ScanResult intentionally remains backwards compatible; this
+            # scan-level metadata is present only when generated reduction ran.
+            result.config_reduction_stats = self._config_reduction_stats
+        return result
+
+    def _reduce_profiles_for_scan(
+        self,
+        files_to_scan: List[str],
+        profiles: Optional[List[ConfigProfile]],
+    ) -> Optional[List[ConfigProfile]]:
+        if not self._reduce_generated_profiles_enabled or not profiles:
+            return profiles
+        if self._reduced_profiles_cache is not None:
+            return self._reduced_profiles_cache
+
+        sources: List[str] = []
+        try:
+            for file_path in files_to_scan:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
+                    sources.append(handle.read())
+            reduction = reduce_generated_profiles(sources, profiles)
+            reduced = list(reduction.profiles)
+            self._config_reduction_stats = reduction.stats
+            self._reduced_profiles_cache = reduced
+            return reduced
+        except OSError:
+            # File scanning owns read-error reporting. Reduction must never turn
+            # an optimization failure into a scan failure or drop a candidate.
+            self._config_reduction_stats = ConfigReductionStats(
+                len(profiles), len(profiles), 0, 0
+            )
+            self._reduced_profiles_cache = list(profiles)
+            return self._reduced_profiles_cache
+
+    def _scan_files_sequential(
+        self,
+        files_to_scan: List[str],
+        config: ScanConfig,
+        progress_callback=None,
+        quiet: bool = False,
+        progress_active: bool = False,
+        profiles: Optional[List[ConfigProfile]] = None,
+    ):
+        profiles = self._reduce_profiles_for_scan(files_to_scan, profiles)
+        return super()._scan_files_sequential(
+            files_to_scan,
+            config,
+            progress_callback=progress_callback,
+            quiet=quiet,
+            progress_active=progress_active,
+            profiles=profiles,
+        )
+
+    def _scan_files_parallel(
+        self,
+        files_to_scan: List[str],
+        jobs: int,
+        config: ScanConfig,
+        progress_callback=None,
+        quiet: bool = False,
+        progress_active: bool = False,
+        profiles: Optional[List[ConfigProfile]] = None,
+    ):
+        profiles = self._reduce_profiles_for_scan(files_to_scan, profiles)
+        return super()._scan_files_parallel(
+            files_to_scan,
+            jobs,
+            config,
+            progress_callback=progress_callback,
+            quiet=quiet,
+            progress_active=progress_active,
+            profiles=profiles,
+        )
 
     def _config_for_file(self, config: ScanConfig, file_path: str) -> ScanConfig:
         database = self.compile_database
