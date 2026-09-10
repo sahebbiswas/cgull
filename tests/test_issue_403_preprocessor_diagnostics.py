@@ -1,6 +1,7 @@
 """Regression coverage for issue #403 preprocessor diagnostic leakage."""
 
 from io import StringIO
+import sys
 
 import pytest
 
@@ -9,6 +10,9 @@ pcpp = pytest.importorskip("pcpp")
 
 from cgull.ast_analyzer import CASTParser
 from cgull.ast_analyzer.pcpp_diagnostics import install_pcpp_diagnostic_suppression
+from cgull.engine import _emit_error
+from cgull.logging_config import configure_logging
+from cgull.telemetry import ProgressIndicator
 
 
 def test_pcpp_error_is_consumed_without_raw_terminal_output(capsys):
@@ -71,3 +75,37 @@ def test_cast_parser_active_error_does_not_leak_synthetic_location(capsys):
     assert "<input>" not in captured.out + captured.err
     assert "unsupported configuration" not in captured.out + captured.err
     assert context is not None
+
+
+def test_analysis_error_clears_and_redraws_live_progress(monkeypatch):
+    """Structured analysis errors must not leave a stale progress line behind."""
+
+    terminal = StringIO()
+    monkeypatch.setattr(sys, "stderr", terminal)
+    configure_logging()
+
+    progress = ProgressIndicator()
+    progress.update(1, 2, "first.c")
+    _emit_error(
+        "offsetof.c",
+        "CoverageDegradedError",
+        "AST preprocessing/layout precision degraded: offsetof(...) remained unexpanded",
+        quiet=False,
+        progress_active=True,
+    )
+    progress.update(2, 2, "offsetof.c")
+    progress.finish()
+
+    rendered = terminal.getvalue()
+    assert "CoverageDegradedError" in rendered
+    assert "offsetof" in rendered
+    # The diagnostic must be preceded by an explicit erase of the current
+    # carriage-return progress line instead of being appended to it.
+    error_offset = rendered.index("[ERROR] Analysis failed")
+    before_error = rendered[:error_offset]
+    assert "\r" in before_error
+    assert "\r " in before_error
+    assert not before_error.endswith("files)\n")
+    # Progress continues after the diagnostic and is finally erased cleanly.
+    assert rendered.count("\rScanning [") >= 3
+    assert rendered.endswith("\r")
