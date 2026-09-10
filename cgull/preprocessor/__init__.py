@@ -95,3 +95,13 @@ __all__ += [
     "WitnessStatus", "WitnessAssignment", "BranchWitness",
     "derive_branch_witnesses",
 ]
+
+from .profile_reduction import (
+    ConfigReductionStats,
+    ConfigReductionResult,
+    reduce_generated_profiles,
+)
+
+__all__ += [
+    "ConfigReductionStats", "ConfigReductionResult", "reduce_generated_profiles",
+]
