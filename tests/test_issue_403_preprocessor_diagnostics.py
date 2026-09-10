@@ -11,8 +11,15 @@ pcpp = pytest.importorskip("pcpp")
 from cgull.ast_analyzer import CASTParser
 from cgull.ast_analyzer.pcpp_diagnostics import install_pcpp_diagnostic_suppression
 from cgull.engine import _emit_error
-from cgull.logging_config import configure_logging
+from cgull.logging_config import _ProgressSafeStderr, configure_logging
 from cgull.telemetry import ProgressIndicator
+
+
+class TTYStringIO(StringIO):
+    """In-memory stream that models an interactive stderr terminal."""
+
+    def isatty(self):
+        return True
 
 
 def test_pcpp_error_is_consumed_without_raw_terminal_output(capsys):
@@ -80,7 +87,7 @@ def test_cast_parser_active_error_does_not_leak_synthetic_location(capsys):
 def test_analysis_error_clears_and_redraws_live_progress(monkeypatch):
     """Structured analysis errors must not leave a stale progress line behind."""
 
-    terminal = StringIO()
+    terminal = TTYStringIO()
     monkeypatch.setattr(sys, "stderr", terminal)
     configure_logging()
 
@@ -109,3 +116,38 @@ def test_analysis_error_clears_and_redraws_live_progress(monkeypatch):
     # Progress continues after the diagnostic and is finally erased cleanly.
     assert rendered.count("\rScanning [") >= 3
     assert rendered.endswith("\r")
+
+
+def test_progress_safe_stderr_passes_redirected_output_through_plainly():
+    redirected = StringIO()
+    stream = _ProgressSafeStderr(redirected)
+
+    stream.write("\rScanning [████] 50% (1/2 files)")
+    before = redirected.getvalue()
+    stream.write("diagnostic\n")
+
+    rendered = redirected.getvalue()
+    assert rendered == before + "diagnostic\n"
+    assert "\r " not in rendered[len(before):]
+
+
+def test_progress_safe_stderr_write_returns_input_length_on_coordinated_write():
+    terminal = TTYStringIO()
+    stream = _ProgressSafeStderr(terminal)
+    stream.write("\rScanning [████] 50% (1/2 files)")
+
+    diagnostic = "diagnostic\n"
+    assert stream.write(diagnostic) == len(diagnostic)
+
+
+def test_progress_safe_stderr_does_not_overwrite_partial_line_diagnostic():
+    terminal = TTYStringIO()
+    stream = _ProgressSafeStderr(terminal)
+    stream.write("\rScanning [████] 50% (1/2 files)")
+
+    diagnostic = "partial diagnostic"
+    assert stream.write(diagnostic) == len(diagnostic)
+
+    rendered = terminal.getvalue()
+    assert rendered.endswith(diagnostic)
+    assert not rendered.endswith("\rScanning [████] 50% (1/2 files)")
