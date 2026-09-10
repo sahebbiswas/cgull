@@ -299,9 +299,59 @@ class CompileDatabaseCGullScanner(_TelemetryCGullScanner):
             self._reduce_generated_profiles_enabled = False
 
         if self._config_reduction_stats is not None:
-            # ScanResult intentionally remains backwards compatible; this
-            # scan-level metadata is present only when generated reduction ran.
             result.config_reduction_stats = self._config_reduction_stats
+        return result
+
+    def scan_text(
+        self,
+        source_code: str,
+        file_path: str = "source.c",
+        quiet: bool = False,
+        profiles: Optional[List[ConfigProfile]] = None,
+        config_strategy: Optional[str] = None,
+        exhaustive_threshold: Optional[int] = None,
+    ):
+        """Scan in-memory source, reducing only internally generated profiles."""
+
+        reduction_stats: Optional[ConfigReductionStats] = None
+        effective_profiles = profiles
+        configured_strategy = getattr(self.config, "config_strategy", "one-at-a-time")
+        should_generate = profiles is None and (
+            config_strategy is not None or configured_strategy != "one-at-a-time"
+        )
+        if should_generate:
+            strat = config_strategy if config_strategy is not None else configured_strategy
+            threshold = (
+                exhaustive_threshold
+                if exhaustive_threshold is not None
+                else getattr(self.config, "exhaustive_threshold", 10)
+            )
+            from .ast_analyzer import ConditionalFlagCollector, generate_config_profiles
+            from .utils import strip_comments_keep_lines
+
+            _, clean_code = strip_comments_keep_lines(source_code)
+            collected = ConditionalFlagCollector.collect(clean_code)
+            if collected.presence_flags or strat == "baseline":
+                candidates = generate_config_profiles(
+                    collected.presence_flags,
+                    strategy=strat,
+                    exhaustive_threshold=threshold,
+                    base_flags=self.config.defined_syms,
+                )
+                reduction = reduce_generated_profiles([source_code], candidates)
+                effective_profiles = list(reduction.profiles)
+                reduction_stats = reduction.stats
+
+        result = super().scan_text(
+            source_code,
+            file_path=file_path,
+            quiet=quiet,
+            profiles=effective_profiles,
+            config_strategy=config_strategy,
+            exhaustive_threshold=exhaustive_threshold,
+        )
+        if reduction_stats is not None:
+            result.config_reduction_stats = reduction_stats
         return result
 
     def _reduce_profiles_for_scan(
