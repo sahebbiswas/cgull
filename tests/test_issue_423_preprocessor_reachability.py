@@ -30,6 +30,14 @@ def test_parent_context_makes_nested_branch_unreachable():
     assert "effective condition" in issues[0].message
 
 
+def test_unreachable_parent_suppresses_cascading_child_findings():
+    source = "#if 0\n#if A\nint x;\n#elif !A\nint y;\n#endif\n#endif\n"
+    issues = analyze(source)
+    assert len(issues) == 1
+    assert issues[0].line_number == 1
+    assert "unreachable" in issues[0].message.lower()
+
+
 def test_parent_context_can_make_nested_condition_redundant():
     issues = analyze("#if A\n#if A\nint x;\n#endif\n#endif\n")
     assert len(issues) == 1
