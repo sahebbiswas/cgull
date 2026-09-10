@@ -67,11 +67,12 @@ class _ProgressSafeStderr:
     """Coordinate ordinary stderr writes with C-GULL's in-place progress line.
 
     ProgressIndicator renders with carriage returns while diagnostics and logging
-    use normal stderr writes.  When both target the same terminal, an uncoordinated
-    diagnostic permanently leaves the current progress line behind.  This proxy
-    remembers the most recent progress rendering, clears it before an ordinary
-    stderr write, and redraws it afterwards.  The normal ProgressIndicator.finish
-    erase sequence clears the remembered state.
+    use normal stderr writes.  When both target the same interactive terminal, an
+    uncoordinated diagnostic permanently leaves the current progress line behind.
+    This proxy remembers the most recent progress rendering, clears it before an
+    ordinary stderr write, and redraws it afterwards. Redirected streams are passed
+    through unchanged so files, pipes, and CI logs never gain terminal control
+    sequences.
     """
 
     def __init__(self, stream):
@@ -82,9 +83,23 @@ class _ProgressSafeStderr:
     def __getattr__(self, name):
         return getattr(self._stream, name)
 
+    def _is_tty(self) -> bool:
+        isatty = getattr(self._stream, "isatty", None)
+        if not callable(isatty):
+            return False
+        try:
+            return bool(isatty())
+        except OSError:
+            return False
+
     def write(self, data):
         if not data:
             return 0
+
+        # Carriage-return progress coordination is meaningful only on an
+        # interactive terminal. Preserve redirected stderr byte-for-byte.
+        if not self._is_tty():
+            return self._stream.write(data)
 
         # Both the base and telemetry progress indicators begin their in-place
         # rendering with a carriage return and the stable "Scanning [" prefix.
@@ -110,10 +125,14 @@ class _ProgressSafeStderr:
 
         progress_line = self._progress_line
         width = self._progress_width
-        written = self._stream.write("\r" + " " * width + "\r")
-        written += self._stream.write(data)
-        written += self._stream.write(progress_line)
-        return written
+        self._stream.write("\r" + " " * width + "\r")
+        self._stream.write(data)
+        # A partial-line write cannot safely be followed by a carriage-return
+        # progress redraw without overwriting the diagnostic text. Leave progress
+        # cleared until a later complete-line write or progress update redraws it.
+        if data.endswith("\n"):
+            self._stream.write(progress_line)
+        return len(data)
 
     def flush(self):
         return self._stream.flush()
