@@ -19,7 +19,6 @@ class ConfigReductionStats:
     candidate_count: int
     retained_count: int
     equivalent_removed: int
-    unreachable_removed: int
 
     @property
     def removed_count(self) -> int:
@@ -119,7 +118,7 @@ def _duplicate_only_result(
     removed = candidates - len(retained)
     return ConfigReductionResult(
         tuple(retained),
-        ConfigReductionStats(candidates, len(retained), removed, 0),
+        ConfigReductionStats(candidates, len(retained), removed),
     )
 
 
@@ -140,6 +139,11 @@ def reduce_generated_profiles(
     to exact flag-map deduplication rather than dropping a potentially distinct
     generated variant.
 
+    An empty branch signature is a valid behavior class, not an unreachable
+    configuration: it still scans unconditional source while activating no
+    modeled conditional branch. One deterministic representative of that class
+    is retained so conditional finding attribution remains correct.
+
     This helper is intentionally for generated/derived profiles. Explicit user
     profiles should bypass it so user-requested scans remain authoritative.
     """
@@ -149,7 +153,7 @@ def reduce_generated_profiles(
     if candidates <= 1:
         return ConfigReductionResult(
             tuple(ordered_profiles),
-            ConfigReductionStats(candidates, candidates, 0, 0),
+            ConfigReductionStats(candidates, candidates, 0),
         )
 
     branch_expressions: list[tuple[int, int, Expression]] = []
@@ -198,15 +202,10 @@ def reduce_generated_profiles(
         signatures.setdefault(active, profile)
 
     retained = list(signatures.values())
-    # An empty signature is still a valid configuration: it scans unconditional
-    # source while activating no modeled conditional branch. Keep one stable
-    # representative of that equivalence class so unconditional-vs-conditional
-    # finding attribution remains meaningful after reduction.
     if empty_profiles:
         retained.append(empty_profiles[0])
 
     retained.sort(key=_profile_key)
-    unreachable_removed = 0
     equivalent_removed = candidates - len(retained)
     return ConfigReductionResult(
         tuple(retained),
@@ -214,7 +213,6 @@ def reduce_generated_profiles(
             candidates,
             len(retained),
             max(0, equivalent_removed),
-            unreachable_removed,
         ),
     )
 
