@@ -63,6 +63,69 @@ def parse_log_level(level_str: str) -> int:
             return logging.WARNING
 
 
+class _ProgressSafeStderr:
+    """Coordinate ordinary stderr writes with C-GULL's in-place progress line.
+
+    ProgressIndicator renders with carriage returns while diagnostics and logging
+    use normal stderr writes.  When both target the same terminal, an uncoordinated
+    diagnostic permanently leaves the current progress line behind.  This proxy
+    remembers the most recent progress rendering, clears it before an ordinary
+    stderr write, and redraws it afterwards.  The normal ProgressIndicator.finish
+    erase sequence clears the remembered state.
+    """
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._progress_line = ""
+        self._progress_width = 0
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def write(self, data):
+        if not data:
+            return 0
+
+        # Both the base and telemetry progress indicators begin their in-place
+        # rendering with a carriage return and the stable "Scanning [" prefix.
+        if data.startswith("\rScanning ["):
+            self._progress_line = data
+            self._progress_width = max(
+                self._progress_width,
+                len(data[1:]),
+            )
+            return self._stream.write(data)
+
+        # ProgressIndicator.finish() erases the in-place line with only carriage
+        # returns/spaces.  Treat that as ownership ending rather than as a
+        # diagnostic that should trigger a redraw.
+        if self._progress_line and data.startswith("\r") and data.endswith("\r"):
+            if not data.strip("\r "):
+                self._progress_line = ""
+                self._progress_width = 0
+                return self._stream.write(data)
+
+        if not self._progress_line:
+            return self._stream.write(data)
+
+        progress_line = self._progress_line
+        width = self._progress_width
+        written = self._stream.write("\r" + " " * width + "\r")
+        written += self._stream.write(data)
+        written += self._stream.write(progress_line)
+        return written
+
+    def flush(self):
+        return self._stream.flush()
+
+
+def _ensure_progress_safe_stderr() -> None:
+    """Install the stderr coordinator once for CLI/logging output."""
+    if isinstance(sys.stderr, _ProgressSafeStderr):
+        return
+    sys.stderr = _ProgressSafeStderr(sys.stderr)
+
+
 def configure_logging(
     verbose_count: int = 0,
     log_level_str: Optional[str] = None,
@@ -121,6 +184,8 @@ def configure_logging(
     """
     Configures root logging with a standard structured format.
     """
+    _ensure_progress_safe_stderr()
+
     # Determine log level
     if log_level_str:
         level = parse_log_level(log_level_str)
