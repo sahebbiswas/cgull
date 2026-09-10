@@ -67,3 +67,19 @@ __all__ += [
     "ConditionalDirective", "ConditionalBranch", "ConditionalBlock",
     "ConditionalTree", "parse_conditional_directives",
 ]
+
+from .robdd import (
+    AnalysisLimitExceeded,
+    BDD,
+    ResourceLimits,
+    equivalent,
+    satisfiable,
+    implies,
+    witness_assignment,
+    exact_simplify,
+)
+
+__all__ += [
+    "AnalysisLimitExceeded", "BDD", "ResourceLimits", "equivalent",
+    "satisfiable", "implies", "witness_assignment", "exact_simplify",
+]
