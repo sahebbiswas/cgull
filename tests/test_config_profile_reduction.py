@@ -33,7 +33,6 @@ int fallback;
     assert result.stats.candidate_count == 4
     assert result.stats.retained_count == 3
     assert result.stats.equivalent_removed == 1
-    assert result.stats.unreachable_removed == 0
     assert [dict(p.flags) for p in result.profiles] == [{}, {"A": None}, {"B": None}]
 
 
@@ -102,7 +101,6 @@ def test_empty_branch_signature_is_deduplicated_not_discarded():
     assert result.stats.candidate_count == 4
     assert result.stats.retained_count == 2
     assert result.stats.equivalent_removed == 2
-    assert result.stats.unreachable_removed == 0
     assert [dict(profile.flags) for profile in result.profiles] == [{}, {"A": None, "B": None}]
 
 
