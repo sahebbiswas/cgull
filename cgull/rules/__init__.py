@@ -67,6 +67,7 @@ from .misra_and_style import (
 )
 from .dead_stores import DeadStoresRule
 from .trust_boundary import UnvalidatedExternalDataSinkRule
+from .preprocessor_reachability import PreprocessorReachabilityRule
 
 ALL_RULES: List[Type[BaseRule]] = [
     # High Impact
@@ -125,6 +126,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     DeadStoresRule,
     VariableShadowingRule,
     MissingInclusionGuardRule,
+    PreprocessorReachabilityRule,
 ]
 
 RULE_REGISTRY: Dict[str, Type[BaseRule]] = {
