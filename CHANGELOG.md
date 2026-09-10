@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- CGULL-039 checks every successful chroot path for chdir("/") using CFG reachability, including bypasses, result tests, and loops/gotos (#364).
+
 ## [0.11.7] - 2026-09-09
 
 ### Added

@@ -22,7 +22,7 @@ void string_literal_safe(void) {
 
 void chdir_outside_block(void) {
     {
-        chroot("/var/jail"); // expect: CGULL-039
+        chroot("/var/jail"); // unconditional repair after leaving the block
     }
     chdir("/");
 }

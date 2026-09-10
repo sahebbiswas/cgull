@@ -1134,46 +1134,71 @@ class ImproperChrootJailRule(BaseRule):
     name = "Improper chroot() Jail"
     impact = Severity.HIGH
     category = RuleCategory.CONTROL_FLOW
-    description = "Detect calls to chroot() that are not immediately followed by chdir() to restrict the working directory. A missing chdir(\"/\") allows attackers to escape the chroot jail using relative paths."
-    implementation_method = "AST traversal to find chroot() and ensure chdir() is called within the same function"
+    description = 'Detect successful chroot() paths that continue without chdir("/"), permitting working-directory escape from the jail.'
+    implementation_method = "CFG success-path analysis with ordered expressions and conservative unresolved branches"
     implementation_complexity = "Low"
     chances_of_false_positives = "Low"
     cwe_id = "CWE-243"
     remediation_suggestion = "Always call chdir(\"/\") or another directory inside the jail immediately after chroot() to restrict the working directory."
     sample_vulnerable_code = "chroot(\"/var/jail\");\n// FLAW: Missing chdir()"
     sample_remediated_code = "chroot(\"/var/jail\");\nchdir(\"/\");"
-    analysis_engine = AnalysisEngine.HYBRID
+    analysis_engine = AnalysisEngine.AST
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        from copy import copy
+        from pycparser import c_ast
+        from ..cfg.construction import build_cfg, find_function_def
+        from .chroot_paths import calls_in, callee, expression, unsafe_success_path
+
         issues = []
-        clean_lines = ast_ctx.clean_source.splitlines() if ast_ctx.clean_source else ast_ctx.source_lines
         for fn in ast_ctx.functions:
-            for i, call in enumerate(fn.calls):
-                callee, line_no, args = call[0], call[1], call[2]
-                if callee == "chroot":
-                    has_subsequent_chdir = False
-                    for j in range(i + 1, len(fn.calls)):
-                        if fn.calls[j][0] == "chdir":
-                            has_subsequent_chdir = True
-                            break
-                    if not has_subsequent_chdir:
-                        if any(iss.line_number == line_no for iss in issues):
-                            continue
+            chroots = [call for call in fn.calls if call[0] == "chroot"]
+            if not chroots:
+                continue
+            funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+            if funcdef is None:
+                # Lexical parsing cannot prove that a repair is unavoidable.
+                locations = [(call[1], 1) for call in chroots]
+            else:
+                # The shared CFG omits edges to an implicit function exit.
+                # Add a local sentinel so bypasses at the end remain visible,
+                # without mutating the shared translation-unit AST.
+                local_def = copy(funcdef)
+                local_def.body = copy(funcdef.body)
+                local_def.body.block_items = list(funcdef.body.block_items or []) + [c_ast.Return(None)]
+                cfg = build_cfg(local_def, line_map=getattr(ast_ctx, "line_map", None))
+                declarations = {}
+                untracked_names = set()
 
-                        line_idx = (line_no - 1) if (line_no and line_no > 0) else 0
-                        clean_snippet = clean_lines[line_idx].strip() if line_idx < len(clean_lines) else f"chroot({args});"
-                        snippet = ast_ctx.source_lines[line_idx].strip() if line_idx < len(ast_ctx.source_lines) else f"chroot({args});"
-                        issues.append(self.create_issue(
-                            file_path=file_path,
-                            line_number=line_no,
-                            code_snippet=snippet,
-                            message="chroot() called without a subsequent chdir(). This allows attackers to escape the chroot jail using relative paths (CWE-243).",
-                            column_number=1,
-                            engine="AST",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=clean_snippet.strip(";") + ";\nchdir(\"/\");"
-                        ))
+                class Bindings(c_ast.NodeVisitor):
+                    def visit_Decl(self, node):
+                        if node.name:
+                            declarations[node.name] = declarations.get(node.name, 0) + 1
+                            if "volatile" in (node.quals or []):
+                                untracked_names.add(node.name)
+                        self.generic_visit(node)
 
+                Bindings().visit(funcdef)
+                untracked_names.update(name for name, count in declarations.items() if count > 1)
+                locations = []
+                for event in cfg.nodes.values():
+                    for call in calls_in(expression(event)):
+                        if callee(call) == "chroot" and unsafe_success_path(cfg, call, untracked_names):
+                            from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
+                            line = _map_line(max(1, call.coord.line - _PRELUDE_LINE_COUNT), getattr(ast_ctx, "line_map", None))
+                            locations.append((line, call.coord.column or 1))
+            for line, column in sorted(set(locations)):
+                snippet = ast_ctx.source_lines[line - 1].strip() if 0 < line <= len(ast_ctx.source_lines) else "chroot(...);"
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line,
+                    column_number=column,
+                    code_snippet=snippet,
+                    message='A successful chroot() path can continue without chdir("/"). This can permit working-directory escape from the jail (CWE-243).',
+                    engine="AST",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement='Ensure chdir("/") executes on every successful chroot() path before continuing.',
+                ))
         return issues
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
