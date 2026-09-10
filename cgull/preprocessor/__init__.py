@@ -83,3 +83,15 @@ __all__ += [
     "AnalysisLimitExceeded", "BDD", "ResourceLimits", "equivalent",
     "satisfiable", "implies", "witness_assignment", "exact_simplify",
 ]
+
+from .configuration_space import (
+    WitnessStatus,
+    WitnessAssignment,
+    BranchWitness,
+    derive_branch_witnesses,
+)
+
+__all__ += [
+    "WitnessStatus", "WitnessAssignment", "BranchWitness",
+    "derive_branch_witnesses",
+]
