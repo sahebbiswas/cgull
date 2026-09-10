@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-09-10
+
+### Added
+- Add an independent conditional-directive tree with all eight conditional forms, nested branch relationships, lossless source ranges, continuation-aware token locations, symbolic conditions, and recoverable structural diagnostics (#421). Existing scanner preprocessing is unchanged.
+
 ## [0.11.9] - 2026-09-10
 
 ### Added

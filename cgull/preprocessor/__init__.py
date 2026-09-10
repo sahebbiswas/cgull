@@ -49,3 +49,21 @@ __all__ = [
     "expression_to_dict",
     "expression_from_dict",
 ]
+
+from .directives import (
+    SourceLocation,
+    SourceRange,
+    DirectiveToken,
+    StructureDiagnostic,
+    ConditionalDirective,
+    ConditionalBranch,
+    ConditionalBlock,
+    ConditionalTree,
+    parse_conditional_directives,
+)
+
+__all__ += [
+    "SourceLocation", "SourceRange", "DirectiveToken", "StructureDiagnostic",
+    "ConditionalDirective", "ConditionalBranch", "ConditionalBlock",
+    "ConditionalTree", "parse_conditional_directives",
+]
