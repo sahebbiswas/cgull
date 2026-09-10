@@ -25,6 +25,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | Successful chroot paths and working-directory repair | [CGULL-039 path analysis](analysis/chroot-paths.md) |
 | Cross-file summaries, linkage, configuration isolation, and limitations | [Project-level direct-call summaries](analysis/project-summaries.md) |
 | Interprocedural architecture | [Interprocedural analysis](interprocedural-analysis.md) |
+| Immutable symbolic preprocessor expressions, normalization, and serialization | [Symbolic preprocessor API](analysis/symbolic-preprocessor.md) |
 | Interprocedural fact/query contract | [Interprocedural fact query contract](interprocedural-fact-query-contract.md) |
 | Trust-boundary semantic models | [Trust-boundary semantic models](trust-boundary-semantic-models.md) |
 | Historical interprocedural work plan | [Interprocedural analysis issues](interprocedural-analysis-issues.md) |
