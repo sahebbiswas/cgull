@@ -198,17 +198,16 @@ def reduce_generated_profiles(
         signatures.setdefault(active, profile)
 
     retained = list(signatures.values())
-    unreachable_removed = 0
+    # An empty signature is still a valid configuration: it scans unconditional
+    # source while activating no modeled conditional branch. Keep one stable
+    # representative of that equivalence class so unconditional-vs-conditional
+    # finding attribution remains meaningful after reduction.
     if empty_profiles:
-        if retained:
-            unreachable_removed = len(empty_profiles)
-        else:
-            # Keep one deterministic profile so unconditional source still scans.
-            retained.append(empty_profiles[0])
-            unreachable_removed = len(empty_profiles) - 1
+        retained.append(empty_profiles[0])
 
     retained.sort(key=_profile_key)
-    equivalent_removed = candidates - len(retained) - unreachable_removed
+    unreachable_removed = 0
+    equivalent_removed = candidates - len(retained)
     return ConfigReductionResult(
         tuple(retained),
         ConfigReductionStats(
