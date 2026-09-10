@@ -184,3 +184,30 @@ def test_deep_condition_is_retained_without_aborting_structure():
     tree = parse_conditional_directives(f'#if {condition}\n#endif')
     assert not tree.diagnostics
     assert tree.directives[0].condition == Predicate(condition)
+
+
+@pytest.mark.parametrize('literal', ["1'024", "1'000'000", "0xFF'AB", "0b10'01", "1.2'5e+1'0", ".1'25"])
+def test_digit_separators_do_not_hide_following_directives(literal):
+    source = f"auto value = {literal};\n#if FEATURE\nbody\n#endif\n"
+    tree = parse_conditional_directives(source)
+    assert not tree.diagnostics
+    assert [d.kind for d in tree.directives] == ['if', 'endif']
+    assert tree.directives[0].source_range.start.line == 2
+    assert tree.blocks[0].branches[0].body_range.text(source) == 'body\n'
+
+
+def test_digit_separator_condition_tokens_and_following_character_literal():
+    source = "#if LIMIT > 1'024\nchar c = 'x';\n#endif\n"
+    tree = parse_conditional_directives(source)
+    assert not tree.diagnostics
+    assert [t.text for t in tree.directives[0].tokens] == ['LIMIT', '>', "1'024"]
+    assert tree.directives[0].tokens[-1].source_range.text(source) == "1'024"
+    assert tree.directives[-1].kind == 'endif'
+
+
+@pytest.mark.parametrize('prefix', ['', 'L', 'u', 'U', 'u8'])
+def test_character_literal_prefixes_still_hide_comment_delimiters(prefix):
+    source = f"auto c = {prefix}'/*';\n#if FLAG\n#endif\n"
+    tree = parse_conditional_directives(source)
+    assert not tree.diagnostics
+    assert [d.kind for d in tree.directives] == ['if', 'endif']

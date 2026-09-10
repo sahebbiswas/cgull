@@ -80,7 +80,11 @@ class ConditionalTree:
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-_TOKEN = re.compile(r'''[A-Za-z_][A-Za-z0-9_]*|[0-9][A-Za-z0-9_]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|&&|\|\||==|!=|<=|>=|<<|>>|[^\s]''')
+# A preprocessing number owns its digit separators; prefixes such as u8 on
+# character literals are identifiers, not numbers.
+_PP_NUMBER = r"(?:[0-9]|\.[0-9])(?:[eEpP][+-]|[A-Za-z0-9_.]|'[A-Za-z0-9_])*"
+_NUMBER = re.compile(_PP_NUMBER)
+_TOKEN = re.compile(r'''[A-Za-z_][A-Za-z0-9_]*|''' + _PP_NUMBER + r'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|&&|\|\||==|!=|<=|>=|<<|>>|[^\s]''')
 _FORMS = frozenset(('if', 'ifdef', 'ifndef', 'elif', 'elifdef', 'elifndef', 'else', 'endif'))
 
 
@@ -104,6 +108,11 @@ def _logical_source(source: str) -> tuple[str, str, list[int]]:
     hidden: list[tuple[int, int]] = []
     i = 0
     while i < len(text):
+        if i == 0 or not (text[i - 1].isalnum() or text[i - 1] == '_'):
+            number = _NUMBER.match(text, i)
+            if number:
+                i = number.end()
+                continue
         raw = re.match(r'R"([^ ()\\\t\r\n]{0,16})\(', text[i:i + 20]) if text.startswith('R"', i) else None
         if raw:
             end_marker = ')' + raw[1] + '"'
