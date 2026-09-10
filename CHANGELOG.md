@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.9] - 2026-09-10
+
+### Added
+- Add an independent symbolic preprocessor expression API with immutable Boolean nodes, distinct macro-value/definedness/opaque atoms, canonical normalization and formatting, deterministic atom enumeration, and tagged JSON serialization (#420). Scanner and concrete preprocessor behavior are unchanged.
+
 ### Fixed
 - CGULL-039 checks every successful chroot path for chdir("/") using CFG reachability, including bypasses, result tests, and loops/gotos (#364).
 
