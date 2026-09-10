@@ -55,6 +55,7 @@
     {"rule_id": "CGULL-052", "status": "not-yet-measured", "reason": "Focused endpoint arithmetic regressions; no Juliet attribution measured."},
     {"rule_id": "CGULL-051", "status": "not-yet-measured", "reason": "Configured validated pointer interval regressions only; no Juliet validator-contract attribution has been measured."},
     {"rule_id": "CGULL-050", "status": "not-yet-measured", "reason": "Focused pointer formation/access corpus only; Juliet CWE-823/125/787 attribution has not been measured."},
-    {"rule_id": "CGULL-054", "status": "no-Juliet-equivalent", "reason": "Conditional-preprocessor reachability and redundancy have no suitable Juliet bad/good oracle."}
+    {"rule_id": "CGULL-054", "status": "no-Juliet-equivalent", "reason": "Conditional-preprocessor reachability and redundancy have no suitable Juliet bad/good oracle."},
+    {"rule_id": "CGULL-055", "status": "no-Juliet-equivalent", "reason": "Preprocessor condition simplification is a configuration-quality diagnostic without a suitable Juliet bad/good oracle."}
   ]
 }
