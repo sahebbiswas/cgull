@@ -128,10 +128,14 @@ class _ProgressSafeStderr:
         self._stream.write("\r" + " " * width + "\r")
         self._stream.write(data)
         # A partial-line write cannot safely be followed by a carriage-return
-        # progress redraw without overwriting the diagnostic text. Leave progress
-        # cleared until a later complete-line write or progress update redraws it.
+        # progress redraw without overwriting the diagnostic text. Once progress
+        # is erased for a partial write, forget the remembered rendering so any
+        # subsequent chunks append to that visible diagnostic instead of erasing it.
         if data.endswith("\n"):
             self._stream.write(progress_line)
+        else:
+            self._progress_line = ""
+            self._progress_width = 0
         return len(data)
 
     def flush(self):
