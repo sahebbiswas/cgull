@@ -2,14 +2,7 @@ from cgull.rules.preprocessor_reachability import PreprocessorReachabilityRule
 
 
 def analyze(source: str):
-    lines = source.splitlines()
-    return PreprocessorReachabilityRule().scan_line(
-        file_path="test.c",
-        line_number=1,
-        line_content=lines[0] if lines else "",
-        full_code=source,
-        source_lines=lines,
-    )
+    return PreprocessorReachabilityRule()._scan_source("test.c", source)
 
 
 def test_if_zero_is_unreachable_with_source_location():
@@ -72,5 +65,4 @@ def test_analysis_is_deterministic():
 
 def test_malformed_condition_stops_chain_reasoning_conservatively():
     source = "#if A\n#elif\n#elif A\n#endif\n"
-    issues = analyze(source)
-    assert issues == []
+    assert analyze(source) == []
