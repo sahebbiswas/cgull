@@ -4,18 +4,12 @@ from __future__ import annotations
 
 from ..ast_analyzer import CASTContext
 from ..models import AnalysisEngine, Issue, RuleCategory, Severity
-from ..preprocessor import (
-    FALSE,
-    TRUE,
-    ConditionalBlock,
-    Expression,
-    conjunction,
-    disjunction,
-    format_expression,
-    negate,
-    parse_conditional_directives,
+from ..preprocessor import parse_conditional_directives
+from ..preprocessor.branch_analysis import (
+    BranchAnalysis,
+    BranchStatus,
+    analyze_conditional_tree,
 )
-from ..preprocessor.robdd import implies, satisfiable
 from .base import BaseRule
 
 
@@ -50,98 +44,38 @@ class PreprocessorReachabilityRule(BaseRule):
     def _scan_source(self, file_path: str, source: str) -> list[Issue]:
         tree = parse_conditional_directives(source)
         issues: list[Issue] = []
-        for block in tree.blocks:
-            self._analyze_block(file_path, source, block, TRUE, issues)
+        for analysis in analyze_conditional_tree(tree):
+            if analysis.status in (BranchStatus.DEAD, BranchStatus.REDUNDANT):
+                issues.append(self._issue(file_path, source, analysis))
         return issues
 
-    def _analyze_block(
-        self,
-        file_path: str,
-        source: str,
-        block: ConditionalBlock,
-        parent_context: Expression,
-        issues: list[Issue],
-    ) -> None:
-        covered: Expression = FALSE
-
-        for branch in block.branches:
-            directive = branch.directive
-            remaining = conjunction(parent_context, negate(covered))
-
-            if directive.kind == "else":
-                effective = remaining
-                reachable = satisfiable(effective)
-                if not reachable:
-                    issues.append(
-                        self._issue(
-                            file_path,
-                            source,
-                            branch,
-                            "Preprocessor #else branch is unreachable because "
-                            "the surrounding/earlier branch context is impossible "
-                            f"({format_expression(effective)}).",
-                        )
-                    )
-                else:
-                    self._analyze_children(file_path, source, branch.children, effective, issues)
-                covered = TRUE
-                continue
-
-            condition = directive.condition
-            # Malformed conditions carry no symbolic expression. Do not make
-            # claims about this branch or later siblings because their exact
-            # chain context is then unknown.
-            if condition is None:
-                return
-
-            effective = conjunction(remaining, condition)
-            reachable = satisfiable(effective)
-            if not reachable:
-                issues.append(
-                    self._issue(
-                        file_path,
-                        source,
-                        branch,
-                        "Preprocessor branch is unreachable: its condition "
-                        f"'{directive.condition_text}' cannot be true when this "
-                        "branch is reached (effective condition: "
-                        f"{format_expression(effective)}).",
-                    )
-                )
-            else:
-                if implies(remaining, condition):
-                    issues.append(
-                        self._issue(
-                            file_path,
-                            source,
-                            branch,
-                            "Preprocessor condition "
-                            f"'{directive.condition_text}' is redundant: whenever this "
-                            "branch is reached, the surrounding/earlier branch context "
-                            f"already guarantees it ({format_expression(remaining)}).",
-                        )
-                    )
-                # Once the enclosing branch is proven unreachable, one diagnostic
-                # identifies the root cause. Avoid cascading findings from every
-                # nested conditional under a context that can never execute.
-                self._analyze_children(file_path, source, branch.children, effective, issues)
-
-            covered = disjunction(covered, condition)
-
-    def _analyze_children(
-        self,
-        file_path: str,
-        source: str,
-        children: list[ConditionalBlock],
-        parent_context: Expression,
-        issues: list[Issue],
-    ) -> None:
-        for child in children:
-            self._analyze_block(file_path, source, child, parent_context, issues)
-
-    def _issue(self, file_path: str, source: str, branch, message: str) -> Issue:
+    def _issue(self, file_path: str, source: str, analysis: BranchAnalysis) -> Issue:
+        branch = analysis.branch
         directive = branch.directive
         location = directive.source_range.start
+
+        if analysis.status == BranchStatus.DEAD:
+            if directive.kind == "else":
+                message = (
+                    "Preprocessor #else branch is unreachable because "
+                    "the surrounding/earlier branch context is impossible "
+                    f"({analysis.effective_condition_text})."
+                )
+            else:
+                message = (
+                    "Preprocessor branch is unreachable: its condition "
+                    f"'{directive.condition_text}' cannot be true when this "
+                    "branch is reached (effective condition: "
+                    f"{analysis.effective_condition_text})."
+                )
+        else:
+            message = (
+                "Preprocessor condition "
+                f"'{directive.condition_text}' is redundant: whenever this "
+                "branch is reached, the surrounding/earlier branch context "
+                f"already guarantees it ({analysis.context_text})."
+            )
+
         return self.create_issue(
             file_path=file_path,
             line_number=location.line,
