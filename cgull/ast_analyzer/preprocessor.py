@@ -324,8 +324,8 @@ def _conditional_directives_by_line(code: str) -> Dict[int, ConditionalDirective
 
 
 def _directive_line_count(code: str, directive: ConditionalDirective) -> int:
-    """Return the number of physical lines occupied by a lossless directive range."""
-    return max(1, len(directive.source_range.text(code).splitlines()))
+    """Return the number of IR physical lines occupied by a directive range."""
+    return max(1, directive.source_range.end.line - directive.source_range.start.line)
 
 
 def _conditional_expr(directive: ConditionalDirective) -> str:
@@ -348,7 +348,10 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
     branch bodies are blanked to preserve exact source line alignment.
     """
     macros: Dict[str, int] = _normalize_macro_dict(defined_syms)
-    lines = code.splitlines()
+    # The directive IR numbers only '\n' as a physical line boundary. Use the
+    # identical model here so directive indices remain aligned even when source
+    # contains lone '\r', form-feed, vertical-tab, or Unicode separators.
+    lines = code.split("\n")
     output_lines: List[str] = []
     cond_stack: List[_CondFrame] = []
     conditional_by_line = _conditional_directives_by_line(code)
@@ -450,10 +453,7 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
         output_lines.append(line if current_active else "")
         i += 1
 
-    res = "\n".join(output_lines)
-    if code.endswith("\n") and not res.endswith("\n"):
-        res += "\n"
-    return res
+    return "\n".join(output_lines)
 
 
 def _strip_attributes_and_specifiers(code: str) -> str:
