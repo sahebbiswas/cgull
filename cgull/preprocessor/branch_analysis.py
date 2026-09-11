@@ -20,11 +20,10 @@ from .expressions import (
     Negation,
     conjunction,
     disjunction,
-    exact_simplify,
     format_expression,
     negate,
 )
-from .robdd import equivalent, implies, satisfiable
+from .robdd import exact_simplify, equivalent, implies, satisfiable
 
 
 class BranchStatus(str, Enum):
