@@ -351,7 +351,10 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
     # The directive IR numbers only '\n' as a physical line boundary. Use the
     # identical model here so directive indices remain aligned even when source
     # contains lone '\r', form-feed, vertical-tab, or Unicode separators.
+    trailing_newline = code.endswith("\n")
     lines = code.split("\n")
+    if trailing_newline:
+        lines.pop()
     output_lines: List[str] = []
     cond_stack: List[_CondFrame] = []
     conditional_by_line = _conditional_directives_by_line(code)
@@ -453,7 +456,8 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
         output_lines.append(line if current_active else "")
         i += 1
 
-    return "\n".join(output_lines)
+    resolved = "\n".join(output_lines)
+    return resolved + "\n" if trailing_newline else resolved
 
 
 def _strip_attributes_and_specifiers(code: str) -> str:
