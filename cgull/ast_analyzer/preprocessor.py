@@ -325,7 +325,8 @@ def _conditional_directives_by_line(code: str) -> Dict[int, ConditionalDirective
 
 def _directive_line_count(code: str, directive: ConditionalDirective) -> int:
     """Return the number of IR physical lines occupied by a directive range."""
-    return max(1, directive.source_range.end.line - directive.source_range.start.line)
+    text = directive.source_range.text(code)
+    return max(1, len(text.split("\n")) - (1 if text.endswith("\n") else 0))
 
 
 def _conditional_expr(directive: ConditionalDirective) -> str:
