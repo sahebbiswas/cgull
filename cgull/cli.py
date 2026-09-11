@@ -287,16 +287,25 @@ def handle_scan(args) -> int:
 
 
 def _is_preprocessor_command(argv: List[str]) -> bool:
-    """Recognize the explicit subcommand without changing legacy path shorthand."""
-    if not argv:
-        return False
-    if argv[0] == "preprocessor":
-        return True
-    # Support the common global verbosity form: cgull -v preprocessor ...
+    """Recognize preprocessor after supported global logging options."""
     index = 0
-    while index < len(argv) and argv[index] in ("-v",):
-        index += 1
-    return index < len(argv) and argv[index] == "preprocessor"
+    while index < len(argv):
+        token = argv[index]
+        if token == "preprocessor":
+            return True
+        if token == "--":
+            return False
+        if token in ("--log-level", "--log-file"):
+            index += 2
+            continue
+        if token.startswith("--log-level=") or token.startswith("--log-file="):
+            index += 1
+            continue
+        if token == "--verbose" or (token.startswith("-") and len(token) > 1 and set(token[1:]) == {"v"}):
+            index += 1
+            continue
+        return False
+    return False
 
 
 def main(argv: Optional[List[str]] = None) -> int:
