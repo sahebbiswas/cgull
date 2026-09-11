@@ -118,6 +118,23 @@ def _legacy_reference(code: str, defined_syms=None) -> str:
     return result
 
 
+def _assert_legacy_semantics_with_exact_alignment(source, defined_syms=None):
+    """Compare legacy semantics while enforcing #428's exact line-count contract.
+
+    The legacy resolver could lose the final physical line when a newline-terminated
+    file ended in a blanked directive because its joined output already ended in a
+    newline. The shared-IR resolver intentionally retains that final alignment line.
+    """
+    result = prep.resolve_preprocessor_conditionals(source, defined_syms)
+    legacy = _legacy_reference(source, defined_syms)
+    if source.endswith("\n") and result.count("\n") == legacy.count("\n") + 1:
+        result_for_comparison = result[:-1]
+    else:
+        result_for_comparison = result
+    assert result_for_comparison == legacy
+    assert result.count("\n") == source.count("\n")
+
+
 @pytest.mark.parametrize(
     ("source", "defined_syms"),
     [
@@ -146,7 +163,7 @@ def _legacy_reference(code: str, defined_syms=None) -> str:
     ],
 )
 def test_shared_ir_resolver_matches_legacy_reference(source, defined_syms):
-    assert prep.resolve_preprocessor_conditionals(source, defined_syms) == _legacy_reference(source, defined_syms)
+    _assert_legacy_semantics_with_exact_alignment(source, defined_syms)
 
 
 def test_shared_ir_parser_is_the_structural_source(monkeypatch):
@@ -207,9 +224,8 @@ def test_refactor_does_not_add_elifdef_concrete_semantics():
         "int fallback;\n"
         "#endif\n"
     )
+    _assert_legacy_semantics_with_exact_alignment(source, {"FEATURE"})
     result = prep.resolve_preprocessor_conditionals(source, {"FEATURE"})
-
-    assert result == _legacy_reference(source, {"FEATURE"})
     assert "int second;" not in result
     assert "int fallback;" in result
 
