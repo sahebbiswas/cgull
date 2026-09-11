@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
+from ..preprocessor.directives import ConditionalDirective, parse_conditional_directives
+
 
 @dataclass
 class _CondFrame:
@@ -308,34 +310,99 @@ def eval_preprocessor_expr(expr_str: str, defined_syms: Optional[Any] = None) ->
     return bool(val != 0)
 
 
-def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = None) -> str:
-    """
-    Performs a line-by-line single-pass resolution of C preprocessor directives and
-    conditionals (#if, #ifdef, #ifndef, #elif, #else, #endif), evaluating branch
-    conditions against `macros` (or `defined_syms`).
+_CONCRETE_CONDITIONAL_KINDS = frozenset(("if", "ifdef", "ifndef", "elif", "else", "endif"))
 
-    Replaces directive lines and non-taken branch bodies with blank lines ("") to maintain
-    exact line alignment and total line count for AST mapping.
+
+def _conditional_directives_by_line(code: str) -> Dict[int, ConditionalDirective]:
+    """Index concrete-supported conditional directives by physical start line."""
+    tree = parse_conditional_directives(code)
+    return {
+        directive.source_range.start.line - 1: directive
+        for directive in tree.directives
+        if directive.kind in _CONCRETE_CONDITIONAL_KINDS
+    }
+
+
+def _directive_line_count(code: str, directive: ConditionalDirective) -> int:
+    """Return the number of IR physical lines occupied by a directive range."""
+    text = directive.source_range.text(code)
+    return max(1, len(text.split("\n")) - (1 if text.endswith("\n") else 0))
+
+
+def _conditional_expr(directive: ConditionalDirective) -> str:
+    """Recover the concrete expression without depending on symbolic interpretation."""
+    if directive.kind == "ifdef":
+        symbol = directive.tokens[0].text if directive.tokens else ""
+        return f"defined({symbol})"
+    if directive.kind == "ifndef":
+        symbol = directive.tokens[0].text if directive.tokens else ""
+        return f"!defined({symbol})"
+    return directive.logical_condition or ""
+
+
+def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = None) -> str:
+    """Resolve concrete preprocessor branches using the shared directive IR.
+
+    Structural recognition and physical directive ranges come from
+    :func:`parse_conditional_directives`; concrete C-integer expression semantics
+    and macro mutation remain local to this resolver. Directive lines and inactive
+    branch bodies are blanked to preserve exact source line alignment.
     """
     macros: Dict[str, int] = _normalize_macro_dict(defined_syms)
-
-    lines = code.splitlines()
+    # The directive IR numbers only '\n' as a physical line boundary. Use the
+    # identical model here so directive indices remain aligned even when source
+    # contains lone '\r', form-feed, vertical-tab, or Unicode separators.
+    trailing_newline = code.endswith("\n")
+    lines = code.split("\n")
+    if trailing_newline:
+        lines.pop()
     output_lines: List[str] = []
-
     cond_stack: List[_CondFrame] = []
+    conditional_by_line = _conditional_directives_by_line(code)
 
     i = 0
     n = len(lines)
-
     while i < n:
+        directive = conditional_by_line.get(i)
+        if directive is not None:
+            line_count = min(_directive_line_count(code, directive), n - i)
+            parent_act = True if not cond_stack else (
+                cond_stack[-1].parent_active and cond_stack[-1].is_taken
+            )
+
+            if directive.kind in ("if", "ifdef", "ifndef"):
+                val = eval_preprocessor_expr(_conditional_expr(directive), macros) if parent_act else False
+                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
+            elif directive.kind == "elif":
+                if cond_stack:
+                    top = cond_stack[-1]
+                    if top.has_taken:
+                        top.is_taken = False
+                    else:
+                        val = eval_preprocessor_expr(_conditional_expr(directive), macros) if top.parent_active else False
+                        top.is_taken = val
+                        if val:
+                            top.has_taken = True
+            elif directive.kind == "else":
+                if cond_stack:
+                    top = cond_stack[-1]
+                    if top.has_taken:
+                        top.is_taken = False
+                    else:
+                        top.is_taken = top.parent_active
+                        top.has_taken = True
+            elif directive.kind == "endif" and cond_stack:
+                cond_stack.pop()
+
+            output_lines.extend("" for _ in range(line_count))
+            i += line_count
+            continue
+
         line = lines[i]
         line_lstrip = line.lstrip()
-
-        # Check if this line starts a preprocessor directive
         if line_lstrip.startswith('#'):
-            directive_parts = []
-            directive_line_indices = []
-
+            directive_parts: List[str] = []
+            directive_line_indices: List[int] = []
             curr_i = i
             while curr_i < n:
                 curr_line = lines[curr_i]
@@ -349,125 +416,49 @@ def resolve_preprocessor_conditionals(code: str, defined_syms: Optional[Any] = N
                     break
 
             full_directive_str = " ".join(directive_parts).strip()
-            i = curr_i + 1
-
             dir_body = full_directive_str.lstrip('#').strip()
-
-            m_ifdef = re.match(r'^ifdef\s+([a-zA-Z_]\w*)', dir_body)
-            m_ifndef = re.match(r'^ifndef\s+([a-zA-Z_]\w*)', dir_body)
-            m_if = re.match(r'^if\b\s*(.*)', dir_body)
-            m_elif = re.match(r'^elif\b\s*(.*)', dir_body)
-            m_else = re.match(r'^else\b', dir_body)
-            m_endif = re.match(r'^endif\b', dir_body)
             m_define = re.match(r'^define\s+([a-zA-Z_]\w*)(?:\([^)]*\))?(?:\s+(.*))?$', dir_body)
             m_undef = re.match(r'^undef\s+([a-zA-Z_]\w*)', dir_body)
+            current_active = True if not cond_stack else (
+                cond_stack[-1].parent_active and cond_stack[-1].is_taken
+            )
 
-            parent_act = True if not cond_stack else (cond_stack[-1].parent_active and cond_stack[-1].is_taken)
-
-            if m_ifdef:
-                sym_name = m_ifdef.group(1)
-                val = eval_preprocessor_expr(f"defined({sym_name})", macros) if parent_act else False
-                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
-                for _ in directive_line_indices:
-                    output_lines.append("")
-            elif m_ifndef:
-                sym_name = m_ifndef.group(1)
-                val = eval_preprocessor_expr(f"!defined({sym_name})", macros) if parent_act else False
-                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
-                for _ in directive_line_indices:
-                    output_lines.append("")
-            elif m_if:
-                expr_str = m_if.group(1)
-                val = eval_preprocessor_expr(expr_str, macros) if parent_act else False
-                cond_stack.append(_CondFrame(has_taken=val, is_taken=val, parent_active=parent_act))
-                for _ in directive_line_indices:
-                    output_lines.append("")
-            elif m_elif:
-                expr_str = m_elif.group(1)
-                if cond_stack:
-                    top = cond_stack[-1]
-                    if top.has_taken:
-                        top.is_taken = False
+            if m_define and current_active:
+                m_name = m_define.group(1)
+                m_val_raw = (m_define.group(2) or "").strip()
+                if not m_val_raw or m_val_raw.startswith('//') or m_val_raw.startswith('/*'):
+                    macros[m_name] = 1
+                else:
+                    val_clean = re.sub(r'/\*.*?\*/|//.*', '', m_val_raw).strip()
+                    m_num = re.match(r'^-?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
+                    if m_num:
+                        parsed_int = _parse_c_int_literal(val_clean)
+                        macros[m_name] = parsed_int if parsed_int is not None else 1
+                    elif eval_preprocessor_expr(val_clean, macros):
+                        tokens = _tokenize_c_prep_expr(val_clean, macros)
+                        macros[m_name] = _eval_c_prep_tokens(tokens) if tokens else 1
                     else:
-                        val = eval_preprocessor_expr(expr_str, macros) if top.parent_active else False
-                        top.is_taken = val
-                        if val:
-                            top.has_taken = True
-                for _ in directive_line_indices:
-                    output_lines.append("")
-            elif m_else:
-                if cond_stack:
-                    top = cond_stack[-1]
-                    if top.has_taken:
-                        top.is_taken = False
-                    else:
-                        top.is_taken = top.parent_active
-                        top.has_taken = True
-                for _ in directive_line_indices:
-                    output_lines.append("")
-            elif m_endif:
-                if cond_stack:
-                    cond_stack.pop()
-                for _ in directive_line_indices:
-                    output_lines.append("")
-            elif m_define:
-                if parent_act:
-                    m_name = m_define.group(1)
-                    m_val_raw = (m_define.group(2) or "").strip()
-                    if not m_val_raw or m_val_raw.startswith('//') or m_val_raw.startswith('/*'):
                         macros[m_name] = 1
-                    else:
-                        val_clean = re.sub(r'/\*.*?\*/|//.*', '', m_val_raw).strip()
-                        m_num = re.match(r'^-?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', val_clean)
-                        if m_num:
-                            parsed_int = _parse_c_int_literal(val_clean)
-                            if parsed_int is not None:
-                                macros[m_name] = parsed_int
-                            else:
-                                macros[m_name] = 1
-                        else:
-                            if eval_preprocessor_expr(val_clean, macros):
-                                tokens = _tokenize_c_prep_expr(val_clean, macros)
-                                if tokens:
-                                    macros[m_name] = _eval_c_prep_tokens(tokens)
-                                else:
-                                    macros[m_name] = 1
-                            else:
-                                macros[m_name] = 1
-                    for idx in directive_line_indices:
-                        output_lines.append(lines[idx])
-                else:
-                    for _ in directive_line_indices:
-                        output_lines.append("")
-            elif m_undef:
-                if parent_act:
-                    macros.pop(m_undef.group(1), None)
-                    for idx in directive_line_indices:
-                        output_lines.append(lines[idx])
-                else:
-                    for _ in directive_line_indices:
-                        output_lines.append("")
+                output_lines.extend(lines[idx] for idx in directive_line_indices)
+            elif m_undef and current_active:
+                macros.pop(m_undef.group(1), None)
+                output_lines.extend(lines[idx] for idx in directive_line_indices)
+            elif current_active:
+                output_lines.extend(lines[idx] for idx in directive_line_indices)
             else:
-                if parent_act:
-                    for idx in directive_line_indices:
-                        output_lines.append(lines[idx])
-                else:
-                    for _ in directive_line_indices:
-                        output_lines.append("")
+                output_lines.extend("" for _ in directive_line_indices)
 
-        else:
-            # Ordinary code line
-            current_active = True if not cond_stack else (cond_stack[-1].parent_active and cond_stack[-1].is_taken)
-            if current_active:
-                output_lines.append(line)
-            else:
-                output_lines.append("")
-            i += 1
+            i = curr_i + 1
+            continue
 
-    res = "\n".join(output_lines)
-    if code.endswith("\n") and not res.endswith("\n"):
-        res += "\n"
-    return res
+        current_active = True if not cond_stack else (
+            cond_stack[-1].parent_active and cond_stack[-1].is_taken
+        )
+        output_lines.append(line if current_active else "")
+        i += 1
+
+    resolved = "\n".join(output_lines)
+    return resolved + "\n" if trailing_newline else resolved
 
 
 def _strip_attributes_and_specifiers(code: str) -> str:
@@ -509,4 +500,3 @@ def _strip_attributes_and_specifiers(code: str) -> str:
             result.append(code[i])
             i += 1
     return ''.join(result)
-
