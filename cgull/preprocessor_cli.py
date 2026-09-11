@@ -8,6 +8,7 @@ import os
 import sys
 from typing import Iterable
 
+from .cli_base import print
 from .config import load_config
 from .ignore import CGullIgnoreFilter
 from .preprocessor import parse_conditional_directives
