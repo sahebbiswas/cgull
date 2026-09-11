@@ -212,3 +212,12 @@ def test_refactor_does_not_add_elifdef_concrete_semantics():
     assert result == _legacy_reference(source, {"FEATURE"})
     assert "int second;" not in result
     assert "int fallback;" in result
+
+
+def test_continued_conditional_at_eof_without_newline_blanks_every_physical_line():
+    source = "#if defined(A) \\\n && defined(B)"
+
+    result = prep.resolve_preprocessor_conditionals(source, {"A", "B"})
+
+    assert result == _legacy_reference(source, {"A", "B"})
+    assert result == "\n"
