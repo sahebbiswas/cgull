@@ -1,4 +1,4 @@
-"""CLI facade adding safe-fix support on top of the established CLI."""
+"""CLI facade adding safe-fix and preprocessor support to the established CLI."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import io
 import os
+import sys
 from typing import List, Optional, Tuple
 
 from . import cli_base as _base
@@ -16,6 +17,7 @@ from .compile_database import (
     load_compile_commands_data,
 )
 from .fixes import FixResult, apply_safe_fixes
+from .preprocessor_cli import handle_preprocessor
 from .telemetry import ProgressIndicator as _TelemetryProgressIndicator
 
 
@@ -31,11 +33,15 @@ ProgressIndicator = _TelemetryProgressIndicator
 ReportGenerator = _base.ReportGenerator
 
 
-def _scan_subparser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+def _subparsers_action(parser: argparse.ArgumentParser) -> argparse._SubParsersAction:
     for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
-            return action.choices["scan"]
-    raise RuntimeError("scan subparser not found")
+            return action
+    raise RuntimeError("subparsers action not found")
+
+
+def _scan_subparser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    return _subparsers_action(parser).choices["scan"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +56,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--write",
         action="store_true",
         help="With --fix, write SAFE_FIX replacements to source files and re-scan",
+    )
+
+    subparsers = _subparsers_action(parser)
+    preprocessor_parser = subparsers.add_parser(
+        "preprocessor",
+        help="Analyze conditional preprocessor structure and Boolean semantics",
+    )
+    preprocessor_parser.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="C/C++ source file or directory to analyze (default: current directory)",
+    )
+    preprocessor_parser.add_argument(
+        "--verbose",
+        dest="preprocessor_verbose",
+        action="store_true",
+        help="Include unchanged structural entries",
+    )
+    preprocessor_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit stable structured JSON instead of human-readable output",
+    )
+    preprocessor_parser.add_argument(
+        "-c",
+        "--config",
+        help="Path to .cgull.toml or pyproject.toml configuration file",
+    )
+    preprocessor_parser.add_argument("--ignore-file", help="Path to .cgullignore file")
+    preprocessor_parser.add_argument(
+        "--ignore-pattern",
+        action="append",
+        default=[],
+        help="Pattern to ignore (can be specified multiple times)",
     )
     return parser
 
@@ -245,11 +286,51 @@ def handle_scan(args) -> int:
     return rc
 
 
+def _is_preprocessor_command(argv: List[str]) -> bool:
+    """Recognize preprocessor after supported global logging options."""
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == "preprocessor":
+            return True
+        if token == "--":
+            return False
+        if token in ("--log-level", "--log-file"):
+            index += 2
+            continue
+        if token.startswith("--log-level=") or token.startswith("--log-file="):
+            index += 1
+            continue
+        if token == "--verbose" or (token.startswith("-") and len(token) > 1 and set(token[1:]) == {"v"}):
+            index += 1
+            continue
+        return False
+    return False
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Run the CLI while preserving the established injectable argv API."""
     _base.build_parser = build_parser
     _base.handle_scan = handle_scan
     _sync_base_symbols()
+
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if _is_preprocessor_command(effective_argv):
+        parser = build_parser()
+        args = parser.parse_args(effective_argv)
+        from .logging_config import configure_logging
+
+        try:
+            configure_logging(
+                verbose_count=getattr(args, "verbose", 0) or 0,
+                log_level_str=getattr(args, "log_level", None),
+                log_file=getattr(args, "log_file", None),
+            )
+        except OSError as exc:
+            _base.print(f"Error configuring logging: {exc}", file=_base.sys.stderr)
+            return 1
+        return handle_preprocessor(args)
+
     return _base.main(argv)
 
 
