@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Add `cgull init [PATH]` as the canonical project setup flow, including focused/comprehensive finding profiles, interactive custom rule exclusions, include-root detection, compile database discovery guidance, and `--migrate` support for legacy `.cgullignore` and `.cgullincludes` files (#447).
+
+### Changed
+- Remove the advertised `init-ignore` command in favor of a single editable `.cgull.toml` configuration surface. Existing legacy project files continue to load for backward compatibility (#447).
+
 ## [0.11.10] - 2026-09-10
 
 ### Added
