@@ -69,8 +69,7 @@ def _normalize_ignore_pattern(pattern: str) -> str:
     body = raw[1:] if negated else raw
     while body.startswith("./"):
         body = body[2:]
-    normalized = ("!" if negated else "") + body
-    return normalized
+    return ("!" if negated else "") + body
 
 
 def _read_legacy_ignore(path: Path) -> List[str]:
@@ -250,10 +249,10 @@ def _render_config(
             lines.append("# Focused profile: opinionated low-severity policy checks disabled explicitly.")
         else:
             lines.append("# Custom profile: rule exclusions selected explicitly during initialization.")
-        lines.extend(["[rules]", "skip = {"])
+        lines.append("[rules.skip]")
         for rule_id, reason in skipped_rules.items():
-            lines.append(f"    {_toml_quote(rule_id)} = {_toml_quote(reason)},")
-        lines.extend(["}", ""])
+            lines.append(f"{_toml_quote(rule_id)} = {_toml_quote(reason)}")
+        lines.append("")
     else:
         lines.extend(
             [
@@ -292,10 +291,14 @@ def initialize_project(
     *,
     profile: Optional[str] = None,
     migrate: bool = False,
-    stdin: TextIO = sys.stdin,
-    stdout: TextIO = sys.stdout,
-    stderr: TextIO = sys.stderr,
+    stdin: Optional[TextIO] = None,
+    stdout: Optional[TextIO] = None,
+    stderr: Optional[TextIO] = None,
 ) -> int:
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
+    stderr = sys.stderr if stderr is None else stderr
+
     root = project_root.expanduser().resolve()
     if not root.exists():
         _write(stderr, f"Error: project path '{project_root}' does not exist.")
@@ -366,7 +369,13 @@ def initialize_project(
     return 0
 
 
-def handle_init(args, *, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr: TextIO = sys.stderr) -> int:
+def handle_init(
+    args,
+    *,
+    stdin: Optional[TextIO] = None,
+    stdout: Optional[TextIO] = None,
+    stderr: Optional[TextIO] = None,
+) -> int:
     return initialize_project(
         Path(getattr(args, "path", ".") or "."),
         profile=getattr(args, "profile", None),
