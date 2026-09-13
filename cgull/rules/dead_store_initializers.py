@@ -99,6 +99,22 @@ def suppress_lexical_initializer(context, variable, line):
     if "\n" in text[:match.start()]:
         return False
 
+    # assigned_lines is line-based and can collapse multiple writes on one line.
+    # Inspect the remainder of the declaration line so the fallback tier does not
+    # mistake a later assignment (or increment/decrement) for the initializer.
+    first_line_end = text.find("\n")
+    if first_line_end < 0:
+        first_line_end = len(text)
+    if match.end() <= first_line_end:
+        tail = text[match.end():first_line_end]
+        name = re.escape(variable.name)
+        same_line_write = re.search(
+            rf"(?:\b{name}\b\s*(?:\+\+|--|(?:<<|>>|[+\-*/%&|^])?=(?!=))|(?:\+\+|--)\s*\b{name}\b)",
+            tail,
+        )
+        if same_line_write is not None:
+            return False
+
     try:
         unit = CParser().parse("void f(void) { int value = " + match.group(1) + "; }")
     except Exception:
