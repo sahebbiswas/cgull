@@ -17,7 +17,7 @@ PathLike = Union[str, os.PathLike[str]]
 
 def normalize_project_path(path: PathLike) -> str:
     """Return a stable absolute path without requiring the path to exist."""
-    return os.path.abspath(os.path.expanduser(os.fspath(path)))
+    return os.path.realpath(os.path.abspath(os.path.expanduser(os.fspath(path))))
 
 
 def _target_directory(target: PathLike) -> str:
@@ -102,7 +102,7 @@ def resolve_project_state_root(
 
     discovered = find_config_file(target_root)
     if discovered:
-        return os.path.dirname(os.path.abspath(discovered))
+        return os.path.dirname(os.path.realpath(discovered))
     return target_root
 
 
