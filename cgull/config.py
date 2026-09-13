@@ -12,7 +12,7 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore
 
 from .models import Severity, ScanMode
-from .project_state import DEFAULT_LOG_RETENTION_RUNS, normalize_project_path
+from .project_state import DEFAULT_LOG_RETENTION_RUNS
 from .semantic_models import (
     EMPTY_SEMANTIC_MODELS,
     SemanticModelConfigError,
@@ -132,7 +132,7 @@ def find_config_file(target_path: str) -> Optional[str]:
 
     .cgull.toml takes precedence over pyproject.toml in the same directory.
     """
-    abs_target = normalize_project_path(target_path)
+    abs_target = os.path.abspath(target_path)
     curr_dir = abs_target if os.path.isdir(abs_target) else os.path.dirname(abs_target)
 
     while True:
