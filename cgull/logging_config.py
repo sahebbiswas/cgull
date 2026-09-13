@@ -2,10 +2,14 @@
 Structured trace and diagnostic logging configuration for C-GULL.
 """
 
+import json
 import logging
-import time
+import os
 import sys
-from typing import Optional, Union
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
 
 # Define TRACE level below DEBUG (DEBUG is 10)
 TRACE_LEVEL_NUM = 5
@@ -61,6 +65,63 @@ def parse_log_level(level_str: str) -> int:
             return int(normalized)
         except ValueError:
             return logging.WARNING
+
+
+def _resolve_display_level(verbose_count: int, log_level_str: Optional[str]) -> int:
+    if log_level_str:
+        return parse_log_level(log_level_str)
+    if verbose_count >= 3:
+        return TRACE_LEVEL_NUM
+    if verbose_count == 2:
+        return logging.DEBUG
+    if verbose_count == 1:
+        return logging.INFO
+    return logging.WARNING
+
+
+class JSONLFormatter(logging.Formatter):
+    """Render one structured, parseable JSON object per log record."""
+
+    _CONTEXT_FIELDS = ("cgull_phase", "cgull_file", "cgull_rule")
+
+    def format(self, record: logging.LogRecord) -> str:
+        try:
+            payload = {
+                "timestamp": (
+                    datetime.fromtimestamp(record.created, timezone.utc)
+                    .isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z")
+                ),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+                "process_id": record.process,
+            }
+            for field in self._CONTEXT_FIELDS:
+                if hasattr(record, field):
+                    value = getattr(record, field)
+                    try:
+                        json.dumps(value, allow_nan=False)
+                    except (TypeError, ValueError):
+                        value = str(value)
+                    payload[field] = value
+            if record.exc_info:
+                payload["exception"] = self.formatException(record.exc_info)
+            return json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        except Exception:
+            # Logging must never be allowed to terminate analysis. Keep the
+            # fallback deliberately small and composed only of safe primitives.
+            return json.dumps(
+                {
+                    "timestamp": datetime.now(timezone.utc)
+                    .isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z"),
+                    "level": getattr(record, "levelname", "ERROR"),
+                    "logger": getattr(record, "name", "cgull.logging"),
+                    "message": "Unable to serialize diagnostic record",
+                    "process_id": os.getpid(),
+                }
+            )
 
 
 class _ProgressSafeStderr:
@@ -149,42 +210,6 @@ def _ensure_progress_safe_stderr() -> None:
     sys.stderr = _ProgressSafeStderr(sys.stderr)
 
 
-def configure_logging(
-    verbose_count: int = 0,
-    log_level_str: Optional[str] = None,
-    log_file: Optional[str] = None,
-) -> None:
-    """
-    Configures root logging with a standard structured format.
-    """
-    # Determine log level
-    if log_level_str:
-        level = parse_log_level(log_level_str)
-    elif verbose_count >= 3:
-        level = TRACE_LEVEL_NUM
-    elif verbose_count == 2:
-        level = logging.DEBUG
-    elif verbose_count == 1:
-        level = logging.INFO
-    else:
-        level = logging.WARNING
-
-    # If unconfigured/default WARNING level or quiet logging, use raw message format
-    # so unformatted direct stderr error messages like "\n[ERROR] Analysis failed for ..."
-    # remain prefixed by newline and exactly match terminal expectations without timestamp prefixes.
-    if level >= logging.WARNING and not log_file and verbose_count == 0 and not log_level_str:
-        fmt = "%(message)s"
-    else:
-        fmt = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
-    formatter = UTCFormatter(fmt)
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-
-    # Remove existing handlers to avoid duplicates on re-configuration
-    for h in list(root_logger.handlers):
-        root_logger.removeHandler(h)
-
 class DynamicStderrHandler(logging.StreamHandler):
     """
     StreamHandler whose stream dynamically evaluates sys.stderr at emit time
@@ -203,23 +228,11 @@ def configure_logging(
     verbose_count: int = 0,
     log_level_str: Optional[str] = None,
     log_file: Optional[str] = None,
+    capture_file: Optional[str] = None,
 ) -> None:
-    """
-    Configures root logging with a standard structured format.
-    """
+    """Configure interactive display and complete local diagnostic capture."""
     _ensure_progress_safe_stderr()
-
-    # Determine log level
-    if log_level_str:
-        level = parse_log_level(log_level_str)
-    elif verbose_count >= 3:
-        level = TRACE_LEVEL_NUM
-    elif verbose_count == 2:
-        level = logging.DEBUG
-    elif verbose_count == 1:
-        level = logging.INFO
-    else:
-        level = logging.WARNING
+    level = _resolve_display_level(verbose_count, log_level_str)
 
     # If unconfigured/default WARNING level or quiet logging, use raw message format
     # so unformatted direct stderr error messages like "\n[ERROR] Analysis failed for ..."
@@ -231,11 +244,16 @@ def configure_logging(
     formatter = UTCFormatter(fmt)
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(level)
+    root_logger.setLevel(TRACE_LEVEL_NUM)
 
-    # Remove existing handlers to avoid duplicates on re-configuration
+    # Close replaced file handlers as well as detaching them; repeated calls are
+    # common in the API test suite and must not leak descriptors.
     for h in list(root_logger.handlers):
         root_logger.removeHandler(h)
+        try:
+            h.close()
+        except Exception:
+            pass
 
     stderr_handler = DynamicStderrHandler()
     stderr_handler.setLevel(level)
@@ -248,3 +266,35 @@ def configure_logging(
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
+
+    # #455 will supply the canonical project-state location and retention. This
+    # dependency-first slice uses a safe project-local default.
+    if capture_file is None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        capture_file = str(
+            Path.cwd() / ".cgull" / "logs" / f"scan-{stamp}-{os.getpid()}.log"
+        )
+    try:
+        capture_path = Path(capture_file)
+        capture_path.parent.mkdir(parents=True, exist_ok=True)
+        # Reserve a new path without allowing FileHandler's lazy/re-open path to
+        # repeat exclusive creation in forked test/scan processes. Coordinator-
+        # owned queue transport replaces inherited handlers in #457.
+        capture_path.touch(exist_ok=False)
+        capture_handler = logging.FileHandler(capture_path, mode="a", encoding="utf-8")
+        capture_handler.setLevel(TRACE_LEVEL_NUM)
+        capture_handler.setFormatter(JSONLFormatter())
+        root_logger.addHandler(capture_handler)
+    except (OSError, ValueError) as exc:
+        # Report through the already-configured display handler, never through a
+        # partially initialized capture handler.
+        warning = logging.LogRecord(
+            "cgull.logging",
+            logging.WARNING,
+            __file__,
+            0,
+            "Unable to create diagnostic capture log %s: %s",
+            (capture_file, exc),
+            None,
+        )
+        stderr_handler.handle(warning)
