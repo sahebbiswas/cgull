@@ -269,7 +269,8 @@ def configure_logging(
 
     # #455 will supply the canonical project-state location and retention. This
     # dependency-first slice uses a safe project-local default.
-    if capture_file is None:
+    auto_capture = capture_file is None
+    if auto_capture:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         capture_file = str(
             Path.cwd() / ".cgull" / "logs" / f"scan-{stamp}-{os.getpid()}.log"
@@ -280,7 +281,8 @@ def configure_logging(
         # Reserve a new path without allowing FileHandler's lazy/re-open path to
         # repeat exclusive creation in forked test/scan processes. Coordinator-
         # owned queue transport replaces inherited handlers in #457.
-        capture_path.touch(exist_ok=False)
+        if auto_capture:
+            capture_path.touch(exist_ok=False)
         capture_handler = logging.FileHandler(capture_path, mode="a", encoding="utf-8")
         capture_handler.setLevel(TRACE_LEVEL_NUM)
         capture_handler.setFormatter(JSONLFormatter())
