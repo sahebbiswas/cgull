@@ -1,5 +1,6 @@
 """Regression coverage for issue #470 logging verbosity policy."""
 
+from contextlib import contextmanager
 import io
 import json
 import logging
@@ -14,6 +15,20 @@ from cgull.logging_config import (
     configure_logging,
     resolve_effective_log_level,
 )
+
+
+@contextmanager
+def logging_project():
+    """Close logging file handles before TemporaryDirectory cleanup on Windows."""
+    with tempfile.TemporaryDirectory() as directory:
+        try:
+            yield Path(directory)
+        finally:
+            root = logging.getLogger()
+            for handler in list(root.handlers):
+                if isinstance(handler, logging.FileHandler):
+                    root.removeHandler(handler)
+                    handler.close()
 
 
 class TestIssue470LoggingVerbosity(unittest.TestCase):
@@ -72,8 +87,7 @@ class TestIssue470LoggingVerbosity(unittest.TestCase):
 
         for verbose_count, log_level, expected_levels in cases:
             with self.subTest(verbose_count=verbose_count, log_level=log_level):
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    project = Path(temp_dir)
+                with logging_project() as project:
                     stderr = io.StringIO()
                     with patch("sys.stderr", stderr):
                         configure_logging(
@@ -106,8 +120,7 @@ class TestIssue470LoggingVerbosity(unittest.TestCase):
                         self.assertEqual(level in stderr_text, should_appear)
 
     def test_explicit_text_log_uses_same_effective_threshold(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            project = Path(temp_dir)
+        with logging_project() as project:
             text_log = project / "diagnostics.log"
             stderr = io.StringIO()
             with patch("sys.stderr", stderr):
@@ -130,8 +143,7 @@ class TestIssue470LoggingVerbosity(unittest.TestCase):
             )
 
     def test_explicit_log_level_can_be_less_verbose_than_default(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            project = Path(temp_dir)
+        with logging_project() as project:
             text_log = project / "errors.log"
             stdout = io.StringIO()
             stderr = io.StringIO()
