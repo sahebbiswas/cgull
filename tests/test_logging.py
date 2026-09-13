@@ -92,8 +92,8 @@ class TestLoggingConfig(unittest.TestCase):
                     if isinstance(h.formatter, JSONLFormatter)
                 )
                 self.assertEqual(stderr.level, expected)
-                self.assertEqual(capture.level, TRACE_LEVEL_NUM)
-                self.assertEqual(self.root_logger.level, TRACE_LEVEL_NUM)
+                self.assertEqual(capture.level, expected)
+                self.assertEqual(self.root_logger.level, expected)
 
     def test_configure_logging_log_level_string_takes_precedence(self):
         with logging_directory() as temp_dir:
@@ -121,12 +121,12 @@ class TestLoggingConfig(unittest.TestCase):
             )
             self.assertEqual(stderr.level, logging.ERROR)
 
-    def test_capture_records_all_levels_as_jsonl(self):
+    def test_capture_records_selected_levels_as_jsonl(self):
         with logging_directory() as temp_dir:
             capture_file = os.path.join(temp_dir, "capture.log")
             stderr_buf = io.StringIO()
             with patch("sys.stderr", stderr_buf):
-                configure_logging(log_level_str="error", capture_file=capture_file)
+                configure_logging(log_level_str="warning", capture_file=capture_file)
                 logger = logging.getLogger("cgull.capture_test")
                 logger.log(TRACE_LEVEL_NUM, "trace")
                 logger.debug("debug")
@@ -143,11 +143,11 @@ class TestLoggingConfig(unittest.TestCase):
                 records = [json.loads(line) for line in stream]
             self.assertEqual(
                 [record["level"] for record in records],
-                ["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"],
+                ["WARNING", "ERROR"],
             )
-            self.assertEqual(records[3]["cgull_phase"], "parse")
-            self.assertEqual(records[3]["cgull_rule"], "CGULL-001")
-            self.assertNotIn("warning", stderr_buf.getvalue())
+            self.assertEqual(records[0]["cgull_phase"], "parse")
+            self.assertEqual(records[0]["cgull_rule"], "CGULL-001")
+            self.assertIn("warning", stderr_buf.getvalue())
             self.assertIn("error", stderr_buf.getvalue())
 
     def test_exception_is_one_json_record(self):
@@ -178,10 +178,10 @@ class TestLoggingConfig(unittest.TestCase):
                     if isinstance(h.formatter, JSONLFormatter)
                 )
                 old_stream = old_handler.stream
-                logging.getLogger("cgull.capture_test").info("first")
+                logging.getLogger("cgull.capture_test").warning("first")
                 configure_logging(capture_file=capture_file)
                 self.assertTrue(old_stream.closed)
-                logging.getLogger("cgull.capture_test").info("second")
+                logging.getLogger("cgull.capture_test").warning("second")
             captures = [
                 h for h in self.root_logger.handlers
                 if isinstance(h.formatter, JSONLFormatter)
@@ -191,7 +191,8 @@ class TestLoggingConfig(unittest.TestCase):
             with open(capture_file, encoding="utf-8") as stream:
                 messages = [json.loads(line)["message"] for line in stream]
             self.assertEqual(messages, ["existing", "first", "second"])
-            self.assertEqual(stderr_buf.getvalue(), "")
+            self.assertIn("first", stderr_buf.getvalue())
+            self.assertIn("second", stderr_buf.getvalue())
 
     def test_capture_open_failure_warns_and_remains_usable(self):
         stderr_buf = io.StringIO()

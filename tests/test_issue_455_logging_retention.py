@@ -172,7 +172,7 @@ class TestCapturePlacementAndPruning(unittest.TestCase):
             project = Path(tmpdir)
             configure_logging(project_state_root=str(project))
             logger = logging.getLogger("cgull.issue455")
-            logger.info("captured")
+            logger.warning("captured")
             for handler in logging.getLogger().handlers:
                 handler.flush()
 

@@ -76,7 +76,11 @@ def parse_log_level(level_str: str) -> int:
             return logging.WARNING
 
 
-def _resolve_display_level(verbose_count: int, log_level_str: Optional[str]) -> int:
+def resolve_effective_log_level(
+    verbose_count: int,
+    log_level_str: Optional[str],
+) -> int:
+    """Resolve the single diagnostic threshold shared by every logging sink."""
     if log_level_str:
         return parse_log_level(log_level_str)
     if verbose_count >= 3:
@@ -314,9 +318,9 @@ def configure_logging(
     project_state_root: Optional[str] = None,
     retention_runs: Optional[int] = None,
 ) -> None:
-    """Configure interactive display and complete local diagnostic capture."""
+    """Configure every diagnostic sink at one effective logging threshold."""
     _ensure_progress_safe_stderr()
-    level = _resolve_display_level(verbose_count, log_level_str)
+    level = resolve_effective_log_level(verbose_count, log_level_str)
 
     # If unconfigured/default WARNING level or quiet logging, use raw message format
     # so unformatted direct stderr error messages like "\n[ERROR] Analysis failed for ..."
@@ -328,7 +332,8 @@ def configure_logging(
     formatter = UTCFormatter(fmt)
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(TRACE_LEVEL_NUM)
+    # Reject disabled detail before records reach formatter/file/transport work.
+    root_logger.setLevel(level)
 
     # Close replaced file handlers as well as detaching them; repeated calls are
     # common in the API test suite and must not leak descriptors.
@@ -344,8 +349,7 @@ def configure_logging(
     stderr_handler.setFormatter(formatter)
     root_logger.addHandler(stderr_handler)
 
-    # Optional legacy text log handler. Its level continues to follow display
-    # verbosity until the compatibility/opt-out slice in #456 extends CLI policy.
+    # Optional legacy text log handler follows the same selected threshold.
     if log_file:
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(level)
@@ -398,7 +402,7 @@ def configure_logging(
             mode="x" if auto_capture else "a",
             encoding="utf-8",
         )
-        capture_handler.setLevel(TRACE_LEVEL_NUM)
+        capture_handler.setLevel(level)
         capture_handler.setFormatter(JSONLFormatter())
         root_logger.addHandler(capture_handler)
     except (OSError, ValueError) as exc:
