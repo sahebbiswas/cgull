@@ -161,10 +161,10 @@ def _primary_target(args) -> str:
 def _resolve_scan_mode_args(args):
     """Return a copy of args with the CLI scan mode resolved when possible."""
     internal = argparse.Namespace(**vars(args))
-    targets = getattr(internal, "target", ["."])
+    targets = getattr(internal, "target", None)
     if isinstance(targets, str):
         targets = [targets]
-    targets = list(targets) or ["."]
+    targets = list(targets or ["."])
     internal.target = targets
 
     # Preserve cli_base's established missing/invalid target error path. Mode
