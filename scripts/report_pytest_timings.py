@@ -2,8 +2,9 @@
 """Report the slowest pytest cases from a JUnit XML result.
 
 The CI matrix uses this for the Windows/Python 3.11 lane so slow-test data is
-visible in both the job log and the GitHub Actions job summary.  GitHub notice
-annotations make the individual slow cases queryable without downloading logs.
+visible in both the job log and the GitHub Actions job summary. GitHub notice
+annotations make the highest-impact slow cases queryable without downloading
+logs while the summary retains the wider ranked list.
 """
 
 from __future__ import annotations
@@ -55,10 +56,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("junit_xml", type=Path)
     parser.add_argument("--top", type=int, default=25)
+    parser.add_argument(
+        "--notices",
+        type=int,
+        default=10,
+        help="number of top cases to emit as GitHub notice annotations",
+    )
     args = parser.parse_args(argv)
 
     if args.top < 1:
         parser.error("--top must be at least 1")
+    if args.notices < 0:
+        parser.error("--notices must be zero or greater")
     if not args.junit_xml.exists():
         print(f"Timing report not available: {args.junit_xml}")
         return 0
@@ -81,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(summary_path, "a", encoding="utf-8") as summary:
             summary.write(report)
 
-    for duration, name in cases:
+    for duration, name in cases[: args.notices]:
         message = _github_escape(f"{name} took {duration:.3f}s")
         print(f"::notice title=Slow pytest case::{message}")
 
