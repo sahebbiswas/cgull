@@ -5,15 +5,24 @@ Structured trace and diagnostic logging configuration for C-GULL.
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from .project_state import DEFAULT_LOG_RETENTION_RUNS
+
 # Define TRACE level below DEBUG (DEBUG is 10)
 TRACE_LEVEL_NUM = 5
 logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
+
+_DEFAULT_CAPTURE_RE = re.compile(
+    r"^scan-(?P<stamp>\d{8}T\d{6}(?:\.\d{1,6})?Z)-(?P<pid>\d+)\.log$"
+)
+_BOOTSTRAP_PROJECT_STATE_ROOT: Optional[str] = None
+_BOOTSTRAP_RETENTION_RUNS: Optional[int] = None
 
 
 def trace(self, message, *args, **kws):
@@ -224,11 +233,86 @@ class DynamicStderrHandler(logging.StreamHandler):
         pass
 
 
+def set_logging_bootstrap_context(
+    *,
+    project_state_root: Optional[str] = None,
+    retention_runs: Optional[int] = None,
+) -> None:
+    """Set transient CLI-derived state used by the legacy logging call site."""
+    global _BOOTSTRAP_PROJECT_STATE_ROOT, _BOOTSTRAP_RETENTION_RUNS
+    _BOOTSTRAP_PROJECT_STATE_ROOT = project_state_root
+    _BOOTSTRAP_RETENTION_RUNS = retention_runs
+
+
+def clear_logging_bootstrap_context() -> None:
+    """Clear transient CLI logging state after one command dispatch."""
+    set_logging_bootstrap_context(project_state_root=None, retention_runs=None)
+
+
+def _capture_sort_key(path: Path):
+    match = _DEFAULT_CAPTURE_RE.match(path.name)
+    if match is not None:
+        stamp = match.group("stamp")
+        for fmt in ("%Y%m%dT%H%M%S.%fZ", "%Y%m%dT%H%M%SZ"):
+            try:
+                parsed = datetime.strptime(stamp, fmt).replace(tzinfo=timezone.utc)
+                return (parsed.timestamp(), path.name)
+            except ValueError:
+                continue
+    try:
+        return (path.stat().st_mtime_ns / 1_000_000_000, path.name)
+    except OSError:
+        return (0.0, path.name)
+
+
+def _default_capture_files(log_dir: Path):
+    if not log_dir.is_dir():
+        return []
+    return sorted(
+        (
+            child
+            for child in log_dir.iterdir()
+            if child.is_file() and _DEFAULT_CAPTURE_RE.match(child.name)
+        ),
+        key=_capture_sort_key,
+    )
+
+
+def _prune_default_capture_logs(log_dir: Path, retention_runs: int) -> None:
+    """Make room for the current run while deleting only C-GULL-owned captures."""
+    keep_existing = max(retention_runs - 1, 0)
+    captures = _default_capture_files(log_dir)
+    excess = len(captures) - keep_existing
+    if excess <= 0:
+        return
+    for capture in captures[:excess]:
+        capture.unlink()
+
+
+def _display_logging_warning(
+    stderr_handler: DynamicStderrHandler,
+    message: str,
+    args,
+) -> None:
+    warning = logging.LogRecord(
+        "cgull.logging",
+        logging.WARNING,
+        __file__,
+        0,
+        message,
+        args,
+        None,
+    )
+    stderr_handler.handle(warning)
+
+
 def configure_logging(
     verbose_count: int = 0,
     log_level_str: Optional[str] = None,
     log_file: Optional[str] = None,
     capture_file: Optional[str] = None,
+    project_state_root: Optional[str] = None,
+    retention_runs: Optional[int] = None,
 ) -> None:
     """Configure interactive display and complete local diagnostic capture."""
     _ensure_progress_safe_stderr()
@@ -260,43 +344,64 @@ def configure_logging(
     stderr_handler.setFormatter(formatter)
     root_logger.addHandler(stderr_handler)
 
-    # Optional Log file handler
+    # Optional legacy text log handler. Its level continues to follow display
+    # verbosity until the compatibility/opt-out slice in #456 extends CLI policy.
     if log_file:
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
 
-    # #455 will supply the canonical project-state location and retention. This
-    # dependency-first slice uses a safe project-local default.
     auto_capture = capture_file is None
+    warning_emitted = False
+
     if auto_capture:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-        capture_file = str(
-            Path.cwd() / ".cgull" / "logs" / f"scan-{stamp}-{os.getpid()}.log"
+        state_root = project_state_root or _BOOTSTRAP_PROJECT_STATE_ROOT or os.getcwd()
+        configured_retention = (
+            retention_runs
+            if retention_runs is not None
+            else _BOOTSTRAP_RETENTION_RUNS
         )
+        if (
+            isinstance(configured_retention, bool)
+            or not isinstance(configured_retention, int)
+            or configured_retention <= 0
+        ):
+            configured_retention = DEFAULT_LOG_RETENTION_RUNS
+
+        log_dir = Path(state_root) / ".cgull" / "logs"
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            _prune_default_capture_logs(log_dir, configured_retention)
+        except OSError as exc:
+            _display_logging_warning(
+                stderr_handler,
+                "Unable to prune diagnostic capture logs in %s: %s",
+                (str(log_dir), exc),
+            )
+            warning_emitted = True
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        capture_file = str(log_dir / f"scan-{stamp}-{os.getpid()}.log")
+
     try:
         capture_path = Path(capture_file)
         capture_path.parent.mkdir(parents=True, exist_ok=True)
-        # Reserve a new path without allowing FileHandler's lazy/re-open path to
-        # repeat exclusive creation in forked test/scan processes. Coordinator-
-        # owned queue transport replaces inherited handlers in #457.
-        if auto_capture:
-            capture_path.touch(exist_ok=False)
-        capture_handler = logging.FileHandler(capture_path, mode="a", encoding="utf-8")
+        capture_handler = logging.FileHandler(
+            capture_path,
+            mode="x" if auto_capture else "a",
+            encoding="utf-8",
+        )
         capture_handler.setLevel(TRACE_LEVEL_NUM)
         capture_handler.setFormatter(JSONLFormatter())
         root_logger.addHandler(capture_handler)
     except (OSError, ValueError) as exc:
         # Report through the already-configured display handler, never through a
-        # partially initialized capture handler.
-        warning = logging.LogRecord(
-            "cgull.logging",
-            logging.WARNING,
-            __file__,
-            0,
-            "Unable to create diagnostic capture log %s: %s",
-            (capture_file, exc),
-            None,
-        )
-        stderr_handler.handle(warning)
+        # partially initialized capture handler. Suppress a second setup warning
+        # if retention already failed during this same bootstrap.
+        if not warning_emitted:
+            _display_logging_warning(
+                stderr_handler,
+                "Unable to create diagnostic capture log %s: %s",
+                (capture_file, exc),
+            )
