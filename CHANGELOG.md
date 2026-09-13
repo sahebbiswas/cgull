@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Resolve otherwise unresolved system includes using the runtime `pycparser-fake-libc` dependency and a packaged Linux analysis overlay, preserving project precedence and excluding model headers from findings and source counts (#442).
 - Add `cgull init [PATH]` as the canonical project setup flow, including focused/comprehensive finding profiles, interactive custom rule exclusions, include-root detection, compile database discovery guidance, and `--migrate` support for legacy `.cgullignore` and `.cgullincludes` files (#447).
 - Report CLI scan-mode provenance in terminal/Markdown output and structured JSON/SARIF metadata so users and CI can distinguish explicit, configured, and target-inferred mode selection (#448).
 

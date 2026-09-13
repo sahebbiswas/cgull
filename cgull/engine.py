@@ -16,6 +16,7 @@ from pathlib import Path
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile, ScanMode
 from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander, HEADER_CACHE
+from .analysis_headers import is_analysis_header
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
 from .utils import SuppressionMap, mask_string_and_char_literals, compute_issue_fingerprint, compute_issue_fingerprint_tu, sanitize_terminal_text
@@ -242,6 +243,8 @@ class CGullScanner:
         ignored_paths: List[str] = []
 
         for abs_t in abs_targets:
+            if is_analysis_header(abs_t):
+                continue
             if os.path.isfile(abs_t):
                 if self.ignore_filter.should_ignore(abs_t):
                     ignored_paths.append(abs_t)
@@ -249,11 +252,12 @@ class CGullScanner:
                     files_to_scan.append(abs_t)
             elif os.path.isdir(abs_t):
                 for root, dirs, files in os.walk(abs_t):
-                    dirs[:] = [d for d in dirs if not self.ignore_filter.should_prune_dir(os.path.join(root, d))]
+                    dirs[:] = [d for d in dirs if not is_analysis_header(os.path.join(root, d))
+                               and not self.ignore_filter.should_prune_dir(os.path.join(root, d))]
                     for f in files:
                         file_path = os.path.join(root, f)
                         ext = os.path.splitext(f)[1].lower()
-                        if ext in self.C_EXTENSIONS:
+                        if ext in self.C_EXTENSIONS and not is_analysis_header(file_path):
                             if self.ignore_filter.should_ignore(file_path):
                                 if file_path not in ignored_paths:
                                     ignored_paths.append(file_path)
@@ -852,7 +856,8 @@ def _scan_file_content(
         enable_suppressions = True
 
     t0 = time.time()
-    orig_loc = len(content.splitlines())
+    original_lines = content.splitlines()
+    orig_loc = len(original_lines)
 
     inc_roots = config.include_roots if config else []
     source_dir = os.path.dirname(os.path.abspath(file_path)) if file_path and file_path != "source.c" else os.getcwd()
@@ -873,7 +878,7 @@ def _scan_file_content(
     issues: List[Issue] = []
     seen_keys: Set[str] = set()
 
-    suppressions = SuppressionMap.from_source(raw_lines) if enable_suppressions else None
+    suppressions = SuppressionMap.from_source(original_lines) if enable_suppressions else None
 
     # Cache per-file suppression maps so inline ignore comments work across included headers
     file_suppressions: Dict[str, SuppressionMap] = {
@@ -900,6 +905,8 @@ def _scan_file_content(
     def add_issue_if_unique(issue: Issue):
         exp_line = issue.line_number
         src_loc = line_map.get(exp_line)
+        if src_loc and src_loc.is_analysis:
+            return
         if src_loc:
             orig_file = src_loc.file_path
             orig_line = src_loc.line_number
