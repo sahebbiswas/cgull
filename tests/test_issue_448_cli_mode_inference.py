@@ -139,7 +139,7 @@ def test_library_default_remains_file_mode():
 
 def test_mode_help_describes_inference():
     parser = build_parser()
-    help_text = _scan_subparser(parser).format_help()
+    help_text = " ".join(_scan_subparser(parser).format_help().split())
     assert "inferred from targets" in help_text
     assert "TU if any target is a directory" in help_text
 
@@ -212,3 +212,49 @@ def test_mode_reporter_preserves_suppressed_capture():
     assert reporter.to_terminal_text(result) == ""
     assert result.scan_mode == "file"
     assert result.scan_mode_source == MODE_SOURCE_COMMAND_LINE
+
+
+def test_mode_reporter_delegates_unhandled_reporter_extensions():
+    class ExtendedReporter:
+        custom_value = "extended"
+
+        @staticmethod
+        def to_custom(result):
+            return f"custom:{result}"
+
+    reporter = mode_aware_reporter(ExtendedReporter, ScanMode.FILE, MODE_SOURCE_COMMAND_LINE)
+
+    assert reporter.custom_value == "extended"
+    assert reporter.to_custom("result") == "custom:result"
+
+
+def test_mode_reporter_handles_null_sarif_invocations():
+    class NullInvocationReporter:
+        @staticmethod
+        def to_sarif(result):
+            return json.dumps({"runs": [{"invocations": None}]})
+
+    reporter = mode_aware_reporter(
+        NullInvocationReporter,
+        ScanMode.TU,
+        MODE_SOURCE_CONFIGURATION,
+    )
+    sarif = json.loads(reporter.to_sarif(SimpleNamespace()))
+
+    props = sarif["runs"][0]["invocations"][0]["properties"]
+    assert props["scanMode"] == "tu"
+    assert props["scanModeSource"] == MODE_SOURCE_CONFIGURATION
+
+
+def test_mode_reporter_preserves_crlf_terminal_summary():
+    class CRLFReporter:
+        @staticmethod
+        def to_terminal_text(result):
+            return "Report body\r\n\r\nScan complete\r\n  Files scanned:       1\r\n"
+
+    reporter = mode_aware_reporter(CRLFReporter, ScanMode.TU, MODE_SOURCE_INFERRED)
+    terminal = reporter.to_terminal_text(SimpleNamespace())
+
+    assert "Scan complete\r\n  Scan mode:           tu\r\n" in terminal
+    assert f"  Mode source:         {MODE_SOURCE_INFERRED}\r\n" in terminal
+    assert not terminal.startswith("Selected scan mode:")
