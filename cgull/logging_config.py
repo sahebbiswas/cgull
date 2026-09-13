@@ -405,3 +405,19 @@ def configure_logging(
                 "Unable to create diagnostic capture log %s: %s",
                 (capture_file, exc),
             )
+
+
+def teardown_cli_logging() -> None:
+    """Flush, close, and detach file and diagnostic capture handlers for CLI runs."""
+    root_logger = logging.getLogger()
+    for h in list(root_logger.handlers):
+        if isinstance(h, logging.FileHandler):
+            root_logger.removeHandler(h)
+            try:
+                h.flush()
+            except Exception:
+                pass
+            try:
+                h.close()
+            except Exception:
+                pass

@@ -557,7 +557,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         args = parser.parse_args(argv)
 
-        from .logging_config import configure_logging
+        from .logging_config import configure_logging, teardown_cli_logging
         verbose_cnt = getattr(args, "verbose", 0) or 0
         log_lvl = getattr(args, "log_level", None)
         log_fl = getattr(args, "log_file", None)
@@ -567,15 +567,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"Error configuring logging: {e}", file=sys.stderr)
             return 1
 
-        if args.command == "rules":
-            return handle_rules(args)
-        elif args.command == "flags":
-            return handle_flags(args)
-        elif args.command == "scan":
-            return handle_scan(args)
-        else:
-            parser.print_help()
-            return 0
+        try:
+            if args.command == "rules":
+                return handle_rules(args)
+            elif args.command == "flags":
+                return handle_flags(args)
+            elif args.command == "scan":
+                return handle_scan(args)
+            else:
+                parser.print_help()
+                return 0
+        finally:
+            teardown_cli_logging()
     except KeyboardInterrupt:
         print("\nScan interrupted by user.", file=sys.stderr)
         return 130

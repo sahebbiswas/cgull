@@ -493,19 +493,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 2
 
+    from .logging_config import teardown_cli_logging
+
     if command in ("init", "preprocessor"):
         parser = build_parser()
         args = parser.parse_args(effective_argv)
         logging_rc = _configure_logging_for_args(args)
         if logging_rc:
             return logging_rc
-        if command == "init":
-            return handle_project_init(args)
-        return handle_preprocessor(args)
+        try:
+            if command == "init":
+                return handle_project_init(args)
+            return handle_preprocessor(args)
+        finally:
+            teardown_cli_logging()
 
     bootstrap_args = _bootstrap_args_for_logging(effective_argv, command)
     if bootstrap_args is None:
-        return _base.main(argv)
+        try:
+            return _base.main(argv)
+        finally:
+            teardown_cli_logging()
 
     from .logging_config import (
         clear_logging_bootstrap_context,
@@ -521,6 +529,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _base.main(argv)
     finally:
         clear_logging_bootstrap_context()
+        teardown_cli_logging()
 
 
 handle_flags = _base.handle_flags

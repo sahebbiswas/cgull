@@ -16,6 +16,7 @@ from cgull.cli import main
 from cgull.config import load_config
 from cgull.logging_config import (
     JSONLFormatter,
+    _DEFAULT_CAPTURE_RE,
     _prune_default_capture_logs,
     configure_logging,
 )
@@ -37,17 +38,25 @@ def clean_logging_handlers():
     finally:
         for handler in list(root.handlers):
             root.removeHandler(handler)
-            handler.close()
+            try:
+                handler.close()
+            except Exception:
+                pass
         root.setLevel(previous_level)
         for handler in previous_handlers:
-            root.addHandler(handler)
+            if not isinstance(handler, logging.FileHandler):
+                root.addHandler(handler)
 
 
 def _capture_files(root: Path):
     log_dir = root / ".cgull" / "logs"
     if not log_dir.is_dir():
         return []
-    return sorted(path for path in log_dir.glob("scan-*.log") if path.is_file())
+    return sorted(
+        path
+        for path in log_dir.iterdir()
+        if path.is_file() and _DEFAULT_CAPTURE_RE.match(path.name)
+    )
 
 
 def _owned_name(instant: datetime, pid: int = 1) -> str:
