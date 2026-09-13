@@ -65,7 +65,7 @@ From the root of a C project:
 cgull scan .
 ```
 
-Useful defaults are already selected. Scans remain read-only when no project configuration exists; `cgull init` is always explicit.
+Useful defaults are already selected. Scans remain read-only when no project configuration exists; `cgull init` is always explicit. When neither `--mode` nor project configuration selects a mode, the CLI infers it from the effective targets: any directory target uses translation-unit (`tu`) mode, while a target list containing only source files uses per-file mode. Therefore `cgull scan .`, `cgull scan src/`, and the no-target `cgull scan` form use TU mode naturally, while a direct source-file scan remains lightweight.
 
 Scan a narrower target when appropriate:
 
@@ -73,6 +73,15 @@ Scan a narrower target when appropriate:
 cgull scan src/
 cgull scan src/main.c include/project.h
 ```
+
+Override inference explicitly in either direction when needed:
+
+```bash
+cgull scan . --mode file
+cgull scan src/main.c --mode tu
+```
+
+The terminal summary reports both the selected scan mode and whether it came from the command line, project configuration, or target inference. JSON and SARIF reports carry the same provenance as structured metadata.
 
 ## Understand the result
 
@@ -108,6 +117,8 @@ Then the normal command remains simple:
 ```bash
 cgull scan .
 ```
+
+Leaving `[scan].mode` unset is intentional for many projects: it lets directory scans choose TU mode while direct file scans stay in file mode. Configure `mode = "file"` or `mode = "tu"` only when the repository wants a fixed policy for every invocation.
 
 See [Configuration](configuration.md) for the complete schema and precedence rules.
 
