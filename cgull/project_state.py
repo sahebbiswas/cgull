@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Optional, Sequence, Union
 
 try:
@@ -13,7 +12,6 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 
 DEFAULT_LOG_RETENTION_RUNS = 20
-_CONFIG_FILENAMES = {".cgull.toml", "pyproject.toml"}
 PathLike = Union[str, os.PathLike[str]]
 
 
@@ -51,11 +49,10 @@ def effective_target_root(targets: Optional[Sequence[PathLike]] = None) -> str:
 
 
 def _existing_explicit_config(config_path: Optional[PathLike]) -> Optional[str]:
+    """Return any existing explicit config path, regardless of its filename."""
     if config_path is None:
         return None
     resolved = normalize_project_path(config_path)
-    if os.path.basename(resolved) not in _CONFIG_FILENAMES:
-        return None
     if not os.path.isfile(resolved):
         return None
     return resolved
