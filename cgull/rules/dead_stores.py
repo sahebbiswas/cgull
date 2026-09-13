@@ -238,6 +238,43 @@ def _write_bindings(ast_ctx) -> Dict[int, List[object]]:
     return by_line
 
 
+def _same_line_initializer_overwrites(ast_ctx) -> List[Tuple[object, object]]:
+    """Return fallback bindings whose initializer is overwritten before any read.
+
+    The regex extractor stores reads/writes at physical-line granularity. On a
+    compact line such as ``int x = 0; x = 1;`` it therefore records the second
+    occurrence of ``x`` as a declaration-line read and can hide the dead store.
+    Recover only the unambiguous ordered case where the first post-declaration
+    use is a plain assignment whose RHS does not read the same binding.
+    """
+    source_lines = (getattr(ast_ctx, "clean_source", "") or "\n".join(ast_ctx.source_lines)).splitlines()
+    result = []
+    for fn in getattr(ast_ctx, "functions", []):
+        for c_var in _eligible_variables(fn):
+            line_no = int(getattr(c_var, "declaration_line", 0) or 0)
+            if not getattr(c_var, "has_initializer", False) or not (1 <= line_no <= len(source_lines)):
+                continue
+
+            line = mask_string_and_char_literals(source_lines[line_no - 1])
+            name = re.escape(c_var.name)
+            initializer = re.search(rf"\b{name}\b\s*=\s*.*?;", line)
+            if initializer is None:
+                continue
+
+            tail = line[initializer.end():]
+            first_use = re.search(rf"\b{name}\b", tail)
+            if first_use is None:
+                continue
+            fragment = tail[first_use.start():]
+            overwrite = re.match(rf"\b{name}\b\s*=(?!=)\s*([^;]*)", fragment)
+            if overwrite is None:
+                continue
+            if re.search(rf"\b{name}\b", overwrite.group(1)):
+                continue
+            result.append((fn, c_var))
+    return result
+
+
 def _shadowed_bindings(ast_ctx) -> List[Tuple[object, object]]:
     """Return ``(function, binding)`` pairs for names declared in multiple scopes."""
     shadowed = []
@@ -277,6 +314,7 @@ class DeadStoresRule(_BaseDeadStoresRule):
 
         protected = _protected_loop_carried_writes(ast_ctx)
         write_bindings = _write_bindings(ast_ctx)
+        same_line_overwrites = _same_line_initializer_overwrites(ast_ctx)
         shadowed_pairs = _shadowed_bindings(ast_ctx)
         shadowed_keys = {_variable_key(c_var) for _fn, c_var in shadowed_pairs}
 
@@ -301,6 +339,26 @@ class DeadStoresRule(_BaseDeadStoresRule):
             else:
                 issues.append(issue)
 
+        existing = {_issue_signature(issue) for issue in issues}
+
+        # The regex extractor can conservatively mark any second declaration-line
+        # occurrence as a read. Re-run only bindings where textual ordering proves
+        # a plain overwrite happens first, removing that synthetic same-line read.
+        if same_line_overwrites:
+            adjusted_pairs = []
+            for fn, c_var in same_line_overwrites:
+                adjusted = copy(c_var)
+                adjusted.read_lines = [
+                    read_line for read_line in getattr(c_var, "read_lines", [])
+                    if read_line != c_var.declaration_line
+                ]
+                adjusted_pairs.append((fn, adjusted))
+            for issue in self._base_scan_for_bindings(file_path, ast_ctx, adjusted_pairs):
+                signature = _issue_signature(issue)
+                if signature not in existing:
+                    issues.append(issue)
+                    existing.add(signature)
+
         # Most shadowed bindings have distinct write lines. Analyze all of them in
         # one base-rule invocation, avoiding the former N full fallback scans. Only
         # bindings that share a physical write line take the rare individual path.
@@ -319,7 +377,6 @@ class DeadStoresRule(_BaseDeadStoresRule):
             for line_no in set(getattr(c_var, "assigned_lines", []) or []):
                 batch_line_binding[line_no] = c_var
 
-        existing = {_issue_signature(issue) for issue in issues}
         if batch_pairs:
             for issue in self._base_scan_for_bindings(file_path, ast_ctx, batch_pairs):
                 line_no = getattr(issue, "line_number", None)
