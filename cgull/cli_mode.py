@@ -58,6 +58,8 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
         def to_json(result):
             annotate(result)
             rendered = delegate.to_json(result)
+            if not rendered:
+                return rendered
             data = json.loads(rendered)
             meta = data.setdefault("meta", {})
             meta["scan_mode"] = mode.value
@@ -68,6 +70,8 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
         def to_sarif(result):
             annotate(result)
             rendered = delegate.to_sarif(result)
+            if not rendered:
+                return rendered
             data = json.loads(rendered)
             runs = data.get("runs") or []
             if runs:
@@ -83,6 +87,8 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
         def to_markdown(result):
             annotate(result)
             rendered = delegate.to_markdown(result)
+            if not rendered:
+                return rendered
             lines = rendered.splitlines()
             insertion = [
                 f"**Scan Mode**: `{mode.value}`  ",
@@ -98,6 +104,8 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
         def to_terminal_text(result):
             annotate(result)
             rendered = delegate.to_terminal_text(result)
+            if not rendered:
+                return rendered
             marker = "Scan complete\n"
             details = (
                 f"  Scan mode:           {mode.value}\n"
