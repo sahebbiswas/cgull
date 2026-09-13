@@ -1,8 +1,7 @@
 import json
-import os
 from types import SimpleNamespace
 
-from cgull.cli import _resolve_scan_mode_args, build_parser
+from cgull.cli import _resolve_scan_mode_args, _scan_subparser, build_parser
 from cgull.cli_mode import (
     MODE_SOURCE_COMMAND_LINE,
     MODE_SOURCE_CONFIGURATION,
@@ -140,7 +139,7 @@ def test_library_default_remains_file_mode():
 
 def test_mode_help_describes_inference():
     parser = build_parser()
-    help_text = parser._subparsers._group_actions[0].choices["scan"].format_help()
+    help_text = _scan_subparser(parser).format_help()
     assert "inferred from targets" in help_text
     assert "TU if any target is a directory" in help_text
 
@@ -184,3 +183,32 @@ def test_mode_metadata_is_visible_in_all_report_formats():
     assert f"Mode source:         {MODE_SOURCE_INFERRED}" in terminal
     assert result.scan_mode == "tu"
     assert result.scan_mode_source == MODE_SOURCE_INFERRED
+
+
+def test_mode_reporter_preserves_suppressed_capture():
+    class EmptyReporter:
+        @staticmethod
+        def to_json(result):
+            return ""
+
+        @staticmethod
+        def to_sarif(result):
+            return ""
+
+        @staticmethod
+        def to_markdown(result):
+            return ""
+
+        @staticmethod
+        def to_terminal_text(result):
+            return ""
+
+    result = SimpleNamespace()
+    reporter = mode_aware_reporter(EmptyReporter, ScanMode.FILE, MODE_SOURCE_COMMAND_LINE)
+
+    assert reporter.to_json(result) == ""
+    assert reporter.to_sarif(result) == ""
+    assert reporter.to_markdown(result) == ""
+    assert reporter.to_terminal_text(result) == ""
+    assert result.scan_mode == "file"
+    assert result.scan_mode_source == MODE_SOURCE_COMMAND_LINE
