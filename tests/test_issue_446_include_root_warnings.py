@@ -54,7 +54,10 @@ def test_compile_database_attributes_and_deduplicates_roots(tmp_path):
     ])
     assert len(database.warnings) == 2
     assert 'entry 0' in database.warnings[0]
-    assert str(tmp_path / 'a.c') in database.warnings[0]
+    # TU identity uses canonical casing (lowercase on Windows), unlike the
+    # original include value and the case-preserving resolved include path.
+    expected_tu = os.path.normcase(os.path.realpath(tmp_path / 'a.c'))
+    assert expected_tu in database.warnings[0]
     assert repr('missing') in database.warnings[0]
     assert repr(str(tmp_path / 'missing')) in database.warnings[0]
     assert database.roots_for(str(tmp_path / 'b.c')) == (str(tmp_path / 'missing'),)
