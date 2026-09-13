@@ -107,8 +107,11 @@ def _cgull_toml_payload(config_path: str) -> Optional[dict]:
     except (OSError, ValueError, TypeError):
         return None
 
+    if not isinstance(data, dict):
+        return None
     if os.path.basename(config_path) == "pyproject.toml":
-        data = data.get("tool", {}).get("cgull", {}) if isinstance(data, dict) else {}
+        tool_section = data.get("tool")
+        data = tool_section.get("cgull", {}) if isinstance(tool_section, dict) else {}
     return data if isinstance(data, dict) else None
 
 
