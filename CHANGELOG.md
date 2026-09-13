@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Add `cgull init [PATH]` as the canonical project setup flow, including focused/comprehensive finding profiles, interactive custom rule exclusions, include-root detection, compile database discovery guidance, and `--migrate` support for legacy `.cgullignore` and `.cgullincludes` files (#447).
+- Report CLI scan-mode provenance in terminal/Markdown output and structured JSON/SARIF metadata so users and CI can distinguish explicit, configured, and target-inferred mode selection (#448).
 
 ### Changed
 - Remove the advertised `init-ignore` command in favor of a single editable `.cgull.toml` configuration surface. Existing legacy project files continue to load for backward compatibility (#447).
+- Infer CLI scan mode from effective targets when neither `--mode` nor project configuration selects one: any directory target uses TU mode, while file-only target lists use per-file mode. Programmatic `ScanConfig.create()` keeps its backward-compatible file-mode default (#448).
 
 ## [0.11.10] - 2026-09-10
 
