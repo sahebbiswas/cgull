@@ -31,11 +31,9 @@ roots = ["include"]
 default_format = "text"
 warn_on_fallback = false
 
-[rules]
-skip = {
-    "CGULL-019" = "Focused profile: explicit void style is project policy",
-    "CGULL-025" = "Focused profile: assertion placement is project policy",
-}
+[rules.skip]
+"CGULL-019" = "Focused profile: explicit void style is project policy"
+"CGULL-025" = "Focused profile: assertion placement is project policy"
 ```
 
 Only detected include roots are activated. Scan mode is omitted by default so target-sensitive CLI mode inference can remain effective.
