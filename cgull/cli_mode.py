@@ -53,7 +53,12 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
         result.scan_mode = mode.value
         result.scan_mode_source = source
 
-    class ModeAwareReporter:
+    class DelegateReporterMeta(type):
+        def __getattr__(cls, name: str):
+            """Preserve reporter extensions not overridden by this wrapper."""
+            return getattr(delegate, name)
+
+    class ModeAwareReporter(metaclass=DelegateReporterMeta):
         @staticmethod
         def to_json(result):
             annotate(result)
@@ -75,10 +80,18 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
             data = json.loads(rendered)
             runs = data.get("runs") or []
             if runs:
-                invocations = runs[0].setdefault("invocations", [{}])
+                invocations = runs[0].get("invocations")
+                if not isinstance(invocations, list):
+                    invocations = []
+                    runs[0]["invocations"] = invocations
                 if not invocations:
                     invocations.append({})
-                props = invocations[0].setdefault("properties", {})
+                if not isinstance(invocations[0], dict):
+                    invocations[0] = {}
+                props = invocations[0].get("properties")
+                if not isinstance(props, dict):
+                    props = {}
+                    invocations[0]["properties"] = props
                 props["scanMode"] = mode.value
                 props["scanModeSource"] = source
             return json.dumps(data, indent=2)
@@ -106,16 +119,17 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
             rendered = delegate.to_terminal_text(result)
             if not rendered:
                 return rendered
-            marker = "Scan complete\n"
+            newline = "\r\n" if "\r\n" in rendered else "\n"
+            marker = f"Scan complete{newline}"
             details = (
-                f"  Scan mode:           {mode.value}\n"
-                f"  Mode source:         {source}\n"
+                f"  Scan mode:           {mode.value}{newline}"
+                f"  Mode source:         {source}{newline}"
             )
             if marker in rendered:
                 return rendered.replace(marker, marker + details, 1)
             return (
-                f"Selected scan mode: {mode.value}\n"
-                f"Mode source: {source}\n\n"
+                f"Selected scan mode: {mode.value}{newline}"
+                f"Mode source: {source}{newline}{newline}"
                 f"{rendered}"
             )
 
