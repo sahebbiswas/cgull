@@ -10,6 +10,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from . import cli_base as _base
+from .cli_mode import mode_aware_reporter, resolve_cli_scan_mode
 from .compile_database import (
     CompileCommandIncludeDatabase,
     CompileDatabaseCGullScanner,
@@ -57,6 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _ORIGINAL_BUILD_PARSER()
 
     scan_parser = _scan_subparser(parser)
+    for action in scan_parser._actions:
+        if action.dest == "mode":
+            action.help = (
+                "Scan mode: 'file' (per-file scan) or 'tu' (translation unit mode). "
+                "When omitted, configuration wins; otherwise mode is inferred from targets "
+                "(TU if any target is a directory, file mode otherwise)."
+            )
+            break
     scan_parser.add_argument(
         "--fix",
         action="store_true",
@@ -128,11 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _sync_base_symbols() -> None:
+def _sync_base_symbols(*, reporter=None) -> None:
     """Propagate public monkey-patch points into the established CLI module."""
     _base.CGullScanner = CGullScanner
     _base.ProgressIndicator = ProgressIndicator
-    _base.ReportGenerator = ReportGenerator
+    _base.ReportGenerator = ReportGenerator if reporter is None else reporter
 
 
 def _primary_target(args) -> str:
@@ -147,6 +156,37 @@ def _primary_target(args) -> str:
         except ValueError:
             pass
     return "."
+
+
+def _resolve_scan_mode_args(args):
+    """Return a copy of args with the CLI scan mode resolved when possible."""
+    internal = argparse.Namespace(**vars(args))
+    targets = getattr(internal, "target", ["."])
+    if isinstance(targets, str):
+        targets = [targets]
+    targets = list(targets) or ["."]
+    internal.target = targets
+
+    # Preserve cli_base's established missing/invalid target error path. Mode
+    # inference runs only after the same existence validation would succeed.
+    if any(not os.path.exists(target) for target in targets):
+        return internal, None, None
+
+    config = _base.load_config(
+        config_path=getattr(internal, "config", None),
+        target_path=_primary_target(internal),
+    )
+    if config.error:
+        # cli_base owns rendering and exit semantics for configuration errors.
+        return internal, None, None
+
+    mode, source = resolve_cli_scan_mode(
+        targets,
+        getattr(internal, "mode", None),
+        config.mode,
+    )
+    internal.mode = mode.value
+    return internal, mode, source
 
 
 def _compile_database_for_args(
@@ -214,11 +254,20 @@ def _shared_compile_commands_parse(data: Optional[List[object]], path: Optional[
         ast_analyzer.parse_compile_commands = original_parse
 
 
-def _run_original_scan(args):
-    database, data, compile_commands_path = _compile_database_for_args(args)
+def _run_original_scan(args, *, reporter=None):
+    effective_args, scan_mode, mode_source = _resolve_scan_mode_args(args)
+    database, data, compile_commands_path = _compile_database_for_args(effective_args)
+    active_reporter = reporter if reporter is not None else ReportGenerator
+    if scan_mode is not None and mode_source is not None:
+        active_reporter = mode_aware_reporter(active_reporter, scan_mode, mode_source)
+
+    previous_reporter = _base.ReportGenerator
     with activate_compile_command_database(database), _shared_compile_commands_parse(data, compile_commands_path):
-        _sync_base_symbols()
-        return _ORIGINAL_HANDLE_SCAN(args)
+        _sync_base_symbols(reporter=active_reporter)
+        try:
+            return _ORIGINAL_HANDLE_SCAN(effective_args)
+        finally:
+            _base.ReportGenerator = previous_reporter
 
 
 def _run_scan_and_capture(args, *, suppress_output: bool):
@@ -258,17 +307,11 @@ def _run_scan_and_capture(args, *, suppress_output: bool):
         internal.fail_on_error = False
         internal.warn_on_fallback = False
 
-    _sync_base_symbols()
-    previous = _base.ReportGenerator
-    _base.ReportGenerator = CapturingReporter
-    try:
-        if suppress_output:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                rc = _run_original_scan(internal)
-        else:
-            rc = _run_original_scan(internal)
-    finally:
-        _base.ReportGenerator = previous
+    if suppress_output:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = _run_original_scan(internal, reporter=CapturingReporter)
+    else:
+        rc = _run_original_scan(internal, reporter=CapturingReporter)
 
     return rc, captured["result"]
 
