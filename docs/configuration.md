@@ -264,3 +264,24 @@ Resource discovery uses `importlib.resources`, with no hardcoded site-packages
 path. Installed wheel and sdist resources are checked by the packaging CI job;
 the regular Python 3.10–3.14 matrix exercises parsing and worker behavior.
 See [dependency notes](analysis-header-dependencies.md) for upstream provenance.
+
+### Invalid include roots
+
+Include roots in `.cgull.toml` and `[tool.cgull]` in `pyproject.toml` are relative
+to the declaring configuration file's directory. Legacy `.cgullincludes` entries
+are relative to that file's directory. For a project with `.cgull.toml`, `include/`,
+and `src/` beside one another, use `roots = ["include"]`, not `"../include"`.
+
+A nonexistent root or a path naming a regular file produces a warning showing
+its original value, resolved absolute path, and declaring source. Equivalent
+invalid paths produce one warning per scan, retaining the first source's context.
+C-GULL retains these roots and continues scanning, including when a generated
+include directory is temporarily absent. Native path separator rules apply:
+backslashes are not silently converted into directory separators on POSIX.
+
+CLI warnings go to stderr. JSON reports expose `configuration_warnings`, and
+SARIF exposes `runs[].invocations[].properties.configurationWarnings`. The Python
+API exposes `CGullConfig.warnings`, `IncludeResolver.warnings` (keyed by canonical
+path), and `ScanResult.configuration_warnings`. Explicit API roots keep their
+existing source-directory resolution semantics; absolute paths avoid ambiguity
+when scanning multiple source directories.

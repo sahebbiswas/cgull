@@ -49,3 +49,14 @@ C-GULL does not silently approximate compiler options whose search semantics it 
 ## Why this improves analysis
 
 Header resolution feeds the shared translation-unit AST pipeline. Recovering a header through the compilation database can therefore restore typedefs, prototypes, macros, declarations, and other semantic context used by multiple rules. For example, a declaration-only function prototype found only through a build include root can make argument-conversion analysis resolvable instead of unknown.
+
+### Invalid include directories
+
+Nonexistent and non-directory `-I`/`-isystem` roots generate non-fatal warnings.
+Each warning identifies the original option value, resolved absolute path, and
+first compilation-database entry index and source TU using that invalid root.
+Equivalent invalid roots are deduplicated across entries in database order.
+The roots remain in the TU's search configuration so missing generated directories
+do not prevent scanning. Warnings are available through
+`CompileCommandIncludeDatabase.warnings`, stderr during scanning, and JSON/SARIF
+configuration warnings.

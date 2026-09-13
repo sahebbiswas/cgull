@@ -367,6 +367,7 @@ def handle_scan(args) -> int:
         config_strategy=config_strategy,
         exhaustive_threshold=exhaustive_threshold,
         include_roots=config.include_roots,
+        include_root_warnings=config.include_root_warnings,
         dedup_headers=args.dedup_headers,
         mode=scan_mode,
     )

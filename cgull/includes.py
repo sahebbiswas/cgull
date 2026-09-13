@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Dict, Tuple, Any, Union
 
+from .include_diagnostics import invalid_root_warning, record_root_warning
 from .analysis_headers import analysis_header_roots, is_analysis_header
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,7 @@ class IncludeResolver:
     ):
         self.base_dir = os.path.realpath(base_dir) if base_dir else os.path.realpath(os.getcwd())
         self.include_roots: List[str] = []
+        self.warnings: Dict[str, str] = {}
         self.allow_external_includes = allow_external_includes
 
         if include_roots:
@@ -148,7 +150,7 @@ class IncludeResolver:
             if os.path.isfile(cgullinc_path):
                 self.load_from_file(cgullinc_path)
 
-    def add_include_root(self, root: str, relative_to: Optional[str] = None) -> None:
+    def add_include_root(self, root: str, relative_to: Optional[str] = None, source: str = "API include_roots") -> None:
         """Adds an include root directory."""
         raw = root.strip()
         if not raw:
@@ -160,7 +162,12 @@ class IncludeResolver:
             rel_base = relative_to if relative_to else self.base_dir
             abs_root = os.path.realpath(os.path.join(rel_base, raw))
 
-        if abs_root not in self.include_roots:
+        key = os.path.normcase(abs_root)
+        warning = invalid_root_warning(root, abs_root, source)
+        if warning is not None:
+            self.warnings.setdefault(key, warning)
+            record_root_warning(abs_root, self.warnings[key])
+        if key not in {os.path.normcase(path) for path in self.include_roots}:
             self.include_roots.append(abs_root)
 
     def load_from_file(self, file_path: str) -> None:
@@ -169,11 +176,11 @@ class IncludeResolver:
             return
         file_dir = os.path.dirname(os.path.abspath(file_path))
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
+            for line_number, line in enumerate(f, 1):
                 raw = line.strip()
                 if not raw or raw.startswith("#"):
                     continue
-                self.add_include_root(raw, relative_to=file_dir)
+                self.add_include_root(raw, relative_to=file_dir, source=f"{file_path}:{line_number}")
 
     def load_from_text(self, text: str, base_dir: Optional[str] = None) -> None:
         """Parses include root paths from raw string content."""

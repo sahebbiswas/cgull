@@ -201,6 +201,7 @@ class ReportGenerator:
             "filesFailed": failed,
             "scanErrors": [err.to_dict() for err in result.scan_errors],
             "scanMetrics": telemetry_for(result).to_dict(),
+            "configurationWarnings": list(result.configuration_warnings),
         }
         inv_obj: Dict[str, Any] = {
             "executionSuccessful": failed == 0,

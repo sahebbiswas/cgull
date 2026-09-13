@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.20] - 2026-09-13
+
+### Fixed
+- Warn about nonexistent or non-directory include roots with original values, resolved paths, and configuration/compile-command provenance. Retain roots for non-fatal scanning and expose warnings in JSON/SARIF results (#446).
+
 ## [0.11.19] - 2026-09-13
 
 ### Added

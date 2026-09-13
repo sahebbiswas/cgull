@@ -46,6 +46,7 @@ class CGullConfig:
     config_file_path: Optional[str] = None
     config_dir: Optional[str] = None
     error: Optional[str] = None
+    include_root_warnings: Dict[str, str] = field(default_factory=dict)
 
     def apply_to_rules(self, rules: List[BaseRule]) -> List[BaseRule]:
         """
@@ -360,7 +361,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
             inc_list = paths_sec.get("include_roots", [])
             if isinstance(inc_list, list):
                 for x in inc_list:
-                    inc_resolver.add_include_root(str(x), relative_to=base_search_dir)
+                    inc_resolver.add_include_root(str(x), relative_to=base_search_dir, source=str(config_path))
 
         # Section [includes]
         includes_sec = raw_toml.get("includes", {})
@@ -368,7 +369,7 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
             inc_list = includes_sec.get("include_roots", includes_sec.get("roots", []))
             if isinstance(inc_list, list):
                 for x in inc_list:
-                    inc_resolver.add_include_root(str(x), relative_to=base_search_dir)
+                    inc_resolver.add_include_root(str(x), relative_to=base_search_dir, source=str(config_path))
 
     # Load .cgullincludes if present in base_search_dir
     cgullinc_path = os.path.join(base_search_dir, ".cgullincludes")
@@ -376,6 +377,8 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
         inc_resolver.load_from_file(cgullinc_path)
 
     cfg.include_roots = list(inc_resolver.include_roots)
+    cfg.include_root_warnings = dict(inc_resolver.warnings)
+    cfg.warnings.extend(inc_resolver.warnings.values())
 
     # Section [output]
     output_sec = raw_toml.get("output", {})
