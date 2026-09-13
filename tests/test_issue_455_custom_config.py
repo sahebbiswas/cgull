@@ -32,3 +32,21 @@ def test_non_table_pyproject_tool_section_falls_back_for_retention():
 
         assert read_logging_retention([project], str(pyproject)) == DEFAULT_LOG_RETENTION_RUNS
         assert resolve_project_state_root([project], str(pyproject)) == str(project.resolve())
+
+
+def test_missing_explicit_config_does_not_adopt_discovered_project_root():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        discovered_project = base / "project"
+        target_dir = discovered_project / "src"
+        target_dir.mkdir(parents=True)
+        (discovered_project / ".cgull.toml").write_text(
+            "[logging]\nretention_runs = 3\n", encoding="utf-8"
+        )
+        missing_config = base / "missing" / "cgull-dev.toml"
+
+        assert resolve_project_state_root([target_dir], str(missing_config)) == str(target_dir.resolve())
+        assert (
+            read_logging_retention([target_dir], str(missing_config))
+            == DEFAULT_LOG_RETENTION_RUNS
+        )
