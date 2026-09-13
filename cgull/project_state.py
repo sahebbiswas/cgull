@@ -85,13 +85,19 @@ def resolve_project_state_root(
     Existing explicit configuration wins. Otherwise configuration is discovered
     from the effective target/common target root. With no configuration, state is
     rooted at that effective target directory. Cross-drive target sets fall back
-    deterministically to cwd.
+    deterministically to cwd. An invalid explicit config never causes bootstrap
+    to adopt a different auto-discovered configuration.
     """
     explicit = _existing_explicit_config(config_path)
     if explicit is not None:
         return os.path.dirname(explicit)
 
     target_root = effective_target_root(targets)
+    if config_path is not None:
+        # load_config() owns the eventual missing/invalid explicit-path error.
+        # Logging housekeeping must not choose a different discovered project.
+        return target_root
+
     from .config import find_config_file
 
     discovered = find_config_file(target_root)
