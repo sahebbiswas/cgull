@@ -257,7 +257,7 @@ def _render_config(
         lines.extend(
             [
                 "# Comprehensive profile: every registered rule remains enabled.",
-                "# Add a [rules].skip table only when the project intentionally disables a rule.",
+                "# Add a [rules.skip] table only when the project intentionally disables a rule.",
                 "",
             ]
         )
@@ -270,8 +270,8 @@ def _render_config(
             "#",
             "# Optional project rule policy:",
             "#",
-            "# [rules]",
-            '# skip = { "CGULL-019" = "Project policy does not require this rule" }',
+            "# [rules.skip]",
+            '# "CGULL-019" = "Project policy does not require this rule"',
             "",
         ]
     )
