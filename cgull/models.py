@@ -392,6 +392,7 @@ class FileScanSummary:
     status: str = "success"
     confidence: str = Confidence.FALLBACK.value
     parse_tier: str = ParseTier.REGEX_FALLBACK.value
+    parse_attempts: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

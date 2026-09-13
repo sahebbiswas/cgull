@@ -311,6 +311,7 @@ class CASTContext:
     struct_defs: Dict[str, StructDef] = field(default_factory=dict)
     typedef_shapes: Dict[str, TypedefShape] = field(default_factory=dict)
     line_map: Optional[Dict[int, Any]] = None
+    parse_attempts: List[Dict[str, Any]] = field(default_factory=list)
 
     def _clean_and_resolve_type_string(self, type_str: str) -> Optional[StructDef]:
         if not type_str or not isinstance(type_str, str):

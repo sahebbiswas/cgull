@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple, Union
 
 from ..models import ParserStatus, ParseTier
+from ..parse_diagnostics import make_attempt, map_attempts
 from ..utils import mask_string_and_char_literals, strip_comments_keep_lines
 from .configuration import *
 from .configuration import _PRELUDE_LINE_COUNT, _PREPROCESSOR_LINE_RE, _PYCPARSER_PRELUDE
@@ -408,6 +409,7 @@ class CASTParser:
         unsigned_typedefs: Set[str] = set()
         self._extract_unsigned_typedefs(clean_code, unsigned_typedefs)
 
+        self.parse_attempts = []
         pycparser_res = self._try_pycparser(clean_code, defined_syms=defined_syms)
         if len(pycparser_res) == 3:
             pycparser_ast, has_pycparser, parse_tier = pycparser_res
@@ -442,6 +444,7 @@ class CASTParser:
             pycparser_ast=pycparser_ast,
             parser_status=parser_status,
             parse_tier=parse_tier,
+            parse_attempts=map_attempts(self.parse_attempts, source_code, line_map),
             unsigned_typedefs=unsigned_typedefs,
             struct_defs=struct_defs,
             typedef_shapes=typedef_shapes,
@@ -952,20 +955,36 @@ class CASTParser:
            or both tiers above fail, return None and let the caller use
            the regex-based function/variable extractor.
         """
+        self.parse_attempts = []
         try:
             from pycparser import c_parser
-        except ImportError:
+        except ImportError as exc:
+            self.parse_attempts = [make_attempt(tier, "skipped", exc) for tier in
+                                   (ParseTier.PCPP_PYCPARSER.value, ParseTier.DIRECTIVE_STRIPPED.value)]
             return None, False, ParseTier.REGEX_FALLBACK.value
 
         # Tier 1: pcpp preprocessing (if available)
-        pcpp_result = self._try_pcpp_preprocess(clean_code, defined_syms=defined_syms)
+        self._preprocess_error = None
+        try:
+            pcpp_result = self._try_pcpp_preprocess(clean_code, defined_syms=defined_syms)
+        except Exception as exc:
+            self._preprocess_error = exc
+            pcpp_result = None
         if pcpp_result is not None:
             try:
                 parser = c_parser.CParser()
                 pycparser_ast = parser.parse(pcpp_result, filename='<input>')
+                self.parse_attempts.append(make_attempt(ParseTier.PCPP_PYCPARSER.value, "success"))
                 return pycparser_ast, True, ParseTier.PCPP_PYCPARSER.value
-            except Exception:
-                pass  # Fall through to tier 2
+            except Exception as exc:
+                self.parse_attempts.append(make_attempt(ParseTier.PCPP_PYCPARSER.value, "failure", exc, _PRELUDE_LINE_COUNT, prepared=pcpp_result, source=clean_code))
+        else:
+            exc = self._preprocess_error
+            # pcpp parses filtered_prelude + clean_code, so its errors carry
+            # the same prelude offset as the subsequent pycparser attempt.
+            self.parse_attempts.append(make_attempt(ParseTier.PCPP_PYCPARSER.value,
+                                      "skipped" if isinstance(exc, ImportError) else "failure",
+                                      exc, _PRELUDE_LINE_COUNT, preprocessing_failed=not isinstance(exc, ImportError)))
 
         # Tier 2: Conditional resolution + Directive stripping + typedef prelude
         resolved_code = resolve_preprocessor_conditionals(clean_code, defined_syms=defined_syms)
@@ -983,8 +1002,10 @@ class CASTParser:
         try:
             parser = c_parser.CParser()
             pycparser_ast = parser.parse(prepared, filename='<input>')
+            self.parse_attempts.append(make_attempt(ParseTier.DIRECTIVE_STRIPPED.value, "success"))
             return pycparser_ast, True, ParseTier.DIRECTIVE_STRIPPED.value
-        except Exception:
+        except Exception as exc:
+            self.parse_attempts.append(make_attempt(ParseTier.DIRECTIVE_STRIPPED.value, "failure", exc, filtered_prelude.count("\n"), prepared=prepared, source=clean_code))
             return None, False, ParseTier.REGEX_FALLBACK.value
 
     def _filter_prelude(self, prelude_text: str, code_text: str) -> str:
@@ -1019,20 +1040,33 @@ class CASTParser:
         """
         try:
             import pcpp
-        except ImportError:
+        except ImportError as exc:
+            self._preprocess_error = exc
             return None
 
         import io
         import re
 
         class _SilentPreprocessor(pcpp.Preprocessor):
-            """Suppresses errors, passes through unresolvable #includes, and syncs #line directives on drift."""
+            """Capture errors for fallback without emitting raw terminal output.
+
+            pcpp errors and active #error directives abort this tier: partially
+            preprocessed output is not treated as a successful expansion.
+            Unresolved includes still pass through, warnings stay suppressed,
+            and #line directives track drift for source-coordinate mapping.
+            """
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 self.line_directive = '#line'
 
             def on_error(self, file, line, msg):
-                pass
+                raise ValueError(f"{file}:{line}: {msg}")
+
+            def on_directive_unknown(self, directive, toks, ifpassthru, precedingtoks):
+                if directive.value == "error":
+                    message = "".join(str(tok.value) for tok in toks)
+                    raise ValueError(f"<input>:{directive.lineno}: {message}")
+                return super().on_directive_unknown(directive, toks, ifpassthru, precedingtoks)
 
             def on_include_not_found(self, is_malformed, is_system_include,
                                      curdir, includepath):
@@ -1179,7 +1213,8 @@ class CASTParser:
             result = _strip_attributes_and_specifiers(result)
 
             return result
-        except Exception:
+        except Exception as exc:
+            self._preprocess_error = exc
             return None
 
     def _build_model_from_ast(
