@@ -17,13 +17,13 @@ from .ast_events import (
     _find_value_producing_call,
     _function_pointer_names,
     _guarded_expression_uses,
-    _ids,
     _is_nullish,
     _replace_ast_node,
     _simple_null_facts,
 )
 from .dataflow import StructuredCFG
 from .diagnostics import CFGDiagnostic
+from .expression_effects import expression_read_write_sets
 from .model import FunctionSummary
 
 
@@ -66,6 +66,12 @@ def build_cfg(
             summaries=summaries,
             line_map=line_map,
         )
+        # Read/write semantics are derived once from the AST expression shape.
+        # Keep top-level call-event facts from _event_payload because that layer
+        # intentionally handles deallocator and call-summary contracts specially;
+        # nested calls remain part of the surrounding expression-effect walk.
+        if kind != "FuncCall":
+            reads, writes = expression_read_write_sets(stmt)
         node_kind = "allocation" if allocated else "free" if freed else kind.lower()
         if kind == "Return":
             expr_str = (
@@ -200,12 +206,14 @@ def build_cfg(
             return node
 
         if kind == "If":
+            cond_reads, cond_writes = expression_read_write_sets(stmt.cond)
             cond = cfg.new_node(
                 "if_cond",
                 stmt,
                 line_map=line_map,
                 expr_str=_format_pycparser_expr(stmt.cond),
-                reads=_ids(stmt.cond),
+                reads=cond_reads,
+                writes=cond_writes,
                 calls=_call_events(stmt.cond, line_map, function_pointers),
             )
             true_add, true_remove = _simple_null_facts(stmt.cond)
@@ -243,13 +251,15 @@ def build_cfg(
             return cond
 
         if kind in {"While", "DoWhile"}:
+            cond_reads, cond_writes = expression_read_write_sets(stmt.cond)
             if kind == "While":
                 cond = cfg.new_node(
                     "while_cond",
                     stmt,
                     line_map=line_map,
                     expr_str=_format_pycparser_expr(stmt.cond),
-                    reads=_ids(stmt.cond),
+                    reads=cond_reads,
+                    writes=cond_writes,
                     calls=_call_events(stmt.cond, line_map, function_pointers),
                 )
                 body = build_stmt(stmt.stmt, cond, next_entry, cond)
@@ -265,7 +275,8 @@ def build_cfg(
                 stmt,
                 line_map=line_map,
                 expr_str=_format_pycparser_expr(stmt.cond),
-                reads=_ids(stmt.cond),
+                reads=cond_reads,
+                writes=cond_writes,
                 calls=_call_events(stmt.cond, line_map, function_pointers),
             )
             body = build_stmt(stmt.stmt, cond, next_entry, cond)
@@ -277,6 +288,7 @@ def build_cfg(
 
         if kind == "For":
             cond_expr = stmt.cond
+            cond_reads, cond_writes = expression_read_write_sets(cond_expr)
             cond = cfg.new_node(
                 "for_cond",
                 stmt,
@@ -284,7 +296,8 @@ def build_cfg(
                 expr_str=(
                     _format_pycparser_expr(cond_expr) if cond_expr else "1"
                 ),
-                reads=_ids(cond_expr) if cond_expr is not None else set(),
+                reads=cond_reads,
+                writes=cond_writes,
                 calls=_call_events(cond_expr, line_map, function_pointers),
             )
             iter_node = None
@@ -305,12 +318,14 @@ def build_cfg(
             return cond
 
         if kind == "Switch":
+            cond_reads, cond_writes = expression_read_write_sets(stmt.cond)
             switch_node = cfg.new_node(
                 "switch_cond",
                 stmt,
                 line_map=line_map,
                 expr_str=_format_pycparser_expr(stmt.cond),
-                reads=_ids(stmt.cond),
+                reads=cond_reads,
+                writes=cond_writes,
                 calls=_call_events(stmt.cond, line_map, function_pointers),
             )
             body = stmt.stmt

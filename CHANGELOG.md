@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.21] - 2026-09-13
+
+### Fixed
+- Model compound assignments, increment/decrement, and indexed/member/pointer lvalue effects in the shared CFG so data-flow consumers preserve required C reads and writes and CGULL-042 avoids false dead-store reports (#464).
+
 ## [0.11.20] - 2026-09-13
 
 ### Fixed
