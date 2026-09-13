@@ -181,6 +181,7 @@ class ScanConfig:
     mode: ScanMode = ScanMode.FILE
     # Internal, per-file parsed inputs passed to workers; not a user option.
     prepared_units: Dict[Any, Any] = field(default_factory=dict, repr=False, compare=False)
+    include_root_warnings: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -196,6 +197,7 @@ class ScanConfig:
         include_roots: Optional[List[str]] = None,
         dedup_headers: bool = True,
         mode: Union[ScanMode, str] = ScanMode.FILE,
+        include_root_warnings: Optional[Dict[str, str]] = None,
     ) -> "ScanConfig":
         if isinstance(mode, str):
             mode = ScanMode(mode.lower())
@@ -219,6 +221,7 @@ class ScanConfig:
             config_strategy=config_strategy,
             exhaustive_threshold=exhaustive_threshold,
             include_roots=list(include_roots) if include_roots is not None else [],
+            include_root_warnings=dict(include_root_warnings or {}),
             dedup_headers=dedup_headers,
             mode=mode,
         )
@@ -251,6 +254,7 @@ class ScanConfig:
             "config_strategy": self.config_strategy,
             "exhaustive_threshold": self.exhaustive_threshold,
             "include_roots": list(self.include_roots),
+            "include_root_warnings": dict(self.include_root_warnings),
             "dedup_headers": self.dedup_headers,
             "mode": self.mode.value if isinstance(self.mode, ScanMode) else str(self.mode),
         }
@@ -273,6 +277,7 @@ class ScanConfig:
             config_strategy=data.get("config_strategy", "one-at-a-time"),
             exhaustive_threshold=data.get("exhaustive_threshold", 10),
             include_roots=list(data.get("include_roots", [])),
+            include_root_warnings=dict(data.get("include_root_warnings", {})),
             dedup_headers=data.get("dedup_headers", True),
             mode=ScanMode(data.get("mode", ScanMode.FILE.value)),
         )
@@ -429,6 +434,7 @@ class ScanResult:
     baseline_total_before_filter: Optional[int] = None
     scan_errors: List[ScanError] = field(default_factory=list)
     baseline_rules_count: Optional[int] = None
+    configuration_warnings: List[str] = field(default_factory=list)
 
     def get_overall_parser_status(self) -> str:
         if self.overall_parser_status:
@@ -502,6 +508,7 @@ class ScanResult:
             "issues": [issue.to_dict() for issue in self.issues],
             "file_summaries": [fs.to_dict() for fs in self.file_summaries],
             "scan_errors": [err.to_dict() for err in self.scan_errors],
+            "configuration_warnings": list(self.configuration_warnings),
             "ignored_paths": self.ignored_paths,
             "failed_paths": self.failed_paths,
         }

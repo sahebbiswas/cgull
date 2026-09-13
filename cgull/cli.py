@@ -234,8 +234,6 @@ def _compile_database_for_args(
         # report/ignore the parse failure exactly as before.
         return None, None, None
 
-    for warning in database.warnings:
-        _base.print(f"Warning: {warning}", file=_base.sys.stderr)
     return database, data, os.path.realpath(compile_commands_path)
 
 

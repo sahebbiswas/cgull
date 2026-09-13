@@ -154,6 +154,7 @@ class CGullScanner:
                     config_strategy=self.config.config_strategy,
                     exhaustive_threshold=self.config.exhaustive_threshold,
                     include_roots=self.config.include_roots,
+                    include_root_warnings=self.config.include_root_warnings,
                     dedup_headers=getattr(self.config, "dedup_headers", True),
                     mode=getattr(self.config, "mode", ScanMode.FILE),
                 )

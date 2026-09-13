@@ -10,13 +10,15 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
+import logging
 import os
 from pathlib import Path
 import shlex
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
+from .include_diagnostics import collect_include_warnings, invalid_root_warning
 from .models import ConfigProfile, ScanConfig
 from .preprocessor import ConfigReductionStats, reduce_generated_profiles
 from .telemetry import CGullScanner as _TelemetryCGullScanner
@@ -28,6 +30,7 @@ class CompileCommandIncludeDatabase:
 
     include_roots_by_file: Mapping[str, Tuple[str, ...]]
     warnings: Tuple[str, ...] = ()
+    include_root_warnings: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_file(cls, path: Union[str, os.PathLike[str]]) -> "CompileCommandIncludeDatabase":
@@ -51,6 +54,7 @@ class CompileCommandIncludeDatabase:
         base_dir = os.path.realpath(database_dir or os.getcwd())
         roots_by_file: Dict[str, Tuple[str, ...]] = {}
         warnings: List[str] = []
+        root_warnings: Dict[str, str] = {}
 
         for entry_index, entry in enumerate(data):
             if not isinstance(entry, dict):
@@ -76,8 +80,9 @@ class CompileCommandIncludeDatabase:
             ordinary_roots, system_roots = _parse_include_args(
                 args,
                 command_dir=command_dir,
-                entry_label=str(raw_file),
+                entry_label=f"compile_commands entry {entry_index} ({file_path})",
                 warnings=warnings,
+                root_warnings=root_warnings,
             )
             roots = tuple(_dedupe_paths([*ordinary_roots, *system_roots]))
 
@@ -90,7 +95,8 @@ class CompileCommandIncludeDatabase:
                     "C-GULL uses the first entry deterministically"
                 )
 
-        return cls(include_roots_by_file=roots_by_file, warnings=tuple(_dedupe_strings(warnings)))
+        return cls(include_roots_by_file=roots_by_file, warnings=tuple(_dedupe_strings(warnings)),
+                   include_root_warnings=root_warnings)
 
     def roots_for(self, file_path: str) -> Tuple[str, ...]:
         return self.include_roots_by_file.get(_canonical_path(file_path, os.getcwd()), ())
@@ -173,10 +179,19 @@ def _parse_include_args(
     command_dir: str,
     entry_label: str,
     warnings: List[str],
+    root_warnings: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], List[str]]:
     ordinary_roots: List[str] = []
     system_roots: List[str] = []
     index = 0
+    invalid_roots: Dict[str, str] = {}
+
+    def resolve(raw: str) -> str:
+        resolved = _resolve_root(raw, command_dir)
+        warning = invalid_root_warning(raw, resolved, entry_label)
+        if warning is not None:
+            invalid_roots.setdefault(os.path.normcase(resolved), warning)
+        return resolved
 
     while index < len(args):
         arg = args[index]
@@ -184,15 +199,15 @@ def _parse_include_args(
         if arg == "-I":
             if index + 1 < len(args):
                 index += 1
-                ordinary_roots.append(_resolve_root(args[index], command_dir))
+                ordinary_roots.append(resolve(args[index]))
             else:
                 warnings.append(f"'{entry_label}': trailing -I has no path and was ignored")
         elif arg.startswith("-I") and len(arg) > 2:
-            ordinary_roots.append(_resolve_root(arg[2:], command_dir))
+            ordinary_roots.append(resolve(arg[2:]))
         elif arg == "-isystem":
             if index + 1 < len(args):
                 index += 1
-                system_roots.append(_resolve_root(args[index], command_dir))
+                system_roots.append(resolve(args[index]))
             else:
                 warnings.append(f"'{entry_label}': trailing -isystem has no path and was ignored")
         elif arg.startswith("-isystem") and len(arg) > len("-isystem"):
@@ -200,7 +215,7 @@ def _parse_include_args(
             if raw.startswith("="):
                 raw = raw[1:]
             if raw:
-                system_roots.append(_resolve_root(raw, command_dir))
+                system_roots.append(resolve(raw))
         elif arg == "-iquote" or arg.startswith("-iquote"):
             warnings.append(
                 f"'{entry_label}': -iquote is ignored because C-GULL's current include resolver "
@@ -217,6 +232,11 @@ def _parse_include_args(
                     index += 1
         index += 1
 
+    for key, warning in invalid_roots.items():
+        if root_warnings is None or key not in root_warnings:
+            warnings.append(warning)
+            if root_warnings is not None:
+                root_warnings[key] = warning
     return _dedupe_paths(ordinary_roots), _dedupe_paths(system_roots)
 
 
@@ -278,7 +298,28 @@ class CompileDatabaseCGullScanner(_TelemetryCGullScanner):
         # progress, quiet, profiles, strategy, threshold, seed_profiles.
         return args[6] if len(args) >= 7 else None
 
+    def _scan_with_include_warnings(self, method, *args, **kwargs):
+        with collect_include_warnings(self.config.include_root_warnings) as warnings:
+            database_warnings = list(self.compile_database.warnings) if self.compile_database else []
+            if self.compile_database:
+                for key, warning in self.compile_database.include_root_warnings.items():
+                    if key in warnings:
+                        database_warnings.remove(warning)
+                    else:
+                        warnings[key] = warning
+            for warning in database_warnings:
+                logging.getLogger(__name__).warning("%s", warning)
+            result = method(*args, **kwargs)
+            result.configuration_warnings = list(dict.fromkeys([*warnings.values(), *database_warnings]))
+            return result
+
     def scan_path(self, *args, **kwargs):
+        return self._scan_with_include_warnings(self._scan_path, *args, **kwargs)
+
+    def scan_text(self, *args, **kwargs):
+        return self._scan_with_include_warnings(self._scan_text, *args, **kwargs)
+
+    def _scan_path(self, *args, **kwargs):
         explicit_profiles = kwargs.get("profiles")
         if "profiles" not in kwargs:
             explicit_profiles = self._positional_profiles(args)
@@ -302,7 +343,14 @@ class CompileDatabaseCGullScanner(_TelemetryCGullScanner):
             result.config_reduction_stats = self._config_reduction_stats
         return result
 
-    def scan_text(
+    @staticmethod
+    def _validate_include_roots(config: ScanConfig, file_path: str) -> None:
+        from .includes import IncludeResolver
+
+        IncludeResolver(include_roots=config.include_roots,
+                        base_dir=os.path.dirname(os.path.abspath(file_path)))
+
+    def _scan_text(
         self,
         source_code: str,
         file_path: str = "source.c",
@@ -313,6 +361,7 @@ class CompileDatabaseCGullScanner(_TelemetryCGullScanner):
     ):
         """Scan in-memory source, reducing only internally generated profiles."""
 
+        self._validate_include_roots(self.config, file_path)
         reduction_stats: Optional[ConfigReductionStats] = None
         effective_profiles = profiles
         configured_strategy = getattr(self.config, "config_strategy", "one-at-a-time")
@@ -424,6 +473,9 @@ class CompileDatabaseCGullScanner(_TelemetryCGullScanner):
         )
 
     def _config_for_file(self, config: ScanConfig, file_path: str) -> ScanConfig:
+        # This runs in the coordinator before worker dispatch, including regex
+        # scans which do not construct a TU resolver themselves.
+        self._validate_include_roots(config, file_path)
         database = self.compile_database
         if database is None:
             return config
