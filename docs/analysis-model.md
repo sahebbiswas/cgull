@@ -14,17 +14,31 @@ For normal use, keep the `hybrid` default unless you are deliberately measuring 
 
 ## File mode and translation-unit mode
 
-File mode analyzes discovered files individually and is the default when no project mode is configured:
+The CLI selects scan mode with this precedence:
+
+1. an explicit `--mode file|tu`;
+2. a mode configured in the discovered `.cgull.toml` or `pyproject.toml`;
+3. target-based inference.
+
+When inference is used, any directory target selects translation-unit (TU) mode. A target list containing only source files selects file mode. This means `cgull scan .`, `cgull scan src/`, mixed file/directory scans, and the no-target `cgull scan` form naturally use TU mode, while direct file scans remain lightweight.
+
+File mode analyzes discovered files individually:
 
 ```bash
+cgull scan src/main.c
 cgull scan . --mode file
 ```
 
 Translation-unit (TU) mode expands resolvable project includes and preserves a provenance map back to original files:
 
 ```bash
+cgull scan .
 cgull scan . --mode tu
 ```
+
+Explicit overrides continue to work in either direction. The terminal scan summary reports both the selected mode and whether it came from the command line, configuration, or target inference. JSON and SARIF reports expose the same provenance as structured run metadata.
+
+The programmatic API is intentionally different: `ScanConfig.create()` retains `ScanMode.FILE` as its backward-compatible default. Target-based inference is a CLI behavior only.
 
 TU mode is useful when a rule needs declarations, macros, wrappers, or effects defined in project headers. Configure include roots with `.cgullincludes`, `.cgull.toml`, or build metadata.
 
