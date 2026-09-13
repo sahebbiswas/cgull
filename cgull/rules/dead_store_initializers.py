@@ -1,7 +1,6 @@
 """Conservative defensive-initialization policy for CGULL-042."""
 
 import re
-from collections import deque
 
 from pycparser import CParser, c_ast
 
@@ -36,113 +35,86 @@ def pure_initializer(expr):
     return False
 
 
-def overwritten_on_all_paths(cfg, successors, variable):
-    """Prove overwrite before exit, read, unknown flow, or an unbounded cycle."""
-    pending = list(successors)
-    nodes = {}
-    proven = set()
-    while pending:
-        node_id = pending.pop()
-        if node_id in nodes:
-            continue
-        node = cfg.nodes[node_id]
-        nodes[node_id] = node
-        if variable in node.reads or node.kind == "unknown_control_flow":
-            return False
-        if variable in node.writes:
-            proven.add(node_id)
-            continue
-        # StructuredGraph represents fall-through out of a function as None,
-        # which connect() omits. A conditional with one stored edge can therefore
-        # also exit without executing that edge.
-        if node.kind == "switch_cond" or (
-            node.kind in {"if_cond", "while_cond", "for_cond", "do_cond"}
-            and len(node.successors) < 2
-        ):
-            return False
-        if not node.successors:
-            return False
-        pending.extend(node.successors)
-    # Least fixed point: cycles without a guaranteed overwrite remain unproven.
-    predecessors = {node_id: [] for node_id in nodes}
-    remaining = {}
-    for node_id, node in nodes.items():
-        if node_id in proven:
-            continue
-        remaining[node_id] = len(node.successors)
-        for successor in node.successors:
-            predecessors[successor].append(node_id)
-    queue = deque(proven)
-    while queue:
-        for predecessor in predecessors[queue.popleft()]:
-            remaining[predecessor] -= 1
-            if remaining[predecessor] == 0:
-                proven.add(predecessor)
-                queue.append(predecessor)
-    return bool(successors) and all(s in proven for s in successors)
-
-
 def pure_declaration_coordinates(funcdef):
-    """Retain original purity before CFG ternary-expression lowering."""
-    coordinates = set()
+    """Return identities of declarations whose original initializer is pure.
+
+    The legacy helper name is retained for compatibility with the base rule. The
+    values are object identities, not coordinates: CGULL-042 must suppress only
+    the exact declaration event represented by a CFG node, never another write
+    that merely shares its source line.
+    """
+    declarations = set()
     pending = [funcdef]
     while pending:
         node = pending.pop()
-        if isinstance(node, c_ast.Decl) and node.coord is not None and pure_initializer(node.init):
-            coordinates.add((node.coord.file, node.coord.line, node.coord.column))
+        if isinstance(node, c_ast.Decl) and pure_initializer(node.init):
+            declarations.add(id(node))
         pending.extend(child for _, child in node.children())
-    return coordinates
+    return declarations
 
 
-def suppress_cfg_initializer(cfg, node, variable, pure_coordinates):
+def suppress_cfg_initializer(_cfg, node, variable, pure_declarations):
+    """Suppress only the exact pure declaration initializer CFG event.
+
+    Declaration initializers are outside CGULL-042's policy regardless of
+    whether later control flow overwrites the value or exits the scope first.
+    """
     decl = getattr(node, "_ast_node", None)
-    coord = getattr(decl, "coord", None)
     return (
         isinstance(decl, c_ast.Decl)
         and decl.name == variable
-        and coord is not None
-        and (coord.file, coord.line, coord.column) in pure_coordinates
+        and id(decl) in pure_declarations
         and pure_initializer(decl.init)
-        and overwritten_on_all_paths(cfg, node.successors, variable)
     )
 
 
 def suppress_lexical_initializer(context, variable, line):
-    """Require a known declaration and an unambiguous straight-line overwrite.
+    """Suppress a fallback finding only for a proven pure declaration initializer.
 
-    The fallback has line-based bindings rather than CFG events. Only inspect a
-    complete, single declaration statement and decline control-flow ambiguity.
+    Fallback findings are line-based, so require the concrete binding metadata to
+    identify this line as the variable's initializer declaration. If more than one
+    write to the same binding occurs on that physical line, keep the finding: the
+    fallback tier cannot distinguish the initializer from the later assignment.
     """
     if not variable.has_initializer or line != variable.declaration_line:
         return False
-    later = [w for w in variable.assigned_lines if w > line]
-    if not later:
+    if sum(1 for write_line in variable.assigned_lines if write_line == line) != 1:
         return False
-    next_write = min(later)
+
     source = getattr(context, "clean_source", "") or "\n".join(context.source_lines)
     lines = source.splitlines()
-    text = "\n".join(lines[line - 1:next_write])
-    match = re.search(r"\b" + re.escape(variable.name) + r"\s*=\s*([^;]+);", text)
+    if line < 1 or line > len(lines):
+        return False
+
+    # Start at the binding's declaration line and extract only its initializer.
+    # The metadata establishes declaration identity; parsing establishes purity.
+    text = "\n".join(lines[line - 1:])
+    match = re.search(
+        r"\b" + re.escape(variable.name) + r"\s*=\s*(.*?);",
+        text,
+        re.DOTALL,
+    )
     if match is None:
         return False
-    # The initializer must start on the declaration line, and cannot include a
-    # second declarator/assignment. The small C parser validates the expression.
     if "\n" in text[:match.start()]:
         return False
-    tail = text[match.end():]
-    if re.search(r"\b" + re.escape(variable.name) + r"\s*=(?!=)", tail.split("\n", 1)[0]):
-        # Line-based fallback findings cannot separate this later assignment
-        # from the initializer, so keep the finding instead of hiding both.
-        return False
-    if re.search(r"[{}?:#]|\b(if|else|for|while|do|switch|goto|return|break|continue)\b", tail):
-        return False
-    overwrite = re.search(r"\b" + re.escape(variable.name) + r"\s*=(?!=)", tail)
-    if overwrite is None:
-        return False
-    # Intervening calls might terminate or otherwise invalidate straight-line
-    # reasoning. Calls on the overwriting RHS do not affect the old value.
-    if re.search(r"\b\w+\s*\(", tail[:overwrite.start()]):
-        return False
+
+    # assigned_lines is line-based and can collapse multiple writes on one line.
+    # Inspect the remainder of the declaration line so the fallback tier does not
+    # mistake a later assignment (or increment/decrement) for the initializer.
+    first_line_end = text.find("\n")
+    if first_line_end < 0:
+        first_line_end = len(text)
+    if match.end() <= first_line_end:
+        tail = text[match.end():first_line_end]
+        name = re.escape(variable.name)
+        same_line_write = re.search(
+            rf"(?:\b{name}\b\s*(?:\+\+|--|(?:<<|>>|[+\-*/%&|^])?=(?!=))|(?:\+\+|--)\s*\b{name}\b)",
+            tail,
+        )
+        if same_line_write is not None:
+            return False
+
     try:
         unit = CParser().parse("void f(void) { int value = " + match.group(1) + "; }")
     except Exception:
