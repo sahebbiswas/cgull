@@ -176,6 +176,7 @@ def _resolve_scan_mode_args(args):
         config_path=getattr(internal, "config", None),
         target_path=_primary_target(internal),
     )
+    internal._cgull_loaded_config = config
     if config.error:
         # cli_base owns rendering and exit semantics for configuration errors.
         return internal, None, None
@@ -200,10 +201,12 @@ def _compile_database_for_args(
         from .ast_analyzer import find_compile_commands
 
         primary_target = _primary_target(args)
-        config = _base.load_config(
-            config_path=getattr(args, "config", None),
-            target_path=primary_target,
-        )
+        config = getattr(args, "_cgull_loaded_config", None)
+        if config is None:
+            config = _base.load_config(
+                config_path=getattr(args, "config", None),
+                target_path=primary_target,
+            )
         if not config.error:
             compile_commands_path = find_compile_commands(
                 primary_target,
@@ -254,20 +257,45 @@ def _shared_compile_commands_parse(data: Optional[List[object]], path: Optional[
         ast_analyzer.parse_compile_commands = original_parse
 
 
+@contextlib.contextmanager
+def _reuse_loaded_config(args):
+    """Reuse CLI config discovery when cli_base requests the same configuration."""
+    cached = getattr(args, "_cgull_loaded_config", None)
+    if cached is None:
+        yield
+        return
+
+    expected_config_path = getattr(args, "config", None)
+    expected_target_path = _primary_target(args)
+    original_load_config = _base.load_config
+
+    def load_config_once(config_path=None, target_path=None):
+        if config_path == expected_config_path and target_path == expected_target_path:
+            return cached
+        return original_load_config(config_path=config_path, target_path=target_path)
+
+    _base.load_config = load_config_once
+    try:
+        yield
+    finally:
+        _base.load_config = original_load_config
+
+
 def _run_original_scan(args, *, reporter=None):
     effective_args, scan_mode, mode_source = _resolve_scan_mode_args(args)
-    database, data, compile_commands_path = _compile_database_for_args(effective_args)
     active_reporter = reporter if reporter is not None else ReportGenerator
     if scan_mode is not None and mode_source is not None:
         active_reporter = mode_aware_reporter(active_reporter, scan_mode, mode_source)
 
     previous_reporter = _base.ReportGenerator
-    with activate_compile_command_database(database), _shared_compile_commands_parse(data, compile_commands_path):
-        _sync_base_symbols(reporter=active_reporter)
-        try:
-            return _ORIGINAL_HANDLE_SCAN(effective_args)
-        finally:
-            _base.ReportGenerator = previous_reporter
+    with _reuse_loaded_config(effective_args):
+        database, data, compile_commands_path = _compile_database_for_args(effective_args)
+        with activate_compile_command_database(database), _shared_compile_commands_parse(data, compile_commands_path):
+            _sync_base_symbols(reporter=active_reporter)
+            try:
+                return _ORIGINAL_HANDLE_SCAN(effective_args)
+            finally:
+                _base.ReportGenerator = previous_reporter
 
 
 def _run_scan_and_capture(args, *, suppress_output: bool):
