@@ -55,8 +55,6 @@ def _remove_subcommand(subparsers: argparse._SubParsersAction, name: str) -> Non
 
 def build_parser() -> argparse.ArgumentParser:
     parser = _ORIGINAL_BUILD_PARSER()
-    if parser.epilog:
-        parser.epilog = parser.epilog.replace("  cgull init-ignore\n", "  cgull init\n")
 
     scan_parser = _scan_subparser(parser)
     scan_parser.add_argument(
