@@ -38,6 +38,6 @@ PR #461's logging capture exposed Windows cleanup failures, but it is not suffic
 
 ## Timing visibility retained in CI
 
-The matrix now runs pytest with `--durations=30 --durations-min=0.5` and emits JUnit timing data. The Windows/Python 3.11 lane keeps the top 25 test-case durations in the job summary and emits the top 10 as GitHub notice annotations, matching the UI's visible notice limit. This makes a future regression attributable to specific tests instead of only a single step-level duration.
+The matrix now runs pytest with `--durations=30` and emits JUnit timing data. The Windows/Python 3.11 lane keeps the top 25 test-case durations in the job summary and emits the top 10 as GitHub notice annotations, matching the UI's visible notice limit. This makes a future regression attributable to specific tests instead of only a single step-level duration.
 
 The test job timeout is 20 minutes. This does not replace profiling: it gives the measured 14:26 outlier reasonable runner headroom while retaining all supported Python/OS coverage and the slow-test diagnostics above. If the Windows/Python 3.11 lane approaches that ceiling again, use the reported slow cases to decide whether a specific multiprocessing test, teardown path, or repeated scan needs isolation or optimization.
