@@ -20,6 +20,12 @@ from .compile_database import (
 from .fixes import FixResult, apply_safe_fixes
 from .preprocessor_cli import handle_preprocessor
 from .project_init import handle_init as handle_project_init
+from .project_state import (
+    DEFAULT_LOG_RETENTION_RUNS,
+    normalize_project_path,
+    read_logging_retention,
+    resolve_project_state_root,
+)
 from .telemetry import ProgressIndicator as _TelemetryProgressIndicator
 
 
@@ -416,14 +422,54 @@ def _is_preprocessor_command(argv: List[str]) -> bool:
     return _command_after_global_options(argv) == "preprocessor"
 
 
+def _logging_context_for_args(args) -> Tuple[str, int]:
+    command = getattr(args, "command", None)
+    config_path = getattr(args, "config", None)
+
+    if command == "init":
+        root = normalize_project_path(getattr(args, "path", ".") or ".")
+        return root, DEFAULT_LOG_RETENTION_RUNS
+
+    targets = getattr(args, "target", None)
+    if isinstance(targets, str):
+        targets = [targets]
+    targets = list(targets or ["."])
+    root = resolve_project_state_root(targets, config_path)
+    retention = read_logging_retention(targets, config_path)
+    return root, retention
+
+
+def _bootstrap_args_for_logging(effective_argv: List[str], command: Optional[str]):
+    """Parse command context without surfacing duplicate argparse diagnostics."""
+    if command in ("init", "preprocessor"):
+        return None
+
+    if not effective_argv:
+        normalized = ["scan", "."]
+    elif command in ("scan", "flags", "rules"):
+        normalized = list(effective_argv)
+    else:
+        normalized = ["scan", *effective_argv]
+
+    parser = build_parser()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return parser.parse_args(normalized)
+    except SystemExit:
+        return None
+
+
 def _configure_logging_for_args(args) -> int:
     from .logging_config import configure_logging
 
+    project_state_root, retention_runs = _logging_context_for_args(args)
     try:
         configure_logging(
             verbose_count=getattr(args, "verbose", 0) or 0,
             log_level_str=getattr(args, "log_level", None),
             log_file=getattr(args, "log_file", None),
+            project_state_root=project_state_root,
+            retention_runs=retention_runs,
         )
     except OSError as exc:
         _base.print(f"Error configuring logging: {exc}", file=_base.sys.stderr)
@@ -447,17 +493,43 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 2
 
+    from .logging_config import teardown_cli_logging
+
     if command in ("init", "preprocessor"):
         parser = build_parser()
         args = parser.parse_args(effective_argv)
         logging_rc = _configure_logging_for_args(args)
         if logging_rc:
             return logging_rc
-        if command == "init":
-            return handle_project_init(args)
-        return handle_preprocessor(args)
+        try:
+            if command == "init":
+                return handle_project_init(args)
+            return handle_preprocessor(args)
+        finally:
+            teardown_cli_logging()
 
-    return _base.main(argv)
+    bootstrap_args = _bootstrap_args_for_logging(effective_argv, command)
+    if bootstrap_args is None:
+        try:
+            return _base.main(argv)
+        finally:
+            teardown_cli_logging()
+
+    from .logging_config import (
+        clear_logging_bootstrap_context,
+        set_logging_bootstrap_context,
+    )
+
+    project_state_root, retention_runs = _logging_context_for_args(bootstrap_args)
+    set_logging_bootstrap_context(
+        project_state_root=project_state_root,
+        retention_runs=retention_runs,
+    )
+    try:
+        return _base.main(argv)
+    finally:
+        clear_logging_bootstrap_context()
+        teardown_cli_logging()
 
 
 handle_flags = _base.handle_flags

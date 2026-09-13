@@ -12,6 +12,7 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore
 
 from .models import Severity, ScanMode
+from .project_state import DEFAULT_LOG_RETENTION_RUNS
 from .semantic_models import (
     EMPTY_SEMANTIC_MODELS,
     SemanticModelConfigError,
@@ -22,7 +23,6 @@ import logging
 from .rules import BaseRule
 
 logger = logging.getLogger(__name__)
-
 
 
 @dataclass
@@ -41,6 +41,7 @@ class CGullConfig:
     default_format: Optional[str] = None
     fail_on: Optional[str] = None
     warn_on_fallback: bool = False
+    logging_retention_runs: int = DEFAULT_LOG_RETENTION_RUNS
     warnings: List[str] = field(default_factory=list)
     config_file_path: Optional[str] = None
     config_dir: Optional[str] = None
@@ -237,7 +238,18 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 cfg.warnings.append(f"Invalid schema_version in {config_path}: expected integer")
 
         # Check top-level keys for unknown keys
-        known_top_keys = {"schema_version", "rules", "functions", "paths", "output", "includes", "scan", "mode", "semantic_models"}
+        known_top_keys = {
+            "schema_version",
+            "rules",
+            "functions",
+            "paths",
+            "output",
+            "includes",
+            "scan",
+            "mode",
+            "semantic_models",
+            "logging",
+        }
         for key in raw_toml.keys():
             if key not in known_top_keys:
                 cfg.warnings.append(f"Unknown key/section '[{key}]' in configuration file {config_path}")
@@ -265,6 +277,18 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 cfg.mode = ScanMode(m_val)
             else:
                 cfg.warnings.append(f"Invalid [scan].mode '{m_val}' in {config_path}. Expected 'file' or 'tu'.")
+
+        # Section [logging]
+        logging_sec = raw_toml.get("logging", {})
+        if isinstance(logging_sec, dict) and "retention_runs" in logging_sec:
+            retention = logging_sec["retention_runs"]
+            if isinstance(retention, bool) or not isinstance(retention, int) or retention <= 0:
+                cfg.warnings.append(
+                    f"Invalid [logging].retention_runs '{retention}' in {config_path}. "
+                    f"Expected a positive integer; using {DEFAULT_LOG_RETENTION_RUNS}."
+                )
+            else:
+                cfg.logging_retention_runs = retention
 
         # Section [rules]
         rules_sec = raw_toml.get("rules", {})

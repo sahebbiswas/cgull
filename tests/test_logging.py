@@ -52,9 +52,13 @@ class TestLoggingConfig(unittest.TestCase):
         self.root_logger.setLevel(self.original_level)
         for h in list(self.root_logger.handlers):
             self.root_logger.removeHandler(h)
-            h.close()
+            try:
+                h.close()
+            except Exception:
+                pass
         for h in self.original_handlers:
-            self.root_logger.addHandler(h)
+            if not isinstance(h, logging.FileHandler):
+                self.root_logger.addHandler(h)
 
     def test_parse_log_level(self):
         self.assertEqual(parse_log_level("trace"), TRACE_LEVEL_NUM)
