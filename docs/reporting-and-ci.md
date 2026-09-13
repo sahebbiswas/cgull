@@ -100,3 +100,26 @@ A practical adoption sequence is:
 6. optionally require `--fail-on-error` and `--warn-on-fallback` where full analysis coverage is part of the security contract.
 
 See [Development integration](development-integration.md) for concrete pre-commit and GitHub Actions configurations.
+
+## Parser fallback diagnostics
+
+JSON `file_summaries[].parse_attempts` records structural attempts in tier order.
+SARIF exposes the same summaries in `runs[].properties.file_summaries`.
+These are additive fields in output schema version `1`; existing report keys and
+exit policies are unchanged. Regex-only scans have an empty attempts list.
+
+Each attempt includes `tier`, `status` (`success`, `failure`, or `skipped`),
+`exception_category`, a bounded `message`, and `preprocessing_failed`.
+`expanded_line`/`expanded_column` are pycparser coordinates including the injected
+prelude. `source_line` removes that prelude; `original_file`/`original_line` apply
+TU include provenance. `source_column` and `original_column` are null when macro
+expansion or normalization prevents a verified column mapping. Unavailable
+locations are null. `snippet` contains at most 160 printable characters; messages
+contain at most 240. Profile scans additionally identify the attempt's `profile`.
+Paths follow the containing report's path policy.
+
+`--warn-on-fallback` prints the failing tiers and reasons on stderr for each
+fallback file, and retains its existing exit status of 1. Debug logging also
+records fallback reasons. Successful higher-tier parses emit no fallback warning;
+a successful regex fallback does not become a scan error. Normal successful-scan
+output remains concise, and JSON/SARIF on stdout remain machine-readable.

@@ -201,7 +201,7 @@ def test_scanner_config_include_roots_propagation(tmp_path):
     assert scanner._get_active_config().include_roots == [inc_dir]
 
     profile = ConfigProfile(name="test", flags={"FOO": None})
-    _, _, _, _, _, _, _, _ = _scan_file_content_profiles(
+    _, _, _, _, _, _, _, _, attempts = _scan_file_content_profiles(
         content="int main(void) { return 0; }\n",
         file_path="main.c",
         config=scan_cfg,

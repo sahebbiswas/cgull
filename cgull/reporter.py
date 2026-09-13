@@ -232,6 +232,7 @@ class ReportGenerator:
                     }
                 },
                 "invocations": [inv_obj],
+                "properties": {"file_summaries": [fs.to_dict() for fs in result.file_summaries]},
                 "results": results_list
             }]
         }

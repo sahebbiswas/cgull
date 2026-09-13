@@ -426,7 +426,7 @@ class CGullScanner(_BaseCGullScanner):
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = self._scan_single_file_content(
+                file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts = self._scan_single_file_content(
                     file_path,
                     content,
                     config=self._prepared_config_for_file(config, file_path),
@@ -434,7 +434,7 @@ class CGullScanner(_BaseCGullScanner):
                     quiet=quiet,
                     progress_active=progress_active,
                 )
-                result = (file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err)
+                result = (file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts)
             except Exception as e:
                 scan_err = ScanError(
                     file_path=file_path,
@@ -451,10 +451,10 @@ class CGullScanner(_BaseCGullScanner):
                     ParseTier.REGEX_FALLBACK.value,
                     "failed",
                     Confidence.LIMITED.value,
-                    scan_err,
+                    scan_err, [],
                 )
             results.append(result)
-            _, file_issues, loc, _, parser_status, _, status, _, _ = result
+            _, file_issues, loc, _, parser_status, _, status, _, _, _ = result
             self._record_progress_result(
                 loc=loc,
                 file_issues=file_issues,
@@ -512,8 +512,8 @@ class CGullScanner(_BaseCGullScanner):
                 file_path = futures[future]
                 completed_count += 1
                 try:
-                    file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err = future.result()
-                    result = (file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err)
+                    file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts = future.result()
+                    result = (file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts)
                 except Exception as e:
                     scan_err = ScanError(
                         file_path=file_path,
@@ -530,10 +530,10 @@ class CGullScanner(_BaseCGullScanner):
                         ParseTier.REGEX_FALLBACK.value,
                         "failed",
                         Confidence.LIMITED.value,
-                        scan_err,
+                        scan_err, [],
                     )
                 results.append(result)
-                _, file_issues, loc, _, parser_status, _, status, _, _ = result
+                _, file_issues, loc, _, parser_status, _, status, _, _, _ = result
                 self._record_progress_result(
                     loc=loc,
                     file_issues=file_issues,
