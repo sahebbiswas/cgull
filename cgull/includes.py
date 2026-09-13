@@ -13,6 +13,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Set, Dict, Tuple, Any, Union
 
+from .analysis_headers import analysis_header_roots, is_analysis_header
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,13 +82,14 @@ class SourceLocation:
     file_path: str
     line_number: int
     line_content: str
+    is_analysis: bool = False
 
 
 class ExpandedTU(str):
     """
     Result of Translation Unit (TU) expansion containing expanded source text,
     a line-by-line provenance mapping back to original source locations,
-    and a set of all included file paths expanded into the TU.
+    and a set of included user file paths (excluding analysis infrastructure).
     Subclasses str so it can be passed directly as a string or inspected for line_map/expanded_text/included_files.
     """
     line_map: Dict[int, SourceLocation]
@@ -212,7 +215,7 @@ class IncludeResolver:
         Resolves a header target path to an absolute path.
 
         - Quote form (#include "..."): searches source_dir first, then include_roots in order.
-        - Angle form (#include <...>): searches include_roots only in order.
+        - Angle form (#include <...>): searches include_roots, then analysis models.
         - Enforces containment within trusted roots unless allow_external_includes is True.
         - Returns real absolute path if found and is a file, or None if unresolved/rejected.
         """
@@ -271,7 +274,15 @@ class IncludeResolver:
                 if self.allow_external_includes or _is_path_contained(candidate, trusted_roots):
                     return candidate
 
-        # 3. Unresolved (system header, missing header, or rejected outside boundary)
+        # Model roots are fallback infrastructure, never explicit project roots.
+        # Quoted helper includes inside models also need the generic root.
+        if not is_quote or is_analysis_header(abs_source_dir):
+            for root in analysis_header_roots():
+                candidate = os.path.realpath(os.path.join(root, clean_header))
+                if _is_path_contained(candidate, [root]) and os.path.isfile(candidate):
+                    return candidate
+
+        # 3. Unresolved (missing header or rejected outside boundary)
         return None
 
 
@@ -408,7 +419,10 @@ class TUIncludeExpander:
         for idx, (_, src_loc) in enumerate(output_tuples, 1):
             line_map[idx] = src_loc
 
-        return ExpandedTU(expanded_text=expanded_text, line_map=line_map, included_files=included_files)
+        return ExpandedTU(
+            expanded_text=expanded_text, line_map=line_map,
+            included_files={p for p in included_files if not is_analysis_header(p)},
+        )
 
     def _expand_text(
         self,
@@ -426,6 +440,7 @@ class TUIncludeExpander:
 
         current_dir = os.path.dirname(current_file_path) if os.path.isabs(current_file_path) else os.getcwd()
         lines = code.splitlines()
+        model_source = is_analysis_header(current_file_path)
 
         include_regex = re.compile(r'^[ \t]*#[ \t]*include[ \t]+(?:"([^"]+)"|<([^>]+)>|([^\r\n]+))')
         cond_stack: List[_CondFrame] = []
@@ -435,7 +450,7 @@ class TUIncludeExpander:
         while i < n:
             line = lines[i]
             orig_line_no = i + 1
-            src_loc = SourceLocation(file_path=current_file_path, line_number=orig_line_no, line_content=line)
+            src_loc = SourceLocation(file_path=current_file_path, line_number=orig_line_no, line_content=line, is_analysis=model_source)
 
             line_lstrip = line.lstrip()
 

@@ -4,3 +4,5 @@
 # silently omitting these dependencies can reduce coverage.
 pycparser>=2.21
 pcpp>=1.30
+pycparser-fake-libc>=2.21
+tomli>=1.1.0; python_version < "3.11"

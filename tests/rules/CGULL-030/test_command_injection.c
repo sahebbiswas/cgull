@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 char* build_cmd(char *prefix, char *input) {
-    return "cmd";
+    return input; /* Keep this sink genuinely influenced by user input. */
 }
 
 int system(const char *command); // Declaration shouldn't flag

@@ -112,9 +112,9 @@ def test_missing_header_handling(tmp_path):
         load_cgullincludes=False,
     )
 
-    # System headers or missing headers degrade gracefully to None
-    assert resolver.resolve("<stdio.h>", str(src_dir)) is None
-    assert resolver.resolve("<stdint.h>", str(src_dir)) is None
+    # Known system headers use analysis models; missing headers remain unresolved
+    assert resolver.resolve("<stdio.h>", str(src_dir)).endswith("stdio.h")
+    assert resolver.resolve("<stdint.h>", str(src_dir)).endswith("stdint.h")
     assert resolver.resolve("non_existent.h", str(src_dir), is_quote=True) is None
     assert resolver.resolve("<missing_system.h>", str(src_dir), is_quote=False) is None
 

@@ -216,3 +216,51 @@ cgull scan . --config-strategy pairwise
 Available configuration expansion strategies are `baseline`, `one-at-a-time` (the CLI default), `pairwise`, and `exhaustive`. `--exhaustive-threshold` bounds exhaustive expansion. Use `cgull flags .` or `cgull scan . --list-flags` to inspect discovered conditional symbols.
 
 For how these profiles affect analysis, see [Analysis model](analysis-model.md).
+
+### Standard/POSIX and Linux analysis headers
+
+Normal installation includes `pycparser-fake-libc>=2.21`. Include expansion
+uses these parsing headers automatically in both file and TU scans, including
+worker processes. There is no need to add host `/usr/include` or compiler libc
+paths. For each include, resolution is deterministic:
+
+1. The including file's directory, for quoted includes only.
+2. Explicit project include roots, in order (CLI/configuration and legacy
+   `.cgullincludes` roots).
+3. Per-source compile-database include roots, after explicit roots.
+4. C-GULL's Linux analysis overlay, for otherwise unresolved angle includes.
+5. Generic fake libc headers, for otherwise unresolved angle includes.
+
+Quoted helper includes inside analysis headers can also resolve through model
+roots. An unresolved quoted include in project code stays unresolved. Project
+headers that resolve in the earlier steps remain authoritative; C-GULL does
+not merge a model into a resolved project header. Put project/toolchain-specific
+analysis headers in an explicit root such as `analysis-include`, before other
+roots when an override is intended:
+
+```toml
+[includes]
+roots = ["analysis-include", "include"]
+```
+
+The generic package supplies parsing typedefs such as `pthread_t`,
+`pthread_attr_t`, and `time_t`. The small Linux overlay adds `Dl_info`/`dladdr`,
+`struct spwd`/`getspnam`, and basic `linux/if.h` interface name, flags, index,
+MTU, data, and configuration declarations. These are declaration/type models,
+not ABI-accurate layouts, runtime implementations, or a full Linux SDK.
+Generic fake typedefs may use placeholder integer types; do not treat sizes,
+alignment, signedness, or offsets of modeled platform types as target ABI
+proof. Supply authoritative project models where target details matter.
+Unsupported kernel structures or compiler extensions can still require custom
+headers or reach fallback parsing. This does not add C++ parsing.
+
+Bundled overlay and dependency headers are analysis infrastructure: they are
+excluded from scan roots (including orphan headers), reported findings, and
+unique user-source counts. Project-header findings retain their original paths,
+lines, snippets, and inline suppressions. Explicit custom include roots remain
+user-owned source and are not automatically exempt from findings.
+
+Resource discovery uses `importlib.resources`, with no hardcoded site-packages
+path. Installed wheel and sdist resources are checked by the packaging CI job;
+the regular Python 3.10–3.14 matrix exercises parsing and worker behavior.
+See [dependency notes](analysis-header-dependencies.md) for upstream provenance.
