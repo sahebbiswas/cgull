@@ -59,14 +59,14 @@ def test_first_assignment_is_not_initialization(fallback):
 
 
 @pytest.mark.parametrize("fallback", [False, True, "regex"])
-def test_scope_exit_is_still_dead(fallback):
-    assert 2 in scan("void f(void) {\nint x = 0;\n}", fallback)
+def test_pure_initializer_at_scope_exit_is_left_to_unused_variable_rule(fallback):
+    assert scan("void f(void) {\nint x = 0;\n}", fallback) == set()
 
 
 @pytest.mark.parametrize("fallback", [False, True, "regex"])
-def test_optional_overwrite_does_not_hide_unused_initializer(fallback):
+def test_optional_overwrite_keeps_only_post_declaration_dead_store(fallback):
     code = "void f(int flag) {\nint x = 0;\nif (flag) {\nx = 1;\n}\n}"
-    assert 2 in scan(code, fallback)
+    assert scan(code, fallback) == {4}
 
 
 def test_cfg_all_branches_overwrite():
@@ -74,11 +74,19 @@ def test_cfg_all_branches_overwrite():
     assert scan(code, False) == set()
 
 
-def test_cfg_same_line_later_assignment_is_not_suppressed():
+@pytest.mark.parametrize("fallback", [False, True, "regex"])
+def test_same_line_later_assignment_is_not_suppressed(fallback):
     code = "void f(void) {\nint x = 0; x = 1;\nx = 2;\nuse(x);\n}"
-    assert scan(code, False) == {2}
+    assert scan(code, fallback) == {2}
 
 
-def test_cfg_early_exit_retains_initializer():
+@pytest.mark.parametrize("fallback", [False, True, "regex"])
+def test_early_exit_does_not_retain_pure_initializer(fallback):
     code = "void f(int flag) {\nint x = 0;\nif (flag) return;\nx = 1;\nuse(x);\n}"
-    assert 2 in scan(code, False)
+    assert scan(code, fallback) == set()
+
+
+@pytest.mark.parametrize("fallback", [False, True, "regex"])
+def test_effectful_initializer_at_scope_exit_remains(fallback):
+    code = "void f(void) {\nint x = initialize_device();\n}"
+    assert scan(code, fallback) == {2}
