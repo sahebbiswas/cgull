@@ -36,13 +36,21 @@ python -m pip install "cgull[ast]"
 
 ## Get started
 
-From the root of a C project:
+From the root of a C project, initialize one editable project configuration:
+
+```bash
+cgull init
+```
+
+Interactive terminals offer focused, comprehensive, and custom finding profiles. In scripts/CI, initialization is deterministic and defaults to the focused profile; use `--profile comprehensive` when every registered rule should remain enabled. The focused profile keeps security/correctness coverage while explicitly skipping only the opinionated low-severity `CGULL-019` and `CGULL-025` policy checks.
+
+Then scan the project:
 
 ```bash
 cgull scan .
 ```
 
-That is the intended default workflow. C-GULL recursively discovers supported source/header files, uses the `hybrid` engine, reports all severities, runs sequentially, and writes a terminal report.
+C-GULL also works without project configuration: scans remain read-only and use inferred defaults when `.cgull.toml` is absent.
 
 Scan a narrower target when needed:
 
@@ -57,21 +65,18 @@ List the installed rule catalog:
 cgull rules
 ```
 
-Create a starter ignore file:
-
-```bash
-cgull init-ignore
-```
-
 ## Add project policy
 
-C-GULL automatically discovers `.cgull.toml`, or `[tool.cgull]` in `pyproject.toml`, by searching upward from the scan target. For example:
+`.cgull.toml` is the recommended project configuration surface. C-GULL automatically discovers it, or `[tool.cgull]` in `pyproject.toml`, by searching upward from the scan target. For example:
 
 ```toml
 schema_version = 1
 
 [paths]
 exclude = ["third_party/", "build/"]
+
+[includes]
+roots = ["include"]
 
 [output]
 fail_on = "high"
@@ -83,7 +88,7 @@ The everyday command remains:
 cgull scan .
 ```
 
-Project include roots can be kept in `.cgullincludes`, while `.cgullignore` defines files/directories outside the scan boundary. See the documentation links below for their exact resolution and precedence behavior.
+Existing `.cgullignore` and `.cgullincludes` files continue to load for compatibility. New projects should keep scan boundaries and include roots in `.cgull.toml`; migrate an existing project with `cgull init --migrate` and review the generated TOML before removing legacy files.
 
 ## Common workflows
 
@@ -124,9 +129,9 @@ cgull scan . --fix --write
 
 The [documentation knowledgebase](https://github.com/sahebbiswas/cgull/blob/main/docs/README.md) contains the detailed user and maintainer guides. Start with:
 
-- [Getting started](https://github.com/sahebbiswas/cgull/blob/main/docs/getting-started.md) — installation, defaults, first scan, and adoption path.
+- [Getting started](https://github.com/sahebbiswas/cgull/blob/main/docs/getting-started.md) — installation, initialization, defaults, first scan, and adoption path.
 - [Configuration reference](https://github.com/sahebbiswas/cgull/blob/main/docs/configuration.md) — `.cgull.toml`, `pyproject.toml`, rules, functions, paths, output policy, and semantic models.
-- [Project files and suppressions](https://github.com/sahebbiswas/cgull/blob/main/docs/project-files.md) — `.cgullignore`, `.cgullincludes`, baselines, include boundaries, and inline suppression.
+- [Project files and suppressions](https://github.com/sahebbiswas/cgull/blob/main/docs/project-files.md) — canonical project configuration, legacy migration, baselines, include boundaries, and inline suppression.
 - [Analysis model](https://github.com/sahebbiswas/cgull/blob/main/docs/analysis-model.md) — engines, TU mode, parser tiers, configuration profiles, and interprocedural analysis.
 - [Reporting and CI](https://github.com/sahebbiswas/cgull/blob/main/docs/reporting-and-ci.md) — report formats, failure policy, baselines, fixes, and CI adoption.
 - [Development integration](https://github.com/sahebbiswas/cgull/blob/main/docs/development-integration.md) — pre-commit, GitHub Actions, SARIF, and build-aware integration.

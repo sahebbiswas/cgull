@@ -1,4 +1,4 @@
-"""CLI facade adding safe-fix and preprocessor support to the established CLI."""
+"""CLI facade adding safe-fix, preprocessor, and project setup support."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from .compile_database import (
 )
 from .fixes import FixResult, apply_safe_fixes
 from .preprocessor_cli import handle_preprocessor
+from .project_init import handle_init as handle_project_init
 from .telemetry import ProgressIndicator as _TelemetryProgressIndicator
 
 
@@ -44,8 +45,17 @@ def _scan_subparser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     return _subparsers_action(parser).choices["scan"]
 
 
+def _remove_subcommand(subparsers: argparse._SubParsersAction, name: str) -> None:
+    """Remove a legacy command from both parsing and argparse help output."""
+    subparsers.choices.pop(name, None)
+    subparsers._choices_actions = [
+        action for action in subparsers._choices_actions if action.dest != name
+    ]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _ORIGINAL_BUILD_PARSER()
+
     scan_parser = _scan_subparser(parser)
     scan_parser.add_argument(
         "--fix",
@@ -59,6 +69,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = _subparsers_action(parser)
+    _remove_subcommand(subparsers, "init-ignore")
+
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Create a canonical .cgull.toml project configuration",
+    )
+    init_parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Project root to initialize (default: current directory)",
+    )
+    init_parser.add_argument(
+        "--profile",
+        choices=["focused", "comprehensive"],
+        help="Non-interactive finding profile (default: focused when stdin/stdout are not TTYs)",
+    )
+    init_parser.add_argument(
+        "--migrate",
+        action="store_true",
+        help="Import legacy .cgullignore and .cgullincludes entries into the generated TOML",
+    )
+
     preprocessor_parser = subparsers.add_parser(
         "preprocessor",
         help="Analyze conditional preprocessor structure and Boolean semantics",
@@ -286,15 +319,13 @@ def handle_scan(args) -> int:
     return rc
 
 
-def _is_preprocessor_command(argv: List[str]) -> bool:
-    """Recognize preprocessor after supported global logging options."""
+def _command_after_global_options(argv: List[str]) -> Optional[str]:
+    """Return the explicit command token after supported global logging options."""
     index = 0
     while index < len(argv):
         token = argv[index]
-        if token == "preprocessor":
-            return True
         if token == "--":
-            return False
+            return None
         if token in ("--log-level", "--log-file"):
             index += 2
             continue
@@ -304,8 +335,29 @@ def _is_preprocessor_command(argv: List[str]) -> bool:
         if token == "--verbose" or (token.startswith("-") and len(token) > 1 and set(token[1:]) == {"v"}):
             index += 1
             continue
-        return False
-    return False
+        if token.startswith("-"):
+            return None
+        return token
+    return None
+
+
+def _is_preprocessor_command(argv: List[str]) -> bool:
+    return _command_after_global_options(argv) == "preprocessor"
+
+
+def _configure_logging_for_args(args) -> int:
+    from .logging_config import configure_logging
+
+    try:
+        configure_logging(
+            verbose_count=getattr(args, "verbose", 0) or 0,
+            log_level_str=getattr(args, "log_level", None),
+            log_file=getattr(args, "log_file", None),
+        )
+    except OSError as exc:
+        _base.print(f"Error configuring logging: {exc}", file=_base.sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -315,20 +367,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     _sync_base_symbols()
 
     effective_argv = list(sys.argv[1:] if argv is None else argv)
-    if _is_preprocessor_command(effective_argv):
+    command = _command_after_global_options(effective_argv)
+
+    if command == "init-ignore":
+        _base.print(
+            "Error: 'cgull init-ignore' has been removed. Use 'cgull init' to create project configuration.",
+            file=_base.sys.stderr,
+        )
+        return 2
+
+    if command in ("init", "preprocessor"):
         parser = build_parser()
         args = parser.parse_args(effective_argv)
-        from .logging_config import configure_logging
-
-        try:
-            configure_logging(
-                verbose_count=getattr(args, "verbose", 0) or 0,
-                log_level_str=getattr(args, "log_level", None),
-                log_file=getattr(args, "log_file", None),
-            )
-        except OSError as exc:
-            _base.print(f"Error configuring logging: {exc}", file=_base.sys.stderr)
-            return 1
+        logging_rc = _configure_logging_for_args(args)
+        if logging_rc:
+            return logging_rc
+        if command == "init":
+            return handle_project_init(args)
         return handle_preprocessor(args)
 
     return _base.main(argv)
@@ -336,5 +391,5 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 handle_flags = _base.handle_flags
 handle_rules = _base.handle_rules
-handle_init_ignore = _base.handle_init_ignore
+handle_init = handle_project_init
 print = _base.print

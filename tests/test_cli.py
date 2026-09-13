@@ -564,39 +564,6 @@ class TestFlagsCommand(unittest.TestCase):
         self.assertEqual(parsed["presence_flags"], ["FEATURE_X"])
 
 
-class TestInitIgnoreCommand(unittest.TestCase):
-    def test_creates_cgullignore_file_in_cwd(self):
-        temp_dir = tempfile.mkdtemp()
-        cwd = os.getcwd()
-        try:
-            os.chdir(temp_dir)
-            stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
-                code = main(["init-ignore"])
-            self.assertEqual(code, 0)
-            self.assertTrue(os.path.exists(".cgullignore"))
-        finally:
-            os.chdir(cwd)
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_does_not_overwrite_existing_file(self):
-        temp_dir = tempfile.mkdtemp()
-        cwd = os.getcwd()
-        try:
-            os.chdir(temp_dir)
-            with open(".cgullignore", "w") as f:
-                f.write("# custom content\n")
-            stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
-                main(["init-ignore"])
-            with open(".cgullignore") as f:
-                content = f.read()
-            self.assertEqual(content, "# custom content\n")
-        finally:
-            os.chdir(cwd)
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-
 class TestMainDispatch(unittest.TestCase):
     def test_no_args_defaults_to_scanning_current_directory(self):
         temp_dir = tempfile.mkdtemp()

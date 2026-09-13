@@ -26,6 +26,37 @@ cd cgull
 python -m pip install -e ".[ast]"
 ```
 
+## Initialize a project
+
+From the root of a C project, create the recommended `.cgull.toml` configuration:
+
+```bash
+cgull init
+```
+
+On an interactive terminal, C-GULL offers three finding profiles:
+
+- **Focused (recommended/default):** enables all security/correctness checks while explicitly skipping only `CGULL-019` and `CGULL-025`, the two opinionated low-severity policy checks;
+- **Comprehensive:** enables every registered rule;
+- **Custom:** shows each rule's ID, name, category, and severity and lets you select exclusions explicitly.
+
+When stdin/stdout are not terminals, initialization never prompts and defaults to focused. Automation can choose explicitly:
+
+```bash
+cgull init --profile focused
+cgull init --profile comprehensive
+```
+
+The generated file contains the actual `[rules].skip` entries and reasons; profiles are only an initialization convenience, not hidden persistent state. Existing include directories such as `include/`, `inc/`, and `src/include/` are detected, and an existing `compile_commands.json` is reported without copying all build-derived paths into TOML.
+
+Existing `.cgullignore` and `.cgullincludes` users can migrate their settings without deleting the legacy files:
+
+```bash
+cgull init --migrate
+```
+
+Initialization refuses to overwrite or shadow an existing `.cgull.toml` or `pyproject.toml [tool.cgull]` configuration.
+
 ## First scan
 
 From the root of a C project:
@@ -34,14 +65,7 @@ From the root of a C project:
 cgull scan .
 ```
 
-Useful defaults are already selected:
-
-- target: current directory when none is supplied;
-- engine: `hybrid`;
-- severity filter: `all`;
-- scan mode: per-file unless project/CLI configuration selects TU mode;
-- parallelism: one in-process worker;
-- report: terminal text to stdout unless project configuration selects another default.
+Useful defaults are already selected. Scans remain read-only when no project configuration exists; `cgull init` is always explicit.
 
 Scan a narrower target when appropriate:
 
@@ -64,13 +88,16 @@ The analyzer may use regex, AST/structural, CFG/data-flow, and interprocedural f
 
 C-GULL automatically searches upward from the scan target for `.cgull.toml`, or for `[tool.cgull]` in `pyproject.toml`. A standalone `.cgull.toml` takes precedence when both exist in the same directory.
 
-A small starting configuration is:
+The canonical project fields are `[paths].exclude` for discovery exclusions, `[includes].roots` for include roots, `[scan]` for scan policy, plus `[output]`, `[rules]`, `[functions]`, and `[semantic_models]` for their existing purposes. For example:
 
 ```toml
 schema_version = 1
 
 [paths]
 exclude = ["third_party/", "build/"]
+
+[includes]
+roots = ["include"]
 
 [output]
 fail_on = "high"
@@ -83,16 +110,6 @@ cgull scan .
 ```
 
 See [Configuration](configuration.md) for the complete schema and precedence rules.
-
-## Exclude non-project code
-
-Create a starter `.cgullignore`:
-
-```bash
-cgull init-ignore
-```
-
-Use it for vendor code, generated output, test fixtures, or other paths that should not be scanned. See [Project files and suppressions](project-files.md).
 
 ## CI-friendly scan
 
