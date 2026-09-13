@@ -66,7 +66,12 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
             if not rendered:
                 return rendered
             data = json.loads(rendered)
-            meta = data.setdefault("meta", {})
+            if not isinstance(data, dict):
+                return json.dumps(data, indent=2)
+            meta = data.get("meta")
+            if not isinstance(meta, dict):
+                meta = {}
+                data["meta"] = meta
             meta["scan_mode"] = mode.value
             meta["scan_mode_source"] = source
             return json.dumps(data, indent=2)
@@ -78,22 +83,25 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
             if not rendered:
                 return rendered
             data = json.loads(rendered)
-            runs = data.get("runs") or []
-            if runs:
-                invocations = runs[0].get("invocations")
-                if not isinstance(invocations, list):
-                    invocations = []
-                    runs[0]["invocations"] = invocations
-                if not invocations:
-                    invocations.append({})
-                if not isinstance(invocations[0], dict):
-                    invocations[0] = {}
-                props = invocations[0].get("properties")
-                if not isinstance(props, dict):
-                    props = {}
-                    invocations[0]["properties"] = props
-                props["scanMode"] = mode.value
-                props["scanModeSource"] = source
+            if not isinstance(data, dict):
+                return json.dumps(data, indent=2)
+            runs = data.get("runs")
+            if not isinstance(runs, list) or not runs or not isinstance(runs[0], dict):
+                return json.dumps(data, indent=2)
+            invocations = runs[0].get("invocations")
+            if not isinstance(invocations, list):
+                invocations = []
+                runs[0]["invocations"] = invocations
+            if not invocations:
+                invocations.append({})
+            if not isinstance(invocations[0], dict):
+                invocations[0] = {}
+            props = invocations[0].get("properties")
+            if not isinstance(props, dict):
+                props = {}
+                invocations[0]["properties"] = props
+            props["scanMode"] = mode.value
+            props["scanModeSource"] = source
             return json.dumps(data, indent=2)
 
         @staticmethod
