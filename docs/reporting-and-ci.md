@@ -104,7 +104,8 @@ See [Development integration](development-integration.md) for concrete pre-commi
 ## Parser fallback diagnostics
 
 JSON `file_summaries[].parse_attempts` records structural attempts in tier order.
-SARIF exposes the same summaries in `runs[].properties.file_summaries`.
+SARIF exposes only `file_path` and `parse_attempts` in
+`runs[].properties.file_summaries`, avoiding duplicate counts and timings.
 These are additive fields in output schema version `1`; existing report keys and
 exit policies are unchanged. Regex-only scans have an empty attempts list.
 

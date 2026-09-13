@@ -25,8 +25,9 @@ def make_attempt(tier: str, status: str, error: Optional[Exception] = None,
     reason = match[3] if match else message
     source_line = line - prelude_lines if line and line > prelude_lines else None
     prepared_lines, source_lines = prepared.splitlines(), source.splitlines()
-    same_line = bool(line and source_line and line <= len(prepared_lines)
-                     and source_line <= len(source_lines)
+    same_line = bool(line is not None and source_line is not None
+                     and 0 < line <= len(prepared_lines)
+                     and 0 < source_line <= len(source_lines)
                      and prepared_lines[line - 1] == source_lines[source_line - 1])
     return dict(tier=tier, status=status,
                 exception_category=type(error).__name__ if error is not None else None,
@@ -50,7 +51,8 @@ def map_attempts(attempts: List[Dict[str, Any]], source: str,
         line = item['source_line']
         loc = (line_map or {}).get(line)
         text = lines[line - 1] if line and 0 < line <= len(lines) else ''
-        item['original_file'] = sanitize_path(loc.file_path if loc else file_path) if loc or file_path else None
+        target_path = loc.file_path if loc and loc.file_path else file_path
+        item['original_file'] = sanitize_path(target_path) if target_path else None
         item['original_line'] = loc.line_number if loc else line
         item['snippet'] = sanitize(loc.line_content if loc else text, 160)
         item['original_column'] = item.get('source_column') if not loc or loc.line_content == text else None

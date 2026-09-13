@@ -980,6 +980,8 @@ class CASTParser:
                 self.parse_attempts.append(make_attempt(ParseTier.PCPP_PYCPARSER.value, "failure", exc, _PRELUDE_LINE_COUNT, prepared=pcpp_result, source=clean_code))
         else:
             exc = self._preprocess_error
+            # pcpp parses filtered_prelude + clean_code, so its errors carry
+            # the same prelude offset as the subsequent pycparser attempt.
             self.parse_attempts.append(make_attempt(ParseTier.PCPP_PYCPARSER.value,
                                       "skipped" if isinstance(exc, ImportError) else "failure",
                                       exc, _PRELUDE_LINE_COUNT, preprocessing_failed=not isinstance(exc, ImportError)))
@@ -1046,7 +1048,13 @@ class CASTParser:
         import re
 
         class _SilentPreprocessor(pcpp.Preprocessor):
-            """Suppresses errors, passes through unresolvable #includes, and syncs #line directives on drift."""
+            """Capture errors for fallback without emitting raw terminal output.
+
+            pcpp errors and active #error directives abort this tier: partially
+            preprocessed output is not treated as a successful expansion.
+            Unresolved includes still pass through, warnings stay suppressed,
+            and #line directives track drift for source-coordinate mapping.
+            """
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 self.line_directive = '#line'

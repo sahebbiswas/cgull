@@ -4,6 +4,8 @@ import logging
 import subprocess
 import sys
 
+import pytest
+
 from cgull import CGullScanner, ScanConfig, AnalysisEngine, ScanMode
 from cgull.ast_analyzer import CASTParser
 from cgull.ast_analyzer.configuration import _PRELUDE_LINE_COUNT
@@ -82,7 +84,9 @@ def test_header_mapping_parallel_and_reports(tmp_path):
     data = json.loads(ReportGenerator.to_json(seq))
     assert data['file_summaries'][0]['parse_attempts'] == left[0][1]
     sarif = json.loads(ReportGenerator.to_sarif(seq))
-    assert sarif['runs'][0]['properties']['file_summaries'][0]['parse_attempts'] == left[0][1]
+    assert sarif['runs'][0]['properties']['file_summaries'][0] == {
+        'file_path': left[0][0], 'parse_attempts': left[0][1],
+    }
 
 
 def test_debug_only_for_fallback(caplog):
@@ -129,7 +133,8 @@ def test_active_preprocessor_error_has_original_location(capsys):
     ctx = CASTParser().parse('#error unsupported configuration\nint x;\n')
     attempt = ctx.parse_attempts[0]
     assert attempt['preprocessing_failed'] is True
-    assert attempt['original_line'] == 1
+    assert attempt['expanded_line'] == _PRELUDE_LINE_COUNT + 1
+    assert attempt['source_line'] == attempt['original_line'] == 1
     assert 'unsupported configuration' in attempt['message']
     assert ctx.parse_tier == 'directive-stripped'
     assert capsys.readouterr() == ('', '')
@@ -162,3 +167,33 @@ def test_report_path_preserves_spaces(tmp_path):
     path = str(tmp_path / 'two  spaces.c')
     attempts = map_attempts([make_attempt('directive-stripped', 'failure')], '', file_path=path)
     assert report_attempts(attempts, str(tmp_path))[0]['original_file'] == 'two  spaces.c'
+
+
+@pytest.mark.parametrize('path', [None, ''])
+@pytest.mark.parametrize('fallback', [None, 'input.c'])
+def test_missing_provenance_path_uses_fallback(path, fallback):
+    from cgull.includes import SourceLocation
+    from cgull.parse_diagnostics import map_attempts
+    attempt = make_attempt('directive-stripped', 'failure', ValueError('<input>:1:1: bad'))
+    line_map = {1: SourceLocation(path, 12, 'int x;')}
+    result = map_attempts([attempt], 'int x;', line_map, fallback)[0]
+    assert result['original_file'] == fallback
+    assert result['original_line'] == 12
+
+
+@pytest.mark.parametrize('line', [-1, 0, 2])
+def test_unavailable_coordinates_do_not_verify_columns(line):
+    attempt = make_attempt('directive-stripped', 'failure',
+                           ValueError(f'<input>:{line}:1: bad'),
+                           prepared='int x;', source='int x;')
+    assert attempt['source_column'] is None
+
+
+def test_preprocessor_on_error_includes_prelude_offset(capsys):
+    ctx = CASTParser().parse('#if 1\nint x;\n')
+    attempt = ctx.parse_attempts[0]
+    assert attempt['preprocessing_failed'] is True
+    assert attempt['expanded_line'] == _PRELUDE_LINE_COUNT + 1
+    assert attempt['original_line'] == 1
+    assert 'unterminated #if' in attempt['message'].lower()
+    assert capsys.readouterr() == ('', '')
