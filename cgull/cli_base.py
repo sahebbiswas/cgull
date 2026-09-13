@@ -53,7 +53,7 @@ Examples:
   cgull scan src/ --list-flags                       # list preprocessor conditional flags
   cgull flags src/                                   # discover preprocessor flags in target
   cgull rules
-  cgull init-ignore
+  cgull init
 
 Suppressing findings inline:
   // cgull-ignore                          suppress all rules on this line
@@ -112,9 +112,6 @@ Suppressing findings inline:
     # RULES subcommand
     rules_parser = subparsers.add_parser("rules", help="List all security audit rules supported by C-GULL")
     rules_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
-
-    # INIT-IGNORE subcommand
-    subparsers.add_parser("init-ignore", help="Generate a default .cgullignore template file")
 
     return parser
 
@@ -535,36 +532,6 @@ def handle_rules(args=None) -> int:
     return 0
 
 
-def handle_init_ignore() -> int:
-    ignore_content = """# .cgullignore - C-GULL Static Analyzer Ignore Rules
-# Exclude third-party vendor directories
-vendor/
-third_party/
-deps/
-
-# Build artifacts
-build/
-dist/
-*.o
-*.obj
-*.so
-*.dylib
-*.a
-
-# Test suites & mocks if desired
-test/mocks/
-temp_*.c
-"""
-    file_path = ".cgullignore"
-    if os.path.exists(file_path):
-        print(f"⚠️  {file_path} already exists. Not overwriting.")
-        return 0
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(ignore_content)
-    print(f"✅ Created default '{file_path}' template.")
-    return 0
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     try:
         parser = build_parser()
@@ -572,7 +539,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             argv = sys.argv[1:]
 
         # Default to 'scan .' if no args provided or path given without subcommand
-        known_subcommands = {"scan", "rules", "flags", "init-ignore"}
+        known_subcommands = {"scan", "rules", "flags"}
         if not argv:
             argv = ["scan", "."]
         else:
@@ -601,8 +568,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             return handle_rules(args)
         elif args.command == "flags":
             return handle_flags(args)
-        elif args.command == "init-ignore":
-            return handle_init_ignore()
         elif args.command == "scan":
             return handle_scan(args)
         else:
