@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json
 import logging
-import os
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -48,7 +47,7 @@ def _capture_files(root: Path):
     log_dir = root / ".cgull" / "logs"
     if not log_dir.is_dir():
         return []
-    return sorted(log_dir.glob("scan-*.log"))
+    return sorted(path for path in log_dir.glob("scan-*.log") if path.is_file())
 
 
 def _owned_name(instant: datetime, pid: int = 1) -> str:
@@ -267,7 +266,10 @@ class TestCapturePlacementAndPruning(unittest.TestCase):
             unrelated.write_text("keep\n", encoding="utf-8")
 
             _prune_default_capture_logs(log_dir, 3)
-            self.assertEqual(len(list(log_dir.glob("scan-*.log"))), 2)
+            self.assertEqual(
+                len([path for path in log_dir.glob("scan-*.log") if path.is_file()]),
+                2,
+            )
             self.assertTrue(unrelated.exists())
 
     def test_cli_bootstrap_uses_discovered_project_root(self):
