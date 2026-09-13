@@ -11,6 +11,7 @@ import tempfile
 import logging
 import unittest
 from unittest.mock import patch
+from contextlib import contextmanager
 
 from cgull.logging_config import (
     DynamicStderrHandler,
@@ -21,6 +22,24 @@ from cgull.logging_config import (
 )
 from cgull.cli import main, handle_scan, build_parser
 from cgull.engine import CGullScanner
+
+
+@contextmanager
+def logging_directory():
+    """Release file handles before temporary-directory cleanup on Windows."""
+    with tempfile.TemporaryDirectory() as directory:
+        try:
+            yield directory
+        finally:
+            root = logging.getLogger()
+            for handler in list(root.handlers):
+                if isinstance(handler, logging.FileHandler):
+                    root.removeHandler(handler)
+                    stream = handler.stream
+                    handler.close()
+                    assert stream is None or stream.closed
+
+
 
 
 class TestLoggingConfig(unittest.TestCase):
@@ -49,7 +68,7 @@ class TestLoggingConfig(unittest.TestCase):
         self.assertEqual(parse_log_level("invalid"), logging.WARNING)
 
     def test_configure_logging_verbose_levels(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with logging_directory() as temp_dir:
             for count, expected in (
                 (0, logging.WARNING),
                 (1, logging.INFO),
@@ -73,7 +92,7 @@ class TestLoggingConfig(unittest.TestCase):
                 self.assertEqual(self.root_logger.level, TRACE_LEVEL_NUM)
 
     def test_configure_logging_log_level_string_takes_precedence(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with logging_directory() as temp_dir:
             configure_logging(
                 verbose_count=1,
                 log_level_str="trace",
@@ -99,7 +118,7 @@ class TestLoggingConfig(unittest.TestCase):
             self.assertEqual(stderr.level, logging.ERROR)
 
     def test_capture_records_all_levels_as_jsonl(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with logging_directory() as temp_dir:
             capture_file = os.path.join(temp_dir, "capture.log")
             stderr_buf = io.StringIO()
             with patch("sys.stderr", stderr_buf):
@@ -128,7 +147,7 @@ class TestLoggingConfig(unittest.TestCase):
             self.assertIn("error", stderr_buf.getvalue())
 
     def test_exception_is_one_json_record(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with logging_directory() as temp_dir:
             capture_file = os.path.join(temp_dir, "capture.log")
             configure_logging(capture_file=capture_file)
             try:
@@ -142,9 +161,37 @@ class TestLoggingConfig(unittest.TestCase):
             self.assertEqual(len(lines), 1)
             self.assertIn("ValueError: bad value", json.loads(lines[0])["exception"])
 
+    def test_explicit_capture_path_can_be_reused(self):
+        with logging_directory() as temp_dir:
+            capture_file = os.path.join(temp_dir, "capture.log")
+            with open(capture_file, "w", encoding="utf-8") as stream:
+                stream.write('{"message": "existing"}\n')
+            stderr_buf = io.StringIO()
+            with patch("sys.stderr", stderr_buf):
+                configure_logging(capture_file=capture_file)
+                old_handler = next(
+                    h for h in self.root_logger.handlers
+                    if isinstance(h.formatter, JSONLFormatter)
+                )
+                old_stream = old_handler.stream
+                logging.getLogger("cgull.capture_test").info("first")
+                configure_logging(capture_file=capture_file)
+                self.assertTrue(old_stream.closed)
+                logging.getLogger("cgull.capture_test").info("second")
+            captures = [
+                h for h in self.root_logger.handlers
+                if isinstance(h.formatter, JSONLFormatter)
+            ]
+            self.assertEqual(len(captures), 1)
+            captures[0].flush()
+            with open(capture_file, encoding="utf-8") as stream:
+                messages = [json.loads(line)["message"] for line in stream]
+            self.assertEqual(messages, ["existing", "first", "second"])
+            self.assertEqual(stderr_buf.getvalue(), "")
+
     def test_capture_open_failure_warns_and_remains_usable(self):
         stderr_buf = io.StringIO()
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with logging_directory() as temp_dir:
             directory = os.path.join(temp_dir, "not-a-file")
             os.mkdir(directory)
             with patch("sys.stderr", stderr_buf):
@@ -177,7 +224,11 @@ class TestLoggingConfig(unittest.TestCase):
                 content = f.read()
             self.assertIn("INFO     cgull.test_module: Test log entry into file", content)
         finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            for handler in list(self.root_logger.handlers):
+                if isinstance(handler, logging.FileHandler):
+                    self.root_logger.removeHandler(handler)
+                    handler.close()
+            shutil.rmtree(temp_dir)
 
 
 class TestTriageTraceLogging(unittest.TestCase):
