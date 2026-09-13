@@ -8,7 +8,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -381,8 +381,14 @@ def configure_logging(
             )
             warning_emitted = True
 
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-        capture_file = str(log_dir / f"scan-{stamp}-{os.getpid()}.log")
+        instant = datetime.now(timezone.utc)
+        stamp = instant.strftime("%Y%m%dT%H%M%S.%fZ")
+        capture_path = log_dir / f"scan-{stamp}-{os.getpid()}.log"
+        while capture_path.exists():
+            instant += timedelta(microseconds=1)
+            stamp = instant.strftime("%Y%m%dT%H%M%S.%fZ")
+            capture_path = log_dir / f"scan-{stamp}-{os.getpid()}.log"
+        capture_file = str(capture_path)
 
     try:
         capture_path = Path(capture_file)
