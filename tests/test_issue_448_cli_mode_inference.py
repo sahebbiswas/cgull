@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 
+import cgull.cli as cli_module
 from cgull.cli import _resolve_scan_mode_args, _scan_subparser, build_parser
 from cgull.cli_mode import (
     MODE_SOURCE_COMMAND_LINE,
@@ -131,6 +132,37 @@ def test_resolution_is_independent_of_parallelism(tmp_path):
     parallel = parser.parse_args(["scan", str(source_dir), "--jobs", "4"])
 
     assert _resolve_scan_mode_args(sequential)[1:] == _resolve_scan_mode_args(parallel)[1:]
+
+
+def test_scan_reuses_discovered_config(tmp_path, monkeypatch):
+    source = tmp_path / "one.c"
+    source.write_text("int one;\n", encoding="utf-8")
+    parser = build_parser()
+    args = parser.parse_args(["scan", str(source)])
+
+    original_load_config = cli_module._base.load_config
+    loaded = []
+
+    def counting_load_config(config_path=None, target_path=None):
+        config = original_load_config(config_path=config_path, target_path=target_path)
+        loaded.append(config)
+        return config
+
+    monkeypatch.setattr(cli_module._base, "load_config", counting_load_config)
+    seen = {}
+
+    def fake_handle_scan(internal):
+        seen["config"] = cli_module._base.load_config(
+            config_path=internal.config,
+            target_path=cli_module._primary_target(internal),
+        )
+        return 0
+
+    monkeypatch.setattr(cli_module, "_ORIGINAL_HANDLE_SCAN", fake_handle_scan)
+
+    assert cli_module._run_original_scan(args) == 0
+    assert len(loaded) == 1
+    assert seen["config"] is loaded[0]
 
 
 def test_library_default_remains_file_mode():
