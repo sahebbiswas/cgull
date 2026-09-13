@@ -10,6 +10,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from . import cli_base as _base
+from .cli_mode import mode_aware_reporter, resolve_cli_scan_mode
 from .compile_database import (
     CompileCommandIncludeDatabase,
     CompileDatabaseCGullScanner,
@@ -57,6 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _ORIGINAL_BUILD_PARSER()
 
     scan_parser = _scan_subparser(parser)
+    for action in scan_parser._actions:
+        if action.dest == "mode":
+            action.help = (
+                "Scan mode: 'file' (per-file scan) or 'tu' (translation unit mode). "
+                "When omitted, configuration wins; otherwise mode is inferred from targets "
+                "(TU if any target is a directory, file mode otherwise)."
+            )
+            break
     scan_parser.add_argument(
         "--fix",
         action="store_true",
@@ -128,11 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _sync_base_symbols() -> None:
+def _sync_base_symbols(*, reporter=None) -> None:
     """Propagate public monkey-patch points into the established CLI module."""
     _base.CGullScanner = CGullScanner
     _base.ProgressIndicator = ProgressIndicator
-    _base.ReportGenerator = ReportGenerator
+    _base.ReportGenerator = ReportGenerator if reporter is None else reporter
 
 
 def _primary_target(args) -> str:
@@ -149,6 +158,38 @@ def _primary_target(args) -> str:
     return "."
 
 
+def _resolve_scan_mode_args(args):
+    """Return a copy of args with the CLI scan mode resolved when possible."""
+    internal = argparse.Namespace(**vars(args))
+    targets = getattr(internal, "target", None)
+    if isinstance(targets, str):
+        targets = [targets]
+    targets = list(targets or ["."])
+    internal.target = targets
+
+    # Preserve cli_base's established missing/invalid target error path. Mode
+    # inference runs only after the same existence validation would succeed.
+    if any(not os.path.exists(target) for target in targets):
+        return internal, None, None
+
+    config = _base.load_config(
+        config_path=getattr(internal, "config", None),
+        target_path=_primary_target(internal),
+    )
+    internal._cgull_loaded_config = config
+    if config.error:
+        # cli_base owns rendering and exit semantics for configuration errors.
+        return internal, None, None
+
+    mode, source = resolve_cli_scan_mode(
+        targets,
+        getattr(internal, "mode", None),
+        config.mode,
+    )
+    internal.mode = mode.value
+    return internal, mode, source
+
+
 def _compile_database_for_args(
     args,
 ) -> Tuple[Optional[CompileCommandIncludeDatabase], Optional[List[object]], Optional[str]]:
@@ -160,10 +201,12 @@ def _compile_database_for_args(
         from .ast_analyzer import find_compile_commands
 
         primary_target = _primary_target(args)
-        config = _base.load_config(
-            config_path=getattr(args, "config", None),
-            target_path=primary_target,
-        )
+        config = getattr(args, "_cgull_loaded_config", None)
+        if config is None:
+            config = _base.load_config(
+                config_path=getattr(args, "config", None),
+                target_path=primary_target,
+            )
         if not config.error:
             compile_commands_path = find_compile_commands(
                 primary_target,
@@ -214,11 +257,45 @@ def _shared_compile_commands_parse(data: Optional[List[object]], path: Optional[
         ast_analyzer.parse_compile_commands = original_parse
 
 
-def _run_original_scan(args):
-    database, data, compile_commands_path = _compile_database_for_args(args)
-    with activate_compile_command_database(database), _shared_compile_commands_parse(data, compile_commands_path):
-        _sync_base_symbols()
-        return _ORIGINAL_HANDLE_SCAN(args)
+@contextlib.contextmanager
+def _reuse_loaded_config(args):
+    """Reuse CLI config discovery when cli_base requests the same configuration."""
+    cached = getattr(args, "_cgull_loaded_config", None)
+    if cached is None:
+        yield
+        return
+
+    expected_config_path = getattr(args, "config", None)
+    expected_target_path = _primary_target(args)
+    original_load_config = _base.load_config
+
+    def load_config_once(config_path=None, target_path=None):
+        if config_path == expected_config_path and target_path == expected_target_path:
+            return cached
+        return original_load_config(config_path=config_path, target_path=target_path)
+
+    _base.load_config = load_config_once
+    try:
+        yield
+    finally:
+        _base.load_config = original_load_config
+
+
+def _run_original_scan(args, *, reporter=None):
+    effective_args, scan_mode, mode_source = _resolve_scan_mode_args(args)
+    active_reporter = reporter if reporter is not None else ReportGenerator
+    if scan_mode is not None and mode_source is not None:
+        active_reporter = mode_aware_reporter(active_reporter, scan_mode, mode_source)
+
+    previous_reporter = _base.ReportGenerator
+    with _reuse_loaded_config(effective_args):
+        database, data, compile_commands_path = _compile_database_for_args(effective_args)
+        with activate_compile_command_database(database), _shared_compile_commands_parse(data, compile_commands_path):
+            _sync_base_symbols(reporter=active_reporter)
+            try:
+                return _ORIGINAL_HANDLE_SCAN(effective_args)
+            finally:
+                _base.ReportGenerator = previous_reporter
 
 
 def _run_scan_and_capture(args, *, suppress_output: bool):
@@ -258,17 +335,11 @@ def _run_scan_and_capture(args, *, suppress_output: bool):
         internal.fail_on_error = False
         internal.warn_on_fallback = False
 
-    _sync_base_symbols()
-    previous = _base.ReportGenerator
-    _base.ReportGenerator = CapturingReporter
-    try:
-        if suppress_output:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                rc = _run_original_scan(internal)
-        else:
-            rc = _run_original_scan(internal)
-    finally:
-        _base.ReportGenerator = previous
+    if suppress_output:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc = _run_original_scan(internal, reporter=CapturingReporter)
+    else:
+        rc = _run_original_scan(internal, reporter=CapturingReporter)
 
     return rc, captured["result"]
 
