@@ -86,7 +86,14 @@ def _plausible_function_prefix(prefix: str) -> bool:
         token for token in identifiers
         if token not in _FUNCTION_PREFIX_QUALIFIERS and token not in _FUNCTION_DECORATORS
     ]
-    return bool(substantive)
+    if substantive:
+        return True
+    # Preserve the legacy fallback's C89 implicit-int recovery for definitions
+    # whose prefix consists only of storage/qualifier keywords, e.g. static foo().
+    return all(
+        token in _FUNCTION_PREFIX_QUALIFIERS or token in _FUNCTION_DECORATORS
+        for token in identifiers
+    )
 
 
 def _find_definition_body_start(text: str, start: int) -> Optional[int]:
