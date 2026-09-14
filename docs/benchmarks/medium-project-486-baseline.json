@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "production_main_revision": "8cfb86ae7fa0ccc314e3276e75a483b2b105720d",
+    "capture_workflow_run": 34906679313,
+    "capture_artifact_id": 10371919263,
+    "capture_artifact_sha256": "1ed9f4624eb56e8e265f7588fabd3e2e24007762d99d6ee3cd63215c780f3831",
+    "note": "Captured from PR #500 after only benchmark/docs/workflow/version changes; production scanner implementation is identical to main revision 8cfb86ae7fa0ccc314e3276e75a483b2b105720d. GitHub Actions checked out a synthetic PR merge revision for the capture."
+  },
+  "captured_at": "2026-09-14T22:58:58.801549+00:00",
+  "environment": {
+    "captured_revision": "c7e65f2145ca892c13bd73cf37d54a716191f0ea",
+    "cgull_version": "0.11.30",
+    "python": "3.12.14 (main, Aug 13 2026, 02:47:42) [GCC 13.3.0]",
+    "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "processor": "x86_64",
+    "cpu_count": 4
+  },
+  "workload": {
+    "file_count": 6,
+    "physical_lines": 166,
+    "sha256": "ad082e33d08c868e460b6dbb67b5a5ee951e241aefeb758788cf540bc2ec502b",
+    "modules": 4,
+    "functions_per_module": 3,
+    "statements_per_function": 4
+  },
+  "configuration": {
+    "modes": ["file", "tu"],
+    "jobs": [1, 2],
+    "repetitions": 1,
+    "rules": "default"
+  },
+  "parity": {
+    "passes": true,
+    "within_mode_jobs_and_repetitions_match": true,
+    "cross_mode_findings_match": true,
+    "differences": []
+  },
+  "arms": {
+    "file/jobs=1": {
+      "wall_seconds": 0.531047583000003,
+      "analyzed_lines": 166,
+      "unique_source_lines": 166,
+      "throughput_kloc_per_sec": 0.3125896912329965,
+      "peak_rss_bytes": 35770368,
+      "finding_count": 3,
+      "parse_fallback_count": 0,
+      "semantic_digest": "e4e5032a6321e38226ceac1594d3aa990071c75b903d4a296696bb34f5711f06",
+      "phases": {
+        "file_discovery_seconds": 0.002428585000004091,
+        "tu_include_expansion_seconds": 0.006921023999993281,
+        "parser_seconds": 0.07875133400000323,
+        "project_preparation_seconds": 0.15351203899999177,
+        "project_indexing_seconds": 0.004607273000004852,
+        "project_summary_construction_seconds": 0.061367242000002875,
+        "rule_execution_aggregate_seconds": 0.36967,
+        "worker_execution_wall_seconds": 0.3711721380000057,
+        "worker_startup_ipc_collection_residual_seconds": 0.0015021380000057039,
+        "aggregate_file_analysis_seconds": 0.36967,
+        "total_wall_seconds": 0.531047583000003
+      }
+    },
+    "file/jobs=2": {
+      "wall_seconds": 0.3945642799999973,
+      "analyzed_lines": 166,
+      "unique_source_lines": 166,
+      "throughput_kloc_per_sec": 0.42071725296573004,
+      "peak_rss_bytes": 37343232,
+      "finding_count": 3,
+      "parse_fallback_count": 0,
+      "semantic_digest": "e4e5032a6321e38226ceac1594d3aa990071c75b903d4a296696bb34f5711f06",
+      "phases": {
+        "file_discovery_seconds": 0.00085874900000249,
+        "tu_include_expansion_seconds": 0.00569906800001263,
+        "parser_seconds": 0.0822108550000138,
+        "project_preparation_seconds": 0.15370158999999717,
+        "project_indexing_seconds": 0.0045566890000117155,
+        "project_summary_construction_seconds": 0.059566919000005214,
+        "rule_execution_aggregate_seconds": 0.37623,
+        "worker_execution_wall_seconds": 0.23860436199998958,
+        "worker_startup_ipc_collection_residual_seconds": 0.050489361999989574,
+        "aggregate_file_analysis_seconds": 0.37623,
+        "total_wall_seconds": 0.3945642799999973
+      }
+    },
+    "tu/jobs=1": {
+      "wall_seconds": 0.4762752350000028,
+      "analyzed_lines": 151,
+      "unique_source_lines": 151,
+      "throughput_kloc_per_sec": 0.3170435683056229,
+      "peak_rss_bytes": 38129664,
+      "finding_count": 3,
+      "parse_fallback_count": 0,
+      "semantic_digest": "666d62ec571f3a1c7b05e77d5f6c88e816e7277841dabe34ac3ce0ed7d329e96",
+      "phases": {
+        "file_discovery_seconds": 0.0009155359999937218,
+        "tu_include_expansion_seconds": 0.009468471000019463,
+        "parser_seconds": 0.06481983400000502,
+        "project_preparation_seconds": 0.13625024700000665,
+        "project_indexing_seconds": 0.004054353000000788,
+        "project_summary_construction_seconds": 0.06123104899999987,
+        "rule_execution_aggregate_seconds": 0.32719010299999424,
+        "worker_execution_wall_seconds": 0.3329312120000054,
+        "worker_startup_ipc_collection_residual_seconds": 0.0010512120000054082,
+        "aggregate_file_analysis_seconds": 0.33188,
+        "total_wall_seconds": 0.4762752350000028
+      }
+    },
+    "tu/jobs=2": {
+      "wall_seconds": 0.353257310999993,
+      "analyzed_lines": 151,
+      "unique_source_lines": 151,
+      "throughput_kloc_per_sec": 0.42745045975850443,
+      "peak_rss_bytes": 38129664,
+      "finding_count": 3,
+      "parse_fallback_count": 0,
+      "semantic_digest": "666d62ec571f3a1c7b05e77d5f6c88e816e7277841dabe34ac3ce0ed7d329e96",
+      "phases": {
+        "file_discovery_seconds": 0.0008550029999980779,
+        "tu_include_expansion_seconds": 0.009074307000020099,
+        "parser_seconds": 0.06153638800000749,
+        "project_preparation_seconds": 0.1436699299999873,
+        "project_indexing_seconds": 0.004025228999992692,
+        "project_summary_construction_seconds": 0.072349243000005,
+        "rule_execution_aggregate_seconds": 0.3425729719999858,
+        "worker_execution_wall_seconds": 0.20261511999999016,
+        "worker_startup_ipc_collection_residual_seconds": 0.029040119999990177,
+        "aggregate_file_analysis_seconds": 0.34714999999999996,
+        "total_wall_seconds": 0.353257310999993
+      }
+    }
+  }
+}
