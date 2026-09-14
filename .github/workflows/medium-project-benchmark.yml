@@ -6,17 +6,22 @@ on:
       - "benchmarks/benchmark_medium_project.py"
       - "tests/test_issue_486_medium_project_benchmark.py"
       - "docs/benchmarks/medium-project-486.md"
+      - "docs/benchmarks/medium-project-486-baseline.json"
       - ".github/workflows/medium-project-benchmark.yml"
   workflow_dispatch:
 
 jobs:
   benchmark:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install C-GULL
         run: python -m pip install -e ".[dev]"
@@ -31,10 +36,10 @@ jobs:
             --modes file,tu \
             --jobs 1,2 \
             --repetitions 1 \
-            --output medium-project-486-ci.json
-          cat medium-project-486-ci.json
+            --output medium-project-486-py${{ matrix.python-version }}.json
+          cat medium-project-486-py${{ matrix.python-version }}.json
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@v4
         with:
-          name: medium-project-486
-          path: medium-project-486-ci.json
+          name: medium-project-486-py${{ matrix.python-version }}
+          path: medium-project-486-py${{ matrix.python-version }}.json
