@@ -3,6 +3,8 @@ name: Medium project benchmark
 on:
   pull_request:
     paths:
+      - "cgull/**"
+      - "pyproject.toml"
       - "benchmarks/benchmark_medium_project.py"
       - "tests/test_issue_486_medium_project_benchmark.py"
       - "docs/benchmarks/medium-project-486.md"
