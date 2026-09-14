@@ -47,6 +47,13 @@ jobs:
         run: |
           python -m pytest -v --durations=30 --junitxml=pytest-junit.xml --cov=cgull --cov-report=term-missing
 
+      - name: Upload pytest JUnit on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-junit-${{ matrix.os }}-${{ matrix.python-version }}
+          path: pytest-junit.xml
+
       - name: Summarize Windows/Python 3.11 slow tests
         if: always() && matrix.os == 'windows-latest' && matrix.python-version == '3.11'
         run: |
