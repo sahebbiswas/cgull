@@ -38,6 +38,12 @@ predicates and to copies into automatic locals, so a write such as
 `local_flag = global_flag`. Comparison constraints on that unstable storage are
 also kept conservative.
 
+Branch pruning is also restricted to literals, tracked singleton identifiers,
+supported unary truth forms, comparisons, and logical predicates. Standalone
+constant arithmetic such as `UINT_MAX + 1U` is not used as a feasibility proof
+until that path models C overflow and unsigned wrap semantics directly; both
+CFG edges are retained instead.
+
 The analysis also does **not** infer constant truth from helper-function return
 values, arbitrary calls, unsupported expressions, externally changing state,
 or naming conventions such as Juliet `good*`/`bad*` functions. Short-circuit
@@ -49,7 +55,8 @@ edge.
 ## Regression intent
 
 The focused tests cover the two minimal CWE-195 reproducers from #391, folded
-constant comparisons, local constants, unknown parameters, stale reassignment,
+constant comparisons, signed/unsigned comparison semantics, overflow-prone
+constant arithmetic, local constants, unknown parameters, stale reassignment,
 address escape plus calls, global/static/volatile predicates, transitive copies
 from unstable storage, loops, unresolved control flow, helper predicates, and
 exact CWE-194/CWE-195 attribution. The change is shared range-domain behavior
