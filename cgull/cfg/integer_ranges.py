@@ -262,8 +262,24 @@ def _condition_reads_unstable_storage(node, unstable_names) -> bool:
     return any(_condition_reads_unstable_storage(child, unstable_names) for _, child in node.children())
 
 
+def _branch_proof_expression_supported(node) -> bool:
+    """Limit pruning to condition forms with modeled C truth semantics."""
+    if node is None:
+        return False
+    kind = type(node).__name__
+    if kind in {"Constant", "ID"}:
+        return True
+    if kind == "UnaryOp" and node.op in {"!", "+", "-"}:
+        return _branch_proof_expression_supported(node.expr)
+    if kind == "BinaryOp" and node.op in {"<", "<=", ">", ">=", "==", "!=", "&&", "||"}:
+        return _branch_proof_expression_supported(node.left) and _branch_proof_expression_supported(node.right)
+    return False
+
+
 def _condition_truth(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None, unstable_names=()) -> Optional[bool]:
     """Return a branch truth value only when the current range state proves it."""
+    if not _branch_proof_expression_supported(node):
+        return None
     if _condition_reads_unstable_storage(node, unstable_names):
         return None
     value = _expr_range(node, state, ast_ctx, fn)
