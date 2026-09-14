@@ -12,8 +12,9 @@ The range engine can currently prove branch truth for:
 - integer literal conditions such as `if (1)` and `if (0)`;
 - side-effect-free constant comparisons and logical predicates whose operands
   reduce to singleton integer ranges;
-- tracked local integer values whose current range is a singleton, including
-  ordinary `const` locals initialized from supported constant expressions;
+- tracked automatic local integer values whose current range is a singleton,
+  including ordinary `const` locals initialized from supported constant
+  expressions;
 - equivalent unary forms such as `!condition` when the operand itself is
   proven singleton.
 
@@ -30,22 +31,26 @@ integer range facts before later branch feasibility is considered.
 
 ## Deliberately unsupported condition forms
 
-The analysis does **not** infer constant truth from static/global initializers,
-mutable global state, helper-function return values, arbitrary calls, volatile
-or externally changing state, unsupported expressions, or naming conventions
-such as Juliet `good*`/`bad*` functions. Those conditions remain unknown unless
-the ordinary range engine independently proves a singleton value at that
-program point.
+Static locals, globals, and volatile storage are deliberately excluded from
+precise range facts used for branch feasibility. This applies both to direct
+predicates and to copies into automatic locals, so a write such as
+`global_flag = 1` cannot become a constant branch proof through
+`local_flag = global_flag`. Comparison constraints on that unstable storage are
+also kept conservative.
 
-Short-circuit expressions are folded only when the operands needed by the
-current expression-range model are themselves known. The analysis does not use
-a source-level name, benchmark oracle, or presumed branch intent to discard a
-CFG edge.
+The analysis also does **not** infer constant truth from helper-function return
+values, arbitrary calls, unsupported expressions, externally changing state,
+or naming conventions such as Juliet `good*`/`bad*` functions. Short-circuit
+expressions are folded only when the operands needed by the current
+expression-range model are themselves known. The analysis does not use a
+source-level name, benchmark oracle, or presumed branch intent to discard a CFG
+edge.
 
 ## Regression intent
 
 The focused tests cover the two minimal CWE-195 reproducers from #391, folded
 constant comparisons, local constants, unknown parameters, stale reassignment,
-address escape plus calls, globals/helper predicates, loops, unresolved control
-flow, and exact CWE-194/CWE-195 attribution. The change is shared range-domain
-behavior rather than a Juliet-specific suppression.
+address escape plus calls, global/static/volatile predicates, transitive copies
+from unstable storage, loops, unresolved control flow, helper predicates, and
+exact CWE-194/CWE-195 attribution. The change is shared range-domain behavior
+rather than a Juliet-specific suppression.
