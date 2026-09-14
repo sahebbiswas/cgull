@@ -7,7 +7,7 @@ on files containing thousands of small functions.
 """
 
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..utils import mask_string_and_char_literals, strip_comments_keep_lines
 from .configuration import _STATEMENT_KEYWORDS, is_unsigned_type
@@ -26,31 +26,103 @@ def _masked_source_code(source_code: str) -> str:
     return "\n".join(mask_string_and_char_literals(line) for line in comment_free.splitlines())
 
 
+def _fallback_macro_brace_sequence(
+    text: str,
+    macros: Dict[str, Tuple[bool, str]],
+    expanding: Optional[Set[str]] = None,
+) -> str:
+    """Return braces contributed by text and known macro expansions in source order."""
+    masked_text = mask_string_and_char_literals(text)
+    active = expanding or set()
+    braces: List[str] = []
+    position = 0
+
+    for match in re.finditer(r"\b[A-Za-z_]\w*\b", masked_text):
+        braces.extend(char for char in masked_text[position:match.start()] if char in "{}")
+
+        macro_name = match.group(0)
+        macro = macros.get(macro_name)
+        if macro is not None and macro_name not in active:
+            function_like, replacement = macro
+            invoked = not function_like or masked_text[match.end():].lstrip().startswith("(")
+            if invoked:
+                braces.extend(
+                    _fallback_macro_brace_sequence(
+                        replacement,
+                        macros,
+                        active | {macro_name},
+                    )
+                )
+
+        position = match.end()
+
+    braces.extend(char for char in masked_text[position:] if char in "{}")
+    return "".join(braces)
+
+
+def _record_fallback_macro_directive(
+    directive: str,
+    macros: Dict[str, Tuple[bool, str]],
+) -> None:
+    """Update fallback macro state from one complete logical directive."""
+    undef = re.match(r"^\s*#\s*undef\s+([A-Za-z_]\w*)\b", directive)
+    if undef:
+        macros.pop(undef.group(1), None)
+        return
+
+    define = re.match(r"^\s*#\s*define\s+([A-Za-z_]\w*)(.*)$", directive)
+    if not define:
+        return
+
+    macro_name = define.group(1)
+    tail = define.group(2)
+    function_like = tail.startswith("(")
+    if function_like:
+        params_end = tail.find(")")
+        if params_end < 0:
+            return
+        replacement = tail[params_end + 1:].lstrip()
+    else:
+        replacement = tail.lstrip()
+
+    macros[macro_name] = (function_like, replacement)
+
+
 def _fallback_file_scope_depths(lines: List[str]):
     """Yield lexical brace depth at each physical line's first token.
 
     ``lines`` is the fallback pipeline's already comment-stripped and
     conditionally-resolved source. String/character literal contents are masked
-    before brace accounting, and complete preprocessor directive bodies are
-    ignored, including backslash-continued physical lines.
+    before brace accounting. Preprocessor directive bodies are excluded from
+    source-level brace counting, while known macro definitions are tracked so
+    braces contributed by unexpanded macro uses still affect lexical scope.
     """
     depth = 0
     in_directive = False
+    directive_parts: List[str] = []
+    macros: Dict[str, Tuple[bool, str]] = {}
 
     for line in lines:
         directive_line = in_directive or line.lstrip().startswith("#")
         yield depth, directive_line
 
         if directive_line:
-            in_directive = line.rstrip().endswith("\\")
+            directive_part = line.rstrip()
+            continued = directive_part.endswith("\\")
+            if continued:
+                directive_part = directive_part[:-1]
+            directive_parts.append(directive_part)
+            in_directive = continued
+            if not continued:
+                _record_fallback_macro_directive(" ".join(directive_parts), macros)
+                directive_parts.clear()
             continue
 
         in_directive = False
-        masked_line = mask_string_and_char_literals(line)
-        for char in masked_line:
+        for char in _fallback_macro_brace_sequence(line, macros):
             if char == "{":
                 depth += 1
-            elif char == "}":
+            else:
                 depth = max(0, depth - 1)
 
 
