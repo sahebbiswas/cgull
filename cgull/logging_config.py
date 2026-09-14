@@ -9,9 +9,10 @@ import multiprocessing
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
-from logging.handlers import QueueListener
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,6 +27,10 @@ _DEFAULT_CAPTURE_RE = re.compile(
 )
 _BOOTSTRAP_PROJECT_STATE_ROOT: Optional[str] = None
 _BOOTSTRAP_RETENTION_RUNS: Optional[int] = None
+_WORKER_LOGGING_ENV = "CGULL_MULTIPROCESS_LOGGING_WORKER"
+_WORKER_LOGGING_ENV_LOCK = threading.RLock()
+_WORKER_LOGGING_ENV_USERS = 0
+_WORKER_LOGGING_ENV_ORIGINAL: Optional[str] = None
 
 
 def trace(self, message, *args, **kws):
@@ -150,6 +155,44 @@ class JSONLFormatter(logging.Formatter):
             )
 
 
+def _worker_queue_active() -> bool:
+    """Return whether this process currently owns a worker QueueHandler."""
+    return any(
+        isinstance(handler, QueueHandler)
+        for handler in logging.getLogger().handlers
+    )
+
+
+class _WorkerSilentStderr:
+    """Keep worker diagnostics on the coordinator-owned logging transport."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def write(self, data):
+        if _worker_queue_active():
+            return len(data) if data else 0
+        return self._stream.write(data)
+
+    def flush(self):
+        if _worker_queue_active():
+            return None
+        return self._stream.flush()
+
+
+# Spawn/forkserver workers import this module in a fresh interpreter. The
+# coordinator sets the marker before constructing multiprocessing resources so
+# those workers cannot bypass the logging queue through a raw stderr write once
+# their QueueHandler is installed.
+if os.environ.get(_WORKER_LOGGING_ENV) == "1" and not isinstance(
+    sys.stderr, _WorkerSilentStderr
+):
+    sys.stderr = _WorkerSilentStderr(sys.stderr)
+
+
 class _ProgressSafeStderr:
     """Coordinate ordinary stderr writes with C-GULL's in-place progress line.
 
@@ -164,6 +207,7 @@ class _ProgressSafeStderr:
 
     def __init__(self, stream):
         self._stream = stream
+        self._owner_pid = os.getpid()
         self._progress_line = ""
         self._progress_width = 0
 
@@ -182,6 +226,12 @@ class _ProgressSafeStderr:
     def write(self, data):
         if not data:
             return 0
+
+        # A forked worker inherits this proxy and the coordinator's underlying
+        # terminal/file descriptor. Once its queue handler is active, only the
+        # coordinator may write through that inherited stream.
+        if os.getpid() != self._owner_pid and _worker_queue_active():
+            return len(data)
 
         # Carriage-return progress coordination is meaningful only on an
         # interactive terminal. Preserve redirected stderr byte-for-byte.
@@ -226,6 +276,8 @@ class _ProgressSafeStderr:
         return len(data)
 
     def flush(self):
+        if os.getpid() != self._owner_pid and _worker_queue_active():
+            return None
         return self._stream.flush()
 
 
@@ -248,6 +300,46 @@ class DynamicStderrHandler(logging.StreamHandler):
     @stream.setter
     def stream(self, value):
         pass
+
+
+class _CoordinatorProcessFilter(logging.Filter):
+    """Reject direct handler use from a forked worker process."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._owner_pid = os.getpid()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # QueueListener invokes coordinator handlers in the coordinator process,
+        # so worker-originated queued records still pass even though record.process
+        # identifies the worker that created them.
+        return os.getpid() == self._owner_pid
+
+
+def _acquire_worker_logging_marker() -> None:
+    """Set the spawn/forkserver marker with reentrant cross-thread ownership."""
+    global _WORKER_LOGGING_ENV_USERS, _WORKER_LOGGING_ENV_ORIGINAL
+    with _WORKER_LOGGING_ENV_LOCK:
+        if _WORKER_LOGGING_ENV_USERS == 0:
+            _WORKER_LOGGING_ENV_ORIGINAL = os.environ.get(_WORKER_LOGGING_ENV)
+            os.environ[_WORKER_LOGGING_ENV] = "1"
+        _WORKER_LOGGING_ENV_USERS += 1
+
+
+def _release_worker_logging_marker() -> None:
+    """Release one marker owner and restore the original environment at zero."""
+    global _WORKER_LOGGING_ENV_USERS, _WORKER_LOGGING_ENV_ORIGINAL
+    with _WORKER_LOGGING_ENV_LOCK:
+        if _WORKER_LOGGING_ENV_USERS <= 0:
+            return
+        _WORKER_LOGGING_ENV_USERS -= 1
+        if _WORKER_LOGGING_ENV_USERS != 0:
+            return
+        if _WORKER_LOGGING_ENV_ORIGINAL is None:
+            os.environ.pop(_WORKER_LOGGING_ENV, None)
+        else:
+            os.environ[_WORKER_LOGGING_ENV] = _WORKER_LOGGING_ENV_ORIGINAL
+        _WORKER_LOGGING_ENV_ORIGINAL = None
 
 
 def set_logging_bootstrap_context(
@@ -358,9 +450,12 @@ def configure_logging(
         except Exception:
             pass
 
+    coordinator_filter = _CoordinatorProcessFilter()
+
     stderr_handler = DynamicStderrHandler()
     stderr_handler.setLevel(level)
     stderr_handler.setFormatter(formatter)
+    stderr_handler.addFilter(coordinator_filter)
     root_logger.addHandler(stderr_handler)
 
     # Optional legacy text log handler follows the same selected threshold.
@@ -368,6 +463,7 @@ def configure_logging(
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(coordinator_filter)
         root_logger.addHandler(file_handler)
 
     auto_capture = capture_file is None and not no_log
@@ -419,6 +515,7 @@ def configure_logging(
             )
             capture_handler.setLevel(level)
             capture_handler.setFormatter(JSONLFormatter())
+            capture_handler.addFilter(coordinator_filter)
             root_logger.addHandler(capture_handler)
         except (OSError, ValueError) as exc:
             # Report through the already-configured display handler, never through a
@@ -443,37 +540,61 @@ def multiprocessing_logging_context():
     log_queue = None
     effective_level = logging.getLogger().getEffectiveLevel()
     handlers = list(logging.getLogger().handlers)
-    if handlers:
+    setup_error = None
+
+    # Set the marker before Manager()/executor children can be created. Reference
+    # counting keeps overlapping library scans reentrant: the original environment
+    # is restored only after the final active context exits.
+    _acquire_worker_logging_marker()
+    try:
+        if handlers:
+            try:
+                manager = multiprocessing.Manager()
+                log_queue = manager.Queue()
+                listener = QueueListener(log_queue, *handlers, respect_handler_level=True)
+                listener.start()
+            except Exception as exc:
+                setup_error = exc
+                # Manager() starts a child process. If queue/listener setup fails
+                # after that point, shut it down before degrading to non-queued
+                # logging so a failed bootstrap cannot leak a child process.
+                if manager is not None:
+                    try:
+                        manager.shutdown()
+                    except Exception:
+                        pass
+                manager = None
+                listener = None
+                log_queue = None
+
+        if setup_error is not None:
+            # Diagnostic capture is fail-open. Surface transport degradation once in
+            # the coordinator, but never turn an otherwise successful scan into a
+            # logging failure.
+            logging.getLogger("cgull.logging").warning(
+                "Parallel diagnostic transport unavailable; continuing without "
+                "worker log forwarding: %s",
+                setup_error,
+            )
+
         try:
-            manager = multiprocessing.Manager()
-            log_queue = manager.Queue()
-            listener = QueueListener(log_queue, *handlers, respect_handler_level=True)
-            listener.start()
-        except Exception:
-            # Manager() starts a child process. If queue/listener setup fails
-            # after that point, shut it down before degrading to non-queued
-            # logging so a failed bootstrap cannot leak a child process.
+            yield log_queue, effective_level
+        finally:
+            if listener is not None:
+                try:
+                    # QueueListener.stop() enqueues its sentinel behind records
+                    # already submitted by completed workers and joins the listener,
+                    # draining the queue before file handlers can be closed.
+                    listener.stop()
+                except Exception:
+                    pass
             if manager is not None:
                 try:
                     manager.shutdown()
                 except Exception:
                     pass
-            manager = None
-            listener = None
-            log_queue = None
-    try:
-        yield log_queue, effective_level
     finally:
-        if listener is not None:
-            try:
-                listener.stop()
-            except Exception:
-                pass
-        if manager is not None:
-            try:
-                manager.shutdown()
-            except Exception:
-                pass
+        _release_worker_logging_marker()
 
 
 def teardown_cli_logging() -> None:
