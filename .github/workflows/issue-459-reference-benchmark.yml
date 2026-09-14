@@ -1,0 +1,44 @@
+name: Issue 459 reference logging benchmark
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - benchmarks/benchmark_logging_overhead.py
+      - docs/benchmarks/logging-overhead-459.md
+      - .github/workflows/issue-459-reference-benchmark.yml
+
+jobs:
+  benchmark:
+    name: Juliet logging overhead reference
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[ast]"
+
+      - name: Run repeated parallel logging benchmark
+        run: |
+          python benchmarks/benchmark_logging_overhead.py \
+            --jobs 2 \
+            --mode file \
+            --warmup 1 \
+            --repetitions 5 \
+            --output logging-overhead-459.json
+
+      - name: Upload benchmark artifact
+        if: always() && hashFiles('logging-overhead-459.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: logging-overhead-459
+          path: logging-overhead-459.json
