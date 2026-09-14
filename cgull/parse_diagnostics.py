@@ -4,6 +4,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
+from .logging_payload import truncate_log_excerpt
+
 
 def sanitize(value: Any, limit: Optional[int] = 240) -> str:
     """Keep diagnostic text on one printable, bounded line."""
@@ -54,7 +56,8 @@ def map_attempts(attempts: List[Dict[str, Any]], source: str,
         target_path = loc.file_path if loc and loc.file_path else file_path
         item['original_file'] = sanitize_path(target_path) if target_path else None
         item['original_line'] = loc.line_number if loc else line
-        item['snippet'] = sanitize(loc.line_content if loc else text, 160)
+        snippet_source = loc.line_content if loc else text
+        item['snippet'], _ = truncate_log_excerpt(snippet_source)
         item['original_column'] = item.get('source_column') if not loc or loc.line_content == text else None
         result.append(item)
     return result

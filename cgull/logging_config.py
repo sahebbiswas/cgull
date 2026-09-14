@@ -3,7 +3,6 @@ Structured trace and diagnostic logging configuration for C-GULL.
 """
 
 import contextlib
-import json
 import logging
 import multiprocessing
 import os
@@ -14,8 +13,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
+from .logging_payload import JSONLFormatter
 from .project_state import DEFAULT_LOG_RETENTION_RUNS
 
 # Define TRACE level below DEBUG (DEBUG is 10)
@@ -98,61 +98,6 @@ def resolve_effective_log_level(
     if verbose_count == 1:
         return logging.INFO
     return logging.WARNING
-
-
-class JSONLFormatter(logging.Formatter):
-    """Render one structured, parseable JSON object per log record."""
-
-    _CONTEXT_FIELDS = ("cgull_phase", "cgull_file", "cgull_rule")
-    _MAX_FIELD_LEN = 1000
-
-    def _bound_value(self, value: Any) -> Any:
-        if isinstance(value, str):
-            if len(value) > self._MAX_FIELD_LEN:
-                return value[: self._MAX_FIELD_LEN] + "... [truncated]"
-            return value
-        try:
-            json.dumps(value, allow_nan=False)
-            return value
-        except (TypeError, ValueError):
-            s_val = str(value)
-            if len(s_val) > self._MAX_FIELD_LEN:
-                return s_val[: self._MAX_FIELD_LEN] + "... [truncated]"
-            return s_val
-
-    def format(self, record: logging.LogRecord) -> str:
-        try:
-            payload = {
-                "timestamp": (
-                    datetime.fromtimestamp(record.created, timezone.utc)
-                    .isoformat(timespec="milliseconds")
-                    .replace("+00:00", "Z")
-                ),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-                "process_id": record.process,
-            }
-            for field in self._CONTEXT_FIELDS:
-                if hasattr(record, field):
-                    payload[field] = self._bound_value(getattr(record, field))
-            if record.exc_info:
-                payload["exception"] = self.formatException(record.exc_info)
-            return json.dumps(payload, ensure_ascii=False, allow_nan=False)
-        except Exception:
-            # Logging must never be allowed to terminate analysis. Keep the
-            # fallback deliberately small and composed only of safe primitives.
-            return json.dumps(
-                {
-                    "timestamp": datetime.now(timezone.utc)
-                    .isoformat(timespec="milliseconds")
-                    .replace("+00:00", "Z"),
-                    "level": getattr(record, "levelname", "ERROR"),
-                    "logger": getattr(record, "name", "cgull.logging"),
-                    "message": "Unable to serialize diagnostic record",
-                    "process_id": os.getpid(),
-                }
-            )
 
 
 def _worker_queue_active() -> bool:
