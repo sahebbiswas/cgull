@@ -123,6 +123,10 @@ class TestIssue456LoggingCliContract(unittest.TestCase):
                             level.upper() in expected,
                         )
 
+            # The final matrix row owns an explicit FileHandler. Reconfigure before
+            # TemporaryDirectory cleanup so Windows does not retain an open handle.
+            configure_logging(no_log=True)
+
     def test_global_and_scan_logging_option_positions_are_equivalent(self):
         parser = build_parser()
         global_args = parser.parse_args(
