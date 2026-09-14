@@ -60,10 +60,31 @@ def _remove_subcommand(subparsers: argparse._SubParsersAction, name: str) -> Non
     ]
 
 
+def _document_logging_help(parser: argparse.ArgumentParser) -> None:
+    """Keep the public CLI help aligned with the Logging v2 sink contract."""
+    help_by_dest = {
+        "verbose": (
+            "Set diagnostic verbosity (default WARNING; -v INFO; -vv DEBUG; "
+            "-vvv TRACE)"
+        ),
+        "log_level": "Set explicit diagnostic log level; overrides -v/-vv/-vvv",
+        "log_file": (
+            "Write an additive human-readable diagnostic log at PATH; automatic "
+            "JSONL capture remains enabled unless --no-log"
+        ),
+        "no_log": "Disable automatic project-local JSONL diagnostic capture",
+    }
+    for action in parser._actions:
+        if action.dest in help_by_dest:
+            action.help = help_by_dest[action.dest]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _ORIGINAL_BUILD_PARSER()
 
     scan_parser = _scan_subparser(parser)
+    _document_logging_help(parser)
+    _document_logging_help(scan_parser)
     for action in scan_parser._actions:
         if action.dest == "mode":
             action.help = (
