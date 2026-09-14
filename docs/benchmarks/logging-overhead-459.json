@@ -1,0 +1,258 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-14T12:30:30.908336+00:00",
+  "environment": {
+    "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "python": "3.12.14",
+    "python_executable": "/opt/hostedtoolcache/Python/3.12.14/x64/bin/python",
+    "cgull_revision": "d0ea8cd2856ecb7bcf58d75d5f5cc72209dc6052"
+  },
+  "configuration": {
+    "source_target": "/home/runner/work/cgull/cgull/benchmarks/juliet",
+    "workspace_target": "/tmp/cgull-logging-benchmark-vsb5b255/juliet",
+    "jobs": 2,
+    "scan_mode": "file",
+    "repetitions": 5,
+    "warmup_cycles": 1,
+    "seed": 459,
+    "analyzed_lines": 984,
+    "report_format": "json",
+    "arm_order": [
+      [
+        "trace_capture",
+        "no_capture",
+        "default_capture"
+      ],
+      [
+        "trace_capture",
+        "default_capture",
+        "no_capture"
+      ],
+      [
+        "no_capture",
+        "trace_capture",
+        "default_capture"
+      ],
+      [
+        "trace_capture",
+        "no_capture",
+        "default_capture"
+      ],
+      [
+        "trace_capture",
+        "no_capture",
+        "default_capture"
+      ]
+    ],
+    "warmup_arm_order": [
+      [
+        "default_capture",
+        "no_capture",
+        "trace_capture"
+      ]
+    ]
+  },
+  "summary": {
+    "arms": {
+      "no_capture": {
+        "description": "automatic JSONL capture disabled",
+        "median_throughput_kloc_per_sec": 0.11205540430605337,
+        "median_analysis_elapsed_seconds": 8.781370305999985,
+        "median_wall_elapsed_seconds": 9.009181989000012,
+        "samples": [
+          {
+            "arm": "no_capture",
+            "repetition": 0,
+            "order_index": 1,
+            "throughput_kloc_per_sec": 0.11236669140755504,
+            "analysis_elapsed_seconds": 8.757043458999988,
+            "wall_elapsed_seconds": 8.986452868000015,
+            "analyzed_lines": 984,
+            "capture_files": 0,
+            "capture_bytes": 0
+          },
+          {
+            "arm": "no_capture",
+            "repetition": 1,
+            "order_index": 2,
+            "throughput_kloc_per_sec": 0.11236632482338217,
+            "analysis_elapsed_seconds": 8.757072027999982,
+            "wall_elapsed_seconds": 8.984423368000023,
+            "analyzed_lines": 984,
+            "capture_files": 0,
+            "capture_bytes": 0
+          },
+          {
+            "arm": "no_capture",
+            "repetition": 2,
+            "order_index": 0,
+            "throughput_kloc_per_sec": 0.11119299517208055,
+            "analysis_elapsed_seconds": 8.849478319000013,
+            "wall_elapsed_seconds": 9.077517053000008,
+            "analyzed_lines": 984,
+            "capture_files": 0,
+            "capture_bytes": 0
+          },
+          {
+            "arm": "no_capture",
+            "repetition": 3,
+            "order_index": 1,
+            "throughput_kloc_per_sec": 0.11205540430605337,
+            "analysis_elapsed_seconds": 8.781370305999985,
+            "wall_elapsed_seconds": 9.009181989000012,
+            "analyzed_lines": 984,
+            "capture_files": 0,
+            "capture_bytes": 0
+          },
+          {
+            "arm": "no_capture",
+            "repetition": 4,
+            "order_index": 1,
+            "throughput_kloc_per_sec": 0.11102276804052702,
+            "analysis_elapsed_seconds": 8.863046899000096,
+            "wall_elapsed_seconds": 9.108053478999977,
+            "analyzed_lines": 984,
+            "capture_files": 0,
+            "capture_bytes": 0
+          }
+        ],
+        "throughput_regression_pct_vs_no_capture": 0.0
+      },
+      "default_capture": {
+        "description": "default WARNING+ automatic JSONL capture",
+        "median_throughput_kloc_per_sec": 0.11247873275782659,
+        "median_analysis_elapsed_seconds": 8.748320468000031,
+        "median_wall_elapsed_seconds": 8.982332442000029,
+        "samples": [
+          {
+            "arm": "default_capture",
+            "repetition": 0,
+            "order_index": 2,
+            "throughput_kloc_per_sec": 0.11177013564721286,
+            "analysis_elapsed_seconds": 8.80378281999998,
+            "wall_elapsed_seconds": 9.036284459,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 0
+          },
+          {
+            "arm": "default_capture",
+            "repetition": 1,
+            "order_index": 1,
+            "throughput_kloc_per_sec": 0.11247873275782659,
+            "analysis_elapsed_seconds": 8.748320468000031,
+            "wall_elapsed_seconds": 8.978005576999976,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 0
+          },
+          {
+            "arm": "default_capture",
+            "repetition": 2,
+            "order_index": 2,
+            "throughput_kloc_per_sec": 0.11282223765544384,
+            "analysis_elapsed_seconds": 8.721684841999945,
+            "wall_elapsed_seconds": 8.947379857999977,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 0
+          },
+          {
+            "arm": "default_capture",
+            "repetition": 3,
+            "order_index": 2,
+            "throughput_kloc_per_sec": 0.11155104012251967,
+            "analysis_elapsed_seconds": 8.821074181999961,
+            "wall_elapsed_seconds": 9.067983255999934,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 0
+          },
+          {
+            "arm": "default_capture",
+            "repetition": 4,
+            "order_index": 2,
+            "throughput_kloc_per_sec": 0.1125997291037491,
+            "analysis_elapsed_seconds": 8.73891978100005,
+            "wall_elapsed_seconds": 8.982332442000029,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 0
+          }
+        ],
+        "throughput_regression_pct_vs_no_capture": -0.3777849487892553
+      },
+      "trace_capture": {
+        "description": "TRACE+ automatic JSONL capture",
+        "median_throughput_kloc_per_sec": 0.009239050923782645,
+        "median_analysis_elapsed_seconds": 106.50444597800004,
+        "median_wall_elapsed_seconds": 106.83683293000001,
+        "samples": [
+          {
+            "arm": "trace_capture",
+            "repetition": 0,
+            "order_index": 0,
+            "throughput_kloc_per_sec": 0.009133224838728296,
+            "analysis_elapsed_seconds": 107.7385061,
+            "wall_elapsed_seconds": 108.08378142799998,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 153747337
+          },
+          {
+            "arm": "trace_capture",
+            "repetition": 1,
+            "order_index": 0,
+            "throughput_kloc_per_sec": 0.009290628785062796,
+            "analysis_elapsed_seconds": 105.91317582100004,
+            "wall_elapsed_seconds": 106.24939487500001,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 153747337
+          },
+          {
+            "arm": "trace_capture",
+            "repetition": 2,
+            "order_index": 1,
+            "throughput_kloc_per_sec": 0.009304240227616892,
+            "analysis_elapsed_seconds": 105.75823236799994,
+            "wall_elapsed_seconds": 106.09474784099996,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 153747337
+          },
+          {
+            "arm": "trace_capture",
+            "repetition": 3,
+            "order_index": 0,
+            "throughput_kloc_per_sec": 0.009239050923782645,
+            "analysis_elapsed_seconds": 106.50444597800004,
+            "wall_elapsed_seconds": 106.83683293000001,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 153747337
+          },
+          {
+            "arm": "trace_capture",
+            "repetition": 4,
+            "order_index": 0,
+            "throughput_kloc_per_sec": 0.009171934613933067,
+            "analysis_elapsed_seconds": 107.28380013800006,
+            "wall_elapsed_seconds": 107.62747635599999,
+            "analyzed_lines": 984,
+            "capture_files": 1,
+            "capture_bytes": 153747337
+          }
+        ],
+        "throughput_regression_pct_vs_no_capture": 91.75492607340176
+      }
+    },
+    "release_gate": {
+      "metric": "median throughput_kloc_per_sec regression vs no_capture",
+      "threshold_pct": 2.0,
+      "default_capture_regression_pct": -0.3777849487892553,
+      "passes": true,
+      "trace_is_informational": true
+    }
+  }
+}
