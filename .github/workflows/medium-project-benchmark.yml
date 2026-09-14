@@ -1,0 +1,40 @@
+name: Medium project benchmark
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/benchmark_medium_project.py"
+      - "tests/test_issue_486_medium_project_benchmark.py"
+      - "docs/benchmarks/medium-project-486.md"
+      - ".github/workflows/medium-project-benchmark.yml"
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install C-GULL
+        run: python -m pip install -e ".[dev]"
+      - name: Run focused benchmark tests
+        run: python -m pytest -q tests/test_issue_486_medium_project_benchmark.py
+      - name: Capture compact benchmark artifact
+        run: |
+          python benchmarks/benchmark_medium_project.py \
+            --modules 4 \
+            --functions-per-module 3 \
+            --statements-per-function 4 \
+            --modes file,tu \
+            --jobs 1,2 \
+            --repetitions 1 \
+            --output medium-project-486-ci.json
+          cat medium-project-486-ci.json
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: medium-project-486
+          path: medium-project-486-ci.json
