@@ -34,6 +34,12 @@ from .utils import ProgressIndicator as _BaseProgressIndicator
 # safely recompute throughput, while still avoiding NaN/inf values.
 _MIN_ELAPSED_SECONDS = 1e-6
 
+# File discovery can visit thousands of source candidates in a fraction of a
+# second. Keep the user-visible count live without turning each candidate into a
+# terminal write.
+_DISCOVERY_MIN_INTERVAL_SECONDS = 0.1
+_DISCOVERY_COUNT_INTERVAL = 25
+
 
 @dataclass(frozen=True)
 class ScanTelemetry:
@@ -116,7 +122,7 @@ def _profile_multiplier(profiles: Optional[List[ConfigProfile]]) -> int:
 
 
 class _ProgressUpdateAdapter:
-    """Callable legacy progress callback with an explicit telemetry channel."""
+    """Callable legacy progress callback with explicit optional side channels."""
 
     def __init__(self, owner: "ProgressIndicator") -> None:
         self._owner = owner
@@ -126,6 +132,9 @@ class _ProgressUpdateAdapter:
 
     def update_telemetry(self, telemetry: ScanTelemetry) -> None:
         self._owner.update_telemetry(telemetry)
+
+    def discovery_update(self, found: int) -> None:
+        self._owner.discovery_update(found)
 
 
 class ProgressIndicator(_BaseProgressIndicator):
@@ -139,13 +148,42 @@ class ProgressIndicator(_BaseProgressIndicator):
     ) -> None:
         super().__init__(stream=stream, quiet=quiet, bar_width=bar_width)
         self.telemetry = ScanTelemetry()
+        self._discovery_last_rendered_count = -1
+        self._discovery_last_rendered_at = 0.0
         # cli_base passes ``progress.update`` to the scanner. Shadow the class
-        # method with a callable adapter so telemetry is an explicit callback
-        # protocol rather than inferred from a bound method's ``__self__``.
+        # method with a callable adapter so telemetry/discovery are explicit
+        # callback capabilities rather than inferred from a bound method owner.
         self.update = _ProgressUpdateAdapter(self)  # type: ignore[method-assign]
 
     def update_telemetry(self, telemetry: ScanTelemetry) -> None:
         self.telemetry = telemetry
+
+    def discovery_update(self, found: int) -> None:
+        """Render a throttled unknown-total file-discovery status in place."""
+        if self.quiet:
+            return
+
+        found = max(0, int(found))
+        now = time.monotonic()
+        first_render = self._discovery_last_rendered_count < 0
+        count_due = (
+            not first_render
+            and found - self._discovery_last_rendered_count >= _DISCOVERY_COUNT_INTERVAL
+        )
+        time_due = (
+            not first_render
+            and now - self._discovery_last_rendered_at >= _DISCOVERY_MIN_INTERVAL_SECONDS
+        )
+        if not first_render and not count_due and not time_due:
+            return
+
+        line = f"Discovering files... {found} found"
+        padded_line = line.ljust(self.last_line_len)
+        self.stream.write(f"\r{padded_line}")
+        self.stream.flush()
+        self.last_line_len = max(self.last_line_len, len(padded_line))
+        self._discovery_last_rendered_count = found
+        self._discovery_last_rendered_at = now
 
     def _render(self, completed: int, total: int, current_file: str = "") -> None:
         if self.quiet:
@@ -175,16 +213,32 @@ class ProgressIndicator(_BaseProgressIndicator):
 
 
 class _CountingIgnoreFilter:
-    """Delegate ignore decisions while recording ignored physical files once."""
+    """Delegate ignore decisions while recording discovery accounting once."""
 
-    def __init__(self, delegate: CGullIgnoreFilter, ignored_files: set[str]) -> None:
+    def __init__(
+        self,
+        delegate: CGullIgnoreFilter,
+        ignored_files: set[str],
+        discovered_files: Optional[set[str]] = None,
+        discovery_callback: Optional[Callable[[int], None]] = None,
+    ) -> None:
         self._delegate = delegate
         self._ignored_files = ignored_files
+        self._discovered_files = discovered_files if discovered_files is not None else set()
+        self._discovery_callback = discovery_callback
 
     def should_ignore(self, path: str) -> bool:
         ignored = self._delegate.should_ignore(path)
-        if ignored and os.path.isfile(path):
-            self._ignored_files.add(os.path.normcase(os.path.realpath(path)))
+        if os.path.isfile(path):
+            canonical = os.path.normcase(os.path.realpath(path))
+            if ignored:
+                self._ignored_files.add(canonical)
+            elif (
+                self._discovery_callback is not None
+                and canonical not in self._discovered_files
+            ):
+                self._discovered_files.add(canonical)
+                self._discovery_callback(len(self._discovered_files))
         return ignored
 
     def should_prune_dir(self, path: str) -> bool:
@@ -212,16 +266,26 @@ class CGullScanner(_BaseCGullScanner):
         self._telemetry_total_files = 0
         self._telemetry_issue_keys: set[tuple[Any, ...]] = set()
         self._telemetry_ignored_files: set[str] = set()
+        self._telemetry_discovered_candidates: set[str] = set()
         self._telemetry_callback: Optional[Callable[[ScanTelemetry], None]] = None
 
-    def _prepare_counting_ignore_filter(self, target_path, custom_ignore_patterns=None) -> None:
+    def _prepare_counting_ignore_filter(
+        self,
+        target_path,
+        custom_ignore_patterns=None,
+        discovery_callback: Optional[Callable[[int], None]] = None,
+    ) -> None:
         if isinstance(self.ignore_filter, _CountingIgnoreFilter):
             self.ignore_filter._ignored_files = self._telemetry_ignored_files
+            self.ignore_filter._discovered_files = self._telemetry_discovered_candidates
+            self.ignore_filter._discovery_callback = discovery_callback
             return
         if self.ignore_filter is not None:
             self.ignore_filter = _CountingIgnoreFilter(
                 self.ignore_filter,
                 self._telemetry_ignored_files,
+                self._telemetry_discovered_candidates,
+                discovery_callback,
             )
             return
 
@@ -244,6 +308,8 @@ class CGullScanner(_BaseCGullScanner):
         self.ignore_filter = _CountingIgnoreFilter(
             delegate,
             self._telemetry_ignored_files,
+            self._telemetry_discovered_candidates,
+            discovery_callback,
         )
 
     def _snapshot(self) -> ScanTelemetry:
@@ -341,12 +407,34 @@ class CGullScanner(_BaseCGullScanner):
         custom_ignore_patterns = kwargs.get("custom_ignore_patterns")
         if custom_ignore_patterns is None and len(args) >= 3:
             custom_ignore_patterns = args[2]
-        if target_path is not None:
-            self._prepare_counting_ignore_filter(target_path, custom_ignore_patterns)
-
         progress_callback = kwargs.get("progress_callback")
         if progress_callback is None and len(args) >= 5:
             progress_callback = args[4]
+
+        discovery_callback = getattr(progress_callback, "discovery_update", None)
+        if not callable(discovery_callback):
+            discovery_callback = None
+
+        has_directory_target = False
+        if target_path is not None:
+            raw_targets = (
+                list(target_path)
+                if isinstance(target_path, (list, tuple))
+                else [target_path]
+            )
+            has_directory_target = any(
+                os.path.isdir(os.path.abspath(path)) for path in raw_targets
+            )
+            if has_directory_target and discovery_callback is not None:
+                discovery_callback(0)
+            self._prepare_counting_ignore_filter(
+                target_path,
+                custom_ignore_patterns,
+                discovery_callback=(
+                    discovery_callback if has_directory_target else None
+                ),
+            )
+
         if telemetry_callback is not None:
             self._telemetry_callback = telemetry_callback
         else:
