@@ -35,6 +35,7 @@ CWE_RULE_MAP = {
     "CWE-194": {"CGULL-049"},
     "CWE-195": {"CGULL-049"},
     "CWE-196": {"CGULL-049"},
+    "CWE-197": {"CGULL-049"},
     "CWE-121": {"CGULL-001", "CGULL-007", "CGULL-044"},
     "CWE-122": {"CGULL-001", "CGULL-007", "CGULL-044"},
     "CWE-369": {"CGULL-034"},

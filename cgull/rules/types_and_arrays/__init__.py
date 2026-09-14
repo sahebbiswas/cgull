@@ -12,7 +12,7 @@ from .use_of_magic_numbers import UseOfMagicNumbersRule
 from .signed_unsigned_comparison import SignedUnsignedComparisonRule
 from .division_by_zero import DivisionByZeroRule
 from .pointer_subtraction_size import PointerSubtractionSizeRule
-from .integer_narrowing_cast import IntegerNarrowingCastRule
+from .firmware_integer_conversion import IntegerNarrowingCastRule
 from .pointer_range_bounds import PointerRangeBoundsRule
 from .validated_pointer_range import ValidatedPointerRangeRule
 
