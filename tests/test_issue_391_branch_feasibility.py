@@ -169,7 +169,7 @@ int use_good;
 void f(void) {
     int n = -1;
     use_good = 1;
-    if (use_good) {
+    if (use_good > 0) {
         n = 99;
     }
     malloc(n);
@@ -182,7 +182,7 @@ def test_static_and_volatile_locals_do_not_prove_branch_truth():
 void f(void) {
     static int use_good = 1;
     int n = -1;
-    if (use_good) {
+    if (use_good > 0) {
         n = 99;
     }
     malloc(n);
@@ -192,7 +192,7 @@ void f(void) {
 void g(void) {
     volatile int use_good = 1;
     int n = -1;
-    if (use_good) {
+    if (use_good > 0) {
         n = 99;
     }
     malloc(n);
