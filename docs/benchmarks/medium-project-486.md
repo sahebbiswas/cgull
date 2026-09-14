@@ -57,12 +57,14 @@ Production scan telemetry is intentionally unchanged: these hooks exist only ins
 
 ## Baseline and optimization workflow
 
-The pull-request benchmark workflow runs a compact one-repetition matrix on Ubuntu/Python 3.12 and uploads the JSON artifact. The checked-in baseline artifact in this directory is generated from the scanner implementation at the `main` revision named inside that artifact.
+The pull-request benchmark workflow runs a compact one-repetition file/TU and jobs 1/2 matrix on Ubuntu for every supported Python release (3.10 through 3.14). Each Python job uploads its own JSON artifact. This cross-version CI run validates benchmark portability and semantic parity; it is not an absolute performance gate.
+
+`medium-project-486-baseline.json` records the first successful Python 3.12 compact run. Its `baseline.production_main_revision` identifies the production scanner source used for the measurement. The PR that introduced the harness changes only benchmark/docs/workflow code plus the package version, so the measured scanner implementation is identical to that `main` revision; the separately recorded capture revision is GitHub Actions' synthetic PR merge commit.
 
 For an optimization PR:
 
 1. Run the standard command on the unmodified base revision and save the JSON artifact.
-2. Run the same command on the candidate revision on the same host.
+2. Run the same command on the candidate revision on the same host and Python version.
 3. Confirm workload hashes and semantic parity match.
 4. Compare `median_wall_seconds`, throughput, and the relevant phase/activity fields.
 5. Attach both JSON artifacts to the PR. Avoid claiming a regression/improvement from runs with different workload hashes, Python versions, or machines.
