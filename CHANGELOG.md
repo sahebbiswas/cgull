@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.29] - 2026-09-14
+
+### Added
+- Show immediate, throttled live file-discovery status before directory scans begin, counting only non-ignored scan candidates and transitioning in place to normal scan progress while preserving legacy progress callbacks, structured output, diagnostic coordination, and final discovery telemetry semantics (#484).
+
 ## [0.11.24] - 2026-09-14
 
 ### Fixed

@@ -183,9 +183,9 @@ class _ProgressSafeStderr:
         if not self._is_tty():
             return self._stream.write(data)
 
-        # Both the base and telemetry progress indicators begin their in-place
-        # rendering with a carriage return and the stable "Scanning [" prefix.
-        if data.startswith("\rScanning ["):
+        # The scan and discovery progress indicators begin their in-place
+        # rendering with a carriage return and a stable phase prefix.
+        if data.startswith(("\rScanning [", "\rDiscovering files...")):
             self._progress_line = data
             self._progress_width = max(
                 self._progress_width,
