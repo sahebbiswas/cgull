@@ -304,10 +304,13 @@ def expanded_analysis_lines(result: Any, *, config: ScanConfig) -> int:
     """
 
     total = 0
+    target_root = Path(result.target_path)
     for summary in result.file_summaries:
         if summary.status == "failed":
             continue
         path = Path(summary.file_path)
+        if not path.is_absolute():
+            path = target_root / path
         source = path.read_text(encoding="utf-8", errors="replace")
         resolver = IncludeResolver(
             include_roots=config.include_roots,
