@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import PurePath
 from typing import Any, Optional, Set, Tuple
 
 
@@ -23,6 +24,10 @@ def _safe_text(value: Any) -> str:
     """Return text for arbitrary values without allowing ``__str__`` to fail logging."""
     if isinstance(value, (bytes, bytearray, memoryview)):
         return bytes(value).decode("utf-8", errors="replace")
+    if isinstance(value, PurePath):
+        # Persistent structured logs use one path spelling across platforms while
+        # preserving relative-vs-absolute semantics and avoiding path resolution.
+        return value.as_posix()
     if isinstance(value, os.PathLike):
         try:
             path_value = os.fspath(value)
