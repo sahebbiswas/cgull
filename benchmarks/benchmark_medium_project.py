@@ -33,7 +33,7 @@ from typing import Any, Iterator, Sequence
 
 from cgull import CGullScanner, ScanConfig, ScanMode, __version__, telemetry_for
 from cgull.ast_analyzer import CASTParser
-from cgull.includes import TUIncludeExpander
+from cgull.includes import IncludeResolver, TUIncludeExpander
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -78,6 +78,7 @@ class Sample:
     wall_seconds: float
     analyzed_lines: int
     unique_source_lines: int
+    expanded_analysis_lines: int
     throughput_kloc_per_sec: float
     peak_rss_bytes: int | None
     phases: dict[str, float]
@@ -117,13 +118,6 @@ def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
-    return parsed
-
-
-def _nonnegative_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("must be zero or greater")
     return parsed
 
 
@@ -299,6 +293,32 @@ def workload_manifest(project: Path) -> dict[str, Any]:
         "physical_lines": physical_lines,
         "sha256": digest.hexdigest(),
     }
+
+
+def expanded_analysis_lines(result: Any, *, config: ScanConfig) -> int:
+    """Measure include-expanded volume for the roots the completed scan analyzed.
+
+    This is deliberately computed after the timed scan. It describes the analysis
+    volume without adding a second include-expansion pass to any phase timing or
+    to the scan's peak-RSS sample.
+    """
+
+    total = 0
+    for summary in result.file_summaries:
+        if summary.status == "failed":
+            continue
+        path = Path(summary.file_path)
+        source = path.read_text(encoding="utf-8", errors="replace")
+        resolver = IncludeResolver(
+            include_roots=config.include_roots,
+            base_dir=str(path.resolve().parent),
+        )
+        expanded = TUIncludeExpander(
+            resolver=resolver,
+            defined_syms=config.defined_syms,
+        ).expand(source, source_path=str(path))
+        total += len(expanded.expanded_text.splitlines())
+    return total
 
 
 @contextmanager
@@ -508,6 +528,8 @@ def run_sample(project: Path, *, mode: str, jobs: int, repetition: int) -> Sampl
         result = scanner.scan_path(str(project), jobs=jobs, quiet=True)
         wall_seconds = max(1e-9, time.perf_counter() - started)
 
+    peak_rss = _peak_rss_bytes()
+    expanded_lines = expanded_analysis_lines(result, config=config)
     telemetry = telemetry_for(result)
     snapshot = _semantic_snapshot(result)
     return Sample(
@@ -517,10 +539,11 @@ def run_sample(project: Path, *, mode: str, jobs: int, repetition: int) -> Sampl
         wall_seconds=wall_seconds,
         analyzed_lines=telemetry.analyzed_lines,
         unique_source_lines=telemetry.unique_source_lines,
+        expanded_analysis_lines=expanded_lines,
         throughput_kloc_per_sec=(telemetry.analyzed_lines / 1000.0) / wall_seconds
         if telemetry.analyzed_lines
         else 0.0,
-        peak_rss_bytes=_peak_rss_bytes(),
+        peak_rss_bytes=peak_rss,
         phases=_phase_output(
             recorder,
             result=result,
@@ -549,6 +572,11 @@ def validate_parity(samples: Sequence[Sample]) -> dict[str, Any]:
                 differences.append(
                     f"{mode}: jobs={sample.jobs} repetition={sample.repetition} "
                     f"differs from jobs={reference.jobs} repetition={reference.repetition}"
+                )
+            if sample.expanded_analysis_lines != reference.expanded_analysis_lines:
+                differences.append(
+                    f"{mode}: jobs={sample.jobs} repetition={sample.repetition} "
+                    "produced different expanded analysis volume"
                 )
 
     cross_mode_findings_match = True
@@ -583,6 +611,7 @@ def summarize(samples: Sequence[Sample]) -> dict[str, Any]:
             "mode": mode,
             "jobs": jobs,
             "samples": len(group),
+            "expanded_analysis_lines": group[0].expanded_analysis_lines,
             "median_wall_seconds": statistics.median(s.wall_seconds for s in group),
             "median_throughput_kloc_per_sec": statistics.median(
                 s.throughput_kloc_per_sec for s in group
@@ -646,7 +675,12 @@ def build_artifact(
                 "use for relative before/after comparisons on the same machine"
             ),
             "peak_rss_bytes": (
-                "process-lifetime ru_maxrss where the platform exposes it; null otherwise"
+                "process-lifetime ru_maxrss sampled immediately after scan_path; null where "
+                "the platform does not expose it"
+            ),
+            "expanded_analysis_lines": (
+                "include-expanded line volume recomputed after the timed scan for exactly "
+                "the analyzed roots; excluded from scan timing and peak-RSS measurement"
             ),
         },
     }
@@ -661,7 +695,8 @@ def _print_summary(artifact: dict[str, Any]) -> None:
     for name, arm in artifact["summary"]["arms"].items():
         print(
             f"{name:16s}  {arm['median_wall_seconds']:.3f}s  "
-            f"{arm['median_throughput_kloc_per_sec']:.3f} KLOC/s"
+            f"{arm['median_throughput_kloc_per_sec']:.3f} KLOC/s  "
+            f"expanded={arm['expanded_analysis_lines']} lines"
         )
     parity = artifact["parity"]
     print(f"semantic parity: {'PASS' if parity['passes'] else 'FAIL'}")
