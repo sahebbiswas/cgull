@@ -40,7 +40,7 @@ def test_generated_medium_project_is_deterministic_and_exercises_nested_headers(
     assert benchmark.workload_manifest(project) == first
 
 
-def test_tiny_end_to_end_sample_reports_required_phase_telemetry(tmp_path):
+def test_tiny_end_to_end_sample_reports_required_phase_telemetry_and_volume(tmp_path):
     project = benchmark.generate_medium_project(
         tmp_path,
         modules=2,
@@ -68,11 +68,12 @@ def test_tiny_end_to_end_sample_reports_required_phase_telemetry(tmp_path):
     assert sample.phases["total_wall_seconds"] == sample.wall_seconds
     assert sample.analyzed_lines > 0
     assert sample.unique_source_lines > 0
+    assert sample.expanded_analysis_lines > sample.analyzed_lines
     assert sample.semantic_digest
     assert sample.semantics.files_failed == 0
 
 
-def _sample(mode: str, jobs: int, semantics):
+def _sample(mode: str, jobs: int, semantics, *, expanded_analysis_lines: int = 1200):
     return benchmark.Sample(
         mode=mode,
         jobs=jobs,
@@ -80,6 +81,7 @@ def _sample(mode: str, jobs: int, semantics):
         wall_seconds=1.0,
         analyzed_lines=1000,
         unique_source_lines=1000,
+        expanded_analysis_lines=expanded_analysis_lines,
         throughput_kloc_per_sec=1.0,
         peak_rss_bytes=None,
         phases={"total_wall_seconds": 1.0},
@@ -112,6 +114,28 @@ def test_parity_requires_identical_semantics_across_jobs_within_a_mode():
 
     result = benchmark.validate_parity(
         [_sample("file", 1, baseline), _sample("file", 2, changed_accounting)]
+    )
+
+    assert result["passes"] is False
+    assert result["within_mode_jobs_and_repetitions_match"] is False
+
+
+def test_parity_requires_identical_expanded_volume_across_jobs_within_a_mode():
+    semantics = benchmark.SemanticSnapshot(
+        findings=(),
+        parser_status_counts=(("pycparser_success", 2),),
+        files_discovered=2,
+        files_analyzed=2,
+        files_ignored=0,
+        files_failed=0,
+        scan_errors=(),
+    )
+
+    result = benchmark.validate_parity(
+        [
+            _sample("tu", 1, semantics, expanded_analysis_lines=1200),
+            _sample("tu", 2, semantics, expanded_analysis_lines=1199),
+        ]
     )
 
     assert result["passes"] is False
