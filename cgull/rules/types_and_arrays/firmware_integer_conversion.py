@@ -2,11 +2,11 @@
 
 The base conversion rule owns correctness: this wrapper only raises the priority
 of findings that already exist when their destination is concretely
-hardware-like.  Fixed-width integer spellings and typedef names are deliberately
+hardware-like. Fixed-width integer spellings and typedef names are deliberately
 not treated as MMIO evidence.
 """
 
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, Tuple
 
 from ...ast_analyzer import CASTContext
 from ...cfg import find_function_def
@@ -157,14 +157,28 @@ class IntegerNarrowingCastRule(_BaseIntegerNarrowingCastRule):
         return None
 
     @classmethod
-    def _firmware_priority_lines(cls, ast_ctx: CASTContext) -> Dict[int, str]:
+    def _site_for_node(cls, ast_ctx: CASTContext, fn, node) -> Tuple[int, int]:
+        line = cls._line_for_node(ast_ctx, node, fn)
+        column = getattr(getattr(node, "coord", None), "column", 1) or 1
+        return line, column
+
+    @classmethod
+    def _firmware_priority_sites(cls, ast_ctx: CASTContext) -> Dict[Tuple[int, int], str]:
+        """Map only conversion sites that feed a concrete firmware destination.
+
+        Site-level matching avoids promoting an unrelated conversion merely
+        because it shares a physical source line with a volatile/bitfield write.
+        Explicit casts in the destination value expression are included, while
+        nested call arguments are intentionally not: those are argument-binding
+        conversions, not conversions into the hardware-facing destination.
+        """
         if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
             return {}
 
         from pycparser import c_ast
 
         field_traits = cls._aggregate_field_traits(ast_ctx)
-        priorities: Dict[int, str] = {}
+        priorities: Dict[Tuple[int, int], str] = {}
 
         for fn in ast_ctx.functions:
             funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
@@ -174,20 +188,37 @@ class IntegerNarrowingCastRule(_BaseIntegerNarrowingCastRule):
             rule = cls
 
             class DestinationVisitor(c_ast.NodeVisitor):
-                def _record(self, destination, node):
+                def _record(self, destination, node, value_node):
                     reason = rule._firmware_destination_reason(
                         ast_ctx, fn, destination, field_traits
                     )
-                    if reason:
-                        priorities.setdefault(rule._line_for_node(ast_ctx, node, fn), reason)
+                    if not reason:
+                        return
+
+                    priorities.setdefault(rule._site_for_node(ast_ctx, fn, node), reason)
+
+                    class DirectCastVisitor(c_ast.NodeVisitor):
+                        def visit_Cast(self, cast_node):
+                            priorities.setdefault(
+                                rule._site_for_node(ast_ctx, fn, cast_node), reason
+                            )
+                            self.generic_visit(cast_node)
+
+                        def visit_FuncCall(self, call_node):
+                            # Conversions inside call arguments belong to the
+                            # callee binding, not to the outer hardware write.
+                            return
+
+                    if value_node is not None:
+                        DirectCastVisitor().visit(value_node)
 
                 def visit_Decl(self, node):
                     if node.init is not None:
-                        self._record(node, node)
+                        self._record(node, node, node.init)
                     self.generic_visit(node)
 
                 def visit_Assignment(self, node):
-                    self._record(node.lvalue, node)
+                    self._record(node.lvalue, node, node.rvalue)
                     self.generic_visit(node)
 
             DestinationVisitor().visit(funcdef)
@@ -199,9 +230,9 @@ class IntegerNarrowingCastRule(_BaseIntegerNarrowingCastRule):
         if not issues:
             return issues
 
-        priorities = self._firmware_priority_lines(ast_ctx)
+        priorities = self._firmware_priority_sites(ast_ctx)
         for issue in issues:
-            reason = priorities.get(issue.line_number)
+            reason = priorities.get((issue.line_number, issue.column_number))
             if not reason:
                 continue
             issue.impact = Severity.HIGH
