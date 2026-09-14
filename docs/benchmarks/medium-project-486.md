@@ -26,10 +26,12 @@ The artifact records:
 
 - Python, platform, CPU count, C-GULL version, and Git revision.
 - Workload file count, physical LOC, generator dimensions, and a SHA-256 workload hash.
-- Scan mode, requested worker count, repetition, analyzed volume, unique source LOC, throughput, finding count, parser fallback count, and peak RSS where the platform exposes `ru_maxrss`.
+- Scan mode, requested worker count, repetition, analyzed physical LOC, unique source LOC, include-expanded analysis volume (`expanded_analysis_lines`), throughput, finding count, parser fallback count, and peak RSS where the platform exposes `ru_maxrss`.
 - Stable semantic snapshots containing findings/fingerprints, parser status counts, scan errors, and file accounting.
-- Median wall/throughput/phase values for each `mode/jobs` arm.
-- A parity result. Jobs and repetitions must produce identical semantics within a mode; file and TU modes must produce the same findings/fingerprints. File/TU file accounting is intentionally allowed to differ because TU mode does not separately scan included headers as standalone roots.
+- Median wall/throughput/phase values plus expanded analysis volume for each `mode/jobs` arm.
+- A parity result. Jobs and repetitions must produce identical semantics and expanded volume within a mode; file and TU modes must produce the same findings/fingerprints. File/TU file accounting and expanded volume are intentionally allowed to differ because TU mode does not separately scan included headers as standalone roots.
+
+Expanded volume is recomputed for exactly the roots reported in `file_summaries` immediately after the timed scan, using the same include roots and defined symbols. That second expansion is excluded from `total_wall_seconds`, all phase timers, and the peak-RSS sample so the measurement itself does not inflate the scan being measured.
 
 A parity failure exits with status `2` unless `--no-enforce-parity` is used for diagnosis.
 
@@ -39,7 +41,7 @@ The benchmark reports these timing fields for every arm:
 
 | Field | Meaning |
 | --- | --- |
-| `file_discovery_seconds` | Time spent iterating source/header discovery. |
+| `file_discovery_seconds` | Complete file-discovery interval, including traversal, candidate filtering, ignore checks, and candidate-list construction. |
 | `tu_include_expansion_seconds` | Include/TU expansion activity in project preparation plus any scan-local expansion. |
 | `parser_seconds` | AST parser activity in project preparation plus any scan-local parsing. |
 | `project_preparation_seconds` | Full `prepare_project` wall time, including parse/expansion and summary work. |
@@ -52,6 +54,8 @@ The benchmark reports these timing fields for every arm:
 | `total_wall_seconds` | End-to-end `scan_path` wall time measured by the benchmark. |
 
 The activity timings overlap by design. For example, parser and include-expansion time inside `prepare_project` is also contained in `project_preparation_seconds`. Do not sum every timing field and compare it with total wall time. Use the activity fields to locate expensive work and the wall fields to quantify end-to-end improvement.
+
+For the default multi-file HYBRID workload, `prepare_project()` performs parser/include work before sequential or parallel worker execution, and workers receive prepared units. That keeps parser/include activity comparable across `--jobs` arms without adding benchmark-specific IPC instrumentation. A run that degrades out of that prepared path should be treated as a different semantic/degradation baseline rather than compared as an ordinary performance arm.
 
 Production scan telemetry is intentionally unchanged: these hooks exist only inside the benchmark process, avoiding measurement instrumentation overhead during normal C-GULL use.
 
@@ -66,5 +70,5 @@ For an optimization PR:
 1. Run the standard command on the unmodified base revision and save the JSON artifact.
 2. Run the same command on the candidate revision on the same host and Python version.
 3. Confirm workload hashes and semantic parity match.
-4. Compare `median_wall_seconds`, throughput, and the relevant phase/activity fields.
+4. Compare `median_wall_seconds`, throughput, expanded analysis volume, and the relevant phase/activity fields.
 5. Attach both JSON artifacts to the PR. Avoid claiming a regression/improvement from runs with different workload hashes, Python versions, or machines.
