@@ -475,11 +475,14 @@ class DeadStoresRule(BaseRule):
     analysis_engine = AnalysisEngine.AST
 
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        if not (getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None):
+            from .dead_stores import DeadStoresRule as LexicalDeadStoresRule
+            return LexicalDeadStoresRule().scan_ast(file_path, ast_ctx)
+
         issues = []
         from ..cfg import build_cfg, find_function_def
         from .dead_store_initializers import (
             pure_declaration_coordinates, suppress_cfg_initializer,
-            suppress_lexical_initializer,
         )
 
         summaries = None
@@ -561,47 +564,6 @@ class DeadStoresRule(BaseRule):
                                 engine="AST",
                                 fix_type=FixType.SAFE_FIX if snippet.endswith(";") else FixType.MANUAL_REVIEW,
                             ))
-            else:
-                # Fallback AST/lexical check when pycparser is not used
-                for v_name, c_var in local_vars.items():
-                    # If variable was declared but never read at all, skip if UnusedLocalVariablesRule (CGULL-041) will flag it,
-                    # UNLESS it is assigned multiple times or written but never read.
-                    if not c_var.read_lines:
-                        # If assigned_lines is non-empty, every assignment is a dead store
-                        for line_no in c_var.assigned_lines:
-                            if suppress_lexical_initializer(ast_ctx, c_var, line_no):
-                                continue
-                            snippet = ast_ctx.source_lines[line_no - 1].strip() if 1 <= line_no <= len(ast_ctx.source_lines) else f"{v_name} = ...;"
-                            issues.append(self.create_issue(
-                                file_path=file_path,
-                                line_number=line_no,
-                                code_snippet=snippet,
-                                message=f"Value assigned to local variable '{v_name}' in '{fn.name}' is never read before reassignment or scope exit (dead store, CWE-563).",
-                                column_number=1,
-                                engine="AST",
-                                fix_type=FixType.SAFE_FIX if snippet.endswith(";") else FixType.MANUAL_REVIEW,
-                            ))
-                    else:
-                        # Check ordered assigned_lines and read_lines
-                        all_reads = sorted(c_var.read_lines)
-                        all_writes = sorted(c_var.assigned_lines)
-                        for i, w_line in enumerate(all_writes):
-                            next_w_line = all_writes[i + 1] if i + 1 < len(all_writes) else float('inf')
-                            # Is there a read between w_line and next_w_line?
-                            has_read = any(w_line <= r_line < next_w_line for r_line in all_reads)
-                            if not has_read:
-                                if suppress_lexical_initializer(ast_ctx, c_var, w_line):
-                                    continue
-                                snippet = ast_ctx.source_lines[w_line - 1].strip() if 1 <= w_line <= len(ast_ctx.source_lines) else f"{v_name} = ...;"
-                                issues.append(self.create_issue(
-                                    file_path=file_path,
-                                    line_number=w_line,
-                                    code_snippet=snippet,
-                                    message=f"Value assigned to local variable '{v_name}' in '{fn.name}' is never read before reassignment or scope exit (dead store, CWE-563).",
-                                    column_number=1,
-                                    engine="AST",
-                                    fix_type=FixType.SAFE_FIX if snippet.endswith(";") else FixType.MANUAL_REVIEW,
-                                ))
 
         return issues
 

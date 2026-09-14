@@ -205,6 +205,7 @@ class CASTParser(_LegacyCASTParser):
                 has_void_param_list=has_void_param,
                 is_empty_param_list=is_empty_params,
                 body_start_line=body_start_line,
+                body_start_line_exp=line_at(body_start_pos),
                 start_line_exp=start_line_exp,
                 end_line_exp=end_line_exp,
             )

@@ -80,6 +80,9 @@ class CVariable:
     enclosing_block_id: int = 0
     address_taken: bool = False
     address_taken_lines: List[int] = field(default_factory=list)
+    declaration_line_exp: int = 0
+    assigned_lines_exp: List[int] = field(default_factory=list)
+    read_lines_exp: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -124,6 +127,7 @@ class CFunction:
     has_assertions: bool = False
     cfg_nodes: List[CFGNode] = field(default_factory=list)
     body_start_line: int = 0
+    body_start_line_exp: int = 0
     start_line_exp: int = 0
     end_line_exp: int = 0
 

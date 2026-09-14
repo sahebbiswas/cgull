@@ -90,13 +90,11 @@ def suppress_lexical_initializer(context, variable, line):
     # The metadata establishes declaration identity; parsing establishes purity.
     text = "\n".join(lines[line - 1:])
     match = re.search(
-        r"\b" + re.escape(variable.name) + r"\s*=\s*(.*?);",
+        r"\b" + re.escape(variable.name) + r"\s*(?:\[[^;]*?\]\s*)?=\s*(.*?);",
         text,
         re.DOTALL,
     )
     if match is None:
-        return False
-    if "\n" in text[:match.start()]:
         return False
 
     # assigned_lines is line-based and can collapse multiple writes on one line.

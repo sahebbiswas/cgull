@@ -347,6 +347,8 @@ class Issue:
     reachable_under: List[str] = field(default_factory=list)
     # List of translation units (files) that contributed this issue (for header deduplication)
     related_tus: List[str] = field(default_factory=list)
+    # Internal input coordinate, consumed before TU serialization/fingerprinting.
+    expanded_end_line: Optional[int] = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> Dict[str, Any]:
         conf_val = self.confidence.value if isinstance(self.confidence, Confidence) else (str(self.confidence) if self.confidence else None)
