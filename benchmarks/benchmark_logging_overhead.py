@@ -298,7 +298,8 @@ def _cycle_order(rng: random.Random) -> list[Arm]:
 
 
 def _validate_semantics(samples: Iterable[Sample]) -> int:
-    line_counts = {sample.analyzed_lines for sample in samples}
+    materialized = list(samples)
+    line_counts = {sample.analyzed_lines for sample in materialized}
     if len(line_counts) != 1:
         raise RuntimeError(
             "benchmark arms did not analyze identical volume: "
@@ -307,6 +308,18 @@ def _validate_semantics(samples: Iterable[Sample]) -> int:
     analyzed_lines = next(iter(line_counts))
     if analyzed_lines <= 0:
         raise RuntimeError("benchmark produced no analyzed lines")
+
+    for sample in materialized:
+        if sample.arm == "no_capture" and sample.capture_files != 0:
+            raise RuntimeError(
+                "no_capture unexpectedly produced automatic capture files: "
+                f"repetition={sample.repetition}, capture_files={sample.capture_files}"
+            )
+        if sample.arm in {"default_capture", "trace_capture"} and sample.capture_files <= 0:
+            raise RuntimeError(
+                f"{sample.arm} produced no automatic capture files: "
+                f"repetition={sample.repetition}"
+            )
     return analyzed_lines
 
 

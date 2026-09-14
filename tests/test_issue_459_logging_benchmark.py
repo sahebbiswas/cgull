@@ -23,7 +23,11 @@ def sample(
     wall: float,
     *,
     analyzed_lines: int = 10000,
+    capture_files: int | None = None,
+    capture_bytes: int | None = None,
 ):
+    expected_capture_files = 0 if arm == "no_capture" else 1
+    expected_capture_bytes = 0 if arm == "no_capture" else 123
     return benchmark.Sample(
         arm=arm,
         repetition=repetition,
@@ -32,8 +36,12 @@ def sample(
         analysis_elapsed_seconds=analysis,
         wall_elapsed_seconds=wall,
         analyzed_lines=analyzed_lines,
-        capture_files=0 if arm == "no_capture" else 1,
-        capture_bytes=0 if arm == "no_capture" else 123,
+        capture_files=(
+            expected_capture_files if capture_files is None else capture_files
+        ),
+        capture_bytes=(
+            expected_capture_bytes if capture_bytes is None else capture_bytes
+        ),
     )
 
 
@@ -85,6 +93,44 @@ def test_summary_rejects_different_analysis_volume_between_arms():
     ]
 
     with pytest.raises(RuntimeError, match="identical volume"):
+        benchmark.summarize(samples, threshold_pct=2.0)
+
+
+def test_summary_rejects_capture_arm_without_log_file():
+    samples = [
+        sample("no_capture", 0, 100.0, 1.0, 1.0),
+        sample(
+            "default_capture",
+            0,
+            99.0,
+            1.0,
+            1.0,
+            capture_files=0,
+            capture_bytes=0,
+        ),
+        sample("trace_capture", 0, 90.0, 1.0, 1.0),
+    ]
+
+    with pytest.raises(RuntimeError, match="default_capture produced no automatic capture"):
+        benchmark.summarize(samples, threshold_pct=2.0)
+
+
+def test_summary_rejects_no_capture_arm_with_log_file():
+    samples = [
+        sample(
+            "no_capture",
+            0,
+            100.0,
+            1.0,
+            1.0,
+            capture_files=1,
+            capture_bytes=123,
+        ),
+        sample("default_capture", 0, 99.0, 1.0, 1.0),
+        sample("trace_capture", 0, 90.0, 1.0, 1.0),
+    ]
+
+    with pytest.raises(RuntimeError, match="no_capture unexpectedly produced"):
         benchmark.summarize(samples, threshold_pct=2.0)
 
 

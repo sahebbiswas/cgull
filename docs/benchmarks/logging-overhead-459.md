@@ -31,7 +31,7 @@ Every cycle scans the same isolated corpus copy with the same Python interpreter
 | `default_capture` | none | default WARNING+ automatic JSONL capture |
 | `trace_capture` | `-vvv` | TRACE+ automatic JSONL capture |
 
-The harness validates that all measured samples report the same `analyzed_lines`. A mismatch aborts the benchmark instead of comparing runs with different analysis work.
+The harness validates that all measured samples report the same `analyzed_lines`. It also requires `no_capture` to produce no automatic capture file and both capture-enabled arms to produce at least one `scan-*.log` file. A mismatch aborts the benchmark instead of comparing runs with different analysis work or silently measuring a misconfigured capture path.
 
 ## Noise and retention controls
 
@@ -60,4 +60,14 @@ The JSON artifact records platform, Python version, C-GULL revision, jobs, scan 
 
 ## Representative result
 
-The representative parallel measurement for the implementation commit is stored in `docs/benchmarks/logging-overhead-459.json`. Treat it as an informational point-in-time observation, not a universal golden number. Re-run the command above on the intended release/reference hardware before making a release decision from a narrow margin around 2%.
+The checked-in reference artifact is `docs/benchmarks/logging-overhead-459.json`. It was produced on a GitHub-hosted Linux runner on 2026-09-14 using Python 3.12.14, `--jobs 2`, file mode, one warm-up cycle, and five measured repetitions per arm. All arms analyzed 984 lines in every measured sample.
+
+| Arm | Median throughput | Median analysis time | Median wall time | Regression vs `no_capture` |
+| --- | ---: | ---: | ---: | ---: |
+| `no_capture` | 0.112055 KLOC/s | 8.781 s | 9.009 s | baseline |
+| `default_capture` | 0.112479 KLOC/s | 8.748 s | 8.982 s | **-0.38% — PASS** |
+| `trace_capture` | 0.009239 KLOC/s | 106.504 s | 106.837 s | +91.75% (informational) |
+
+The default WARNING+ arm therefore meets the strict `<2%` target on this reference run. The small negative regression is best interpreted as **no measurable default-capture slowdown on this hosted runner**, not as evidence that logging improves performance. The default arm created one capture file per run but wrote no WARNING+ records for this corpus slice; TRACE created one capture file of 153,747,337 bytes per run.
+
+TRACE overhead is intentionally reported separately because it is opt-in and exercises high-volume diagnostic capture. The reference result is a point-in-time observation, not a universal golden number; re-run the benchmark on intended release/reference hardware before making a release decision from a narrow margin around 2%.
