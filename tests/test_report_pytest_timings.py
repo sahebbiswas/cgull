@@ -1,13 +1,28 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
-from scripts.report_pytest_timings import main
+
+SCRIPT = Path(__file__).parents[1] / "scripts" / "report_pytest_timings.py"
 
 
-def test_report_orders_cases_and_limits_notices(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
+def run_report(
+    *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        cwd=SCRIPT.parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_report_orders_cases_and_limits_notices(tmp_path: Path) -> None:
     junit = tmp_path / "pytest-junit.xml"
     junit.write_text(
         """<?xml version="1.0" encoding="utf-8"?>
@@ -22,11 +37,13 @@ def test_report_orders_cases_and_limits_notices(
         encoding="utf-8",
     )
     summary = tmp_path / "summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    env = os.environ.copy()
+    env["GITHUB_STEP_SUMMARY"] = str(summary)
 
-    assert main([str(junit), "--top", "2", "--notices", "1"]) == 0
+    result = run_report(str(junit), "--top", "2", "--notices", "1", env=env)
 
-    output = capsys.readouterr().out
+    assert result.returncode == 0
+    output = result.stdout
     assert output.index("tests.test_slow::test_slow") < output.index(
         "tests.test_mid::test_mid"
     )
@@ -40,9 +57,8 @@ def test_report_orders_cases_and_limits_notices(
     assert "tests.test_fast::test_fast" not in summary_text
 
 
-def test_report_missing_junit_is_nonfatal(tmp_path: Path, capsys) -> None:
-    missing = tmp_path / "missing.xml"
+def test_report_missing_junit_is_nonfatal(tmp_path: Path) -> None:
+    result = run_report(str(tmp_path / "missing.xml"))
 
-    assert main([str(missing)]) == 0
-
-    assert "Timing report not available" in capsys.readouterr().out
+    assert result.returncode == 0
+    assert "Timing report not available" in result.stdout
