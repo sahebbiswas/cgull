@@ -85,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explicit unresolved-`goto` CFG events and structured diagnostics so missing labels no longer silently terminate analysis paths; affected downstream facts degrade conservatively (#363).
 
 ### Changed
-- Refactored CFG implementation into functionally cohesive units for AST event extraction, graph topology, lattice domains, and legacy dataflow while preserving established compatibility imports and behavior (#393).
+- Refactored CFG implementation into functionally cohesive modules for AST event extraction, graph topology, lattice domains, and legacy dataflow while preserving established compatibility imports and behavior (#393).
 - Interprocedural consumers now use resolved possible callees for indirect calls so lifetime, dereference-safety, validator, and related summaries participate after function-pointer resolution (#366).
 
 ## [0.10.8] - 2026-09-08
