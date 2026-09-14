@@ -253,8 +253,19 @@ def _expr_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) 
     return None
 
 
-def _condition_truth(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) -> Optional[bool]:
+def _condition_reads_unstable_storage(node, unstable_names) -> bool:
+    """Whether a predicate reads storage whose value cannot be assumed stable."""
+    if node is None:
+        return False
+    if type(node).__name__ == "ID" and str(node.name) in unstable_names:
+        return True
+    return any(_condition_reads_unstable_storage(child, unstable_names) for _, child in node.children())
+
+
+def _condition_truth(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None, unstable_names=()) -> Optional[bool]:
     """Return a branch truth value only when the current range state proves it."""
+    if _condition_reads_unstable_storage(node, unstable_names):
+        return None
     value = _expr_range(node, state, ast_ctx, fn)
     if value is None or not value.is_singleton:
         return None
@@ -443,9 +454,18 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
 
     # Once an address escapes, a call or indirect write can invalidate its fact.
     exposed = set(getattr(ast_ctx, "global_variables", {}))
+    unstable_conditions = set(exposed)
+    for name, variable in getattr(fn, "variables", {}).items():
+        if getattr(variable, "is_volatile", False):
+            unstable_conditions.add(str(name))
+    for parameter in getattr(fn, "parameters", ()):
+        if re.search(r"\bvolatile\b", getattr(parameter, "type_name", "")):
+            unstable_conditions.add(str(parameter.name))
     for node in _descendants(funcdef):
         if type(node).__name__ == "UnaryOp" and node.op == "&" and _name(node.expr):
             exposed.add(_name(node.expr))
+        if type(node).__name__ == "Decl" and getattr(node, "name", None) and "static" in (getattr(node, "storage", ()) or ()):
+            unstable_conditions.add(str(node.name))
 
     incoming: Dict[int, Dict[str, IntegerRange]] = {cfg.entry: {}}
     facts_before: Dict[int, Dict[str, IntegerRange]] = {}
@@ -459,7 +479,11 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
         event = cfg.nodes[node_id]
         outgoing = _transfer(event, state, ast_ctx, fn, exposed)
         condition = _condition(event)
-        proven_truth = _condition_truth(condition, outgoing, ast_ctx, fn) if condition is not None else None
+        proven_truth = (
+            _condition_truth(condition, outgoing, ast_ctx, fn, unstable_conditions)
+            if condition is not None
+            else None
+        )
         for index, successor in enumerate(event.successors):
             branch_truth = index == 0
             if condition is not None and index < 2 and proven_truth is not None and branch_truth != proven_truth:
