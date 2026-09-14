@@ -22,6 +22,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | --- | --- |
 | Release versioning, changelog, GitHub Release, and PyPI checklist | [Releasing C-GULL](releasing.md) |
 | Repository architecture, adding rules, extending semantic models, tests, and benchmarks | [Repository extension](repository-extension.md) |
+| CI runtime baseline, slow-test profiling, and Windows/Python 3.11 investigation | [CI runtime profiling](ci-runtime.md) |
 | Successful chroot paths and working-directory repair | [CGULL-039 path analysis](analysis/chroot-paths.md) |
 | Cross-file summaries, linkage, configuration isolation, and limitations | [Project-level direct-call summaries](analysis/project-summaries.md) |
 | Interprocedural architecture | [Interprocedural analysis](interprocedural-analysis.md) |
