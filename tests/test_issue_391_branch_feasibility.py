@@ -77,6 +77,20 @@ void f(void) {
 """) == ["CWE-195"]
 
 
+def test_unmodeled_constant_arithmetic_cannot_prune_a_branch():
+    # UINT_MAX + 1U wraps to zero for the modeled unsigned-int width. Until
+    # branch arithmetic models that conversion itself, keep both CFG edges.
+    assert _cwes("""
+void f(void) {
+    int n = -1;
+    if (UINT_MAX + 1U) {
+        n = 99;
+    }
+    malloc(n);
+}
+""") == ["CWE-195"]
+
+
 def test_tracked_local_constant_can_prove_branch_truth():
     assert _cwes("""
 void f(void) {
