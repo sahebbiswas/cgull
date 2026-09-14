@@ -490,7 +490,14 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
                 continue
             edge_state = dict(outgoing)
             if condition is not None and index < 2:
-                edge_state = _apply(edge_state, _constraints(condition, branch_truth, ast_ctx, fn), ast_ctx, fn)
+                constraints = _constraints(condition, branch_truth, ast_ctx, fn)
+                if unstable_conditions:
+                    constraints = {
+                        name: interval
+                        for name, interval in constraints.items()
+                        if name not in unstable_conditions
+                    }
+                edge_state = _apply(edge_state, constraints, ast_ctx, fn)
             if edge_state is None:
                 continue
             prior = incoming.get(successor)
