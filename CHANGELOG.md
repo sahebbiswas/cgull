@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.23] - 2026-09-14
+
+### Fixed
+- Parse regex-fallback function definitions with balanced declarator boundaries so nested function-pointer parameters, multiline pointer returns, and supported attributes retain correct function ranges, parameters, and source coordinates without misclassifying prototypes or calls (#443).
+
 ## [0.11.22] - 2026-09-14
 
 ### Fixed
