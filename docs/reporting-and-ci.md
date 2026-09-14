@@ -88,6 +88,18 @@ cgull scan . -j 0
 
 For reproducible performance measurements, use an explicit worker count and keep the analyzed configuration space stable.
 
+## Diagnostic logging
+
+C-GULL automatically records project-local structured diagnostics without polluting `stdout`:
+
+- Default capture location: `<project-state-root>/.cgull/logs/scan-<UTC timestamp>-<pid>.log` (JSONL format, auto-pruned to 20 runs).
+- Default verbosity threshold: `WARNING` and `ERROR` records only.
+- Opt into detail using `-v` (`INFO`), `-vv` (`DEBUG`), `-vvv` (`TRACE`), or `--log-level {error,warning,info,debug,trace}`.
+- Detailed `DEBUG` and `TRACE` records are recorded only when explicitly requested during the original scan run.
+- Use `--no-log` to disable automatic JSONL capture for privacy or disk-policy compliance.
+- `--log-file PATH` writes an additive human-readable text log at `PATH` at the same selected verbosity level. Combined with `--no-log`, only `PATH` is written.
+- Parallel worker processes (`-j N`) forward log records to a coordinator-owned transport so parallel scans produce one valid JSONL stream without interleaving.
+
 ## Recommended CI progression
 
 A practical adoption sequence is:

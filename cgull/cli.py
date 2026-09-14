@@ -407,7 +407,7 @@ def _command_after_global_options(argv: List[str]) -> Optional[str]:
         if token.startswith("--log-level=") or token.startswith("--log-file="):
             index += 1
             continue
-        if token == "--verbose" or (token.startswith("-") and len(token) > 1 and set(token[1:]) == {"v"}):
+        if token in ("--no-log", "--verbose") or (token.startswith("-") and len(token) > 1 and set(token[1:]) == {"v"}):
             index += 1
             continue
         if token.startswith("-"):
@@ -466,6 +466,7 @@ def _configure_logging_for_args(args) -> int:
             verbose_count=getattr(args, "verbose", 0) or 0,
             log_level_str=getattr(args, "log_level", None),
             log_file=getattr(args, "log_file", None),
+            no_log=getattr(args, "no_log", False),
             project_state_root=project_state_root,
             retention_runs=retention_runs,
         )

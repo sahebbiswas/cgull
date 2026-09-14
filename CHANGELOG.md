@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.23] - 2026-09-14
+
+### Added
+- Add `--no-log` CLI option to disable automatic project-local JSONL log capture (#456, #470).
+- Implement coordinator-owned multiprocessing logging queue and worker forwarding for parallel scans (`jobs > 1`) (#457).
+- Add context field bounding (`_MAX_FIELD_LEN = 1000`) and safe control character escaping in `JSONLFormatter` (#458).
+
 ## [0.11.22] - 2026-09-14
 
 ### Fixed

@@ -67,6 +67,7 @@ Suppressing findings inline:
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase output verbosity (-v for INFO, -vv for DEBUG, -vvv for TRACE)")
     parser.add_argument("--log-level", choices=["error", "warning", "info", "debug", "trace"], default=None, help="Set logging verbosity level")
     parser.add_argument("--log-file", metavar="PATH", help="Write diagnostic log messages to file")
+    parser.add_argument("--no-log", action="store_true", help="Disable automatic project-local diagnostic log capture")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -75,6 +76,7 @@ Suppressing findings inline:
     scan_parser.add_argument("-v", "--verbose", action="count", default=argparse.SUPPRESS, help="Increase output verbosity (-v for INFO, -vv for DEBUG, -vvv for TRACE)")
     scan_parser.add_argument("--log-level", choices=["error", "warning", "info", "debug", "trace"], default=argparse.SUPPRESS, help="Set logging verbosity level")
     scan_parser.add_argument("--log-file", metavar="PATH", default=argparse.SUPPRESS, help="Write diagnostic log messages to file")
+    scan_parser.add_argument("--no-log", action="store_true", default=argparse.SUPPRESS, help="Disable automatic project-local diagnostic log capture")
     scan_parser.add_argument("target", nargs="*", default=["."], help="Target file(s) or directory to scan (default: current directory)")
     scan_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
     scan_parser.add_argument("-o", "--output", help="Path to write the report file (defaults to stdout)")
@@ -562,8 +564,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         verbose_cnt = getattr(args, "verbose", 0) or 0
         log_lvl = getattr(args, "log_level", None)
         log_fl = getattr(args, "log_file", None)
+        no_log = getattr(args, "no_log", False)
         try:
-            configure_logging(verbose_count=verbose_cnt, log_level_str=log_lvl, log_file=log_fl)
+            configure_logging(verbose_count=verbose_cnt, log_level_str=log_lvl, log_file=log_fl, no_log=no_log)
         except OSError as e:
             print(f"Error configuring logging: {e}", file=sys.stderr)
             return 1

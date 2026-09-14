@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union, Any
 from pathlib import Path
 
+from .logging_config import multiprocessing_logging_context
 from .parse_diagnostics import map_attempts, report_attempts, format_attempts
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile, ScanMode
 from .ignore import CGullIgnoreFilter
@@ -606,57 +607,67 @@ class CGullScanner:
         completed_count = 0
         pool = ProcessPoolExecutor(max_workers=jobs)
         futures = {}
-        try:
-            futures = {
-                pool.submit(_scan_file_worker, file_path, self._prepared_config_for_file(config, file_path), profiles, quiet, progress_active): file_path
-                for file_path in files_to_scan
-            }
-            for future in as_completed(futures):
-                file_path = futures[future]
-                completed_count += 1
-                try:
-                    file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts = future.result()
-                    results.append((file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts))
-                except Exception as e:
-                    scan_err = ScanError(
-                        file_path=file_path,
-                        error_type=type(e).__name__,
-                        message=str(e) or f"Worker execution failed for {file_path}",
-                    )
-                    _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
-                    results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err, []))
-                if progress_callback:
-                    progress_callback(completed_count, total_files, file_path)
-            pool.shutdown(wait=True)
-        except BaseException:
-            procs = list((getattr(pool, "_processes", {}) or {}).values())
-            for future in futures:
-                future.cancel()
-            for p in procs:
-                if p and p.is_alive():
-                    p.terminate()
+        with multiprocessing_logging_context() as (log_queue, effective_log_level):
+            try:
+                futures = {
+                    pool.submit(
+                        _scan_file_worker,
+                        file_path,
+                        self._prepared_config_for_file(config, file_path),
+                        profiles,
+                        quiet,
+                        progress_active,
+                        log_queue,
+                        effective_log_level,
+                    ): file_path
+                    for file_path in files_to_scan
+                }
+                for future in as_completed(futures):
+                    file_path = futures[future]
+                    completed_count += 1
+                    try:
+                        file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts = future.result()
+                        results.append((file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts))
+                    except Exception as e:
+                        scan_err = ScanError(
+                            file_path=file_path,
+                            error_type=type(e).__name__,
+                            message=str(e) or f"Worker execution failed for {file_path}",
+                        )
+                        _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
+                        results.append((file_path, [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err, []))
+                    if progress_callback:
+                        progress_callback(completed_count, total_files, file_path)
+                pool.shutdown(wait=True)
+            except BaseException:
+                procs = list((getattr(pool, "_processes", {}) or {}).values())
+                for future in futures:
+                    future.cancel()
+                for p in procs:
+                    if p and p.is_alive():
+                        p.terminate()
 
-            # Reap terminated children so Windows does not retain worker
-            # handles or a queue-management thread until interpreter exit.
-            join_deadline = time.monotonic() + 1.0
-            for p in procs:
-                if p:
-                    p.join(timeout=max(0.0, join_deadline - time.monotonic()))
+                # Reap terminated children so Windows does not retain worker
+                # handles or a queue-management thread until interpreter exit.
+                join_deadline = time.monotonic() + 1.0
+                for p in procs:
+                    if p:
+                        p.join(timeout=max(0.0, join_deadline - time.monotonic()))
 
-            # terminate() should be sufficient, but use kill() where available
-            # for a worker that did not exit within the bounded grace period.
-            for p in procs:
-                if p and p.is_alive() and hasattr(p, "kill"):
-                    p.kill()
-            for p in procs:
-                if p and p.is_alive():
-                    p.join(timeout=0.5)
+                # terminate() should be sufficient, but use kill() where available
+                # for a worker that did not exit within the bounded grace period.
+                for p in procs:
+                    if p and p.is_alive() and hasattr(p, "kill"):
+                        p.kill()
+                for p in procs:
+                    if p and p.is_alive():
+                        p.join(timeout=0.5)
 
-            # Join the executor manager thread after its workers have been
-            # reaped. shutdown(wait=False) leaves that non-daemon thread alive
-            # on Windows/Python 3.10 and prevents the interpreter from exiting.
-            pool.shutdown(wait=True, cancel_futures=True)
-            raise
+                # Join the executor manager thread after its workers have been
+                # reaped. shutdown(wait=False) leaves that non-daemon thread alive
+                # on Windows/Python 3.10 and prevents the interpreter from exiting.
+                pool.shutdown(wait=True, cancel_futures=True)
+                raise
         return results
 
     def scan_text(
@@ -1186,22 +1197,49 @@ def _scan_file_worker(
     profiles: Optional[List[ConfigProfile]] = None,
     quiet: bool = False,
     progress_active: bool = False,
+    log_queue: Optional[Any] = None,
+    log_level: Optional[int] = None,
 ) -> Tuple[List[Issue], int, float, str, str, str, str, Optional[ScanError], List[Dict[str, Any]]]:
     """
     Entry point run in a separate process by ProcessPoolExecutor. Rebuilds
     the rules and configuration from the provided ScanConfig.
     """
-    if isinstance(config, AnalysisEngine):
-        config = ScanConfig.create(engine_mode=config)
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    original_level = root_logger.level
+
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
+
+    if log_level is not None:
+        root_logger.setLevel(log_level)
+
+    qh = None
+    if log_queue is not None:
+        from logging.handlers import QueueHandler
+        qh = QueueHandler(log_queue)
+        qh.setLevel(log_level if log_level is not None else root_logger.level)
+        root_logger.addHandler(qh)
+
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-    except Exception as e:
-        scan_err = ScanError(
-            file_path=file_path,
-            error_type=type(e).__name__,
-            message=str(e) or f"Failed to read file: {file_path}",
-        )
-        _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
-        return [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err, []
-    return _scan_file_content_profiles(content, file_path, profiles=profiles, config=config, quiet=quiet, progress_active=progress_active)
+        if isinstance(config, AnalysisEngine):
+            config = ScanConfig.create(engine_mode=config)
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            scan_err = ScanError(
+                file_path=file_path,
+                error_type=type(e).__name__,
+                message=str(e) or f"Failed to read file: {file_path}",
+            )
+            _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
+            return [], 0, 0.0, ParserStatus.PARSE_FAILED.value, ParseTier.REGEX_FALLBACK.value, "failed", Confidence.LIMITED.value, scan_err, []
+        return _scan_file_content_profiles(content, file_path, profiles=profiles, config=config, quiet=quiet, progress_active=progress_active)
+    finally:
+        if qh is not None:
+            root_logger.removeHandler(qh)
+        for h in original_handlers:
+            if h not in root_logger.handlers:
+                root_logger.addHandler(h)
+        root_logger.setLevel(original_level)

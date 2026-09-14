@@ -10,7 +10,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .project_state import DEFAULT_LOG_RETENTION_RUNS
 
@@ -96,6 +96,21 @@ class JSONLFormatter(logging.Formatter):
     """Render one structured, parseable JSON object per log record."""
 
     _CONTEXT_FIELDS = ("cgull_phase", "cgull_file", "cgull_rule")
+    _MAX_FIELD_LEN = 1000
+
+    def _bound_value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            if len(value) > self._MAX_FIELD_LEN:
+                return value[: self._MAX_FIELD_LEN] + "... [truncated]"
+            return value
+        try:
+            json.dumps(value, allow_nan=False)
+            return value
+        except (TypeError, ValueError):
+            s_val = str(value)
+            if len(s_val) > self._MAX_FIELD_LEN:
+                return s_val[: self._MAX_FIELD_LEN] + "... [truncated]"
+            return s_val
 
     def format(self, record: logging.LogRecord) -> str:
         try:
@@ -112,12 +127,7 @@ class JSONLFormatter(logging.Formatter):
             }
             for field in self._CONTEXT_FIELDS:
                 if hasattr(record, field):
-                    value = getattr(record, field)
-                    try:
-                        json.dumps(value, allow_nan=False)
-                    except (TypeError, ValueError):
-                        value = str(value)
-                    payload[field] = value
+                    payload[field] = self._bound_value(getattr(record, field))
             if record.exc_info:
                 payload["exception"] = self.formatException(record.exc_info)
             return json.dumps(payload, ensure_ascii=False, allow_nan=False)
@@ -315,6 +325,7 @@ def configure_logging(
     log_level_str: Optional[str] = None,
     log_file: Optional[str] = None,
     capture_file: Optional[str] = None,
+    no_log: bool = False,
     project_state_root: Optional[str] = None,
     retention_runs: Optional[int] = None,
 ) -> None:
@@ -356,7 +367,7 @@ def configure_logging(
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
 
-    auto_capture = capture_file is None
+    auto_capture = capture_file is None and not no_log
     warning_emitted = False
 
     if auto_capture:
@@ -394,27 +405,69 @@ def configure_logging(
             capture_path = log_dir / f"scan-{stamp}-{os.getpid()}.log"
         capture_file = str(capture_path)
 
-    try:
-        capture_path = Path(capture_file)
-        capture_path.parent.mkdir(parents=True, exist_ok=True)
-        capture_handler = logging.FileHandler(
-            capture_path,
-            mode="x" if auto_capture else "a",
-            encoding="utf-8",
-        )
-        capture_handler.setLevel(level)
-        capture_handler.setFormatter(JSONLFormatter())
-        root_logger.addHandler(capture_handler)
-    except (OSError, ValueError) as exc:
-        # Report through the already-configured display handler, never through a
-        # partially initialized capture handler. Suppress a second setup warning
-        # if retention already failed during this same bootstrap.
-        if not warning_emitted:
-            _display_logging_warning(
-                stderr_handler,
-                "Unable to create diagnostic capture log %s: %s",
-                (capture_file, exc),
+    if capture_file:
+        try:
+            capture_path = Path(capture_file)
+            capture_path.parent.mkdir(parents=True, exist_ok=True)
+            capture_handler = logging.FileHandler(
+                capture_path,
+                mode="x" if auto_capture else "a",
+                encoding="utf-8",
             )
+            capture_handler.setLevel(level)
+            capture_handler.setFormatter(JSONLFormatter())
+            root_logger.addHandler(capture_handler)
+        except (OSError, ValueError) as exc:
+            # Report through the already-configured display handler, never through a
+            # partially initialized capture handler. Suppress a second setup warning
+            # if retention already failed during this same bootstrap.
+            if not warning_emitted:
+                _display_logging_warning(
+                    stderr_handler,
+                    "Unable to create diagnostic capture log %s: %s",
+                    (capture_file, exc),
+                )
+
+
+import contextlib
+from logging.handlers import QueueListener
+import multiprocessing
+
+
+@contextlib.contextmanager
+def multiprocessing_logging_context():
+    """
+    Coordinator-owned multiprocessing logging queue context manager.
+    Forwards worker process log records to coordinator logger handlers.
+    """
+    manager = None
+    listener = None
+    log_queue = None
+    effective_level = logging.getLogger().getEffectiveLevel()
+    handlers = list(logging.getLogger().handlers)
+    if handlers:
+        try:
+            manager = multiprocessing.Manager()
+            log_queue = manager.Queue()
+            listener = QueueListener(log_queue, *handlers, respect_handler_level=True)
+            listener.start()
+        except Exception:
+            manager = None
+            listener = None
+            log_queue = None
+    try:
+        yield log_queue, effective_level
+    finally:
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:
+                pass
+        if manager is not None:
+            try:
+                manager.shutdown()
+            except Exception:
+                pass
 
 
 def teardown_cli_logging() -> None:
