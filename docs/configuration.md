@@ -44,6 +44,9 @@ default_format = "sarif"
 fail_on = "high"
 warn_on_fallback = true
 
+[logging]
+retention_runs = 20
+
 [semantic_models]
 # Project-specific source, validator, sink, ownership, or effect models.
 # See trust-boundary-semantic-models.md for the model schema.
@@ -196,6 +199,17 @@ warn_on_fallback = true
 `default_format` accepts `text`, `json`, `sarif`, or `markdown`. `fail_on` accepts `high`, `medium`, `low`, or `all`. `warn_on_fallback` accepts a TOML boolean; compatible `1/0` and common true/false strings are also parsed by the loader.
 
 Use output policy for stable repository defaults and CLI switches for one-off overrides.
+
+## Diagnostic logging retention
+
+Automatic diagnostic capture retains 20 C-GULL-owned runs by default. Configure a different positive run count with the exact key:
+
+```toml
+[logging]
+retention_runs = 20
+```
+
+`retention_runs` controls only automatic JSONL capture retention. It does not manage an explicit `--log-file PATH`. Logging verbosity is intentionally selected per invocation with `-v`/`-vv`/`-vvv` or `--log-level`; `cgull init` does not persist a verbosity setting. See [Diagnostic logging](logging.md) for location, pruning, privacy, and opt-out semantics.
 
 ## Semantic models
 

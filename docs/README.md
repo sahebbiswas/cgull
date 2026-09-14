@@ -12,6 +12,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | Per-translation-unit build include context from `compile_commands.json` | [Compilation database build context](compile-database.md) |
 | Engines, file/TU modes, preprocessing, configuration profiles, and fallback behavior | [Analysis model](analysis-model.md) |
 | Text, JSON, Markdown, SARIF, baselines, exit policy, and safe fixes | [Reporting and CI](reporting-and-ci.md) |
+| Automatic diagnostic capture, verbosity, retention, privacy, and `--log-file` | [Diagnostic logging](logging.md) |
 | pre-commit and GitHub Actions adoption | [Development integration](development-integration.md) |
 | Rule inventory and identifiers | [Rule reference](rules.md) |
 | Embedded-focused defaults and semantic trust boundaries | [Embedded security profile](embedded-security-profile.md) |

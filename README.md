@@ -134,6 +134,7 @@ The [documentation knowledgebase](https://github.com/sahebbiswas/cgull/blob/main
 - [Project files and suppressions](https://github.com/sahebbiswas/cgull/blob/main/docs/project-files.md) — canonical project configuration, legacy migration, baselines, include boundaries, and inline suppression.
 - [Analysis model](https://github.com/sahebbiswas/cgull/blob/main/docs/analysis-model.md) — engines, TU mode, parser tiers, configuration profiles, and interprocedural analysis.
 - [Reporting and CI](https://github.com/sahebbiswas/cgull/blob/main/docs/reporting-and-ci.md) — report formats, failure policy, baselines, fixes, and CI adoption.
+- [Diagnostic logging](https://github.com/sahebbiswas/cgull/blob/main/docs/logging.md) — automatic local JSONL capture, verbosity, retention, privacy, and `--log-file` coexistence.
 - [Development integration](https://github.com/sahebbiswas/cgull/blob/main/docs/development-integration.md) — pre-commit, GitHub Actions, SARIF, and build-aware integration.
 - [Rule reference](https://github.com/sahebbiswas/cgull/blob/main/docs/rules.md) — rule catalog conventions and configuration by stable rule ID.
 - [Repository extension](https://github.com/sahebbiswas/cgull/blob/main/docs/repository-extension.md) — architecture and guidance for contributors extending C-GULL.

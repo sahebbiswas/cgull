@@ -15,6 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 from .config import find_config_file
 from .models import Severity
+from .project_state import DEFAULT_LOG_RETENTION_RUNS
 from .rules import get_all_rules
 
 
@@ -241,6 +242,9 @@ def _render_config(
             "[output]",
             'default_format = "text"',
             "warn_on_fallback = false",
+            "",
+            "[logging]",
+            f"retention_runs = {DEFAULT_LOG_RETENTION_RUNS}",
             "",
         ]
     )

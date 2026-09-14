@@ -90,15 +90,18 @@ For reproducible performance measurements, use an explicit worker count and keep
 
 ## Diagnostic logging
 
-C-GULL automatically records project-local structured diagnostics without polluting `stdout`:
+C-GULL automatically records project-local structured diagnostics without polluting `stdout`. See [Diagnostic logging](logging.md) for the complete capture, retention, privacy, and migration contract.
 
 - Default capture location: `<project-state-root>/.cgull/logs/scan-<UTC timestamp>-<pid>.log` (JSONL format, auto-pruned to 20 runs).
 - Default verbosity threshold: `WARNING` and `ERROR` records only.
-- Opt into detail using `-v` (`INFO`), `-vv` (`DEBUG`), `-vvv` (`TRACE`), or `--log-level {error,warning,info,debug,trace}`.
-- Detailed `DEBUG` and `TRACE` records are recorded only when explicitly requested during the original scan run.
+- Opt into detail using `-v` (`INFO`), `-vv` (`DEBUG`), `-vvv` (`TRACE`), or `--log-level {error,warning,info,debug,trace}`. An explicit `--log-level` overrides `-v` selection.
+- The same effective threshold applies to automatic JSONL capture, stderr diagnostics, and explicit `--log-file PATH` output. INFO/DEBUG/TRACE are unavailable after the fact unless selected for the original run.
+- `--quiet` suppresses progress/UI behavior; it does not disable capture or change the selected log level.
 - Use `--no-log` to disable automatic JSONL capture for privacy or disk-policy compliance.
 - `--log-file PATH` writes an additive human-readable text log at `PATH` at the same selected verbosity level. Combined with `--no-log`, only `PATH` is written.
 - Parallel worker processes (`-j N`) forward log records to a coordinator-owned transport so parallel scans produce one valid JSONL stream without interleaving.
+
+Diagnostic capture is local; report stdout remains available for text, JSON, SARIF, and Markdown payloads. See the dedicated guide before retaining logs in shared CI or proprietary environments because diagnostic records can contain paths, parser context, and bounded source-derived excerpts.
 
 ## Recommended CI progression
 

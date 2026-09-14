@@ -2,6 +2,8 @@
 
 C-GULL reports scan-level telemetry so users can see how much source was scanned and how quickly analysis progressed. These counters describe scanner workload; they do not affect findings, filtering, failure thresholds, or exit status.
 
+Telemetry/progress is distinct from persistent diagnostic logging. Telemetry describes scan workload and progress/report metrics; diagnostic capture records operational messages according to the selected log verbosity and retention policy. See [Diagnostic logging](logging.md).
+
 ## Metric definitions
 
 ### Lines scanned (`unique_source_lines`)
@@ -45,7 +47,7 @@ The same telemetry object also reports:
 
 The existing progress indicator remains a single coordinator-owned stream on **stderr**. As files complete, it can include cumulative analysis volume, average KLOC/s, and findings observed so far. Worker processes never print independent progress lines.
 
-`--quiet` suppresses live progress. Report data written to stdout therefore remains valid JSON, SARIF, Markdown, or text while progress is enabled.
+`--quiet` suppresses live progress. It does not disable persistent diagnostic capture or change the selected diagnostic log level. Report data written to stdout therefore remains valid JSON, SARIF, Markdown, or text while progress is enabled.
 
 Example:
 
