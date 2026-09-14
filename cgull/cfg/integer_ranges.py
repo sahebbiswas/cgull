@@ -367,7 +367,7 @@ def _descendants(root):
             yield from _descendants(child)
 
 
-def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=()) -> Dict[str, IntegerRange]:
+def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=(), unstable=()) -> Dict[str, IntegerRange]:
     if getattr(event, "is_unknown_control_flow", False):
         return {}
     result = dict(state)
@@ -399,7 +399,12 @@ def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=())
             else:
                 delta = 1 if "+" in node.op else -1
                 result[target] = IntegerRange(current.lower + delta, current.upper + delta)
-    if written and written in result:
+    if written and written in unstable:
+        # Global, static, and volatile storage is intentionally not represented
+        # by a precise fact: otherwise its singleton value can leak into a local
+        # assignment and later manufacture a constant branch proof.
+        result.pop(written, None)
+    elif written and written in result:
         from pycparser import c_ast
         destination_type = ast_ctx.infer_expr_type(c_ast.ID(written), fn)
         if _resolved_scalar_type(destination_type, ast_ctx) == "char":
@@ -477,7 +482,7 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
         state = incoming[node_id]
         facts_before[node_id] = dict(state)
         event = cfg.nodes[node_id]
-        outgoing = _transfer(event, state, ast_ctx, fn, exposed)
+        outgoing = _transfer(event, state, ast_ctx, fn, exposed, unstable_conditions)
         condition = _condition(event)
         proven_truth = (
             _condition_truth(condition, outgoing, ast_ctx, fn, unstable_conditions)
