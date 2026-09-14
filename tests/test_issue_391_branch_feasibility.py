@@ -177,6 +177,21 @@ void f(void) {
 """) == ["CWE-195"]
 
 
+def test_unstable_global_fact_does_not_propagate_to_local_branch_proof():
+    assert _cwes("""
+int use_good;
+void f(void) {
+    int n = -1;
+    use_good = 1;
+    int local_choice = use_good;
+    if (local_choice > 0) {
+        n = 99;
+    }
+    malloc(n);
+}
+""") == ["CWE-195"]
+
+
 def test_static_and_volatile_locals_do_not_prove_branch_truth():
     assert _cwes("""
 void f(void) {
