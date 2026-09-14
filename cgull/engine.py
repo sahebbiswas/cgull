@@ -920,6 +920,20 @@ def _scan_file_content(
             orig_line = exp_line
             orig_snippet = raw_lines[exp_line - 1].strip() if 0 < exp_line <= len(raw_lines) else ""
 
+        # A verified multiline write must retain its complete original statement.
+        # Reject spans that cross provenance boundaries or collapse source lines.
+        if issue.expanded_end_line is not None and issue.expanded_end_line > exp_line:
+            locations = [line_map.get(line) for line in range(exp_line, issue.expanded_end_line + 1)]
+            if not src_loc or any(
+                location is None or location.is_analysis
+                or location.file_path != orig_file
+                or location.line_number != orig_line + offset
+                for offset, location in enumerate(locations)
+            ):
+                return
+            orig_snippet = "\n".join(location.line_content for location in locations).strip()
+        issue.expanded_end_line = None
+
         f_supp = get_suppression_map(orig_file)
         if f_supp and f_supp.is_suppressed(orig_line, issue.rule_id):
             return

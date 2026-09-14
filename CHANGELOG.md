@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.22] - 2026-09-14
+
+### Fixed
+- Keep fallback CGULL-042 writes attached to the correct function body coordinate and lexical binding, including multiline statements and nested shadows. Preserve expanded coordinates separately from source provenance, withhold ambiguous locations, and require manual review for fallback dead-store fixes (#466).
+
 ## [0.11.21] - 2026-09-13
 
 ### Fixed

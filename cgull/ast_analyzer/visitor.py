@@ -1423,6 +1423,7 @@ class CASTParser:
                 has_void_param_list=has_void_param,
                 is_empty_param_list=is_empty_params,
                 body_start_line=body_start_line,
+                body_start_line_exp=body_start_line_exp,
                 start_line_exp=start_line_exp,
                 end_line_exp=end_line_exp,
             )
@@ -1434,8 +1435,10 @@ class CASTParser:
         return functions
 
     def _analyze_function_body(self, fn: CFunction, all_lines: List[str], custom_typedefs: Optional[Set[str]] = None, line_map: Optional[Dict[int, Any]] = None) -> None:
-        body_lines = fn.body.splitlines()
-        fn_start_exp = fn.start_line_exp or fn.start_line
+        from .lexical import body_statements
+
+        body_lines = list(body_statements(fn.body))
+        fn_start_exp = fn.body_start_line_exp or fn.body_start_line or fn.start_line_exp or fn.start_line
 
         # Detect assertions
         if "assert(" in fn.body or "ASSERT(" in fn.body or "assert_param(" in fn.body:
@@ -1512,9 +1515,11 @@ class CASTParser:
         scope_stack = [0]
         block_parents = {}
 
-        for i, line in enumerate(body_lines):
+        line_scopes = {}
+        for i, line in body_lines:
             exp_line = fn_start_exp + i
             line_no = _map_line(exp_line, line_map)
+            line_scopes[i] = tuple(scope_stack)
             masked_line = mask_string_and_char_literals(line)
             m = var_decl_regex.match(line)
             m_parr = ptr_arr_decl_regex.match(line) if not m else None
@@ -1555,11 +1560,13 @@ class CASTParser:
                                 array_size_expr=v_arr_dim,
                                 has_initializer=(init_val is not None),
                                 declaration_line=line_no,
+                                declaration_line_exp=exp_line,
                                 is_array=v_is_array,
                                 enclosing_block_id=curr_block,
                             )
                             if init_val:
                                 c_var.assigned_lines.append(line_no)
+                                c_var.assigned_lines_exp.append(exp_line)
                             fn.variables[(v_name, curr_block)] = c_var
 
                 if char == '{':
@@ -1575,33 +1582,42 @@ class CASTParser:
 
         # Track variable life cycles (free, null-checks, reads, assignments, address-taking)
         assign_regex = re.compile(r'^\s*([a-zA-Z_]\w*)\s*(?:\[[^\]]*\]|\.\w+|->\w+)*\s*=(?!=)')
-        for i, line in enumerate(body_lines):
+        for i, line in body_lines:
             exp_line = fn_start_exp + i
             line_no = _map_line(exp_line, line_map)
+            active_variables = {}
+            for binding in dict.values(fn.variables):
+                if (binding.enclosing_block_id in line_scopes[i]
+                        and binding.declaration_line_exp <= exp_line):
+                    previous = active_variables.get(binding.name)
+                    if previous is None or line_scopes[i].index(binding.enclosing_block_id) >= line_scopes[i].index(previous.enclosing_block_id):
+                        active_variables[binding.name] = binding
             m_assign = assign_regex.match(line)
             if m_assign:
                 v_name = m_assign.group(1)
-                if v_name in fn.variables:
-                    if line_no not in fn.variables[v_name].assigned_lines:
-                        fn.variables[v_name].assigned_lines.append(line_no)
+                if v_name in active_variables:
+                    if line_no not in active_variables[v_name].assigned_lines:
+                        active_variables[v_name].assigned_lines.append(line_no)
+                    if exp_line not in active_variables[v_name].assigned_lines_exp:
+                        active_variables[v_name].assigned_lines_exp.append(exp_line)
 
             # free(x)
             free_match = re.search(r'\bfree\s*\(\s*(\w+)\s*\)', line)
             if free_match:
                 v_name = free_match.group(1)
-                if v_name in fn.variables:
-                    fn.variables[v_name].freed_lines.append(line_no)
+                if v_name in active_variables:
+                    active_variables[v_name].freed_lines.append(line_no)
 
             # if (x == NULL) or if (!x) or if (x != NULL)
-            for v_name in list(fn.variables.keys()) + [p.name for p in fn.parameters]:
+            for v_name in list(active_variables.keys()) + [p.name for p in fn.parameters]:
                 if re.search(rf'\bif\s*\([^)]*?\b{re.escape(v_name)}\s*(?:==\s*NULL|!=\s*NULL|==\s*0|!=\s*0)\b', line) or \
                    re.search(rf'\bif\s*\(\s*!{re.escape(v_name)}\b', line) or \
                    re.search(rf'\bif\s*\(\s*{re.escape(v_name)}\s*\)', line):
-                    if v_name in fn.variables:
-                        fn.variables[v_name].checked_null_lines.append(line_no)
+                    if v_name in active_variables:
+                        active_variables[v_name].checked_null_lines.append(line_no)
 
             # Check address-taking & reads for local variables in fallback mode
-            for v_name, c_var in fn.variables.items():
+            for v_name, c_var in active_variables.items():
                 if not v_name or v_name in C_KEYWORDS:
                     continue
 
@@ -1640,6 +1656,8 @@ class CASTParser:
 
                     if is_read and line_no not in c_var.read_lines:
                         c_var.read_lines.append(line_no)
+                    if is_read and exp_line not in c_var.read_lines_exp:
+                        c_var.read_lines_exp.append(exp_line)
 
     def _extract_global_vars(self, lines: List[str], functions: List[CFunction], custom_typedefs: Optional[Set[str]] = None, line_map: Optional[Dict[int, Any]] = None) -> Dict[str, CVariable]:
         global_vars: Dict[str, CVariable] = {}
