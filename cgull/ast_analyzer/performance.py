@@ -6,13 +6,13 @@ line-number and function-range bookkeeping that stays linear (or n log n)
 on files containing thousands of small functions.
 """
 
-from bisect import bisect_left
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..utils import mask_string_and_char_literals, strip_comments_keep_lines
 from .configuration import _STATEMENT_KEYWORDS, is_unsigned_type
-from .types import CFunction, CParameter, CVariable, _map_line, resolve_typedef_shape
+from .fallback_functions import extract_fallback_functions
+from .types import CFunction, CVariable, _map_line, resolve_typedef_shape
 from .visitor import CASTParser as _LegacyCASTParser
 
 
@@ -24,6 +24,106 @@ def _masked_source_code(source_code: str) -> str:
     """Return source with comments and literal contents hidden from code matching."""
     _, comment_free = strip_comments_keep_lines(source_code)
     return "\n".join(mask_string_and_char_literals(line) for line in comment_free.splitlines())
+
+
+def _fallback_macro_brace_sequence(
+    text: str,
+    macros: Dict[str, Tuple[bool, str]],
+    expanding: Optional[Set[str]] = None,
+) -> str:
+    """Return braces contributed by text and known macro expansions in source order."""
+    masked_text = mask_string_and_char_literals(text)
+    active = expanding or set()
+    braces: List[str] = []
+    position = 0
+
+    for match in re.finditer(r"\b[A-Za-z_]\w*\b", masked_text):
+        braces.extend(char for char in masked_text[position:match.start()] if char in "{}")
+
+        macro_name = match.group(0)
+        macro = macros.get(macro_name)
+        if macro is not None and macro_name not in active:
+            function_like, replacement = macro
+            invoked = not function_like or masked_text[match.end():].lstrip().startswith("(")
+            if invoked:
+                braces.extend(
+                    _fallback_macro_brace_sequence(
+                        replacement,
+                        macros,
+                        active | {macro_name},
+                    )
+                )
+
+        position = match.end()
+
+    braces.extend(char for char in masked_text[position:] if char in "{}")
+    return "".join(braces)
+
+
+def _record_fallback_macro_directive(
+    directive: str,
+    macros: Dict[str, Tuple[bool, str]],
+) -> None:
+    """Update fallback macro state from one complete logical directive."""
+    undef = re.match(r"^\s*#\s*undef\s+([A-Za-z_]\w*)\b", directive)
+    if undef:
+        macros.pop(undef.group(1), None)
+        return
+
+    define = re.match(r"^\s*#\s*define\s+([A-Za-z_]\w*)(.*)$", directive)
+    if not define:
+        return
+
+    macro_name = define.group(1)
+    tail = define.group(2)
+    function_like = tail.startswith("(")
+    if function_like:
+        params_end = tail.find(")")
+        if params_end < 0:
+            return
+        replacement = tail[params_end + 1:].lstrip()
+    else:
+        replacement = tail.lstrip()
+
+    macros[macro_name] = (function_like, replacement)
+
+
+def _fallback_file_scope_depths(lines: List[str]):
+    """Yield lexical brace depth at each physical line's first token.
+
+    ``lines`` is the fallback pipeline's already comment-stripped and
+    conditionally-resolved source. String/character literal contents are masked
+    before brace accounting. Preprocessor directive bodies are excluded from
+    source-level brace counting, while known macro definitions are tracked so
+    braces contributed by unexpanded macro uses still affect lexical scope.
+    """
+    depth = 0
+    in_directive = False
+    directive_parts: List[str] = []
+    macros: Dict[str, Tuple[bool, str]] = {}
+
+    for line in lines:
+        directive_line = in_directive or line.lstrip().startswith("#")
+        yield depth, directive_line
+
+        if directive_line:
+            directive_part = line.rstrip()
+            continued = directive_part.endswith("\\")
+            if continued:
+                directive_part = directive_part[:-1]
+            directive_parts.append(directive_part)
+            in_directive = continued
+            if not continued:
+                _record_fallback_macro_directive(" ".join(directive_parts), macros)
+                directive_parts.clear()
+            continue
+
+        in_directive = False
+        for char in _fallback_macro_brace_sequence(line, macros):
+            if char == "{":
+                depth += 1
+            else:
+                depth = max(0, depth - 1)
 
 
 def _declares_offsetof_function(masked_source: str) -> bool:
@@ -106,113 +206,13 @@ class CASTParser(_LegacyCASTParser):
         custom_typedefs: Optional[Set[str]] = None,
         line_map: Optional[Dict[int, Any]] = None,
     ) -> List[CFunction]:
-        functions: List[CFunction] = []
-        func_header_regex = re.compile(
-            r'^[ \t]*((?:(?:static|inline|extern|const|unsigned|signed|struct\s+\w+|\w+)\s+)+)(\*?\s*[\w_]+)\s*\(([^)]*)\)\s*\{',
-            re.MULTILINE,
+        return extract_fallback_functions(
+            self,
+            lines,
+            full_code,
+            custom_typedefs=custom_typedefs,
+            line_map=line_map,
         )
-
-        # Legacy extraction repeatedly sliced the entire prefix and counted
-        # newlines for every function boundary.  On N tiny functions that is
-        # O(N^2) in total source size.  Index newlines once and use binary
-        # search for exact legacy-compatible line numbers instead.
-        newline_offsets = [i for i, ch in enumerate(full_code) if ch == "\n"]
-
-        def line_at(pos: int) -> int:
-            return bisect_left(newline_offsets, pos) + 1
-
-        for match in func_header_regex.finditer(full_code):
-            start_pos = match.start()
-            start_line_exp = line_at(start_pos)
-            start_line = _map_line(start_line_exp, line_map)
-
-            ret_type = match.group(1).strip()
-            raw_name = match.group(2).strip()
-            params_str = match.group(3).strip()
-
-            if raw_name.startswith("*"):
-                ret_type += " *"
-                func_name = raw_name[1:].strip()
-            else:
-                func_name = raw_name
-
-            if func_name in ("if", "for", "while", "switch", "catch"):
-                continue
-
-            brace_count = 1
-            body_start_pos = match.end()
-            curr_pos = body_start_pos
-            n = len(full_code)
-            while curr_pos < n and brace_count > 0:
-                ch = full_code[curr_pos]
-                if ch == "{":
-                    brace_count += 1
-                elif ch == "}":
-                    brace_count -= 1
-                curr_pos += 1
-
-            end_line_exp = line_at(curr_pos)
-            end_line = _map_line(end_line_exp, line_map)
-            body = full_code[body_start_pos : curr_pos - 1]
-            body_start_line = _map_line(line_at(body_start_pos), line_map)
-
-            params: List[CParameter] = []
-            is_empty_params = params_str == ""
-            has_void_param = params_str == "void"
-
-            if params_str and params_str != "void":
-                for param_token in params_str.split(","):
-                    param_token = param_token.strip()
-                    if not param_token:
-                        continue
-                    is_ptr = "*" in param_token
-                    p_parts = param_token.replace("*", " * ").split()
-                    if len(p_parts) >= 2:
-                        p_name = p_parts[-1]
-                        p_type = " ".join(p_parts[:-1])
-                    elif len(p_parts) == 1:
-                        p_name = p_parts[0]
-                        p_type = "int"
-                    else:
-                        continue
-
-                    p_is_arr = False
-                    m_p_arr = re.match(r'^([a-zA-Z_]\w*)\s*(\[[^\]]*\])$', p_name)
-                    if m_p_arr:
-                        p_name = m_p_arr.group(1)
-                        p_type = f"{p_type}{m_p_arr.group(2)}"
-                        p_is_arr = True
-                    if "[" in p_type:
-                        p_is_arr = True
-
-                    params.append(
-                        CParameter(
-                            name=p_name,
-                            type_name=p_type,
-                            is_pointer=is_ptr,
-                            line_number=start_line,
-                            is_array=p_is_arr,
-                        )
-                    )
-
-            fn = CFunction(
-                name=func_name,
-                return_type=ret_type,
-                parameters=params,
-                start_line=start_line,
-                end_line=end_line,
-                body=body,
-                has_void_param_list=has_void_param,
-                is_empty_param_list=is_empty_params,
-                body_start_line=body_start_line,
-                body_start_line_exp=line_at(body_start_pos),
-                start_line_exp=start_line_exp,
-                end_line_exp=end_line_exp,
-            )
-            self._analyze_function_body(fn, lines, custom_typedefs, line_map=line_map)
-            functions.append(fn)
-
-        return functions
 
     def _extract_global_vars(
         self,
@@ -223,29 +223,21 @@ class CASTParser(_LegacyCASTParser):
     ) -> Dict[str, CVariable]:
         global_vars: Dict[str, CVariable] = {}
 
-        # Avoid materializing every source line covered by every function.
-        # Sorted function intervals let us skip function bodies in a single
-        # pass over the file while preserving the legacy classification.
-        func_ranges = sorted(
-            (
-                fn.start_line_exp or fn.start_line,
-                fn.end_line_exp or fn.end_line,
-            )
-            for fn in functions
-        )
-        range_index = 0
+        # ``functions`` remains part of the compatibility signature, but file
+        # scope must not depend on successful fallback function recognition.
+        # Lexical brace depth is the independent safety boundary.
+        del functions
 
         var_decl_regex = re.compile(
             r'^[ \t]*((?:volatile\s+|static\s+|const\s+|unsigned\s+|signed\s+|struct\s+\w+|\w+)\s+(?:\*|\w|\s)*?)\s*(\w+)(?:\[([^\]]*)\])?(?:\s*=\s*([^;]+))?;'
         )
 
-        for line_no_exp, line in enumerate(lines, 1):
-            while range_index < len(func_ranges) and line_no_exp > func_ranges[range_index][1]:
-                range_index += 1
-            if (
-                range_index < len(func_ranges)
-                and func_ranges[range_index][0] <= line_no_exp <= func_ranges[range_index][1]
-            ):
+        for line_no_exp, (line, scope_info) in enumerate(
+            zip(lines, _fallback_file_scope_depths(lines)),
+            1,
+        ):
+            scope_depth, directive_line = scope_info
+            if directive_line or scope_depth != 0:
                 continue
 
             line_no = _map_line(line_no_exp, line_map)

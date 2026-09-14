@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.24] - 2026-09-14
+
+### Fixed
+- Require regex-fallback globals to begin at lexical file scope, independently of fallback function recognition, while ignoring braces in literals, comments, inactive branches, and continued preprocessor directives so nested declarations cannot contaminate `global_variables` or trigger cross-function CGULL-043 false positives (#445).
+
 ## [0.11.23] - 2026-09-14
 
-### Added
-- Add `--no-log` CLI option to disable automatic project-local JSONL log capture (#456, #470).
-- Implement coordinator-owned multiprocessing logging queue and worker forwarding for parallel scans (`jobs > 1`) (#457).
-- Add context field bounding (`_MAX_FIELD_LEN = 1000`) and safe control character escaping in `JSONLFormatter` (#458).
+### Fixed
+- Parse regex-fallback function definitions with balanced declarator boundaries so nested function-pointer parameters, multiline pointer returns, and supported attributes retain correct function ranges, parameters, and source coordinates without misclassifying prototypes or calls (#443).
 
 ## [0.11.22] - 2026-09-14
 
