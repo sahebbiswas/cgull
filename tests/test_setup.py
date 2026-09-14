@@ -34,7 +34,7 @@ class TestProjectMetadata(unittest.TestCase):
         content = workflow_path.read_text(encoding="utf-8")
 
         self.assertIn("python -m pytest -v --cov=cgull", content)
-        self.assertIn("timeout-minutes: 15", content)
+        self.assertIn("timeout-minutes: 20", content)
         self.assertIn("cancel-in-progress: true", content)
         self.assertIn("exclude:", content)
         self.assertIn("- os: windows-latest", content)
