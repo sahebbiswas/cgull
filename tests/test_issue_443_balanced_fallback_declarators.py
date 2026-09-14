@@ -98,3 +98,21 @@ int real(int value)
     assert [fn.name for fn in ctx.functions] == ["real"]
     assert ctx.functions[0].end_line_exp == 10
     assert 'literal_brace = "}"' in ctx.functions[0].body
+
+
+def test_qualifier_only_implicit_int_definitions_preserve_legacy_fallback():
+    source = """static legacy_static(void)
+{
+    return 1;
+}
+
+inline legacy_inline()
+{
+    return 2;
+}
+"""
+
+    ctx = _parse_fallback(source)
+
+    assert [fn.name for fn in ctx.functions] == ["legacy_static", "legacy_inline"]
+    assert [fn.return_type for fn in ctx.functions] == ["static", "inline"]
