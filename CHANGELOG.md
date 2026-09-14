@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.29] - 2026-09-14
+
+### Added
+- Show immediate, throttled live file-discovery status before directory scans begin, counting only non-ignored scan candidates and transitioning in place to normal scan progress while preserving legacy progress callbacks, structured output, diagnostic coordination, and final discovery telemetry semantics (#484).
+
 ## [0.11.24] - 2026-09-14
 
 ### Fixed
@@ -80,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explicit unresolved-`goto` CFG events and structured diagnostics so missing labels no longer silently terminate analysis paths; affected downstream facts degrade conservatively (#363).
 
 ### Changed
-- Refactored CFG implementation into functionally cohesive modules for AST event extraction, graph topology, lattice domains, and legacy dataflow while preserving established compatibility imports and behavior (#393).
+- Refactored CFG implementation into functionally cohesive units for AST event extraction, graph topology, lattice domains, and legacy dataflow while preserving established compatibility imports and behavior (#393).
 - Interprocedural consumers now use resolved possible callees for indirect calls so lifetime, dereference-safety, validator, and related summaries participate after function-pointer resolution (#366).
 
 ## [0.10.8] - 2026-09-08
