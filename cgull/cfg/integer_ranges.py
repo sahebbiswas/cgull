@@ -6,7 +6,12 @@ from dataclasses import dataclass
 import re
 from typing import Dict, Mapping, Optional
 
-from ..ast_analyzer.integer_types import _resolved_scalar_type, get_integer_type_byte_size
+from ..ast_analyzer.integer_types import (
+    _resolved_scalar_type,
+    get_integer_type_byte_size,
+    infer_integer_expression_type,
+    usual_arithmetic_type,
+)
 from .construction import build_cfg, find_function_def
 
 __all__ = ["IntegerRange", "IntegerRangeAnalysis", "analyze_integer_ranges", "integer_type_range"]
@@ -151,6 +156,39 @@ def _constant_binary(op: str, left: int, right: int) -> Optional[int]:
     return None
 
 
+def _constant_predicate(node, left: int, right: int, ast_ctx=None, fn=None) -> Optional[int]:
+    """Fold a side-effect-free binary predicate using modeled C conversions."""
+    if node.op == "&&":
+        return int(bool(left) and bool(right))
+    if node.op == "||":
+        return int(bool(left) or bool(right))
+    if node.op not in {"<", "<=", ">", ">=", "==", "!="} or ast_ctx is None:
+        return None
+
+    left_type = infer_integer_expression_type(ast_ctx, node.left, fn)
+    right_type = infer_integer_expression_type(ast_ctx, node.right, fn)
+    if not left_type or not right_type:
+        return None
+    common_type = usual_arithmetic_type(left_type, right_type, ast_ctx)
+    common_range = integer_type_range(common_type, ast_ctx) if common_type else None
+    if common_range is None or common_range.lower is None or common_range.upper is None:
+        return None
+
+    if common_range.lower == 0:
+        modulus = common_range.upper + 1
+        left %= modulus
+        right %= modulus
+    elif not (common_range.lower <= left <= common_range.upper and common_range.lower <= right <= common_range.upper):
+        return None
+
+    if node.op == "<": return int(left < right)
+    if node.op == "<=": return int(left <= right)
+    if node.op == ">": return int(left > right)
+    if node.op == ">=": return int(left >= right)
+    if node.op == "==": return int(left == right)
+    return int(left != right)
+
+
 def _name(node) -> Optional[str]:
     return str(node.name) if node is not None and type(node).__name__ == "ID" else None
 
@@ -198,7 +236,9 @@ def _expr_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) 
         if left is None or right is None:
             return None
         if left.is_singleton and right.is_singleton:
-            folded = _constant_binary(node.op, left.lower, right.lower)
+            folded = _constant_predicate(node, left.lower, right.lower, ast_ctx, fn)
+            if folded is None:
+                folded = _constant_binary(node.op, left.lower, right.lower)
             if folded is not None:
                 return IntegerRange(folded, folded)
         if node.op == "+" and None not in (left.lower, left.upper, right.lower, right.upper):
@@ -211,6 +251,41 @@ def _expr_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) 
         right = _expr_range(node.iffalse, state, ast_ctx, fn)
         return left.hull(right) if left is not None and right is not None else None
     return None
+
+
+def _condition_reads_unstable_storage(node, unstable_names) -> bool:
+    """Whether a predicate reads storage whose value cannot be assumed stable."""
+    if node is None:
+        return False
+    if type(node).__name__ == "ID" and str(node.name) in unstable_names:
+        return True
+    return any(_condition_reads_unstable_storage(child, unstable_names) for _, child in node.children())
+
+
+def _branch_proof_expression_supported(node) -> bool:
+    """Limit pruning to condition forms with modeled C truth semantics."""
+    if node is None:
+        return False
+    kind = type(node).__name__
+    if kind in {"Constant", "ID"}:
+        return True
+    if kind == "UnaryOp" and node.op in {"!", "+", "-"}:
+        return _branch_proof_expression_supported(node.expr)
+    if kind == "BinaryOp" and node.op in {"<", "<=", ">", ">=", "==", "!=", "&&", "||"}:
+        return _branch_proof_expression_supported(node.left) and _branch_proof_expression_supported(node.right)
+    return False
+
+
+def _condition_truth(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None, unstable_names=()) -> Optional[bool]:
+    """Return a branch truth value only when the current range state proves it."""
+    if not _branch_proof_expression_supported(node):
+        return None
+    if _condition_reads_unstable_storage(node, unstable_names):
+        return None
+    value = _expr_range(node, state, ast_ctx, fn)
+    if value is None or not value.is_singleton:
+        return None
+    return value.lower != 0
 
 
 def _comparison(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str, IntegerRange]:
@@ -308,7 +383,9 @@ def _descendants(root):
             yield from _descendants(child)
 
 
-def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=()) -> Dict[str, IntegerRange]:
+def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=(), unstable=()) -> Dict[str, IntegerRange]:
+    if getattr(event, "is_unknown_control_flow", False):
+        return {}
     result = dict(state)
     node = getattr(event, "_ast_node", None)
     if node is None:
@@ -338,7 +415,12 @@ def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=())
             else:
                 delta = 1 if "+" in node.op else -1
                 result[target] = IntegerRange(current.lower + delta, current.upper + delta)
-    if written and written in result:
+    if written and written in unstable:
+        # Global, static, and volatile storage is intentionally not represented
+        # by a precise fact: otherwise its singleton value can leak into a local
+        # assignment and later manufacture a constant branch proof.
+        result.pop(written, None)
+    elif written and written in result:
         from pycparser import c_ast
         destination_type = ast_ctx.infer_expr_type(c_ast.ID(written), fn)
         if _resolved_scalar_type(destination_type, ast_ctx) == "char":
@@ -393,9 +475,18 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
 
     # Once an address escapes, a call or indirect write can invalidate its fact.
     exposed = set(getattr(ast_ctx, "global_variables", {}))
+    unstable_conditions = set(exposed)
+    for name, variable in getattr(fn, "variables", {}).items():
+        if getattr(variable, "is_volatile", False):
+            unstable_conditions.add(str(name))
+    for parameter in getattr(fn, "parameters", ()):
+        if re.search(r"\bvolatile\b", getattr(parameter, "type_name", "")):
+            unstable_conditions.add(str(parameter.name))
     for node in _descendants(funcdef):
         if type(node).__name__ == "UnaryOp" and node.op == "&" and _name(node.expr):
             exposed.add(_name(node.expr))
+        if type(node).__name__ == "Decl" and getattr(node, "name", None) and "static" in (getattr(node, "storage", ()) or ()):
+            unstable_conditions.add(str(node.name))
 
     incoming: Dict[int, Dict[str, IntegerRange]] = {cfg.entry: {}}
     facts_before: Dict[int, Dict[str, IntegerRange]] = {}
@@ -407,12 +498,27 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
         state = incoming[node_id]
         facts_before[node_id] = dict(state)
         event = cfg.nodes[node_id]
-        outgoing = _transfer(event, state, ast_ctx, fn, exposed)
+        outgoing = _transfer(event, state, ast_ctx, fn, exposed, unstable_conditions)
         condition = _condition(event)
+        proven_truth = (
+            _condition_truth(condition, outgoing, ast_ctx, fn, unstable_conditions)
+            if condition is not None
+            else None
+        )
         for index, successor in enumerate(event.successors):
+            branch_truth = index == 0
+            if condition is not None and index < 2 and proven_truth is not None and branch_truth != proven_truth:
+                continue
             edge_state = dict(outgoing)
             if condition is not None and index < 2:
-                edge_state = _apply(edge_state, _constraints(condition, index == 0, ast_ctx, fn), ast_ctx, fn)
+                constraints = _constraints(condition, branch_truth, ast_ctx, fn)
+                if unstable_conditions:
+                    constraints = {
+                        name: interval
+                        for name, interval in constraints.items()
+                        if name not in unstable_conditions
+                    }
+                edge_state = _apply(edge_state, constraints, ast_ctx, fn)
             if edge_state is None:
                 continue
             prior = incoming.get(successor)
