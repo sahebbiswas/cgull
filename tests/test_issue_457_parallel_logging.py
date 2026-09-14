@@ -10,10 +10,12 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 from cgull.engine import CGullScanner, _scan_file_worker
+import cgull.logging_config as logging_config
 from cgull.logging_config import configure_logging, multiprocessing_logging_context
 from cgull.models import ScanConfig
 
@@ -159,7 +161,7 @@ class TestIssue457ParallelLogging(unittest.TestCase):
 
     def test_transport_setup_failure_warns_once_and_restores_worker_marker(self):
         stderr_buffer = io.StringIO()
-        marker = "CGULL_MULTIPROCESS_LOGGING_WORKER"
+        marker = logging_config._WORKER_LOGGING_ENV
         previous = os.environ.get(marker)
 
         with patch("sys.stderr", stderr_buffer):
@@ -177,6 +179,48 @@ class TestIssue457ParallelLogging(unittest.TestCase):
             1,
         )
         self.assertEqual(os.environ.get(marker), previous)
+
+    def test_worker_marker_refcounts_overlapping_threads(self):
+        marker = logging_config._WORKER_LOGGING_ENV
+        previous = os.environ.get(marker)
+        both_acquired = threading.Barrier(3)
+        release_first = threading.Event()
+        release_second = threading.Event()
+        errors = []
+
+        def hold_marker(release_event):
+            try:
+                logging_config._acquire_worker_logging_marker()
+                both_acquired.wait(timeout=5)
+                release_event.wait(timeout=5)
+            except BaseException as exc:  # surface thread failures in the test
+                errors.append(exc)
+            finally:
+                logging_config._release_worker_logging_marker()
+
+        first = threading.Thread(target=hold_marker, args=(release_first,))
+        second = threading.Thread(target=hold_marker, args=(release_second,))
+        first.start()
+        second.start()
+        try:
+            both_acquired.wait(timeout=5)
+            self.assertEqual(os.environ.get(marker), "1")
+
+            release_first.set()
+            first.join(timeout=5)
+            self.assertFalse(first.is_alive())
+            self.assertEqual(os.environ.get(marker), "1")
+
+            release_second.set()
+            second.join(timeout=5)
+            self.assertFalse(second.is_alive())
+            self.assertFalse(errors)
+            self.assertEqual(os.environ.get(marker), previous)
+        finally:
+            release_first.set()
+            release_second.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
 
 
 if __name__ == "__main__":
