@@ -110,3 +110,38 @@ void write_register(char value) {
     assert issue.impact == Severity.HIGH
     assert issue.confidence == Confidence.LIMITED
     assert "Firmware priority" in issue.message
+
+
+def test_explicit_cast_feeding_volatile_destination_is_high_priority():
+    code = """
+typedef unsigned char uint8_t;
+typedef unsigned int uint32_t;
+volatile uint8_t REGISTER;
+void write_register(uint32_t value) {
+    REGISTER = (uint8_t)value;
+}
+"""
+    issues = _scan(code)
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue.message.startswith("Explicit integer cast")
+    assert issue.impact == Severity.HIGH
+    assert issue.confidence == Confidence.FULL
+    assert "Firmware priority" in issue.message
+
+
+def test_same_line_normal_conversion_is_not_promoted_by_volatile_neighbor():
+    code = """
+typedef unsigned char uint8_t;
+typedef unsigned int uint32_t;
+volatile uint8_t REGISTER;
+void write_both(uint32_t value) {
+    uint8_t byte;
+    REGISTER = value; byte = value;
+}
+"""
+    issues = _scan(code)
+    assert len(issues) == 2
+    assert sum(issue.impact == Severity.HIGH for issue in issues) == 1
+    assert sum(issue.impact == Severity.MEDIUM for issue in issues) == 1
+    assert sum("Firmware priority" in issue.message for issue in issues) == 1
