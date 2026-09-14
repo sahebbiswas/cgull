@@ -2,13 +2,16 @@
 Structured trace and diagnostic logging configuration for C-GULL.
 """
 
+import contextlib
 import json
 import logging
+import multiprocessing
 import os
 import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from logging.handlers import QueueListener
 from pathlib import Path
 from typing import Any, Optional
 
@@ -429,11 +432,6 @@ def configure_logging(
                 )
 
 
-import contextlib
-from logging.handlers import QueueListener
-import multiprocessing
-
-
 @contextlib.contextmanager
 def multiprocessing_logging_context():
     """
@@ -452,6 +450,14 @@ def multiprocessing_logging_context():
             listener = QueueListener(log_queue, *handlers, respect_handler_level=True)
             listener.start()
         except Exception:
+            # Manager() starts a child process. If queue/listener setup fails
+            # after that point, shut it down before degrading to non-queued
+            # logging so a failed bootstrap cannot leak a child process.
+            if manager is not None:
+                try:
+                    manager.shutdown()
+                except Exception:
+                    pass
             manager = None
             listener = None
             log_queue = None
