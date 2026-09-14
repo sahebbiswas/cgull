@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.24] - 2026-09-14
+
+### Fixed
+- Require regex-fallback globals to begin at lexical file scope, independently of fallback function recognition, while ignoring braces in literals, comments, inactive branches, and continued preprocessor directives so nested declarations cannot contaminate `global_variables` or trigger cross-function CGULL-043 false positives (#445).
+
 ## [0.11.23] - 2026-09-14
 
 ### Fixed
