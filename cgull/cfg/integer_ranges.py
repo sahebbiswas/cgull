@@ -6,7 +6,12 @@ from dataclasses import dataclass
 import re
 from typing import Dict, Mapping, Optional
 
-from ..ast_analyzer.integer_types import _resolved_scalar_type, get_integer_type_byte_size
+from ..ast_analyzer.integer_types import (
+    _resolved_scalar_type,
+    get_integer_type_byte_size,
+    infer_integer_expression_type,
+    usual_arithmetic_type,
+)
 from .construction import build_cfg, find_function_def
 
 __all__ = ["IntegerRange", "IntegerRangeAnalysis", "analyze_integer_ranges", "integer_type_range"]
@@ -151,6 +156,39 @@ def _constant_binary(op: str, left: int, right: int) -> Optional[int]:
     return None
 
 
+def _constant_predicate(node, left: int, right: int, ast_ctx=None, fn=None) -> Optional[int]:
+    """Fold a side-effect-free binary predicate using modeled C conversions."""
+    if node.op == "&&":
+        return int(bool(left) and bool(right))
+    if node.op == "||":
+        return int(bool(left) or bool(right))
+    if node.op not in {"<", "<=", ">", ">=", "==", "!="} or ast_ctx is None:
+        return None
+
+    left_type = infer_integer_expression_type(ast_ctx, node.left, fn)
+    right_type = infer_integer_expression_type(ast_ctx, node.right, fn)
+    if not left_type or not right_type:
+        return None
+    common_type = usual_arithmetic_type(left_type, right_type, ast_ctx)
+    common_range = integer_type_range(common_type, ast_ctx) if common_type else None
+    if common_range is None or common_range.lower is None or common_range.upper is None:
+        return None
+
+    if common_range.lower == 0:
+        modulus = common_range.upper + 1
+        left %= modulus
+        right %= modulus
+    elif not (common_range.lower <= left <= common_range.upper and common_range.lower <= right <= common_range.upper):
+        return None
+
+    if node.op == "<": return int(left < right)
+    if node.op == "<=": return int(left <= right)
+    if node.op == ">": return int(left > right)
+    if node.op == ">=": return int(left >= right)
+    if node.op == "==": return int(left == right)
+    return int(left != right)
+
+
 def _name(node) -> Optional[str]:
     return str(node.name) if node is not None and type(node).__name__ == "ID" else None
 
@@ -198,7 +236,9 @@ def _expr_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) 
         if left is None or right is None:
             return None
         if left.is_singleton and right.is_singleton:
-            folded = _constant_binary(node.op, left.lower, right.lower)
+            folded = _constant_predicate(node, left.lower, right.lower, ast_ctx, fn)
+            if folded is None:
+                folded = _constant_binary(node.op, left.lower, right.lower)
             if folded is not None:
                 return IntegerRange(folded, folded)
         if node.op == "+" and None not in (left.lower, left.upper, right.lower, right.upper):
@@ -211,6 +251,14 @@ def _expr_range(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) 
         right = _expr_range(node.iffalse, state, ast_ctx, fn)
         return left.hull(right) if left is not None and right is not None else None
     return None
+
+
+def _condition_truth(node, state: Mapping[str, IntegerRange], ast_ctx=None, fn=None) -> Optional[bool]:
+    """Return a branch truth value only when the current range state proves it."""
+    value = _expr_range(node, state, ast_ctx, fn)
+    if value is None or not value.is_singleton:
+        return None
+    return value.lower != 0
 
 
 def _comparison(node, truth: bool, ast_ctx=None, fn=None) -> Dict[str, IntegerRange]:
@@ -309,6 +357,8 @@ def _descendants(root):
 
 
 def _transfer(event, state: Mapping[str, IntegerRange], ast_ctx, fn, exposed=()) -> Dict[str, IntegerRange]:
+    if getattr(event, "is_unknown_control_flow", False):
+        return {}
     result = dict(state)
     node = getattr(event, "_ast_node", None)
     if node is None:
@@ -409,10 +459,14 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
         event = cfg.nodes[node_id]
         outgoing = _transfer(event, state, ast_ctx, fn, exposed)
         condition = _condition(event)
+        proven_truth = _condition_truth(condition, outgoing, ast_ctx, fn) if condition is not None else None
         for index, successor in enumerate(event.successors):
+            branch_truth = index == 0
+            if condition is not None and index < 2 and proven_truth is not None and branch_truth != proven_truth:
+                continue
             edge_state = dict(outgoing)
             if condition is not None and index < 2:
-                edge_state = _apply(edge_state, _constraints(condition, index == 0, ast_ctx, fn), ast_ctx, fn)
+                edge_state = _apply(edge_state, _constraints(condition, branch_truth, ast_ctx, fn), ast_ctx, fn)
             if edge_state is None:
                 continue
             prior = incoming.get(successor)
