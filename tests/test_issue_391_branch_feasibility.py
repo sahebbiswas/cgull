@@ -163,6 +163,43 @@ void g(void) {
 """) == ["CWE-195"]
 
 
+def test_mutable_global_write_does_not_manufacture_constant_truth():
+    assert _cwes("""
+int use_good;
+void f(void) {
+    int n = -1;
+    use_good = 1;
+    if (use_good) {
+        n = 99;
+    }
+    malloc(n);
+}
+""") == ["CWE-195"]
+
+
+def test_static_and_volatile_locals_do_not_prove_branch_truth():
+    assert _cwes("""
+void f(void) {
+    static int use_good = 1;
+    int n = -1;
+    if (use_good) {
+        n = 99;
+    }
+    malloc(n);
+}
+""") == ["CWE-195"]
+    assert _cwes("""
+void g(void) {
+    volatile int use_good = 1;
+    int n = -1;
+    if (use_good) {
+        n = 99;
+    }
+    malloc(n);
+}
+""") == ["CWE-195"]
+
+
 def test_loop_join_does_not_manufacture_constant_truth():
     assert _cwes("""
 void f(int enter_loop) {
