@@ -74,7 +74,8 @@ void wait_for_thread(PLATFORM_HANDLE thread_object)
     assert "thread_object" in ast_ctx.global_variables
     issues = get_rule_by_id("CGULL-043").scan_ast("thread.c", ast_ctx)
     assert len(issues) == 1
-    assert "Parameter 'thread_object' shadows global variable" in issues[0].message
+    assert "Parameter 'thread_object'" in issues[0].message
+    assert "shadows global variable 'thread_object'" in issues[0].message
 
 
 def test_fallback_globals_require_lexical_file_scope_even_without_function_ranges():
@@ -131,6 +132,30 @@ def test_fallback_globals_require_lexical_file_scope_even_without_function_range
         "inactive_value",
     ):
         assert nested_name not in ast_ctx.global_variables
+
+
+def test_fallback_scope_tracks_unexpanded_brace_macros():
+    code = (
+        "#define OPEN_SCOPE {\n"
+        "#define CLOSE_SCOPE }\n"
+        "#define OPEN_SCOPE_FN() {\n"
+        "#define CLOSE_SCOPE_FN() }\n"
+        "void macro_body(void) OPEN_SCOPE\n"
+        "    int macro_body_local = 1;\n"
+        "    if (macro_body_local) OPEN_SCOPE_FN()\n"
+        "        int nested_macro_local = 2;\n"
+        "    CLOSE_SCOPE_FN()\n"
+        "CLOSE_SCOPE\n"
+        "int real_global_after_macros = 3;\n"
+    )
+    parser = CASTParser()
+    _force_regex_fallback(parser, missed_functions={"macro_body"})
+
+    ast_ctx = parser.parse(code)
+
+    assert set(ast_ctx.global_variables) == {"real_global_after_macros"}
+    assert "macro_body_local" not in ast_ctx.global_variables
+    assert "nested_macro_local" not in ast_ctx.global_variables
 
 
 def test_fallback_global_scope_preserves_line_mapping():
