@@ -2,7 +2,7 @@ import io
 
 from cgull import AnalysisEngine, CGullScanner, ScanConfig
 from cgull.logging_config import _ProgressSafeStderr
-from cgull.telemetry import ProgressIndicator
+from cgull.telemetry import ProgressIndicator, _CountingIgnoreFilter
 
 
 def _scanner() -> CGullScanner:
@@ -21,6 +21,11 @@ class _DiscoveryRecorder:
 
     def discovery_update(self, found: int) -> None:
         self.discovery.append(found)
+
+
+class _NeverIgnore:
+    def should_ignore(self, path: str) -> bool:
+        return False
 
 
 class _TTYStringIO(io.StringIO):
@@ -60,6 +65,23 @@ def test_legacy_progress_callback_needs_no_discovery_method(tmp_path):
     )
 
     assert calls[-1][0:2] == (1, 1)
+
+
+def test_discovery_wrapper_avoids_fs_work_without_callback(monkeypatch):
+    fs_calls = []
+    monkeypatch.setattr(
+        "cgull.telemetry.os.path.isfile",
+        lambda path: fs_calls.append(("isfile", path)) or True,
+    )
+    monkeypatch.setattr(
+        "cgull.telemetry.os.path.realpath",
+        lambda path: fs_calls.append(("realpath", path)) or path,
+    )
+
+    wrapper = _CountingIgnoreFilter(_NeverIgnore(), set())
+
+    assert wrapper.should_ignore("candidate.c") is False
+    assert fs_calls == []
 
 
 def test_discovery_renderer_is_throttled_by_time_or_candidate_count(monkeypatch):
