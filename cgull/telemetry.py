@@ -229,16 +229,14 @@ class _CountingIgnoreFilter:
 
     def should_ignore(self, path: str) -> bool:
         ignored = self._delegate.should_ignore(path)
-        if os.path.isfile(path):
+        discovery_callback = self._discovery_callback
+        if (ignored or discovery_callback is not None) and os.path.isfile(path):
             canonical = os.path.normcase(os.path.realpath(path))
             if ignored:
                 self._ignored_files.add(canonical)
-            elif (
-                self._discovery_callback is not None
-                and canonical not in self._discovered_files
-            ):
+            elif canonical not in self._discovered_files:
                 self._discovered_files.add(canonical)
-                self._discovery_callback(len(self._discovered_files))
+                discovery_callback(len(self._discovered_files))
         return ignored
 
     def should_prune_dir(self, path: str) -> bool:
