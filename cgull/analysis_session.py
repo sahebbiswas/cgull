@@ -5,38 +5,40 @@ from __future__ import annotations
 from threading import RLock
 from time import perf_counter
 from typing import Dict
-from weakref import WeakValueDictionary
+from weakref import WeakSet
 
 from .call_effects import ReturnEffect
 from .semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
 
 
 _SESSION_REGISTRY_LOCK = RLock()
-_SESSION_BY_AST_ID: "WeakValueDictionary[int, AnalysisSession]" = WeakValueDictionary()
-_SESSION_BY_FUNCDEF_ID: "WeakValueDictionary[int, AnalysisSession]" = WeakValueDictionary()
-
-
-def _analysis_session_for_ast(ast):
-    """Return the live session owning ``ast`` when one has been registered."""
-    if ast is None:
-        return None
-    with _SESSION_REGISTRY_LOCK:
-        session = _SESSION_BY_AST_ID.get(id(ast))
-    if session is None:
-        return None
-    return session if getattr(session.ast_context, "pycparser_ast", None) is ast else None
+_SESSION_BY_FUNCDEF_ID: Dict[int, "WeakSet[AnalysisSession]"] = {}
 
 
 def _analysis_session_for_funcdef(funcdef):
-    """Return the live session owning ``funcdef`` when one has been registered."""
+    """Return the unique live session owning ``funcdef``, if one exists.
+
+    Multiple sessions may intentionally analyze the same AST with independent
+    semantic/configuration state. In that case there is no safe implicit owner
+    for the legacy ``build_cfg(funcdef, ...)`` entry point, so callers fall back
+    to the neutral structural CFG cache instead of guessing between sessions.
+    """
     if funcdef is None:
         return None
-    with _SESSION_REGISTRY_LOCK:
-        session = _SESSION_BY_FUNCDEF_ID.get(id(funcdef))
-    if session is None:
-        return None
     name = getattr(getattr(funcdef, "decl", None), "name", None)
-    return session if name and session.function_def(name) is funcdef else None
+    if not name:
+        return None
+    with _SESSION_REGISTRY_LOCK:
+        owners = _SESSION_BY_FUNCDEF_ID.get(id(funcdef))
+        if owners is None:
+            return None
+        sessions = tuple(
+            session for session in owners if session.function_def(name) is funcdef
+        )
+        if not sessions:
+            _SESSION_BY_FUNCDEF_ID.pop(id(funcdef), None)
+            return None
+    return sessions[0] if len(sessions) == 1 else None
 
 
 def _discard_serialized_analysis_session():
@@ -123,12 +125,13 @@ class AnalysisSession:
         return (_discard_serialized_analysis_session, ())
 
     def _register_cfg_owners(self) -> None:
-        ast = getattr(self.ast_context, "pycparser_ast", None)
         with _SESSION_REGISTRY_LOCK:
-            if ast is not None:
-                _SESSION_BY_AST_ID[id(ast)] = self
             for funcdef in self._function_defs.values():
-                _SESSION_BY_FUNCDEF_ID[id(funcdef)] = self
+                owners = _SESSION_BY_FUNCDEF_ID.get(id(funcdef))
+                if owners is None:
+                    owners = WeakSet()
+                    _SESSION_BY_FUNCDEF_ID[id(funcdef)] = owners
+                owners.add(self)
 
     @property
     def function_defs(self):
