@@ -239,9 +239,9 @@ def _resolve_scan_jobs_args(args):
     targets = list(targets or ["."])
     internal.target = targets
 
+    # Preserve cli_base's established missing/invalid target error path. There
+    # is no effective worker count or selection source when a scan cannot start.
     if any(not os.path.exists(target) for target in targets):
-        if getattr(internal, "jobs", None) is None:
-            internal.jobs = 1
         return internal, None, None
 
     jobs, source = resolve_cli_jobs(targets, getattr(internal, "jobs", None))
