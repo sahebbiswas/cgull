@@ -38,8 +38,8 @@ def resolve_cli_jobs(
 
     Explicit positive values are returned unchanged. ``--jobs 0`` retains its
     automatic meaning, but uses the bounded CLI auto limit. When ``--jobs`` is
-    omitted, directory targets use automatic parallelism while explicit
-    file-only targets remain sequential.
+    omitted, only a single explicit file remains sequential; directory and
+    multi-target scans use automatic parallelism.
     """
     jobs_omitted = cli_jobs is None or isinstance(cli_jobs, _DefaultJobs)
     if not jobs_omitted:
@@ -49,9 +49,9 @@ def resolve_cli_jobs(
         return cli_jobs, JOBS_SOURCE_EXPLICIT
 
     effective_targets = list(targets) or ["."]
-    if any(os.path.isdir(target) for target in effective_targets):
-        return automatic_job_limit(), JOBS_SOURCE_AUTOMATIC
-    return 1, JOBS_SOURCE_SEQUENTIAL_DEFAULT
+    if len(effective_targets) == 1 and os.path.isfile(effective_targets[0]):
+        return 1, JOBS_SOURCE_SEQUENTIAL_DEFAULT
+    return automatic_job_limit(), JOBS_SOURCE_AUTOMATIC
 
 
 def _effective_worker_count(result: Any, selected_jobs: int) -> int:
