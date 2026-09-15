@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from cgull import CGullScanner
@@ -55,6 +56,19 @@ def test_session_builds_structural_cfg_once_per_function_and_reuses_call_graph_i
         assert uncached_builder.call_count == 2
         assert session.cfg_construction_count == 2
         assert session.cfg_construction_seconds >= 0.0
+
+
+def test_concurrent_cfg_requests_publish_one_canonical_instance():
+    ctx = _parse("int f(int x) { return x + 1; }\n")
+    session = analysis_session_for(ctx)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        cfgs = list(executor.map(lambda _: session.cfg("f"), range(32)))
+
+    assert cfgs
+    assert all(cfg is cfgs[0] for cfg in cfgs)
+    assert session.call_graph.function("f").cfg is cfgs[0]
+    assert session.cfg_construction_count == 1
 
 
 def test_full_rule_scan_structurally_builds_each_function_at_most_once():
