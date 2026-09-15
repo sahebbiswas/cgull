@@ -29,7 +29,7 @@ jobs:
     name: Per-CWE Detection Metrics
     if: ${{ github.event_name == 'pull_request' || inputs.full_cgull_049 == false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
     steps:
       - name: Checkout C-GULL
         uses: actions/checkout@v7
@@ -58,6 +58,12 @@ jobs:
           cat juliet-upstream.md
           cat juliet-upstream.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Measure full CGULL-042 CWE-563 family
+        run: |
+          python benchmarks/run_juliet_upstream.py .juliet-upstream --cwe CWE-563 --all --format markdown --output cgull-042-cwe563-full.md --json-output cgull-042-cwe563-full.json
+          cat cgull-042-cwe563-full.md
+          cat cgull-042-cwe563-full.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Diagnose split-file oracle attribution
         run: |
           python benchmarks/diagnose_juliet_oracle.py .juliet-upstream --per-cwe 25 --output juliet-oracle-diagnostic.md
@@ -79,6 +85,8 @@ jobs:
           path: |
             juliet-upstream.md
             juliet-upstream.json
+            cgull-042-cwe563-full.md
+            cgull-042-cwe563-full.json
             juliet-oracle-diagnostic.md
             cgull-049-regression.md
 
