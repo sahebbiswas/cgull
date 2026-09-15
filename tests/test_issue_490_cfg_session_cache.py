@@ -1,3 +1,4 @@
+import pickle
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -77,6 +78,20 @@ def test_concurrent_cfg_requests_publish_one_canonical_instance():
     assert all(cfg is cfgs[0] for cfg in cfgs)
     assert session.call_graph.function("f").cfg is cfgs[0]
     assert session.cfg_construction_count == 1
+
+
+def test_serialized_context_drops_process_local_session_and_rebuilds_it():
+    ctx = _parse("int f(int x) { return x + 1; }\n")
+    parent_session = analysis_session_for(ctx)
+    assert getattr(ctx, "analysis_session") is parent_session
+
+    restored = pickle.loads(pickle.dumps(ctx))
+
+    assert getattr(restored, "analysis_session", None) is None
+    worker_session = analysis_session_for(restored)
+    assert worker_session is not parent_session
+    assert worker_session.ast_context is restored
+    assert worker_session.cfg("f") is worker_session.call_graph.function("f").cfg
 
 
 def test_full_rule_scan_structurally_builds_each_function_at_most_once():
