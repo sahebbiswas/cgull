@@ -27,13 +27,17 @@ Dead-store families included for CGULL-042 are:
 - `unused_value_*` — an initial value is overwritten before a read.
 - `unused_init_variable_*` — a value is written and never subsequently read.
 - `unused_global_value_*` — a global's prior value is overwritten before use.
+- `unused_static_global_value_*` — a static global's prior value is overwritten before use.
 - `unused_parameter_value_*` — a parameter's incoming value is overwritten before use.
+- `unused_class_member_value_*` — a C++ class member's prior value is overwritten before use.
 
 Declaration-only families are excluded from CGULL-042 scoring:
 
 - `unused_uninit_variable_*`
 - `unused_global_variable_*`
+- `unused_static_global_variable_*`
 - `unused_parameter_variable_*`
+- `unused_class_member_variable_*`
 
 Any future CWE-563 template family that does not match one of these reviewed categories is reported as `unclassified` and excluded rather than silently becoming a CGULL-042 false negative.
 
@@ -44,7 +48,7 @@ python benchmarks/run_juliet_upstream.py /path/to/juliet-test-suite-c \
   --cwe CWE-563 --all --format markdown
 ```
 
-Known rule-correctness gaps found while preparing this measurement remain out of scope for the benchmark wiring: parameter dead stores are tracked by #496, and struct/member dead stores are tracked by #497. Measurement records those misses rather than changing CGULL-042 solely to improve its Juliet score.
+Known rule-correctness gaps found while preparing this measurement remain out of scope for the benchmark wiring: direct aggregate/member dead stores are tracked by #496, and explicit parameter dead stores are tracked by #497. Measurement records those misses rather than changing CGULL-042 solely to improve its Juliet score.
 
 ## Integer conversion measurement
 
