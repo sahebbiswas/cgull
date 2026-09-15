@@ -10,7 +10,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from . import cli_base as _base
-from .cli_jobs import jobs_aware_reporter, resolve_cli_jobs
+from .cli_jobs import CLI_JOBS_DEFAULT, jobs_aware_reporter, resolve_cli_jobs
 from .cli_mode import mode_aware_reporter, resolve_cli_scan_mode
 from .compile_database import (
     CompileCommandIncludeDatabase,
@@ -94,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
                 "(TU if any target is a directory, file mode otherwise)."
             )
         elif action.dest == "jobs":
-            action.default = None
+            action.default = CLI_JOBS_DEFAULT
             action.help = (
                 "Worker processes. When omitted, directory/multi-target scans use bounded "
                 "automatic parallelism and a single-file scan stays sequential. Use 1 to "
