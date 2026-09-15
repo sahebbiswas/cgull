@@ -21,10 +21,18 @@ def _parse(source: str):
 
 
 def _topology(cfg):
-    return {
-        node_id: (event.kind, tuple(event.successors))
-        for node_id, event in sorted(cfg.nodes.items())
-    }
+    return (
+        cfg.entry,
+        {
+            node_id: tuple(event.successors)
+            for node_id, event in sorted(cfg.nodes.items())
+        },
+        dict(cfg.edge_truth),
+        {
+            edge: (frozenset(add), frozenset(remove))
+            for edge, (add, remove) in cfg.edge_facts.items()
+        },
+    )
 
 
 def test_session_builds_structural_cfg_once_per_function_and_reuses_call_graph_instances():
