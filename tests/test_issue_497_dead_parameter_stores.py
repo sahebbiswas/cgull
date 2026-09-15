@@ -155,3 +155,14 @@ void f(int x) {
 """
     for scan in (scan_dead_stores, scan_dead_stores_fallback, scan_dead_stores_lexical):
         assert issue_lines(scan(code)) == {8}
+
+
+def test_address_of_array_element_does_not_escape_index_parameter():
+    code = """void consume(int *value);
+void f(int *arr, int i) {
+    consume(&arr[i]);
+    i = 3;
+}
+"""
+    for scan in (scan_dead_stores, scan_dead_stores_fallback, scan_dead_stores_lexical):
+        assert issue_lines(scan(code)) == {4}

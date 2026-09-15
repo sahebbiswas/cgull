@@ -99,20 +99,13 @@ class _BindingScopes:
         self.environments[id(node)] = dict(environment)
         if type(node).__name__ == "UnaryOp" and getattr(node, "op", None) == "&":
             expr = getattr(node, "expr", None)
-            for subnode in self._iter_nodes(expr):
-                if type(subnode).__name__ != "ID":
-                    continue
-                binding = environment.get(getattr(subnode, "name", ""))
+            # Follow the addressed lvalue, never its index or value operands.
+            while type(expr).__name__ in {"ArrayRef", "StructRef"}:
+                expr = expr.name
+            if type(expr).__name__ == "ID":
+                binding = environment.get(expr.name)
                 if binding is not None:
                     self.address_taken.add(binding)
-
-    @staticmethod
-    def _iter_nodes(node):
-        if node is None:
-            return
-        yield node
-        for _name, child in node.children():
-            yield from _BindingScopes._iter_nodes(child)
 
     def _bind_declaration(self, decl, environment: Dict[str, _Binding]):
         name = getattr(decl, "name", None)
