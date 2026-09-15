@@ -15,6 +15,7 @@ class CParameter:
     is_pointer: bool
     line_number: int
     is_array: bool = False
+    is_volatile: bool = False
 
 
 class ScopedVarDict(dict):

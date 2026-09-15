@@ -225,8 +225,8 @@ def _transition(
     return "none"
 
 
-def _write_is_live(cfg, node_id: int, effect_index: int, target: _Binding, scopes) -> bool:
-    source_effects = _bound_effects(cfg.nodes[node_id], scopes)
+def _write_is_live(cfg, node_id: int, effect_index: int, target: _Binding, effects_by_node) -> bool:
+    source_effects = effects_by_node[node_id]
     source_transition = _transition(source_effects[effect_index + 1 :], target)
     if source_transition == "read":
         return True
@@ -241,7 +241,7 @@ def _write_is_live(cfg, node_id: int, effect_index: int, target: _Binding, scope
             continue
         visited.add(current_id)
 
-        transition = _transition(_bound_effects(cfg.nodes[current_id], scopes), target)
+        transition = _transition(effects_by_node[current_id], target)
         if transition == "read":
             return True
         if transition == "overwrite":
@@ -272,16 +272,19 @@ def _suppressed_local_initializer(cfg, node, effect, binding, pure_coordinates) 
 
 
 def _dead_bound_write_candidates(cfg, scopes: _BindingScopes, pure_coordinates):
+    effects_by_node = {
+        node_id: _bound_effects(node, scopes) for node_id, node in cfg.nodes.items()
+    }
     for node_id in sorted(cfg.nodes):
         node = cfg.nodes[node_id]
-        for effect_index, (effect, binding) in enumerate(_bound_effects(node, scopes)):
+        for effect_index, (effect, binding) in enumerate(effects_by_node[node_id]):
             if not _eligible_bound_write(effect, binding, scopes):
                 continue
             if _suppressed_local_initializer(
                 cfg, node, effect, binding, pure_coordinates
             ):
                 continue
-            if _write_is_live(cfg, node_id, effect_index, binding, scopes):
+            if _write_is_live(cfg, node_id, effect_index, binding, effects_by_node):
                 continue
             yield node, binding
 
@@ -377,7 +380,9 @@ def _make_fallback_parameter(fn, param):
         type_name=type_name,
         is_pointer=bool(getattr(param, "is_pointer", False)),
         is_signed=("unsigned" not in type_name.split()),
-        is_volatile=("volatile" in type_name.split()),
+        is_volatile=(
+            getattr(param, "is_volatile", False) or "volatile" in type_name.split()
+        ),
         is_vla=False,
         array_size_expr=None,
         has_initializer=False,
@@ -400,15 +405,17 @@ def _raw_local_bindings(fn):
     return list(fn.variables)
 
 
-def _local_hides_parameter(local, name: str, scopes, exp_line: int) -> bool:
+def _local_hides_parameter(local, name: str, scopes, exp_line: int, declaration_scopes) -> bool:
     declaration_line = int(
         getattr(local, "declaration_line_exp", 0)
         or getattr(local, "declaration_line", 0)
         or 0
     )
+    local_scope = declaration_scopes.get(declaration_line, ())
     return (
         getattr(local, "name", None) == name
-        and int(getattr(local, "enclosing_block_id", 0) or 0) in scopes
+        and bool(local_scope)
+        and scopes[:len(local_scope)] == local_scope
         and declaration_line <= exp_line
     )
 
@@ -478,6 +485,9 @@ def fallback_parameter_bindings(fn):
         or 1
     )
     local_bindings = _raw_local_bindings(fn)
+    # AST and lexical parsers allocate different block IDs. Match each local
+    # declaration to the lexical scope at its source line instead.
+    declaration_scopes = {fn_start + offset: scope for offset, scope in line_scopes.items()}
 
     for offset, line in statements:
         exp_line = fn_start + offset
@@ -485,7 +495,7 @@ def fallback_parameter_bindings(fn):
         masked = mask_string_and_char_literals(line)
         for name, variable in bindings.items():
             hidden = any(
-                _local_hides_parameter(local, name, scopes, exp_line)
+                _local_hides_parameter(local, name, scopes, exp_line, declaration_scopes)
                 for local in local_bindings
             )
             if not hidden:
@@ -575,6 +585,29 @@ def _fallback_parameter_issue(
     return issue
 
 
+def _fallback_function_issues(rule, file_path, ast_ctx, fn, source, loop_infos):
+    variables = [
+        variable
+        for variable in fallback_parameter_bindings(fn)
+        if not variable.is_volatile and not variable.address_taken
+    ]
+    expanded_fn = _expanded_function(fn)
+    protected = _protected_parameter_writes(variables, loop_infos)
+    for variable in variables:
+        for line in _fallback_dead_write_lines(variable, protected):
+            issue = _fallback_parameter_issue(
+                rule,
+                file_path,
+                ast_ctx,
+                expanded_fn,
+                variable,
+                line,
+                source,
+            )
+            if issue is not None:
+                yield issue
+
+
 def fallback_parameter_dead_store_issues(rule, file_path, ast_ctx):
     """Report dead explicit parameter writes in lexical fallback mode."""
     from .dead_stores import _collect_loop_infos
@@ -588,26 +621,9 @@ def fallback_parameter_dead_store_issues(rule, file_path, ast_ctx):
     issues = []
 
     for fn in getattr(ast_ctx, "functions", ()):
-        variables = [
-            variable
-            for variable in fallback_parameter_bindings(fn)
-            if not variable.is_volatile and not variable.address_taken
-        ]
-        expanded_fn = _expanded_function(fn)
-        protected = _protected_parameter_writes(variables, loop_infos)
-        for variable in variables:
-            for line in _fallback_dead_write_lines(variable, protected):
-                issue = _fallback_parameter_issue(
-                    rule,
-                    file_path,
-                    ast_ctx,
-                    expanded_fn,
-                    variable,
-                    line,
-                    source,
-                )
-                if issue is not None:
-                    issues.append(issue)
+        issues.extend(_fallback_function_issues(
+            rule, file_path, ast_ctx, fn, source, loop_infos
+        ))
 
     return issues
 
