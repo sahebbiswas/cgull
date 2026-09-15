@@ -10,7 +10,7 @@ uses the normal code path. Both lanes run the normal full-rule scanner with
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -67,7 +67,7 @@ def _legacy_uncached_mode():
 
 
 def _run(project: Path, mode: str, *, legacy: bool):
-    lane = _legacy_uncached_mode() if legacy else contextmanager(lambda: (yield))()
+    lane = _legacy_uncached_mode() if legacy else nullcontext()
     with lane:
         with _measure_uncached_construction() as metrics:
             sample = medium.run_sample(
