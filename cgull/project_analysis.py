@@ -99,7 +99,92 @@ def _signature_key(node, types):
 class PreparedUnit:
     source: str
     expanded: object
-    context: object
+    _context: object = None
+    preparation_key: object = None
+    parse_flags: object = None
+    parse_enabled: bool = True
+
+    @property
+    def context(self):
+        if self._context is None and self.parse_enabled:
+            self._context = CASTParser().parse(
+                self.expanded.expanded_text,
+                defined_syms=self.parse_flags,
+            )
+        return self._context
+
+    @context.setter
+    def context(self, value):
+        self._context = value
+
+
+def _include_roots_key(config):
+    return tuple(os.path.normcase(os.path.realpath(path)) for path in config.include_roots)
+
+
+def _preparation_key(config, flags):
+    """Identity for a scan-local expansion/parse result."""
+    engine_mode = getattr(config.engine_mode, "value", config.engine_mode)
+    return profile_key(flags), _include_roots_key(config), engine_mode
+
+
+def _profile_flags(config, profiles):
+    return [profile.flags for profile in profiles] if profiles else [config.defined_syms]
+
+
+def prepare_units(files, config_for_file, profiles=None, prepared_units=None):
+    """Expand each requested file/profile at most once for this scan.
+
+    ``prepared_units`` is scan-local state from an earlier phase (for example TU
+    root preparation used for orphan-header classification). Compatible entries
+    are reused verbatim; incompatible configuration/profile identities are
+    replaced. AST parsing stays lazy so project preparation and single-file
+    analysis retain their existing phase/timing ownership.
+    """
+    prepared = defaultdict(dict)
+    for path, units in (prepared_units or {}).items():
+        prepared[path].update(units)
+
+    diagnostics = []
+    for path in sorted(set(files)):
+        config = config_for_file(path)
+        source = next((unit.source for unit in prepared[path].values()), None)
+
+        for flags in _profile_flags(config, profiles):
+            key = profile_key(flags)
+            expected_key = _preparation_key(config, flags)
+            existing = prepared[path].get(key)
+            if existing is not None and getattr(existing, "preparation_key", None) == expected_key:
+                continue
+
+            try:
+                if source is None:
+                    with open(path, encoding="utf-8", errors="replace") as stream:
+                        source = stream.read()
+                resolver = IncludeResolver(
+                    include_roots=config.include_roots,
+                    base_dir=os.path.dirname(os.path.abspath(path)),
+                )
+                expanded = TUIncludeExpander(
+                    resolver=resolver,
+                    defined_syms=flags,
+                ).expand(source, source_path=path)
+                prepared[path][key] = PreparedUnit(
+                    source,
+                    expanded,
+                    None,
+                    expected_key,
+                    dict(flags or {}),
+                    config.engine_mode != AnalysisEngine.REGEX,
+                )
+            except Exception as exc:
+                # Normal file scanning retains its established error reporting
+                # and will retry when no compatible prepared unit is available.
+                diagnostics.append(
+                    f"PROJECT_PREPARATION_FAILED: {path}: {exc}; cross-TU summaries omitted"
+                )
+
+    return dict(prepared), tuple(sorted(set(diagnostics)))
 
 
 class ProjectSummaryIndex:
@@ -239,41 +324,48 @@ class ProjectSummaryIndex:
         return self
 
 
-def prepare_project(files, config_for_file, profiles=None):
-    """Parse each TU/profile once and return per-file worker inputs + diagnostics."""
-    prepared = defaultdict(dict)
+def prepare_project(files, config_for_file, profiles=None, prepared_units=None):
+    """Build cross-TU summaries from scan-local prepared units."""
+    prepared, preparation_diagnostics = prepare_units(
+        files,
+        config_for_file,
+        profiles,
+        prepared_units=prepared_units,
+    )
     groups = defaultdict(dict)
     models = {}
-    diagnostics = []
+    diagnostics = list(preparation_diagnostics)
+
     for path in sorted(set(files)):
         config = config_for_file(path)
         if config.engine_mode == AnalysisEngine.REGEX:
             continue
+
         registries = [getattr(rule, "_semantic_models", EMPTY_SEMANTIC_MODELS) for rule in config.get_rules()]
         registry = next((r for r in registries if r != EMPTY_SEMANTIC_MODELS), EMPTY_SEMANTIC_MODELS)
         if any(r != EMPTY_SEMANTIC_MODELS and r != registry for r in registries):
             diagnostics.append(f"INCOMPATIBLE_MODELS: {path}; cross-TU summaries omitted")
             continue
+
         # Registry equality, not repr/order or a mutable process-global cache.
         model_id = next((key for key, value in models.items() if value == registry), len(models))
         models[model_id] = registry
-        for flags in ([p.flags for p in profiles] if profiles else [config.defined_syms]):
+        roots = _include_roots_key(config)
+        for flags in _profile_flags(config, profiles):
             key = profile_key(flags)
-            if key in prepared[path]:
+            unit = prepared.get(path, {}).get(key)
+            if unit is None:
                 continue
             try:
-                with open(path, encoding="utf-8", errors="replace") as stream:
-                    source = stream.read()
-                resolver = IncludeResolver(include_roots=config.include_roots, base_dir=os.path.dirname(os.path.abspath(path)))
-                expanded = TUIncludeExpander(resolver=resolver, defined_syms=flags).expand(source, source_path=path)
-                ctx = CASTParser().parse(expanded.expanded_text, defined_syms=flags)
-                prepared[path][key] = PreparedUnit(source, expanded, ctx)
-                if ctx.has_pycparser and ctx.pycparser_ast is not None:
-                    roots = tuple(os.path.normcase(os.path.realpath(p)) for p in config.include_roots)
-                    groups[(key, roots, model_id)][path] = ctx
+                ctx = unit.context
             except Exception as exc:
-                # Normal file scanning retains its established error reporting.
-                diagnostics.append(f"PROJECT_PREPARATION_FAILED: {path}: {exc}; cross-TU summaries omitted")
+                diagnostics.append(
+                    f"PROJECT_PREPARATION_FAILED: {path}: {exc}; cross-TU summaries omitted"
+                )
+                continue
+            if ctx is not None and ctx.has_pycparser and ctx.pycparser_ast is not None:
+                groups[(key, roots, model_id)][path] = ctx
+
     for (_, _, model_id), contexts in groups.items():
         if len(contexts) < 2:
             continue
@@ -288,4 +380,5 @@ def prepare_project(files, config_for_file, profiles=None):
                 ctx.project_summaries = {}
                 ctx.analysis_session = None
             diagnostics.append(f"PROJECT_ANALYSIS_FAILED: {exc}; cross-TU summaries omitted")
-    return dict(prepared), tuple(sorted(diagnostics))
+
+    return dict(prepared), tuple(sorted(set(diagnostics)))
