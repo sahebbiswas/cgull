@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from cgull import CGullScanner
 from cgull.analysis_session import analysis_session_for
 from cgull.ast_analyzer import CASTParser
 from cgull.cfg.call_graph import build_translation_unit_call_graph
@@ -54,6 +55,26 @@ def test_session_builds_structural_cfg_once_per_function_and_reuses_call_graph_i
         assert uncached_builder.call_count == 2
         assert session.cfg_construction_count == 2
         assert session.cfg_construction_seconds >= 0.0
+
+
+def test_full_rule_scan_structurally_builds_each_function_at_most_once():
+    source = (
+        "int helper(int value) { return value + 1; }\n"
+        "int top(int *p, int flag) {\n"
+        "    int value = helper(flag);\n"
+        "    if (p && flag) value += *p;\n"
+        "    return value;\n"
+        "}\n"
+    )
+
+    with patch(
+        "cgull.cfg.construction.build_cfg_uncached",
+        wraps=construction.build_cfg_uncached,
+    ) as uncached_builder:
+        result = CGullScanner().scan_text(source, file_path="issue490.c", quiet=True)
+
+    assert result.scanned_files_count == 1
+    assert uncached_builder.call_count <= 2
 
 
 def test_mutable_dataflow_on_analysis_cfg_does_not_leak_into_canonical_cfg():
