@@ -7,6 +7,7 @@ on:
       - "cgull/rules/**"
       - "benchmarks/run_juliet.py"
       - "benchmarks/run_juliet_upstream.py"
+      - "benchmarks/juliet_attribution.py"
       - "benchmarks/check_juliet_regression.py"
       - "benchmarks/juliet/cgull-049-regression-baseline.json"
       - "benchmarks/diagnose_juliet_oracle.py"

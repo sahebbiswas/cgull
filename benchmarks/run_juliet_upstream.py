@@ -29,6 +29,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from benchmarks.juliet_attribution import (
+    CWE563_UNCLASSIFIED,
+    applicable_rules_for_juliet_case,
+    cwe563_semantic_family,
+)
 from benchmarks.run_juliet import CWE_RULE_MAP, compute_metrics, extract_function_line_ranges, is_issue_cwe_match
 from cgull.engine import CGullScanner
 from cgull.models import AnalysisEngine
@@ -223,11 +228,21 @@ def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
         cwe: {"tp": 0, "fp": 0, "tn": 0, "fn": 0} for cwe in CWE_RULE_MAP
     }
     evaluated = 0
+    evaluated_entries = 0
     scanned_files = 0
     failed_files: List[str] = []
+    excluded_cases: Dict[str, List[str]] = defaultdict(list)
 
     for cwe, entry_path in cases:
-        relevant_rules = CWE_RULE_MAP[cwe]
+        relevant_rules = applicable_rules_for_juliet_case(
+            cwe, entry_path, CWE_RULE_MAP[cwe]
+        )
+        if not relevant_rules:
+            if cwe == "CWE-563":
+                excluded_cases[cwe563_semantic_family(entry_path)].append(str(entry_path))
+            continue
+
+        evaluated_entries += 1
         members = testcase_members(entry_path)
         scanned_files += len(members)
         result = scan_translation_unit_group(scanner, members, quiet=True)
@@ -271,21 +286,29 @@ def run_benchmark(cases: Sequence[Tuple[str, Path]]) -> Dict[str, object]:
         for key in ("tp", "fp", "tn", "fn")
     }
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "selected_files": len(cases),
+        "evaluated_testcase_entries": evaluated_entries,
         "scanned_files": scanned_files,
         "evaluated_functions": evaluated,
         "failed_files": failed_files,
+        "excluded_cases": dict(excluded_cases),
         "overall": compute_metrics(**overall_counts),
         "by_cwe": by_cwe,
     }
 
 
 def format_markdown(report: Dict[str, object]) -> str:
+    excluded_cases = report.get("excluded_cases", {})
+    excluded_count = sum(len(paths) for paths in excluded_cases.values())
+    unclassified_count = len(excluded_cases.get(CWE563_UNCLASSIFIED, []))
     lines = [
         "# Upstream Juliet 1.3 Benchmark",
         "",
         f"Selected testcase entries: {report['selected_files']}",
+        f"Semantically evaluated testcase entries: {report.get('evaluated_testcase_entries', report['selected_files'])}",
+        f"Semantically excluded testcase entries: {excluded_count}",
+        f"Unclassified excluded testcase entries: {unclassified_count}",
         f"Scanned source files: {report.get('scanned_files', report['selected_files'])}",
         f"Evaluated bad/good functions: {report['evaluated_functions']}",
         f"Failed files: {len(report['failed_files'])}",

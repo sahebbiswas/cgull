@@ -46,6 +46,7 @@ CWE_RULE_MAP = {
     "CWE-415": {"CGULL-027"},
     "CWE-401": {"CGULL-036"},
     "CWE-562": {"CGULL-038"},
+    "CWE-563": {"CGULL-042"},
 }
 
 CATEGORIES = [

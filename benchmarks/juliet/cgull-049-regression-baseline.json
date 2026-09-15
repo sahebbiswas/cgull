@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "report_schema_version": 3,
+  "report_schema_version": 4,
   "rule_id": "CGULL-049",
   "description": "Deterministic PR-time upstream Juliet 1.3 regression baseline for CGULL-049 conversion analysis.",
   "juliet_revision": "f88433e3443648a17671398797a04ea1f8e1a274",

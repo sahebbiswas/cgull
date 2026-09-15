@@ -43,7 +43,7 @@
     {"rule_id": "CGULL-039", "status": "not-yet-measured", "reason": "No rule-specific Juliet oracle is wired into the canonical benchmark yet."},
     {"rule_id": "CGULL-040", "status": "not-yet-measured", "reason": "No rule-specific Juliet oracle is wired into the canonical benchmark yet."},
     {"rule_id": "CGULL-041", "status": "not-yet-measured", "reason": "No rule-specific Juliet oracle is wired into the canonical benchmark yet."},
-    {"rule_id": "CGULL-042", "status": "not-yet-measured", "reason": "No rule-specific Juliet oracle is wired into the canonical benchmark yet."},
+    {"rule_id": "CGULL-042", "status": "measured", "juliet_cwes": ["CWE-563"], "measurement_scope": "Only CWE-563 template families with dead-store semantics are evaluated; declaration-only and unclassified families are excluded deterministically by benchmarks/juliet_attribution.py."},
     {"rule_id": "CGULL-043", "status": "no-Juliet-equivalent", "reason": "Variable shadowing is a coding-standard maintainability policy rather than a Juliet bad/good vulnerability oracle."},
     {"rule_id": "CGULL-044", "status": "measured", "juliet_cwes": ["CWE-121", "CWE-122"]},
     {"rule_id": "CGULL-045", "status": "no-Juliet-equivalent", "reason": "Header inclusion guards are a build/preprocessor hygiene policy without a suitable Juliet bad/good oracle."},
