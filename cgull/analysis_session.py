@@ -2,10 +2,41 @@
 
 from __future__ import annotations
 
+from threading import RLock
+from time import perf_counter
 from typing import Dict
+from weakref import WeakValueDictionary
 
 from .call_effects import ReturnEffect
 from .semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
+
+
+_SESSION_REGISTRY_LOCK = RLock()
+_SESSION_BY_AST_ID: "WeakValueDictionary[int, AnalysisSession]" = WeakValueDictionary()
+_SESSION_BY_FUNCDEF_ID: "WeakValueDictionary[int, AnalysisSession]" = WeakValueDictionary()
+
+
+def _analysis_session_for_ast(ast):
+    """Return the live session owning ``ast`` when one has been registered."""
+    if ast is None:
+        return None
+    with _SESSION_REGISTRY_LOCK:
+        session = _SESSION_BY_AST_ID.get(id(ast))
+    if session is None:
+        return None
+    return session if getattr(session.ast_context, "pycparser_ast", None) is ast else None
+
+
+def _analysis_session_for_funcdef(funcdef):
+    """Return the live session owning ``funcdef`` when one has been registered."""
+    if funcdef is None:
+        return None
+    with _SESSION_REGISTRY_LOCK:
+        session = _SESSION_BY_FUNCDEF_ID.get(id(funcdef))
+    if session is None:
+        return None
+    name = getattr(getattr(funcdef, "decl", None), "name", None)
+    return session if name and session.function_def(name) is funcdef else None
 
 
 class AnalysisQueries:
@@ -62,6 +93,14 @@ class AnalysisSession:
             if isinstance(semantic_models, SemanticModelRegistry)
             else EMPTY_SEMANTIC_MODELS
         )
+        from .cfg.construction import build_function_def_index
+
+        self._function_defs = build_function_def_index(
+            getattr(ast_context, "pycparser_ast", None)
+        )
+        self._cfg_cache: Dict[str, object] = {}
+        self._cfg_construction_count = 0
+        self._cfg_construction_seconds = 0.0
         self._call_graph = None
         self._function_summary_result = None
         self._ownership_summary_result = None
@@ -71,14 +110,113 @@ class AnalysisSession:
         self._pointer_range_analysis_result = None
         self._summary_construction_count = 0
         self._queries = AnalysisQueries(self)
+        self._register_cfg_owners()
+
+    def _register_cfg_owners(self) -> None:
+        ast = getattr(self.ast_context, "pycparser_ast", None)
+        with _SESSION_REGISTRY_LOCK:
+            if ast is not None:
+                _SESSION_BY_AST_ID[id(ast)] = self
+            for funcdef in self._function_defs.values():
+                _SESSION_BY_FUNCDEF_ID[id(funcdef)] = self
+
+    @property
+    def function_defs(self):
+        """One-pass function-definition index for this translation unit."""
+        return self._function_defs
+
+    def function_def(self, function_name: str):
+        """Return a pycparser ``FuncDef`` in O(1) after session construction."""
+        return self._function_defs.get(function_name)
+
+    def _raw_cfg(self, function_name: str):
+        """Return the session-owned structural CFG without forcing call-graph recursion."""
+        if function_name not in self._cfg_cache:
+            funcdef = self.function_def(function_name)
+            if funcdef is None:
+                return None
+            from .cfg.construction import clone_cached_structural_cfg
+
+            started = perf_counter()
+            cfg = clone_cached_structural_cfg(
+                funcdef,
+                line_map=getattr(self.ast_context, "line_map", None),
+            )
+            self._cfg_construction_seconds += perf_counter() - started
+            self._cfg_construction_count += 1
+            self._cfg_cache[function_name] = cfg
+        return self._cfg_cache[function_name]
 
     @property
     def call_graph(self):
         if self._call_graph is None:
             from .cfg.call_graph import build_translation_unit_call_graph
 
-            self._call_graph = build_translation_unit_call_graph(self.ast_context)
+            self._call_graph = build_translation_unit_call_graph(
+                self.ast_context,
+                function_defs=self.function_defs,
+                cfg_provider=self._raw_cfg,
+            )
         return self._call_graph
+
+    def cfg(self, function_name: str):
+        """Return the canonical resolved structural CFG for ``function_name``.
+
+        Callers must treat this graph as read-only. Analyses that attach or mutate
+        data-flow state should use :meth:`analysis_cfg` instead.
+        """
+        function = self.call_graph.function(function_name)
+        return function.cfg if function is not None else None
+
+    def analysis_cfg(
+        self,
+        function_name: str,
+        *,
+        alloc_funcs=None,
+        dealloc_funcs=None,
+        realloc_funcs=None,
+        summaries=None,
+    ):
+        """Return an isolated CFG view sharing the session's structural topology."""
+        cfg = self.cfg(function_name)
+        if cfg is None:
+            return None
+        from .cfg.construction import apply_cfg_event_semantics, clone_structural_cfg
+
+        clone = clone_structural_cfg(cfg)
+        if any(
+            value is not None
+            for value in (alloc_funcs, dealloc_funcs, realloc_funcs, summaries)
+        ):
+            apply_cfg_event_semantics(
+                clone,
+                alloc_funcs=alloc_funcs,
+                dealloc_funcs=dealloc_funcs,
+                realloc_funcs=realloc_funcs,
+                summaries=summaries,
+                line_map=getattr(self.ast_context, "line_map", None),
+            )
+        return clone
+
+    def _analysis_cfg_for_funcdef(
+        self,
+        funcdef,
+        *,
+        alloc_funcs=None,
+        dealloc_funcs=None,
+        realloc_funcs=None,
+        summaries=None,
+    ):
+        name = getattr(getattr(funcdef, "decl", None), "name", None)
+        if not name or self.function_def(name) is not funcdef:
+            return None
+        return self.analysis_cfg(
+            name,
+            alloc_funcs=alloc_funcs,
+            dealloc_funcs=dealloc_funcs,
+            realloc_funcs=realloc_funcs,
+            summaries=summaries,
+        )
 
     def _memory_effect_sets(self):
         """Translate declarative effects into the legacy CFG summary inputs."""
@@ -209,6 +347,16 @@ class AnalysisSession:
     @property
     def summary_construction_count(self) -> int:
         return self._summary_construction_count
+
+    @property
+    def cfg_construction_count(self) -> int:
+        """Number of canonical per-function CFGs materialized by this session."""
+        return self._cfg_construction_count
+
+    @property
+    def cfg_construction_seconds(self) -> float:
+        """Wall time spent materializing canonical session CFG views."""
+        return self._cfg_construction_seconds
 
     @property
     def queries(self) -> AnalysisQueries:
