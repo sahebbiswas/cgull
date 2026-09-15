@@ -65,7 +65,7 @@ from .misra_and_style import (
     VariableShadowingRule,
     MissingInclusionGuardRule,
 )
-from .dead_stores import DeadStoresRule
+from .dead_store_members import DeadStoresRule
 from .trust_boundary import UnvalidatedExternalDataSinkRule
 from .preprocessor_reachability import PreprocessorReachabilityRule
 from .preprocessor_simplification import PreprocessorSimplificationRule
