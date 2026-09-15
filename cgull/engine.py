@@ -282,7 +282,12 @@ class CGullScanner:
                     base_flags=self.config.defined_syms,
                 )
 
+        prepared_source_units: Dict[str, Dict[Any, Any]] = {}
+        source_preparation_diagnostics: Tuple[str, ...] = ()
+
         if self.config.mode == ScanMode.TU and files_to_scan:
+            from .project_analysis import prepare_units, profile_key
+
             source_roots: List[str] = []
             headers: List[str] = []
             HEADER_EXTS = {".h", ".hpp"}
@@ -293,28 +298,39 @@ class CGullScanner:
                 else:
                     source_roots.append(fpath)
 
-            included_headers: Set[str] = set()
-            inc_roots = self.config.include_roots
+            preparation_config = self._get_active_config()
             active_profiles = profiles if profiles else seed_profiles
+            prepared_source_units, source_preparation_diagnostics = prepare_units(
+                source_roots,
+                lambda path: self._config_for_file(preparation_config, path),
+                active_profiles,
+            )
 
-            for s_path in source_roots:
-                try:
-                    with open(s_path, "r", encoding="utf-8", errors="replace") as f:
-                        s_content = f.read()
-                    s_dir = os.path.dirname(os.path.abspath(s_path))
-                    resolver = IncludeResolver(include_roots=inc_roots, base_dir=s_dir)
+            # Seed profiles are used for header reachability, while the actual
+            # scan still uses their merged flags when no explicit/generated
+            # profile set exists. Prepare that scan identity too so a one-root
+            # directory does not fall back to a second include expansion.
+            if profiles is None and seed_profiles:
+                prepared_source_units, scan_preparation_diagnostics = prepare_units(
+                    source_roots,
+                    lambda path: self._config_for_file(preparation_config, path),
+                    None,
+                    prepared_units=prepared_source_units,
+                )
+                source_preparation_diagnostics = tuple(sorted(set(
+                    source_preparation_diagnostics + scan_preparation_diagnostics
+                )))
 
-                    if active_profiles:
-                        for prof in active_profiles:
-                            expander = TUIncludeExpander(resolver=resolver, defined_syms=prof.flags)
-                            expanded_tu = expander.expand(s_content, source_path=s_path)
-                            included_headers.update(expanded_tu.included_files)
-                    else:
-                        expander = TUIncludeExpander(resolver=resolver, defined_syms=self.config.defined_syms)
-                        expanded_tu = expander.expand(s_content, source_path=s_path)
-                        included_headers.update(expanded_tu.included_files)
-                except Exception as e:
-                    logger.warning("Failed to expand includes for TU root '%s': %s", s_path, e)
+            if active_profiles:
+                classification_keys = {profile_key(profile.flags) for profile in active_profiles}
+            else:
+                classification_keys = {profile_key(preparation_config.defined_syms)}
+
+            included_headers: Set[str] = set()
+            for units in prepared_source_units.values():
+                for key, prepared in units.items():
+                    if key in classification_keys:
+                        included_headers.update(prepared.expanded.included_files)
 
             orphan_headers: List[str] = []
             for h_path in headers:
@@ -328,7 +344,6 @@ class CGullScanner:
                     logger.info("Scanning orphan header '%s' as standalone root (not included by any scanned C source file).", display_path)
 
             files_to_scan = source_roots + orphan_headers
-
 
         total_files = len(files_to_scan)
         if total_files > 0:
@@ -361,17 +376,22 @@ class CGullScanner:
 
         from .project_analysis import prepare_project
 
-        self._project_units = {}
-        self.project_diagnostics = ()
+        self._project_units = prepared_source_units
+        self.project_diagnostics = source_preparation_diagnostics
         try:
             if len(files_to_scan) > 1 and config.engine_mode != AnalysisEngine.REGEX:
-                self._project_units, self.project_diagnostics = prepare_project(
+                self._project_units, project_diagnostics = prepare_project(
                     files_to_scan,
                     lambda path: self._config_for_file(config, path),
                     profiles,
+                    prepared_units=self._project_units,
                 )
-                for diagnostic in self.project_diagnostics:
-                    logger.log(logging.INFO if quiet else logging.WARNING, "%s", diagnostic)
+                self.project_diagnostics = tuple(sorted(set(
+                    self.project_diagnostics + project_diagnostics
+                )))
+
+            for diagnostic in self.project_diagnostics:
+                logger.log(logging.INFO if quiet else logging.WARNING, "%s", diagnostic)
 
             progress_active = (progress_callback is not None) and (not quiet)
             if resolved_jobs > 1:
