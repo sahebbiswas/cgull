@@ -174,7 +174,7 @@ def prepare_units(files, config_for_file, profiles=None, prepared_units=None):
                     expanded,
                     None,
                     expected_key,
-                    flags,
+                    dict(flags or {}),
                     config.engine_mode != AnalysisEngine.REGEX,
                 )
             except Exception as exc:
