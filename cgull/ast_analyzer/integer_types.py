@@ -193,17 +193,17 @@ def infer_integer_expression_type(ast_ctx: CASTContext, node: Any, fn: Any = Non
     if kind == "FuncCall":
         name = getattr(node, "name", None)
         if type(name).__name__ == "ID":
-            callee = next(
-                (
-                    candidate
+            attribute = "_cgull_integer_function_return_types"
+            return_types = getattr(ast_ctx, attribute, None)
+            if not isinstance(return_types, dict):
+                return_types = {
+                    candidate.name: candidate.return_type
                     for candidate in getattr(ast_ctx, "functions", ())
-                    if candidate.name == str(name.name)
-                ),
-                None,
-            )
-            if callee and get_integer_type_byte_size(callee.return_type, ast_ctx) is not None:
-                return callee.return_type
-        return None
+                }
+                setattr(ast_ctx, attribute, return_types)
+            return_type = return_types.get(str(name.name))
+            if return_type and get_integer_type_byte_size(return_type, ast_ctx) is not None:
+                return return_type
     inferred = ast_ctx.infer_expr_type(node, fn)
     if inferred and get_integer_type_byte_size(inferred, ast_ctx) is not None:
         return inferred
