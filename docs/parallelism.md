@@ -7,8 +7,8 @@ C-GULL keeps explicit worker control through `-j` / `--jobs`, while choosing a s
 When `--jobs` is omitted:
 
 - a directory target such as `cgull scan .` or `cgull scan src/` uses bounded automatic parallelism;
-- mixed targets that contain a directory also use bounded automatic parallelism;
-- file-only targets remain sequential by default, including a direct `cgull scan file.c` invocation.
+- multi-target scans also use bounded automatic parallelism, including mixed file/directory targets;
+- one explicitly targeted source file such as `cgull scan file.c` remains sequential by default.
 
 Automatic CLI selection uses the available logical CPU count but caps the initial worker limit at **8**. After file discovery, the scanner already caps the effective worker count to the number of files that will actually be scanned. As a result, a directory containing only one scan target remains in the sequential path instead of starting a worker pool.
 
@@ -39,8 +39,8 @@ CLI reports expose both the effective worker count and how it was selected:
 Worker source is one of:
 
 - `explicit` for `--jobs 1` or another positive count;
-- `automatic` for directory-default parallelism or `--jobs 0`;
-- `sequential default` for an omitted `--jobs` on file-only targets.
+- `automatic` for directory/multi-target defaults or `--jobs 0`;
+- `sequential default` for an omitted `--jobs` on a single-file target.
 
 The reported worker count is the effective count after the scan workload is known, so a tiny directory may report fewer workers than the automatic limit.
 
