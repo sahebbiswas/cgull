@@ -18,6 +18,13 @@ JOBS_SOURCE_AUTOMATIC = "automatic"
 JOBS_SOURCE_SEQUENTIAL_DEFAULT = "sequential default"
 
 
+class _DefaultJobs(int):
+    """Parser-compatible marker distinguishing omitted jobs from explicit 1."""
+
+
+CLI_JOBS_DEFAULT = _DefaultJobs(1)
+
+
 def automatic_job_limit() -> int:
     """Return the bounded CLI automatic worker limit."""
     return max(1, min(AUTO_JOBS_CAP, os.cpu_count() or 1))
@@ -34,7 +41,9 @@ def resolve_cli_jobs(
     omitted, a single explicit file remains sequential while directory and
     multi-target scans use automatic parallelism.
     """
-    if cli_jobs is not None:
+    jobs_omitted = cli_jobs is None or isinstance(cli_jobs, _DefaultJobs)
+    if not jobs_omitted:
+        assert cli_jobs is not None
         if cli_jobs == 0:
             return automatic_job_limit(), JOBS_SOURCE_AUTOMATIC
         return cli_jobs, JOBS_SOURCE_EXPLICIT
