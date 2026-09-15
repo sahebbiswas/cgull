@@ -36,7 +36,7 @@ def test_omitted_jobs_auto_parallelize_directories_with_a_bounded_cap(tmp_path):
     assert source == JOBS_SOURCE_AUTOMATIC
 
 
-def test_omitted_jobs_keep_file_only_targets_sequential(tmp_path):
+def test_omitted_jobs_keep_single_file_sequential_and_parallelize_multi_target(tmp_path):
     first = tmp_path / "first.c"
     second = tmp_path / "second.c"
     first.write_text("int first(void) { return 1; }\n", encoding="utf-8")
@@ -45,8 +45,9 @@ def test_omitted_jobs_keep_file_only_targets_sequential(tmp_path):
     jobs, source = resolve_cli_jobs([str(first)], None)
     assert (jobs, source) == (1, JOBS_SOURCE_SEQUENTIAL_DEFAULT)
 
-    jobs, source = resolve_cli_jobs([str(first), str(second)], None)
-    assert (jobs, source) == (1, JOBS_SOURCE_SEQUENTIAL_DEFAULT)
+    with patch("cgull.cli_jobs.os.cpu_count", return_value=4):
+        jobs, source = resolve_cli_jobs([str(first), str(second)], None)
+    assert (jobs, source) == (4, JOBS_SOURCE_AUTOMATIC)
 
 
 def test_explicit_job_controls_are_preserved(tmp_path):
