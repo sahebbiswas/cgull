@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import re
 from typing import Dict, Mapping, Optional, Set, Tuple
 
-from ..ast_analyzer.integer_types import _resolved_scalar_type
 from .construction import build_cfg, find_function_def
 from .integer_ranges import (
     IntegerRange,
@@ -36,6 +35,7 @@ class IntegerRangeSummaryIndex:
 
     parameter_ranges: Mapping[str, Mapping[str, IntegerRange]]
     return_ranges: Mapping[str, IntegerRange]
+    analyses: Mapping[str, IntegerRangeAnalysis]
     converged: bool
     iterations: int
 
@@ -149,9 +149,6 @@ def _private_static(funcdef) -> bool:
 def _clamp_to_type(value: IntegerRange, type_name: str, ast_ctx) -> Optional[IntegerRange]:
     destination = integer_type_range(type_name, ast_ctx)
     if destination is None:
-        # Plain char remains intentionally target-dependent.
-        if _resolved_scalar_type(type_name, ast_ctx) == "char":
-            return None
         return None
     if value.fits_within(destination):
         return value
@@ -221,12 +218,19 @@ def _analyze_seeded(
     function_name: str,
     entry_ranges: Mapping[str, IntegerRange],
     return_ranges: Mapping[str, IntegerRange],
+    *,
+    fn=None,
+    funcdef=None,
+    cfg=None,
 ) -> Optional[IntegerRangeAnalysis]:
-    fn = next((candidate for candidate in getattr(ast_ctx, "functions", ()) if candidate.name == function_name), None)
-    funcdef = find_function_def(getattr(ast_ctx, "pycparser_ast", None), function_name)
+    if fn is None:
+        fn = next((candidate for candidate in getattr(ast_ctx, "functions", ()) if candidate.name == function_name), None)
+    if funcdef is None:
+        funcdef = find_function_def(getattr(ast_ctx, "pycparser_ast", None), function_name)
     if fn is None or funcdef is None:
         return None
-    cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+    if cfg is None:
+        cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
     if not cfg.nodes or cfg.entry is None:
         return _SummaryAwareIntegerRangeAnalysis(ast_ctx, fn, cfg, {}, return_ranges)
 
@@ -375,6 +379,10 @@ def _build_summary_index(ast_ctx) -> IntegerRangeSummaryIndex:
     models = _function_models(ast_ctx)
     funcdefs = _function_defs(ast_ctx)
     graph, callsites = _collect_calls(funcdefs)
+    cfgs = {
+        name: build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+        for name, funcdef in funcdefs.items()
+    }
     recursive = _recursive_functions(graph)
     escaped = _escaped_function_references(ast_ctx, funcdefs)
     eligible_parameters = {
@@ -389,7 +397,15 @@ def _build_summary_index(ast_ctx) -> IntegerRangeSummaryIndex:
 
     for iteration in range(1, max_iterations + 1):
         analyses = {
-            name: _analyze_seeded(ast_ctx, name, parameter_ranges.get(name, {}), return_ranges)
+            name: _analyze_seeded(
+                ast_ctx,
+                name,
+                parameter_ranges.get(name, {}),
+                return_ranges,
+                fn=models[name],
+                funcdef=funcdefs[name],
+                cfg=cfgs[name],
+            )
             for name in funcdefs
         }
         next_returns: Dict[str, IntegerRange] = {}
@@ -414,12 +430,12 @@ def _build_summary_index(ast_ctx) -> IntegerRangeSummaryIndex:
                 next_parameters[name] = summary
 
         if next_parameters == parameter_ranges and next_returns == return_ranges:
-            return IntegerRangeSummaryIndex(next_parameters, next_returns, True, iteration)
+            return IntegerRangeSummaryIndex(next_parameters, next_returns, analyses, True, iteration)
         parameter_ranges = next_parameters
         return_ranges = next_returns
 
     # If the bounded fixed point does not converge, expose no behavioral facts.
-    return IntegerRangeSummaryIndex({}, {}, False, max_iterations)
+    return IntegerRangeSummaryIndex({}, {}, {}, False, max_iterations)
 
 
 def integer_range_summary_index(ast_ctx) -> IntegerRangeSummaryIndex:
@@ -438,9 +454,4 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
     """Analyze one function with conservative same-TU direct-helper summaries."""
 
     summaries = integer_range_summary_index(ast_ctx)
-    return _analyze_seeded(
-        ast_ctx,
-        function_name,
-        summaries.parameter_ranges.get(function_name, {}),
-        summaries.return_ranges,
-    )
+    return summaries.analyses.get(function_name)
