@@ -12,7 +12,6 @@ from typing import List, Optional
 
 from .banned_functions import FormatStringRule as _LegacyFormatStringRule
 from ..ast_analyzer import CASTContext
-from ..cfg.construction import build_cfg, find_function_def
 from ..cfg.value_facts import FormatLiteralness, ValueFact, ValueProvenance
 from ..cfg.value_interprocedural import _actual_fact as _resolve_actual_fact
 from ..evidence import build_value_fact_evidence, public_degradation_reasons
@@ -280,12 +279,9 @@ class FormatStringRule(_LegacyFormatStringRule):
             result = value_analysis.function(function.name)
             if result is None:
                 continue
-            funcdef = find_function_def(ast_ctx.pycparser_ast, function.name)
-            if funcdef is None:
+            cfg = session.cfg(function.name)
+            if cfg is None:
                 continue
-            cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
-            if not cfg.blocks:
-                cfg.build_basic_blocks()
 
             for event in sorted(cfg.nodes.values(), key=lambda item: item.node_id):
                 for call in getattr(event, "calls", ()):

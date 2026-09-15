@@ -3,10 +3,10 @@
 from dataclasses import dataclass
 from heapq import heappop, heappush
 from time import perf_counter
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
-from .construction import build_cfg, find_function_def
+from .construction import build_cfg, build_function_def_index
 from .dataflow import StructuredCFG
 from .indirect_calls import resolve_indirect_calls
 from .model import CFGCall, CFGSourceLocation
@@ -244,26 +244,48 @@ def _function_source_location(funcdef: Any, line_map: Optional[Dict[int, Any]]) 
     )
 
 
-def build_translation_unit_call_graph(ast_context: Any) -> TranslationUnitCallGraph:
-    """Build the call graph for all pycparser definitions in ``ast_context``."""
+def build_translation_unit_call_graph(
+    ast_context: Any,
+    *,
+    function_defs: Optional[Mapping[str, Any]] = None,
+    cfg_provider: Optional[Callable[[str], Optional[StructuredCFG]]] = None,
+) -> TranslationUnitCallGraph:
+    """Build the call graph for all pycparser definitions in ``ast_context``.
+
+    ``function_defs`` and ``cfg_provider`` let :class:`AnalysisSession` supply
+    its one-pass definition index and canonical per-function CFGs. Standalone
+    callers retain the same behavior but still benefit from the shared structural
+    CFG cache in :func:`build_cfg`.
+    """
     if not getattr(ast_context, "has_pycparser", False) or getattr(ast_context, "pycparser_ast", None) is None:
         return build_call_graph(())
 
+    if cfg_provider is None:
+        from ..analysis_session import AnalysisSession
+
+        session = getattr(ast_context, "analysis_session", None)
+        if isinstance(session, AnalysisSession):
+            return session.call_graph
+
     line_map = getattr(ast_context, "line_map", None)
+    definitions = function_defs or build_function_def_index(ast_context.pycparser_ast)
     inputs = []
     seen = set()
     for function in sorted(getattr(ast_context, "functions", ()), key=lambda item: item.name):
         if function.name in seen:
             continue
-        funcdef = find_function_def(ast_context.pycparser_ast, function.name)
+        funcdef = definitions.get(function.name)
         if funcdef is None:
+            continue
+        cfg = cfg_provider(function.name) if cfg_provider is not None else build_cfg(funcdef, line_map=line_map)
+        if cfg is None:
             continue
         seen.add(function.name)
         storage = set(getattr(getattr(funcdef, "decl", None), "storage", ()) or ())
         inputs.append(
             CallGraphFunction(
                 name=function.name,
-                cfg=build_cfg(funcdef, line_map=line_map),
+                cfg=cfg,
                 linkage="internal" if "static" in storage else "external",
                 source_location=_function_source_location(funcdef, line_map),
             )

@@ -434,4 +434,233 @@ def find_function_def(ast, name: str):
     return None
 
 
-__all__ = ["build_cfg", "find_function_def"]
+# Preserve the original constructors as explicit uncached escape hatches. The
+# public names below are rebound to session/cache-aware wrappers so existing
+# callers automatically reuse topology without inheriting mutable data-flow state.
+build_cfg_uncached = build_cfg
+find_function_def_uncached = find_function_def
+
+from copy import copy
+from threading import RLock
+from weakref import WeakKeyDictionary
+
+
+_CACHE_LOCK = RLock()
+_FUNCTION_DEF_INDEX_CACHE = WeakKeyDictionary()
+_STRUCTURAL_CFG_CACHE = WeakKeyDictionary()
+
+
+def build_function_def_index(ast) -> Dict[str, Any]:
+    """Return a one-pass function-definition index for a pycparser AST."""
+    if ast is None:
+        return {}
+    with _CACHE_LOCK:
+        try:
+            cached = _FUNCTION_DEF_INDEX_CACHE.get(ast)
+        except TypeError:
+            cached = None
+        if cached is not None:
+            return cached
+        index: Dict[str, Any] = {}
+        for ext in getattr(ast, "ext", []) or []:
+            if type(ext).__name__ != "FuncDef":
+                continue
+            name = getattr(getattr(ext, "decl", None), "name", None)
+            if name and name not in index:
+                index[name] = ext
+        try:
+            _FUNCTION_DEF_INDEX_CACHE[ast] = index
+        except TypeError:
+            pass
+        return index
+
+
+def find_function_def(ast, name: str):
+    """Look up a function definition in O(1) after one AST indexing pass."""
+    return build_function_def_index(ast).get(name)
+
+
+def clone_structural_cfg(cfg: StructuredCFG) -> StructuredCFG:
+    """Clone graph/event topology while discarding mutable analysis results."""
+    clone = type(cfg)()
+    clone.entry = cfg.entry
+    clone._next_id = cfg._next_id
+    clone.edge_truth = dict(cfg.edge_truth)
+    clone.edge_facts = {
+        edge: (set(add), set(remove))
+        for edge, (add, remove) in cfg.edge_facts.items()
+    }
+    clone.diagnostics = list(cfg.diagnostics)
+
+    for node_id, node in cfg.nodes.items():
+        event = copy(node)
+        event.reads = set(node.reads)
+        event.writes = set(node.writes)
+        event.null_writes = set(node.null_writes)
+        event.maybe_null_writes = set(node.maybe_null_writes)
+        event.freed = set(node.freed)
+        event.allocated = set(node.allocated)
+        event.derefs = set(node.derefs)
+        event.deref_lines = dict(node.deref_lines)
+        event.asserted = set(node.asserted)
+        event.alias_writes = dict(node.alias_writes)
+        event.realloc_inputs = set(node.realloc_inputs)
+        event.realloc_bindings = dict(node.realloc_bindings)
+        event.calls = tuple(node.calls)
+        event.successors = list(node.successors)
+        clone.nodes[node_id] = event
+
+    clone.build_basic_blocks()
+    return clone
+
+
+def _cached_structural_cfg(funcdef, line_map=None) -> StructuredCFG:
+    """Return the private immutable-by-convention structural base for a FuncDef."""
+    with _CACHE_LOCK:
+        try:
+            by_line_map = _STRUCTURAL_CFG_CACHE.get(funcdef)
+        except TypeError:
+            by_line_map = None
+        key = id(line_map)
+        if by_line_map is not None:
+            cached = by_line_map.get(key)
+            if cached is not None and cached[0] is line_map:
+                return cached[1]
+
+        cfg = build_cfg_uncached(funcdef, line_map=line_map)
+        if by_line_map is None:
+            by_line_map = {}
+        by_line_map[key] = (line_map, cfg)
+        try:
+            _STRUCTURAL_CFG_CACHE[funcdef] = by_line_map
+        except TypeError:
+            pass
+        return cfg
+
+
+def clone_cached_structural_cfg(funcdef, line_map=None) -> StructuredCFG:
+    """Return a fresh mutable view of the cached AST-to-CFG topology."""
+    return clone_structural_cfg(_cached_structural_cfg(funcdef, line_map=line_map))
+
+
+_CONDITION_OR_STRUCTURAL_KINDS = {
+    "if_cond",
+    "while_cond",
+    "do_cond",
+    "for_cond",
+    "switch_cond",
+    "label",
+    "goto",
+    "unknown_control_flow",
+}
+
+
+def apply_cfg_event_semantics(
+    cfg: StructuredCFG,
+    *,
+    alloc_funcs: Optional[Set[str]] = None,
+    dealloc_funcs: Optional[Set[str]] = None,
+    realloc_funcs: Optional[Set[str]] = None,
+    summaries: Optional[Dict[str, FunctionSummary]] = None,
+    line_map: Optional[Dict[int, Any]] = None,
+) -> StructuredCFG:
+    """Recompute analysis-specific event facts without rebuilding graph topology."""
+    for event in cfg.nodes.values():
+        if event.kind in _CONDITION_OR_STRUCTURAL_KINDS:
+            continue
+        ast_node = getattr(event, "_ast_node", None)
+        if ast_node is None:
+            continue
+        (
+            kind,
+            reads,
+            writes,
+            null_writes,
+            maybe_null_writes,
+            freed,
+            allocated,
+            derefs,
+            deref_lines,
+            asserted,
+            alias_writes,
+            realloc_inputs,
+            realloc_bindings,
+        ) = _event_payload(
+            ast_node,
+            alloc_funcs=alloc_funcs,
+            dealloc_funcs=dealloc_funcs,
+            realloc_funcs=realloc_funcs,
+            summaries=summaries,
+            line_map=line_map,
+        )
+        if kind != "FuncCall":
+            reads, writes = expression_read_write_sets(ast_node)
+        event.kind = "allocation" if allocated else "free" if freed else kind.lower()
+        event.reads = set(reads)
+        event.writes = set(writes)
+        event.null_writes = set(null_writes)
+        event.maybe_null_writes = set(maybe_null_writes)
+        event.freed = set(freed)
+        event.allocated = set(allocated)
+        event.derefs = set(derefs)
+        event.deref_lines = dict(deref_lines)
+        event.asserted = set(asserted)
+        event.alias_writes = dict(alias_writes)
+        event.realloc_inputs = set(realloc_inputs)
+        event.realloc_bindings = dict(realloc_bindings)
+    return cfg
+
+
+def build_cfg(
+    funcdef,
+    alloc_funcs: Optional[Set[str]] = None,
+    dealloc_funcs: Optional[Set[str]] = None,
+    realloc_funcs: Optional[Set[str]] = None,
+    summaries: Optional[Dict[str, FunctionSummary]] = None,
+    line_map: Optional[Dict[int, Any]] = None,
+) -> StructuredCFG:
+    """Return an isolated CFG view backed by cached structural topology."""
+    try:
+        from ..analysis_session import _analysis_session_for_funcdef
+
+        session = _analysis_session_for_funcdef(funcdef)
+    except ImportError:
+        session = None
+
+    if session is not None and line_map is getattr(session.ast_context, "line_map", None):
+        cfg = session._analysis_cfg_for_funcdef(
+            funcdef,
+            alloc_funcs=alloc_funcs,
+            dealloc_funcs=dealloc_funcs,
+            realloc_funcs=realloc_funcs,
+            summaries=summaries,
+        )
+        if cfg is not None:
+            return cfg
+
+    cfg = clone_cached_structural_cfg(funcdef, line_map=line_map)
+    if any(
+        value is not None
+        for value in (alloc_funcs, dealloc_funcs, realloc_funcs, summaries)
+    ):
+        apply_cfg_event_semantics(
+            cfg,
+            alloc_funcs=alloc_funcs,
+            dealloc_funcs=dealloc_funcs,
+            realloc_funcs=realloc_funcs,
+            summaries=summaries,
+            line_map=line_map,
+        )
+    return cfg
+
+
+__all__ = [
+    "apply_cfg_event_semantics",
+    "build_cfg",
+    "build_cfg_uncached",
+    "build_function_def_index",
+    "clone_cached_structural_cfg",
+    "clone_structural_cfg",
+    "find_function_def",
+    "find_function_def_uncached",
+]

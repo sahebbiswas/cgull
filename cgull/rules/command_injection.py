@@ -6,7 +6,6 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .banned_functions import CommandInjectionRule as _LegacyCommandInjectionRule
 from ..ast_analyzer import CASTContext
-from ..cfg.construction import build_cfg, find_function_def
 from ..cfg.value_facts import ValueFact, ValueProvenance
 from ..cfg.value_interprocedural import _actual_fact as _resolve_actual_fact
 from ..models import AnalysisEngine, Confidence, FixType, Issue
@@ -220,12 +219,9 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
             result = session.value_analysis.function(function.name)
             if result is None:
                 continue
-            funcdef = find_function_def(ast_ctx.pycparser_ast, function.name)
-            if funcdef is None:
+            cfg = session.cfg(function.name)
+            if cfg is None:
                 continue
-            cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
-            if not cfg.blocks:
-                cfg.build_basic_blocks()
             sanitized_before = self._sanitized_state_before(cfg, session)
 
             # Finding order remains deterministic/source-oriented even though
