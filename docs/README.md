@@ -26,6 +26,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | CI runtime baseline, slow-test profiling, and Windows/Python 3.11 investigation | [CI runtime profiling](ci-runtime.md) |
 | Successful chroot paths and working-directory repair | [CGULL-039 path analysis](analysis/chroot-paths.md) |
 | Cross-file summaries, linkage, configuration isolation, and limitations | [Project-level direct-call summaries](analysis/project-summaries.md) |
+| Intra-TU integer argument/return range summaries used by CGULL-049 | [Integer range summaries](analysis/integer-range-summaries.md) |
 | Interprocedural architecture | [Interprocedural analysis](interprocedural-analysis.md) |
 | Immutable symbolic preprocessor expressions, normalization, and serialization | [Symbolic preprocessor API](analysis/symbolic-preprocessor.md) |
 | Interprocedural fact/query contract | [Interprocedural fact query contract](interprocedural-fact-query-contract.md) |
