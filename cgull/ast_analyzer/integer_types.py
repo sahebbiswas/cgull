@@ -190,6 +190,20 @@ def infer_integer_expression_type(ast_ctx: CASTContext, node: Any, fn: Any = Non
         if not left or not right:
             return None
         return usual_arithmetic_type(left, right, ast_ctx)
+    if kind == "FuncCall":
+        name = getattr(node, "name", None)
+        if type(name).__name__ == "ID":
+            attribute = "_cgull_integer_function_return_types"
+            return_types = getattr(ast_ctx, attribute, None)
+            if not isinstance(return_types, dict):
+                return_types = {
+                    candidate.name: candidate.return_type
+                    for candidate in getattr(ast_ctx, "functions", ())
+                }
+                setattr(ast_ctx, attribute, return_types)
+            return_type = return_types.get(str(name.name))
+            if return_type and get_integer_type_byte_size(return_type, ast_ctx) is not None:
+                return return_type
     inferred = ast_ctx.infer_expr_type(node, fn)
     if inferred and get_integer_type_byte_size(inferred, ast_ctx) is not None:
         return inferred
