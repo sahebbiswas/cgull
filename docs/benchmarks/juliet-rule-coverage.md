@@ -48,6 +48,12 @@ python benchmarks/run_juliet_upstream.py /path/to/juliet-test-suite-c \
   --cwe CWE-563 --all --format markdown
 ```
 
+The full pinned measurement for issue #481 selected 514 testcase entries. Semantic attribution evaluated 341 entries and excluded 173 declaration-only entries; no entries remained unclassified and no source files failed to scan. The measured CWE-563 result was:
+
+| TP | FP | TN | FN | Precision | Recall | F1 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 170 | 0 | 1154 | 122 | 1.0000 | 0.5822 | 0.7359 |
+
 Known rule-correctness gaps found while preparing this measurement remain out of scope for the benchmark wiring: direct aggregate/member dead stores are tracked by #496, and explicit parameter dead stores are tracked by #497. Measurement records those misses rather than changing CGULL-042 solely to improve its Juliet score.
 
 ## Integer conversion measurement
