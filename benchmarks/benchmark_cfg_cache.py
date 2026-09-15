@@ -53,17 +53,29 @@ def _legacy_uncached_mode():
     """Approximate pre-#490 CFG behavior for an apples-to-apples comparison."""
     original_clone = construction.clone_cached_structural_cfg
     original_owner_lookup = analysis_session._analysis_session_for_funcdef
+    original_session_cfg = analysis_session.AnalysisSession.cfg
 
     def uncached_clone(funcdef, line_map=None):
         return construction.build_cfg_uncached(funcdef, line_map=line_map)
 
+    def uncached_session_cfg(session, function_name):
+        funcdef = session.function_def(function_name)
+        if funcdef is None:
+            return None
+        return construction.build_cfg_uncached(
+            funcdef,
+            line_map=getattr(session.ast_context, "line_map", None),
+        )
+
     construction.clone_cached_structural_cfg = uncached_clone
     analysis_session._analysis_session_for_funcdef = lambda _funcdef: None
+    analysis_session.AnalysisSession.cfg = uncached_session_cfg
     try:
         yield
     finally:
         construction.clone_cached_structural_cfg = original_clone
         analysis_session._analysis_session_for_funcdef = original_owner_lookup
+        analysis_session.AnalysisSession.cfg = original_session_cfg
 
 
 def _run(project: Path, mode: str, *, legacy: bool):
