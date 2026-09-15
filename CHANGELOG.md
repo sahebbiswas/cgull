@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Preserve proven integer argument and return ranges across conservative same-translation-unit direct helper calls for CGULL-049, while retaining findings for mixed, external, escaped, recursive, mutated, or otherwise unresolved flows (#389).
 
+### Changed
+- Default directory and multi-target CLI scans to bounded automatic parallelism (up to eight workers), while keeping direct single-file scans sequential unless overridden. Preserve explicit `--jobs` control and programmatic scanner defaults, and report effective worker selection in human-readable and structured output (#491).
+
 ## [0.11.29] - 2026-09-14
 
 ### Added
