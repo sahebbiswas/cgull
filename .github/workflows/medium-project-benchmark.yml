@@ -6,7 +6,9 @@ on:
       - "cgull/**"
       - "pyproject.toml"
       - "benchmarks/benchmark_medium_project.py"
+      - "benchmarks/benchmark_cfg_cache.py"
       - "tests/test_issue_486_medium_project_benchmark.py"
+      - "tests/test_issue_490_cfg_session_cache.py"
       - "docs/benchmarks/medium-project-486.md"
       - "docs/benchmarks/medium-project-486-baseline.json"
       - ".github/workflows/medium-project-benchmark.yml"
@@ -28,7 +30,10 @@ jobs:
       - name: Install C-GULL
         run: python -m pip install -e ".[dev]"
       - name: Run focused benchmark tests
-        run: python -m pytest -q tests/test_issue_486_medium_project_benchmark.py
+        run: |
+          python -m pytest -q \
+            tests/test_issue_486_medium_project_benchmark.py \
+            tests/test_issue_490_cfg_session_cache.py
       - name: Capture compact benchmark artifact
         run: |
           python benchmarks/benchmark_medium_project.py \
@@ -40,8 +45,24 @@ jobs:
             --repetitions 1 \
             --output medium-project-486-py${{ matrix.python-version }}.json
           cat medium-project-486-py${{ matrix.python-version }}.json
+      - name: Capture CFG cache before/after artifact
+        if: matrix.python-version == '3.12'
+        run: |
+          python benchmarks/benchmark_cfg_cache.py \
+            --modules 4 \
+            --functions-per-module 3 \
+            --statements-per-function 4 \
+            --modes file,tu \
+            --output medium-project-490-cfg-cache-py${{ matrix.python-version }}.json
+          cat medium-project-490-cfg-cache-py${{ matrix.python-version }}.json
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@v4
         with:
           name: medium-project-486-py${{ matrix.python-version }}
           path: medium-project-486-py${{ matrix.python-version }}.json
+      - name: Upload CFG cache benchmark artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: medium-project-490-cfg-cache-py${{ matrix.python-version }}
+          path: medium-project-490-cfg-cache-py${{ matrix.python-version }}.json
