@@ -13,6 +13,11 @@ from ..cfg import analyze_function_summaries, build_cfg, find_function_def
 from ..cfg.expression_effects import StorageEffect, ordered_storage_effects
 from ..models import FixType
 from .dead_stores import DeadStoresRule as _BaseDeadStoresRule
+from .dead_store_parameters import (
+    fallback_parameter_dead_store_issues,
+    has_tracked_parameters,
+    parameter_dead_store_issues,
+)
 
 
 MemberTarget = Tuple[str, Tuple[str, ...]]
@@ -214,7 +219,8 @@ def _member_dead_store_issues(rule, file_path, ast_ctx):
 
     for fn in getattr(ast_ctx, "functions", ()):
         eligible_roots = _eligible_member_roots(fn)
-        if not eligible_roots:
+        track_parameters = has_tracked_parameters(fn)
+        if not eligible_roots and not track_parameters:
             continue
 
         funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
@@ -226,6 +232,21 @@ def _member_dead_store_issues(rule, file_path, ast_ctx):
             line_map=getattr(ast_ctx, "line_map", None),
         )
         if not cfg.nodes:
+            continue
+
+        if track_parameters:
+            issues.extend(
+                parameter_dead_store_issues(
+                    rule,
+                    file_path,
+                    ast_ctx,
+                    fn,
+                    funcdef,
+                    cfg,
+                )
+            )
+
+        if not eligible_roots:
             continue
         member_types = _MemberTypes(ast_ctx.pycparser_ast, funcdef, eligible_roots)
 
@@ -283,7 +304,7 @@ def _member_dead_store_issues(rule, file_path, ast_ctx):
 
 
 class DeadStoresRule(_BaseDeadStoresRule):
-    """CGULL-042 with direct aggregate-subobject dead-store precision."""
+    """CGULL-042 with aggregate-member and parameter binding precision."""
 
     def scan_ast(self, file_path, ast_ctx):
         issues = super().scan_ast(file_path, ast_ctx)
@@ -291,6 +312,9 @@ class DeadStoresRule(_BaseDeadStoresRule):
             getattr(ast_ctx, "has_pycparser", False)
             and ast_ctx.pycparser_ast is not None
         ):
+            issues.extend(
+                fallback_parameter_dead_store_issues(self, file_path, ast_ctx)
+            )
             return issues
         issues.extend(_member_dead_store_issues(self, file_path, ast_ctx))
         return issues

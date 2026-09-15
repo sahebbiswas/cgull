@@ -1284,7 +1284,7 @@ class CASTParser:
                             if type(param).__name__ == "EllipsisParam" or not hasattr(param, "type"):
                                 continue
                             p_name = getattr(param, "name", None) or ""
-                            p_type, p_is_ptr, p_is_fp, _, _, _, _, p_is_arr = _format_pycparser_type(param.type, custom_typedefs)
+                            p_type, p_is_ptr, p_is_fp, p_is_volatile, _, _, _, p_is_arr = _format_pycparser_type(param.type, custom_typedefs)
                             p_line_exp = (param.coord.line - _PRELUDE_LINE_COUNT) if param.coord else fn_start_exp
                             p_line = _map_line(p_line_exp, line_map)
                             p_shape = resolve_typedef_shape(p_type, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
@@ -1296,6 +1296,7 @@ class CASTParser:
                                 is_pointer=p_is_pointer,
                                 line_number=p_line,
                                 is_array=p_is_array,
+                                is_volatile=p_is_volatile,
                             ))
 
                 fn_end_exp = _get_max_ast_line(ext.body, fn_start_exp, _PRELUDE_LINE_COUNT)
