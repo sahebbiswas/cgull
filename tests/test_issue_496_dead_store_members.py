@@ -156,3 +156,26 @@ void f(void) {
 """
 
     assert 5 not in _dead_store_lines(source)
+
+
+def test_volatile_member_write_is_observable():
+    source = """struct S { volatile int status; };
+void f(void) {
+    struct S data;
+    data.status = 1;
+}
+"""
+
+    assert 4 not in _dead_store_lines(source)
+
+
+def test_reading_sibling_union_member_consumes_write():
+    source = """union U { int bits; float value; };
+int f(void) {
+    union U data;
+    data.bits = 0x3f800000;
+    return data.value == 1.0f;
+}
+"""
+
+    assert 4 not in _dead_store_lines(source)
