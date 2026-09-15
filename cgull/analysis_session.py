@@ -39,6 +39,11 @@ def _analysis_session_for_funcdef(funcdef):
     return session if name and session.function_def(name) is funcdef else None
 
 
+def _discard_serialized_analysis_session():
+    """Restore a serialized process-local analysis-session reference as empty."""
+    return None
+
+
 class AnalysisQueries:
     """Lazy, cached high-level query interface bound to one analysis session."""
 
@@ -112,6 +117,10 @@ class AnalysisSession:
         self._summary_construction_count = 0
         self._queries = AnalysisQueries(self)
         self._register_cfg_owners()
+
+    def __reduce__(self):
+        """Do not carry process-local caches and synchronization state across workers."""
+        return (_discard_serialized_analysis_session, ())
 
     def _register_cfg_owners(self) -> None:
         ast = getattr(self.ast_context, "pycparser_ast", None)
