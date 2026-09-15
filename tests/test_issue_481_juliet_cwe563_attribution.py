@@ -19,7 +19,9 @@ from benchmarks.run_juliet import CWE_RULE_MAP
         "CWE563_Unused_Variable__unused_value_struct_22a.c",
         "CWE563_Unused_Variable__unused_init_variable_char_01.c",
         "CWE563_Unused_Variable__unused_global_value_01.c",
+        "CWE563_Unused_Variable__unused_static_global_value_01.c",
         "CWE563_Unused_Variable__unused_parameter_value_01.c",
+        "CWE563_Unused_Variable__unused_class_member_value_01_bad.cpp",
     ],
 )
 def test_cwe563_dead_store_families_are_attributed_to_cgull_042(filename):
@@ -36,7 +38,9 @@ def test_cwe563_dead_store_families_are_attributed_to_cgull_042(filename):
     [
         "CWE563_Unused_Variable__unused_uninit_variable_int_01.c",
         "CWE563_Unused_Variable__unused_global_variable_01.c",
+        "CWE563_Unused_Variable__unused_static_global_variable_01.c",
         "CWE563_Unused_Variable__unused_parameter_variable_01.c",
+        "CWE563_Unused_Variable__unused_class_member_variable_01_bad.cpp",
     ],
 )
 def test_cwe563_declaration_only_families_are_excluded_from_cgull_042(filename):
