@@ -252,6 +252,73 @@ def _write_is_live(cfg, node_id: int, effect_index: int, target: _Binding, scope
     return False
 
 
+def _eligible_bound_write(effect, binding, scopes: _BindingScopes) -> bool:
+    return (
+        binding is not None
+        and binding.name in scopes.names
+        and effect.action == "write"
+        and not effect.member_path
+        and not binding.is_volatile
+        and binding not in scopes.address_taken
+    )
+
+
+def _suppressed_local_initializer(cfg, node, effect, binding, pure_coordinates) -> bool:
+    return (
+        binding.kind == "local"
+        and effect.write_kind == "initializer"
+        and suppress_cfg_initializer(cfg, node, binding.name, pure_coordinates)
+    )
+
+
+def _dead_bound_write_candidates(cfg, scopes: _BindingScopes, pure_coordinates):
+    for node_id in sorted(cfg.nodes):
+        node = cfg.nodes[node_id]
+        for effect_index, (effect, binding) in enumerate(_bound_effects(node, scopes)):
+            if not _eligible_bound_write(effect, binding, scopes):
+                continue
+            if _suppressed_local_initializer(
+                cfg, node, effect, binding, pure_coordinates
+            ):
+                continue
+            if _write_is_live(cfg, node_id, effect_index, binding, scopes):
+                continue
+            yield node, binding
+
+
+def _bound_issue(rule, file_path, ast_ctx, fn, node, binding):
+    line_no = int(getattr(node, "line_number", 0) or 0)
+    if line_no <= 0:
+        return None
+    snippet = (
+        ast_ctx.source_lines[line_no - 1].strip()
+        if 1 <= line_no <= len(ast_ctx.source_lines)
+        else f"{binding.name} = ...;"
+    )
+    location = getattr(node, "source_location", None)
+    column = int(getattr(location, "column_number", 0) or 0) or 1
+    binding_label = (
+        "function parameter" if binding.kind == "parameter" else "local variable"
+    )
+    return rule.create_issue(
+        file_path=file_path,
+        line_number=line_no,
+        code_snippet=snippet,
+        message=(
+            f"Value assigned to {binding_label} '{binding.name}' in "
+            f"'{fn.name}' is never read before reassignment or scope "
+            "exit (dead store, CWE-563)."
+        ),
+        column_number=column,
+        engine="AST",
+        fix_type=(
+            FixType.SAFE_FIX
+            if snippet.endswith(";")
+            else FixType.MANUAL_REVIEW
+        ),
+    )
+
+
 def parameter_dead_store_issues(rule, file_path, ast_ctx, fn, funcdef, cfg):
     """Report dead explicit stores to parameters and colliding local bindings."""
     if not has_tracked_parameters(fn):
@@ -262,65 +329,16 @@ def parameter_dead_store_issues(rule, file_path, ast_ctx, fn, funcdef, cfg):
     issues = []
     reported = set()
 
-    for node_id in sorted(cfg.nodes):
-        node = cfg.nodes[node_id]
-        effects = _bound_effects(node, scopes)
-        for effect_index, (effect, binding) in enumerate(effects):
-            if (
-                binding is None
-                or binding.name not in scopes.names
-                or effect.action != "write"
-                or effect.member_path
-            ):
-                continue
-            if binding.is_volatile or binding in scopes.address_taken:
-                continue
-            if (
-                binding.kind == "local"
-                and effect.write_kind == "initializer"
-                and suppress_cfg_initializer(cfg, node, binding.name, pure_coordinates)
-            ):
-                continue
-            if _write_is_live(cfg, node_id, effect_index, binding, scopes):
-                continue
-
-            report_key = (node_id, binding.serial)
-            if report_key in reported:
-                continue
-            reported.add(report_key)
-
-            line_no = int(getattr(node, "line_number", 0) or 0)
-            if line_no <= 0:
-                continue
-            snippet = (
-                ast_ctx.source_lines[line_no - 1].strip()
-                if 1 <= line_no <= len(ast_ctx.source_lines)
-                else f"{binding.name} = ...;"
-            )
-            location = getattr(node, "source_location", None)
-            column = int(getattr(location, "column_number", 0) or 0) or 1
-            binding_label = (
-                "function parameter" if binding.kind == "parameter" else "local variable"
-            )
-            issues.append(
-                rule.create_issue(
-                    file_path=file_path,
-                    line_number=line_no,
-                    code_snippet=snippet,
-                    message=(
-                        f"Value assigned to {binding_label} '{binding.name}' in "
-                        f"'{fn.name}' is never read before reassignment or scope "
-                        "exit (dead store, CWE-563)."
-                    ),
-                    column_number=column,
-                    engine="AST",
-                    fix_type=(
-                        FixType.SAFE_FIX
-                        if snippet.endswith(";")
-                        else FixType.MANUAL_REVIEW
-                    ),
-                )
-            )
+    for node, binding in _dead_bound_write_candidates(
+        cfg, scopes, pure_coordinates
+    ):
+        report_key = (node.node_id, binding.serial)
+        if report_key in reported:
+            continue
+        reported.add(report_key)
+        issue = _bound_issue(rule, file_path, ast_ctx, fn, node, binding)
+        if issue is not None:
+            issues.append(issue)
 
     return issues
 
@@ -344,40 +362,114 @@ def _fallback_line_scopes(fn):
     return statements, line_scopes
 
 
-def fallback_parameter_bindings(fn):
-    """Build explicit-write-only parameter bindings for regex fallback mode."""
-    parameters = [
+def _named_parameters(fn):
+    return [
         param
         for param in getattr(fn, "parameters", ())
         if getattr(param, "name", None) and not param.name.startswith("__")
     ]
+
+
+def _make_fallback_parameter(fn, param):
+    type_name = str(getattr(param, "type_name", ""))
+    variable = CVariable(
+        name=param.name,
+        type_name=type_name,
+        is_pointer=bool(getattr(param, "is_pointer", False)),
+        is_signed=("unsigned" not in type_name.split()),
+        is_volatile=("volatile" in type_name.split()),
+        is_vla=False,
+        array_size_expr=None,
+        has_initializer=False,
+        declaration_line=int(
+            getattr(fn, "start_line_exp", 0)
+            or getattr(fn, "start_line", 0)
+            or 0
+        ),
+        is_array=bool(getattr(param, "is_array", False)),
+        enclosing_block_id=0,
+    )
+    variable.declaration_line_exp = variable.declaration_line
+    setattr(variable, "_cgull_parameter_binding", True)
+    return variable
+
+
+def _raw_local_bindings(fn):
+    if isinstance(fn.variables, dict):
+        return list(dict.values(fn.variables))
+    return list(fn.variables)
+
+
+def _local_hides_parameter(local, name: str, scopes, exp_line: int) -> bool:
+    declaration_line = int(
+        getattr(local, "declaration_line_exp", 0)
+        or getattr(local, "declaration_line", 0)
+        or 0
+    )
+    return (
+        getattr(local, "name", None) == name
+        and int(getattr(local, "enclosing_block_id", 0) or 0) in scopes
+        and declaration_line <= exp_line
+    )
+
+
+def _append_unique(values, value: int) -> None:
+    if value not in values:
+        values.append(value)
+
+
+def _plain_assignment_target(masked: str) -> Optional[str]:
+    match = re.match(
+        r"^\s*([A-Za-z_]\w*)\s*(?:\[[^\]]*\]|\.\w+|->\w+)*\s*=(?!=)",
+        masked,
+    )
+    return match.group(1) if match else None
+
+
+def _line_reads_parameter(masked: str, name: str) -> bool:
+    escaped = re.escape(name)
+    if re.search(
+        rf"\b{escaped}\s*(?:\+\+|--|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=)",
+        masked,
+    ):
+        return True
+    if re.search(rf"(?:\+\+|--)\s*\b{escaped}\b", masked):
+        return True
+
+    pure_assignment = re.match(
+        rf"^\s*{escaped}\s*=(?!=)\s*(.*)$",
+        masked,
+        re.DOTALL,
+    )
+    if pure_assignment:
+        return bool(re.search(rf"\b{escaped}\b", pure_assignment.group(1)))
+    return bool(re.search(rf"\b{escaped}\b", masked))
+
+
+def _record_fallback_parameter_line(variable, name: str, masked: str, exp_line: int):
+    if _plain_assignment_target(masked) == name:
+        _append_unique(variable.assigned_lines, exp_line)
+        _append_unique(variable.assigned_lines_exp, exp_line)
+
+    if re.search(rf"&\s*\b{re.escape(name)}\b", masked):
+        variable.address_taken = True
+        _append_unique(variable.address_taken_lines, exp_line)
+
+    if _line_reads_parameter(masked, name):
+        _append_unique(variable.read_lines, exp_line)
+        _append_unique(variable.read_lines_exp, exp_line)
+
+
+def fallback_parameter_bindings(fn):
+    """Build explicit-write-only parameter bindings for regex fallback mode."""
+    parameters = _named_parameters(fn)
     if not parameters:
         return []
 
-    bindings = {}
-    for param in parameters:
-        type_name = str(getattr(param, "type_name", ""))
-        variable = CVariable(
-            name=param.name,
-            type_name=type_name,
-            is_pointer=bool(getattr(param, "is_pointer", False)),
-            is_signed=("unsigned" not in type_name.split()),
-            is_volatile=("volatile" in type_name.split()),
-            is_vla=False,
-            array_size_expr=None,
-            has_initializer=False,
-            declaration_line=int(
-                getattr(fn, "start_line_exp", 0)
-                or getattr(fn, "start_line", 0)
-                or 0
-            ),
-            is_array=bool(getattr(param, "is_array", False)),
-            enclosing_block_id=0,
-        )
-        variable.declaration_line_exp = variable.declaration_line
-        setattr(variable, "_cgull_parameter_binding", True)
-        bindings[param.name] = variable
-
+    bindings = {
+        param.name: _make_fallback_parameter(fn, param)
+        for param in parameters
+    }
     statements, line_scopes = _fallback_line_scopes(fn)
     fn_start = int(
         getattr(fn, "body_start_line_exp", 0)
@@ -385,81 +477,113 @@ def fallback_parameter_bindings(fn):
         or getattr(fn, "start_line", 0)
         or 1
     )
-    local_bindings = list(dict.values(fn.variables)) if isinstance(fn.variables, dict) else list(fn.variables)
-    assign_regex = re.compile(
-        r"^\s*([A-Za-z_]\w*)\s*(?:\[[^\]]*\]|\.\w+|->\w+)*\s*=(?!=)"
-    )
+    local_bindings = _raw_local_bindings(fn)
 
     for offset, line in statements:
         exp_line = fn_start + offset
         scopes = line_scopes[offset]
         masked = mask_string_and_char_literals(line)
-
         for name, variable in bindings.items():
             hidden = any(
-                getattr(local, "name", None) == name
-                and int(getattr(local, "enclosing_block_id", 0) or 0) in scopes
-                and int(
-                    getattr(local, "declaration_line_exp", 0)
-                    or getattr(local, "declaration_line", 0)
-                    or 0
-                ) <= exp_line
+                _local_hides_parameter(local, name, scopes, exp_line)
                 for local in local_bindings
             )
-            if hidden:
-                continue
-
-            assignment = assign_regex.match(masked)
-            if assignment and assignment.group(1) == name:
-                if exp_line not in variable.assigned_lines:
-                    variable.assigned_lines.append(exp_line)
-                if exp_line not in variable.assigned_lines_exp:
-                    variable.assigned_lines_exp.append(exp_line)
-
-            if re.search(rf"&\s*\b{re.escape(name)}\b", masked):
-                variable.address_taken = True
-                if exp_line not in variable.address_taken_lines:
-                    variable.address_taken_lines.append(exp_line)
-
-            if not re.search(rf"\b{re.escape(name)}\b", masked):
-                continue
-
-            is_read = False
-            if re.search(
-                rf"\b{re.escape(name)}\s*(?:\+\+|--|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=)",
-                masked,
-            ) or re.search(rf"(?:\+\+|--)\s*\b{re.escape(name)}\b", masked):
-                is_read = True
-            else:
-                pure_assignment = re.match(
-                    rf"^\s*{re.escape(name)}\s*=(?!=)\s*(.*)$",
-                    masked,
-                    re.DOTALL,
+            if not hidden:
+                _record_fallback_parameter_line(
+                    variable, name, masked, exp_line
                 )
-                if pure_assignment:
-                    is_read = bool(
-                        re.search(rf"\b{re.escape(name)}\b", pure_assignment.group(1))
-                    )
-                else:
-                    is_read = True
-
-            if is_read and exp_line not in variable.read_lines:
-                variable.read_lines.append(exp_line)
-            if is_read and exp_line not in variable.read_lines_exp:
-                variable.read_lines_exp.append(exp_line)
 
     return list(bindings.values())
 
 
-def fallback_parameter_dead_store_issues(rule, file_path, ast_ctx):
-    """Report dead explicit parameter writes in lexical fallback mode."""
+def _expanded_function(fn):
     from copy import copy
 
+    expanded = copy(fn)
+    expanded.start_line = (
+        getattr(fn, "start_line_exp", 0) or getattr(fn, "start_line", 0)
+    )
+    expanded.end_line = (
+        getattr(fn, "end_line_exp", 0) or getattr(fn, "end_line", 0)
+    )
+    return expanded
+
+
+def _protected_parameter_writes(variables, loop_infos):
+    protected = set()
+    for _header, body_start, body_end, read_names in loop_infos:
+        for variable in variables:
+            if variable.name not in read_names:
+                continue
+            loop_writes = [
+                line
+                for line in sorted(set(variable.assigned_lines))
+                if body_start <= line <= body_end
+            ]
+            if loop_writes:
+                protected.add((variable.name, loop_writes[-1]))
+    return protected
+
+
+def _fallback_dead_write_lines(variable, protected):
+    writes = sorted(set(variable.assigned_lines))
+    reads = sorted(set(variable.read_lines))
+    for index, line in enumerate(writes):
+        next_line = (
+            writes[index + 1]
+            if index + 1 < len(writes)
+            else float("inf")
+        )
+        if any(line <= read < next_line for read in reads):
+            continue
+        if (variable.name, line) not in protected:
+            yield line
+
+
+def _fallback_parameter_issue(
+    rule,
+    file_path,
+    ast_ctx,
+    expanded_fn,
+    variable,
+    line,
+    source,
+):
+    from .fallback_writes import verified_write
+
+    event = verified_write(ast_ctx, expanded_fn, variable, line, source)
+    if event is None:
+        return None
+
+    end_line = event.expanded_line + event.statement.count("\n")
+    issue = rule.create_issue(
+        file_path=file_path,
+        line_number=event.expanded_line,
+        code_snippet="\n".join(
+            ast_ctx.source_lines[event.expanded_line - 1 : end_line]
+        ).strip(),
+        message=(
+            f"Value assigned to function parameter '{event.binding[0]}' "
+            f"in '{event.function}' is never read before reassignment "
+            "or scope exit (dead store, CWE-563)."
+        ),
+        column_number=event.column,
+        engine="AST",
+        fix_type=FixType.MANUAL_REVIEW,
+    )
+    issue.expanded_end_line = end_line
+    return issue
+
+
+def fallback_parameter_dead_store_issues(rule, file_path, ast_ctx):
+    """Report dead explicit parameter writes in lexical fallback mode."""
     from .dead_stores import _collect_loop_infos
-    from .fallback_writes import WriteSource, verified_write
+    from .fallback_writes import WriteSource
 
     source = WriteSource(ast_ctx)
-    source_text = getattr(ast_ctx, "clean_source", "") or "\n".join(ast_ctx.source_lines)
+    source_text = getattr(ast_ctx, "clean_source", "") or "\n".join(
+        ast_ctx.source_lines
+    )
     loop_infos = _collect_loop_infos(source_text)
     issues = []
 
@@ -469,66 +593,21 @@ def fallback_parameter_dead_store_issues(rule, file_path, ast_ctx):
             for variable in fallback_parameter_bindings(fn)
             if not variable.is_volatile and not variable.address_taken
         ]
-        if not variables:
-            continue
-
-        expanded_fn = copy(fn)
-        expanded_fn.start_line = (
-            getattr(fn, "start_line_exp", 0) or getattr(fn, "start_line", 0)
-        )
-        expanded_fn.end_line = (
-            getattr(fn, "end_line_exp", 0) or getattr(fn, "end_line", 0)
-        )
-
-        protected = set()
-        for _header, body_start, body_end, read_names in loop_infos:
-            for variable in variables:
-                if variable.name not in read_names:
-                    continue
-                loop_writes = [
-                    line
-                    for line in sorted(set(variable.assigned_lines))
-                    if body_start <= line <= body_end
-                ]
-                if loop_writes:
-                    protected.add((variable.name, loop_writes[-1]))
-
+        expanded_fn = _expanded_function(fn)
+        protected = _protected_parameter_writes(variables, loop_infos)
         for variable in variables:
-            writes = sorted(set(variable.assigned_lines))
-            reads = sorted(set(variable.read_lines))
-            for index, line in enumerate(writes):
-                next_line = (
-                    writes[index + 1]
-                    if index + 1 < len(writes)
-                    else float("inf")
+            for line in _fallback_dead_write_lines(variable, protected):
+                issue = _fallback_parameter_issue(
+                    rule,
+                    file_path,
+                    ast_ctx,
+                    expanded_fn,
+                    variable,
+                    line,
+                    source,
                 )
-                if any(line <= read < next_line for read in reads):
-                    continue
-                if (variable.name, line) in protected:
-                    continue
-
-                event = verified_write(ast_ctx, expanded_fn, variable, line, source)
-                if event is None:
-                    continue
-
-                end_line = event.expanded_line + event.statement.count("\n")
-                issue = rule.create_issue(
-                    file_path=file_path,
-                    line_number=event.expanded_line,
-                    code_snippet="\n".join(
-                        ast_ctx.source_lines[event.expanded_line - 1 : end_line]
-                    ).strip(),
-                    message=(
-                        f"Value assigned to function parameter '{event.binding[0]}' "
-                        f"in '{event.function}' is never read before reassignment "
-                        "or scope exit (dead store, CWE-563)."
-                    ),
-                    column_number=event.column,
-                    engine="AST",
-                    fix_type=FixType.MANUAL_REVIEW,
-                )
-                issue.expanded_end_line = end_line
-                issues.append(issue)
+                if issue is not None:
+                    issues.append(issue)
 
     return issues
 
