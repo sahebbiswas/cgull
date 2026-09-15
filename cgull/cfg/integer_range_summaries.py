@@ -454,4 +454,9 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
     """Analyze one function with conservative same-TU direct-helper summaries."""
 
     summaries = integer_range_summary_index(ast_ctx)
-    return summaries.analyses.get(function_name)
+    analysis = summaries.analyses.get(function_name)
+    if analysis is not None:
+        return analysis
+    # Non-convergence drops only interprocedural behavioral summaries; retain
+    # the ordinary intraprocedural CFG range analysis for conservative parity.
+    return _analyze_seeded(ast_ctx, function_name, {}, {})
