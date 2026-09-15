@@ -98,6 +98,7 @@ class AnalysisSession:
         self._function_defs = build_function_def_index(
             getattr(ast_context, "pycparser_ast", None)
         )
+        self._cfg_lock = RLock()
         self._cfg_cache: Dict[str, object] = {}
         self._cfg_construction_count = 0
         self._cfg_construction_seconds = 0.0
@@ -131,33 +132,35 @@ class AnalysisSession:
 
     def _raw_cfg(self, function_name: str):
         """Return the session-owned structural CFG without forcing call-graph recursion."""
-        if function_name not in self._cfg_cache:
-            funcdef = self.function_def(function_name)
-            if funcdef is None:
-                return None
-            from .cfg.construction import clone_cached_structural_cfg
+        with self._cfg_lock:
+            if function_name not in self._cfg_cache:
+                funcdef = self.function_def(function_name)
+                if funcdef is None:
+                    return None
+                from .cfg.construction import clone_cached_structural_cfg
 
-            started = perf_counter()
-            cfg = clone_cached_structural_cfg(
-                funcdef,
-                line_map=getattr(self.ast_context, "line_map", None),
-            )
-            self._cfg_construction_seconds += perf_counter() - started
-            self._cfg_construction_count += 1
-            self._cfg_cache[function_name] = cfg
-        return self._cfg_cache[function_name]
+                started = perf_counter()
+                cfg = clone_cached_structural_cfg(
+                    funcdef,
+                    line_map=getattr(self.ast_context, "line_map", None),
+                )
+                self._cfg_construction_seconds += perf_counter() - started
+                self._cfg_construction_count += 1
+                self._cfg_cache[function_name] = cfg
+            return self._cfg_cache[function_name]
 
     @property
     def call_graph(self):
-        if self._call_graph is None:
-            from .cfg.call_graph import build_translation_unit_call_graph
+        with self._cfg_lock:
+            if self._call_graph is None:
+                from .cfg.call_graph import build_translation_unit_call_graph
 
-            self._call_graph = build_translation_unit_call_graph(
-                self.ast_context,
-                function_defs=self.function_defs,
-                cfg_provider=self._raw_cfg,
-            )
-        return self._call_graph
+                self._call_graph = build_translation_unit_call_graph(
+                    self.ast_context,
+                    function_defs=self.function_defs,
+                    cfg_provider=self._raw_cfg,
+                )
+            return self._call_graph
 
     def cfg(self, function_name: str):
         """Return the canonical resolved structural CFG for ``function_name``.
