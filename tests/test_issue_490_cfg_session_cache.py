@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from cgull import CGullScanner
-from cgull.analysis_session import analysis_session_for
+from cgull.analysis_session import AnalysisSession, analysis_session_for
 from cgull.ast_analyzer import CASTParser
 from cgull.cfg.call_graph import build_translation_unit_call_graph
 from cgull.cfg.construction import (
@@ -78,6 +78,32 @@ def test_concurrent_cfg_requests_publish_one_canonical_instance():
     assert all(cfg is cfgs[0] for cfg in cfgs)
     assert session.call_graph.function("f").cfg is cfgs[0]
     assert session.cfg_construction_count == 1
+
+
+def test_build_cfg_does_not_cross_route_between_sessions_sharing_one_ast():
+    ctx = _parse("int f(int x) { return x + 1; }\n")
+    first = AnalysisSession(ctx)
+    second = AnalysisSession(ctx)
+    funcdef = first.function_def("f")
+
+    assert funcdef is second.function_def("f")
+
+    standalone = build_cfg(funcdef, line_map=ctx.line_map)
+
+    # With more than one live owner for the same FuncDef there is no safe
+    # implicit session choice. build_cfg() must use the neutral structural
+    # cache rather than populating either session's semantic/canonical state.
+    assert first.cfg_construction_count == 0
+    assert second.cfg_construction_count == 0
+    assert _topology(standalone) == _topology(
+        build_cfg_uncached(funcdef, line_map=ctx.line_map)
+    )
+
+    first_cfg = first.cfg("f")
+    second_cfg = second.cfg("f")
+    assert first_cfg is not second_cfg
+    assert first.cfg_construction_count == 1
+    assert second.cfg_construction_count == 1
 
 
 def test_serialized_context_drops_process_local_session_and_rebuilds_it():
