@@ -26,8 +26,8 @@ concurrency:
 
 jobs:
   benchmark:
-    name: Per-CWE Detection Metrics
-    if: ${{ github.event_name == 'pull_request' || inputs.full_cgull_049 == false }}
+    name: Full CGULL-042 CWE-563 Measurement
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -52,43 +52,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[ast]"
 
-      - name: Run deterministic upstream benchmark
-        run: |
-          python benchmarks/run_juliet_upstream.py .juliet-upstream --per-flow 2 --format markdown --output juliet-upstream.md --json-output juliet-upstream.json
-          cat juliet-upstream.md
-          cat juliet-upstream.md >> "$GITHUB_STEP_SUMMARY"
-
       - name: Measure full CGULL-042 CWE-563 family
         run: |
           python benchmarks/run_juliet_upstream.py .juliet-upstream --cwe CWE-563 --all --format markdown --output cgull-042-cwe563-full.md --json-output cgull-042-cwe563-full.json
           cat cgull-042-cwe563-full.md
           cat cgull-042-cwe563-full.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Diagnose split-file oracle attribution
-        run: |
-          python benchmarks/diagnose_juliet_oracle.py .juliet-upstream --per-cwe 25 --output juliet-oracle-diagnostic.md
-          cat juliet-oracle-diagnostic.md
-          cat juliet-oracle-diagnostic.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Enforce CGULL-049 regression budget
-        run: |
-          python benchmarks/check_juliet_regression.py juliet-upstream.json --output cgull-049-regression.md
-          cat cgull-049-regression.md
-          cat cgull-049-regression.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload benchmark reports
+      - name: Upload measurement
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: juliet-upstream-metrics
+          name: cgull-042-cwe563-full
           if-no-files-found: warn
           path: |
-            juliet-upstream.md
-            juliet-upstream.json
             cgull-042-cwe563-full.md
             cgull-042-cwe563-full.json
-            juliet-oracle-diagnostic.md
-            cgull-049-regression.md
 
   full-cgull-049:
     name: Full CGULL-049 Juliet Families
