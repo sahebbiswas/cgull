@@ -99,8 +99,23 @@ def _signature_key(node, types):
 class PreparedUnit:
     source: str
     expanded: object
-    context: object
+    _context: object = None
     preparation_key: object = None
+    parse_flags: object = None
+    parse_enabled: bool = True
+
+    @property
+    def context(self):
+        if self._context is None and self.parse_enabled:
+            self._context = CASTParser().parse(
+                self.expanded.expanded_text,
+                defined_syms=self.parse_flags,
+            )
+        return self._context
+
+    @context.setter
+    def context(self, value):
+        self._context = value
 
 
 def _include_roots_key(config):
@@ -118,12 +133,13 @@ def _profile_flags(config, profiles):
 
 
 def prepare_units(files, config_for_file, profiles=None, prepared_units=None):
-    """Expand and parse each requested file/profile at most once for this scan.
+    """Expand each requested file/profile at most once for this scan.
 
     ``prepared_units`` is scan-local state from an earlier phase (for example TU
     root preparation used for orphan-header classification). Compatible entries
     are reused verbatim; incompatible configuration/profile identities are
-    replaced. Normal workers still validate the source snapshot before reuse.
+    replaced. AST parsing stays lazy so project preparation and single-file
+    analysis retain their existing phase/timing ownership.
     """
     prepared = defaultdict(dict)
     for path, units in (prepared_units or {}).items():
@@ -153,14 +169,13 @@ def prepare_units(files, config_for_file, profiles=None, prepared_units=None):
                     resolver=resolver,
                     defined_syms=flags,
                 ).expand(source, source_path=path)
-                context = None
-                if config.engine_mode != AnalysisEngine.REGEX:
-                    context = CASTParser().parse(expanded.expanded_text, defined_syms=flags)
                 prepared[path][key] = PreparedUnit(
                     source,
                     expanded,
-                    context,
+                    None,
                     expected_key,
+                    flags,
+                    config.engine_mode != AnalysisEngine.REGEX,
                 )
             except Exception as exc:
                 # Normal file scanning retains its established error reporting
@@ -339,10 +354,16 @@ def prepare_project(files, config_for_file, profiles=None, prepared_units=None):
         for flags in _profile_flags(config, profiles):
             key = profile_key(flags)
             unit = prepared.get(path, {}).get(key)
-            if unit is None or unit.context is None:
+            if unit is None:
                 continue
-            ctx = unit.context
-            if ctx.has_pycparser and ctx.pycparser_ast is not None:
+            try:
+                ctx = unit.context
+            except Exception as exc:
+                diagnostics.append(
+                    f"PROJECT_PREPARATION_FAILED: {path}: {exc}; cross-TU summaries omitted"
+                )
+                continue
+            if ctx is not None and ctx.has_pycparser and ctx.pycparser_ast is not None:
                 groups[(key, roots, model_id)][path] = ctx
 
     for (_, _, model_id), contexts in groups.items():
