@@ -234,6 +234,8 @@ def prepare_units(files, config_for_file, profiles=None, prepared_units=None, *,
     before any CFG/session caches exist. The coordinator retains the prepared
     set needed by cross-TU indexing, but never queues an unbounded second set
     of serialized results. Existing compatible units are reused without IPC.
+    Multi-worker preparation parses submitted sources eagerly and evaluates each
+    unit.context before returning; the sequential path retains lazy parsing.
     """
     paths = sorted(set(files))
     workers = min((os.cpu_count() or 1) if jobs == 0 else jobs, len(paths))
