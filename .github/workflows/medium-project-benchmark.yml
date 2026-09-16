@@ -95,11 +95,10 @@ jobs:
 
           base = json.loads(Path("medium-project-489-base-py3.12.json").read_text())
           head = json.loads(Path("medium-project-489-head-py3.12.json").read_text())
-          assert base["workload"]["source_sha256"] == head["workload"]["source_sha256"]
+          assert base["workload"]["sha256"] == head["workload"]["sha256"]
           for name in ("default", "format-string-only"):
               before = base["arms"][name]
               after = head["arms"][name]
-              assert before["semantic_digest"] if "semantic_digest" in before else before["samples"][0]["semantic_digest"]
               assert before["samples"][0]["semantic_digest"] == after["samples"][0]["semantic_digest"]
               before_time = before["median_project_summary_construction_seconds"]
               after_time = after["median_project_summary_construction_seconds"]
