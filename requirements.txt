@@ -5,4 +5,3 @@
 pycparser>=2.21
 pcpp>=1.30
 pycparser-fake-libc>=2.21
-tomli>=2.4.1; python_version < "3.11"
