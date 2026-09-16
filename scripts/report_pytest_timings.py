@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Report the slowest pytest cases from a JUnit XML result.
 
-The CI matrix uses this for the Windows/Python 3.11 lane so slow-test data is
+The CI matrix uses this on a representative Windows lane so slow-test data is
 visible in both the job log and the GitHub Actions job summary. GitHub notice
 annotations make the highest-impact slow cases queryable without downloading
 logs while the summary retains the wider ranked list.
