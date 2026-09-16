@@ -22,7 +22,7 @@ def _scan_lines(rule, source_lines):
     return issues
 
 
-def test_multiline_line_rules_mask_source_once_per_source_identity():
+def test_multiline_line_rules_mask_source_once_per_stable_source():
     source_lines = [
         "int check_file(const char *path, int flag) {",
         "    if (flag)",
@@ -66,3 +66,24 @@ def test_masked_source_cache_invalidates_for_a_new_source_list():
         _scan_lines(rule, second)
 
     assert mask_calls == len(first) + len(second)
+
+
+def test_masked_source_cache_invalidates_after_in_place_mutation():
+    source_lines = ["if (ready)", "    run();"]
+    rule = NakedControlFlowStatementsRule()
+    real_mask = mask_string_and_char_literals
+    mask_calls = 0
+
+    def counted_mask(line):
+        nonlocal mask_calls
+        mask_calls += 1
+        return real_mask(line)
+
+    with patch("cgull.rules.base.mask_string_and_char_literals", side_effect=counted_mask):
+        first_issues = _scan_lines(rule, source_lines)
+        source_lines[1] = "    { run(); }"
+        second_issues = _scan_lines(rule, source_lines)
+
+    assert mask_calls == 2 * len(source_lines)
+    assert any(issue.rule_id == "CGULL-013" for issue in first_issues)
+    assert not any(issue.rule_id == "CGULL-013" for issue in second_issues)
