@@ -141,7 +141,6 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
         for fn in ast_ctx.functions:
             fn_is_sec_ctx = _is_security_function_context(fn.name)
 
-            # Symbol type map in this function scope
             var_types: dict = {}
             for p in fn.parameters:
                 var_types[p.name] = p.type_name.lower()
@@ -209,7 +208,6 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        # Fallback for line-based scanner when AST is not used
         target_line = masked_line_content or line_content
         for m in re.finditer(r'\b(memcmp|strcmp|strncmp|bcmp)\s*\(', target_line):
             func_name = m.group(1)
@@ -259,7 +257,6 @@ class StrippingVolatileQualifiersRule(BaseRule):
         issues = []
 
         for fn in ast_ctx.functions:
-            # Build map of volatile symbols in this function scope
             volatile_vars: set = set()
 
             for p in fn.parameters:
@@ -274,14 +271,11 @@ class StrippingVolatileQualifiersRule(BaseRule):
                 if g_obj.is_volatile or 'volatile' in g_obj.type_name:
                     volatile_vars.add(g_name)
 
-            # Analyze pycparser AST if available
             if ast_ctx.pycparser_ast:
                 from pycparser import c_ast
 
-                # Find the FuncDef for this function
                 for ext in ast_ctx.pycparser_ast.ext:
                     if isinstance(ext, c_ast.FuncDef) and ext.decl.name == fn.name:
-                        # Inspect parameters
                         if ext.decl.type.args and getattr(ext.decl.type.args, "params", None):
                             for param in ext.decl.type.args.params:
                                 p_name = getattr(param, "name", None)
@@ -293,7 +287,6 @@ class StrippingVolatileQualifiersRule(BaseRule):
                                     if p_name:
                                         volatile_vars.add(p_name)
 
-                        # Visitor to find Cast nodes where expression is volatile
                         class CastVisitor(c_ast.NodeVisitor):
                             def __init__(self, outer_rule, fn_start):
                                 self.outer_rule = outer_rule
@@ -301,10 +294,8 @@ class StrippingVolatileQualifiersRule(BaseRule):
 
                             def visit_Cast(self, node):
                                 cast_to_type, _, _, is_vol, _, _, _, _ = _format_pycparser_type(node.to_type)
-                                # Check if target type is missing volatile
                                 target_has_volatile = is_vol or "volatile" in cast_to_type
                                 if not target_has_volatile:
-                                    # Check if expression being cast contains a known volatile variable
                                     expr_ids = _extract_identifiers_from_ast(node.expr)
                                     volatile_ids = expr_ids.intersection(volatile_vars)
                                     if volatile_ids:
@@ -323,7 +314,6 @@ class StrippingVolatileQualifiersRule(BaseRule):
 
                         CastVisitor(self, fn.start_line).visit(ext.body)
             else:
-                # Fallback AST analysis using regex/code lines and volatile_vars map
                 body_lines = fn.body.splitlines()
                 cast_regex = re.compile(r'\(\s*(?!volatile\b)(?:unsigned\s+|signed\s+|struct\s+\w+|\w+)\s*\*+\s*\)\s*(\w+)')
                 for i, line in enumerate(body_lines):
@@ -344,7 +334,6 @@ class StrippingVolatileQualifiersRule(BaseRule):
         return issues
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
-        # Line scanner fallback only when scan_ast is not executed (REGEX mode)
         issues = []
         m = re.search(r'\(\s*(?!volatile\b)(?:unsigned\s+|signed\s+|struct\s+\w+|\w+)\s*\*+\s*\)\s*(\w*(?:reg|mmio|hw|io|port|shared|vol)\w*)', line_content, re.IGNORECASE)
         if m:
@@ -378,7 +367,6 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
 
-        # Collect function names and function pointer variables in the file
         func_names = {f.name for f in ast_ctx.functions}
         func_ptr_vars = set()
 
@@ -405,11 +393,9 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
 
                 def visit_Cast(self, node):
                     to_type_str, is_ptr, is_fp, _, _, _, _, _ = _format_pycparser_type(node.to_type)
-                    # Check if target cast type is data pointer (e.g. void *) or integer type (e.g. int, long, uintptr_t, uint32_t)
                     is_data_ptr_or_int = (is_ptr and "void" in to_type_str) or any(it in to_type_str for it in ['int', 'long', 'short', 'intptr_t', 'uintptr_t', 'uint32_t', 'uint64_t', 'size_t'])
 
                     if is_data_ptr_or_int and not is_fp:
-                        # Check expression being cast
                         expr_ids = _extract_identifiers_from_ast(node.expr)
                         fn_ids = expr_ids.intersection(all_func_symbols)
                         if fn_ids:
@@ -430,7 +416,6 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
 
             FuncPtrCastVisitor(self).visit(ast_ctx.pycparser_ast)
         else:
-            # Fallback AST analysis using regex & known function symbols
             cast_regex = re.compile(r'\(\s*(?:void\s*\*|int|long|short|uint32_t|uint64_t|intptr_t|uintptr_t|size_t|unsigned\s+int)\s*\)\s*([a-zA-Z_]\w*)\b')
             for line_no, line in enumerate(ast_ctx.source_lines, 1):
                 for m in cast_regex.finditer(line):
@@ -450,7 +435,6 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        # Cast to (void *) or (int) / (long) on function names or func ptrs
         m = re.search(r'\(\s*(?:void\s*\*|int|long|uint32_t|unsigned\s+int)\s*\)\s*([a-zA-Z_]\w*(?:_handler|_fn|_callback|_hook|func))\b', line_content)
         if m:
             target = m.group(1)
@@ -677,8 +661,7 @@ class ToctouFileAccessRule(BaseRule):
             r'\b(open|openat|fopen|freopen|chmod|fchmodat|chown|fchownat|remove|unlink|unlinkat|rmdir|truncate)\s*\('
         )
 
-        from ..utils import mask_string_and_char_literals
-        masked_lines = [mask_string_and_char_literals(l) for l in source_lines]
+        masked_lines = self._masked_source_lines(source_lines)
         limit = min(line_number + 50, len(source_lines))
         net_depth = 0
         in_else_branch = False
@@ -764,11 +747,9 @@ class WeakCryptoPrimitivesRule(BaseRule):
                 primitive_kind = None
                 message = ""
 
-                # 1. MD5 / EVP_md5
                 if callee in ("MD5", "EVP_md5") or callee.startswith("MD5_"):
                     primitive_kind = "MD5"
                     message = f"Use of weak/broken cryptographic hash function '{callee}()' (CWE-327)."
-                # 2. SHA1 / EVP_sha1 / EVP_md5_sha1
                 elif callee in ("SHA1", "EVP_sha1", "EVP_md5_sha1") or callee.startswith("SHA1_"):
                     should_flag = fn_is_sec_ctx
                     if not should_flag:
@@ -778,19 +759,15 @@ class WeakCryptoPrimitivesRule(BaseRule):
                     if should_flag:
                         primitive_kind = "SHA1"
                         message = f"Use of weak cryptographic hash function '{callee}()' in security-sensitive context (CWE-327)."
-                # 3. DES_*
                 elif callee.startswith("DES_") or callee == "DES":
                     primitive_kind = "DES"
                     message = f"Use of weak/deprecated encryption algorithm '{callee}()' (CWE-327)."
-                # 4. RC4
                 elif callee == "RC4" or callee.startswith("RC4_"):
                     primitive_kind = "RC4"
                     message = f"Use of weak/broken stream cipher '{callee}()' (CWE-327)."
-                # 5. ECB cipher modes
                 elif callee.startswith("EVP_") and ("_ecb" in callee or "ecb" in callee):
                     primitive_kind = "ECB"
                     message = f"Use of insecure Electronic Codebook (ECB) cipher mode '{callee}()' (CWE-327)."
-                # Also check if raw_args contains weak hash getters or ECB cipher calls
                 elif re.search(r'\b(?:EVP_md5|EVP_sha1|EVP_md5_sha1|EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*|DES_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(\s*\)', raw_args):
                     weak_m = re.search(r'\b(EVP_md5|EVP_sha1|EVP_md5_sha1|EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*|DES_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(\s*\)', raw_args)
                     weak_fn = weak_m.group(1) if weak_m else "weak primitive"
@@ -846,7 +823,6 @@ class WeakCryptoPrimitivesRule(BaseRule):
 
         from ..utils import mask_string_and_char_literals
 
-        # 1. MD5 / EVP_md5
         m_md5 = re.search(r'\b(MD5|MD5_Init|MD5_Update|MD5_Final|MD5_[A-Za-z0-9_]+|EVP_md5)\s*\(', target_line)
         if m_md5 and not self._is_decl_or_prototype(line_content, m_md5.start()):
             fn_name = m_md5.group(1)
@@ -861,7 +837,6 @@ class WeakCryptoPrimitivesRule(BaseRule):
                 suggested_fix_replacement="SHA-256 or SHA-3"
             ))
 
-        # 2. SHA1 / EVP_sha1 / EVP_md5_sha1 (in sec context)
         m_sha1 = re.search(r'\b(SHA1|SHA1_Init|SHA1_Update|SHA1_Final|SHA1_[A-Za-z0-9_]+|EVP_sha1|EVP_md5_sha1)\s*\(', target_line)
         if m_sha1 and not self._is_decl_or_prototype(line_content, m_sha1.start()):
             fn_name = m_sha1.group(1)
@@ -884,7 +859,6 @@ class WeakCryptoPrimitivesRule(BaseRule):
                     suggested_fix_replacement="SHA-256 or SHA-3"
                 ))
 
-        # 3. DES_*
         m_des = re.search(r'\b(DES_[A-Za-z0-9_]+|DES)\s*\(', target_line)
         if m_des and not self._is_decl_or_prototype(line_content, m_des.start()):
             fn_name = m_des.group(1)
@@ -899,7 +873,6 @@ class WeakCryptoPrimitivesRule(BaseRule):
                 suggested_fix_replacement="AES-256-GCM or ChaCha20-Poly1305"
             ))
 
-        # 4. RC4
         m_rc4 = re.search(r'\b(RC4|RC4_set_key|RC4_[A-Za-z0-9_]+)\s*\(', target_line)
         if m_rc4 and not self._is_decl_or_prototype(line_content, m_rc4.start()):
             fn_name = m_rc4.group(1)
@@ -914,7 +887,6 @@ class WeakCryptoPrimitivesRule(BaseRule):
                 suggested_fix_replacement="AES-256-GCM or ChaCha20-Poly1305"
             ))
 
-        # 5. ECB cipher modes
         m_ecb = re.search(r'\b(EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(', target_line)
         if m_ecb and not self._is_decl_or_prototype(line_content, m_ecb.start()):
             fn_name = m_ecb.group(1)
@@ -955,7 +927,6 @@ class NoInsecureRandRule(BaseRule):
         for fn in ast_ctx.functions:
             fn_is_sec_ctx = _is_security_function_context(fn.name)
 
-            # Build scope symbol types and names
             var_types: dict = {}
             for p in fn.parameters:
                 var_types[p.name] = p.type_name.lower()
@@ -1113,7 +1084,6 @@ class InsecureDataStorageRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        # Match hardcoded password/key/secret strings
         m = re.search(r'(?:const\s+)?(?:char|string)\s*\*?\s*(\w*(?:password|secret|apikey|api_key|private_key|auth_token)\w*)\s*(?:\[[^\]]*\])?\s*=\s*"([^"]+)"', line_content, re.IGNORECASE)
         if m:
             var_name = m.group(1)
@@ -1157,12 +1127,8 @@ class ImproperChrootJailRule(BaseRule):
                 continue
             funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
             if funcdef is None:
-                # Lexical parsing cannot prove that a repair is unavoidable.
                 locations = [(call[1], 1) for call in chroots]
             else:
-                # The shared CFG omits edges to an implicit function exit.
-                # Add a local sentinel so bypasses at the end remain visible,
-                # without mutating the shared translation-unit AST.
                 local_def = copy(funcdef)
                 local_def.body = copy(funcdef.body)
                 local_def.body.block_items = list(funcdef.body.block_items or []) + [c_ast.Return(None)]
@@ -1204,30 +1170,23 @@ class ImproperChrootJailRule(BaseRule):
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
         match_target = masked_line_content or line_content
-        # fallback regex check
         if re.search(r'\bchroot\s*\(', match_target):
             has_chdir = False
             brace_depth = 0
 
-            # Start tracking brace depth from the current line
             for i in range(line_number, len(source_lines) + 1):
-                # Use masked content for lookahead to avoid string literals
                 line = source_lines[i - 1]
-                # A simplistic mask for lookahead
                 masked_lookahead = re.sub(r'\"(\\.|[^\"])*\"', '""', line)
                 masked_lookahead = re.sub(r"\'(\\.|[^\'])*\'", "''", masked_lookahead)
 
-                # Check for chdir
                 if re.search(r'\bchdir\s*\(', masked_lookahead):
                     if brace_depth >= 0:
                         has_chdir = True
                         break
 
-                # Track braces
                 brace_depth += masked_lookahead.count('{')
                 brace_depth -= masked_lookahead.count('}')
 
-                # If we exit the block, stop scanning
                 if brace_depth < 0:
                     break
 
