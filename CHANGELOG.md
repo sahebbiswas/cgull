@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-09-16
+
+### Changed
+- Cache TRACE enablement per file to avoid disabled logging calls in regex and AST rule loops, preserving detailed TRACE output (#494).
+
 ## [0.12.1] - 2026-09-16
 
 ### Changed

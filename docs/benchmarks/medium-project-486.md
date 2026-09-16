@@ -76,3 +76,5 @@ For an optimization PR:
 5. Attach both JSON artifacts to the PR. Avoid claiming a regression/improvement from runs with different workload hashes, Python versions, or machines.
 
 The FIFO worklist optimization has a [before/after evaluation (#493)](worklists-493.md).
+
+The disabled TRACE optimization has a [before/after evaluation (#494)](trace-hot-loop-494.md).
