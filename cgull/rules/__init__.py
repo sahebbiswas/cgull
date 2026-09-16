@@ -3,6 +3,14 @@ Rule registry for C-GULL Static Analyzer.
 """
 
 from typing import List, Dict, Type
+from ..analysis_requirements import (
+    FUNCTION_SUMMARY,
+    OWNERSHIP_SUMMARY,
+    POINTER_RANGE_FACTS,
+    SECURITY_SUMMARY,
+    SIZE_FACTS,
+    VALUE_SUMMARY,
+)
 from .base import BaseRule
 from .banned_functions import (
     UnsafeIntegerConversionsRule,
@@ -130,6 +138,41 @@ ALL_RULES: List[Type[BaseRule]] = [
     PreprocessorReachabilityRule,
     PreprocessorSimplificationRule,
 ]
+
+# Built-ins explicitly opt into their analysis needs. The requirement resolver
+# reads only attributes owned by the concrete class, so third-party subclasses
+# do not inherit these optimistic declarations accidentally.
+for _rule_cls in ALL_RULES:
+    _rule_cls.analysis_requirements = frozenset()
+
+for _rule_cls in (
+    UncheckedDynamicAllocationsRule,
+    MissingNullCheckOnFunctionParametersRule,
+    UninitializedPointersRule,
+    UninitializedMemoryUseRule,
+    DeadStoresRule,
+):
+    _rule_cls.analysis_requirements = frozenset({FUNCTION_SUMMARY})
+
+for _rule_cls in (UseAfterFreeRule, DoubleFreeRule, MemoryLeakRule):
+    _rule_cls.analysis_requirements = frozenset({OWNERSHIP_SUMMARY})
+
+for _rule_cls in (FormatStringRule, CommandInjectionRule):
+    _rule_cls.analysis_requirements = frozenset({VALUE_SUMMARY})
+
+MemcpyStructMemberOverflowRule.analysis_requirements = frozenset({SIZE_FACTS})
+BufferCopyOverflowRule.analysis_requirements = frozenset({SIZE_FACTS})
+UnvalidatedExternalDataSinkRule.analysis_requirements = frozenset({SECURITY_SUMMARY})
+
+for _rule_cls in (
+    PointerRangeBoundsRule,
+    ValidatedPointerRangeRule,
+    PointerEndpointWraparoundRule,
+    PointerProvenanceRule,
+):
+    _rule_cls.analysis_requirements = frozenset({POINTER_RANGE_FACTS})
+
+del _rule_cls
 
 RULE_REGISTRY: Dict[str, Type[BaseRule]] = {
     rule_cls.rule_id: rule_cls for rule_cls in ALL_RULES
