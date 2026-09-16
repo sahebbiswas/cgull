@@ -30,6 +30,46 @@ introduce different transfer semantics.
 These remain the existing bounded, context-insensitive summaries. Importing a
 summary does not make unsupported constructs inside its body analyzable.
 
+## Demand-driven analysis requirements
+
+Project summaries are selected from the enabled rule set before project
+analysis starts. Built-in rules declare the analysis facts they consume using
+`analysis_requirements`; the scanner computes the transitive dependency closure
+once per compatible project group and evaluates only the resulting project
+summary domains.
+
+The requirement vocabulary is defined in `cgull.analysis_requirements`:
+
+- `function-summary`
+- `ownership-summary`
+- `value-summary`
+- `security-summary`
+- `size-facts`
+- `pointer-range-facts`
+
+Dependencies are centralized there as well. Ownership summaries require
+function summaries, while pointer-range facts require size facts and value
+summaries. Size facts are currently TU-local, so a size-only rule does not by
+itself force a project summary index.
+
+Custom rules may explicitly declare a requirement set on their concrete class,
+for example:
+
+```python
+class MyRule(BaseRule):
+    analysis_requirements = frozenset({"value-summary"})
+```
+
+For compatibility and safety, a custom or third-party rule whose concrete class
+does not declare `analysis_requirements` receives the legacy all-requirements
+behavior. Built-in metadata is deliberately not inherited by an unannotated
+third-party subclass; subclasses must opt in explicitly if they want a smaller
+set. Unknown requirement names also fall back conservatively to all analysis.
+
+`ProjectSummaryIndex.domain_evaluations` exposes scan-local per-domain evaluation
+counts for tests and performance instrumentation. A zero count means the domain
+was not evaluated, rather than merely producing an empty summary map.
+
 ## Resolution and configuration identity
 
 Each scan owns a fresh index. Inputs are partitioned by the exact requested
@@ -64,7 +104,7 @@ for libraries or files outside the scan target.
 The index processes a graph of TU dependencies in deterministic
 callee-before-caller SCC order. Acyclic components are evaluated once.
 Recursive cross-TU components use snapshot rounds, with the existing TU engines
-recomputed against the previous round's imports. They stop when all supported
+recomputed against the previous round's imports. They stop when all required
 summary maps stabilize, with a limit of 64 rounds. If the limit is reached,
 all imports and exports of that component are discarded; downstream callers
 retain ordinary unresolved-call behavior. Partially converged safety proofs
@@ -92,9 +132,12 @@ need a separate linkage-aware object index before they can be used safely.
 Parameter-based provenance and validator summaries remain supported.
 
 A new summary domain can use the same compatible symbol bindings and add its
-native engine to `ProjectSummaryIndex`. Summary import hooks live in
+native engine to `ProjectSummaryIndex`, then register its declarative dependency
+in `cgull.analysis_requirements`. Summary import hooks live in
 `cgull/summary_imports.py`; the per-domain transfer and lattice remain in their
-existing CFG modules. The regression suite in
-`tests/test_issue_365_project_summaries.py` covers single-TU parity, caller-side
-findings, ownership/escape, provenance/validation, linkage conflicts,
-configuration separation, recursive convergence/degradation, and worker parity.
+existing CFG modules. The regression suites in
+`tests/test_issue_365_project_summaries.py` and
+`tests/test_issue_489_project_summary_requirements.py` cover single-TU parity,
+caller-side findings, ownership/escape, provenance/validation, linkage
+conflicts, configuration separation, recursive convergence/degradation,
+worker parity, demand-driven domain selection, and legacy-rule compatibility.
