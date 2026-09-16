@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-15
+
 ### Fixed
 - Preserve proven integer argument and return ranges across conservative same-translation-unit direct helper calls for CGULL-049, while retaining findings for mixed, external, escaped, recursive, mutated, or otherwise unresolved flows (#389).
 
