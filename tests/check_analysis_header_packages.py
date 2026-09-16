@@ -24,8 +24,7 @@ assert all(Path(root).is_dir() for root in roots)
 assert Path(roots[0], 'linux/if.h').is_file()
 dependencies = requires('cgull')
 assert any(r.startswith('pycparser-fake-libc>=2.21') for r in dependencies)
-assert any(r.startswith('tomli>=1.1.0;') and 'python_version <' in r
-           and '3.11' in r for r in dependencies)
+assert not any(r.startswith('tomli') for r in dependencies)
 source = ('#include <pthread.h>\n#include <dlfcn.h>\n#include <shadow.h>\n'
           '#include <linux/if.h>\n'
           'void f(void) { pthread_t t; Dl_info d; struct spwd *s; struct ifreq r; }\n')

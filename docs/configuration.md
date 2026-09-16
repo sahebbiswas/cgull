@@ -276,7 +276,7 @@ user-owned source and are not automatically exempt from findings.
 
 Resource discovery uses `importlib.resources`, with no hardcoded site-packages
 path. Installed wheel and sdist resources are checked by the packaging CI job;
-the regular Python 3.10–3.14 matrix exercises parsing and worker behavior.
+the regular Python 3.12–3.14 matrix exercises parsing and worker behavior.
 See [dependency notes](analysis-header-dependencies.md) for upstream provenance.
 
 ### Invalid include roots

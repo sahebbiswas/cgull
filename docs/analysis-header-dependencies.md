@@ -4,7 +4,7 @@ C-GULL requires `pycparser-fake-libc>=2.21` as a separate runtime distribution;
 it does not vendor or redistribute that package's headers in its own wheel.
 Version 2.21 is a pure Python/resource package with a `py3-none-any` wheel and
 no declared Python upper bound. C-GULL uses package resource discovery rather
-than assuming an installation directory. Its Python 3.10–3.14 CI matrix runs
+than assuming an installation directory. Its Python 3.12–3.14 CI matrix runs
 the model-resolution and parsing regressions.
 
 The [wrapper repository](https://github.com/ThomasGerstenberg/pycparser-fake-libc)

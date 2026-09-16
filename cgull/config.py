@@ -2,14 +2,11 @@
 Configuration file handling and auto-discovery for C-GULL Static Analyzer.
 """
 
+import logging
 import os
+import tomllib
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
-
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore
+from typing import Any, Dict, List, Optional
 
 from .models import Severity, ScanMode
 from .project_state import DEFAULT_LOG_RETENTION_RUNS
@@ -19,7 +16,6 @@ from .semantic_models import (
     SemanticModelRegistry,
     parse_semantic_models,
 )
-import logging
 from .rules import BaseRule
 
 logger = logging.getLogger(__name__)

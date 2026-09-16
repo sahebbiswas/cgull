@@ -11,6 +11,7 @@ on:
       - "tests/test_issue_490_cfg_session_cache.py"
       - "docs/benchmarks/medium-project-486.md"
       - "docs/benchmarks/medium-project-486-baseline.json"
+      - "docs/benchmarks/python-version-495.md"
       - ".github/workflows/medium-project-benchmark.yml"
   workflow_dispatch:
 
@@ -20,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

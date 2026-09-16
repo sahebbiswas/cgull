@@ -2,7 +2,7 @@
 
 **Code Guardian for Unchecked Logic & Leaks** — static security analysis for C codebases.
 
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](https://github.com/sahebbiswas/cgull/blob/main/LICENSE)
 [![Security Standards](https://img.shields.io/badge/standards-MISRA--C%20%7C%20CWE%20%7C%20CERT--C-orange.svg)](https://cwe.mitre.org/)
 [![Tests](https://github.com/sahebbiswas/cgull/actions/workflows/ci.yml/badge.svg)](https://github.com/sahebbiswas/cgull/actions/workflows/ci.yml)
@@ -22,7 +22,7 @@ It is designed for incremental adoption: run it with useful defaults on an exist
 
 ## Install
 
-C-GULL requires Python 3.10+.
+C-GULL requires Python 3.12+.
 
 ```bash
 python -m pip install cgull

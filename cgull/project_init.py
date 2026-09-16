@@ -5,13 +5,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tomllib
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, TextIO, Tuple
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
-    import tomli as tomllib  # type: ignore
 
 from .config import find_config_file
 from .models import Severity

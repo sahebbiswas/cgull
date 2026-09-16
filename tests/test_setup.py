@@ -14,6 +14,15 @@ class TestProjectMetadata(unittest.TestCase):
         self.assertIn("Development Status :: 4 - Beta", content)
         self.assertNotIn("Development Status :: 5 - Production/Stable", content)
 
+    def test_python_support_floor_is_312(self):
+        content = self._project_toml()
+
+        self.assertIn('requires-python = ">=3.12"', content)
+        self.assertNotIn("Programming Language :: Python :: 3.10", content)
+        self.assertNotIn("Programming Language :: Python :: 3.11", content)
+        self.assertIn("Programming Language :: Python :: 3.12", content)
+        self.assertNotIn("tomli", content)
+
     def test_flake8_not_in_dev_extras(self):
         content = self._project_toml()
 
@@ -29,16 +38,17 @@ class TestProjectMetadata(unittest.TestCase):
         self.assertIn("package-ecosystem: \"github-actions\"", content)
         self.assertIn("interval: \"weekly\"", content)
 
-    def test_ci_uses_spawn_safe_pytest_invocation_and_bounded_jobs(self):
+    def test_ci_uses_spawn_safe_pytest_invocation_and_supported_python_matrix(self):
         workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"
         content = workflow_path.read_text(encoding="utf-8")
 
         self.assertIn("python -m pytest -v --cov=cgull", content)
         self.assertIn("timeout-minutes: 20", content)
         self.assertIn("cancel-in-progress: true", content)
-        self.assertIn("exclude:", content)
-        self.assertIn("- os: windows-latest", content)
-        self.assertIn('python-version: "3.10"', content)
+        self.assertIn('python-version: ["3.12", "3.13", "3.14"]', content)
+        self.assertNotIn('python-version: "3.10"', content)
+        self.assertNotIn('python-version: "3.11"', content)
+        self.assertNotIn("exclude:", content)
 
     def test_ci_corpus_coverage_gate_is_a_full_ratchet(self):
         workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"

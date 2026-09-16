@@ -4,7 +4,7 @@ C-GULL is a static security analyzer for C projects. The default CLI is delibera
 
 ## Requirements and installation
 
-C-GULL requires Python 3.10 or newer.
+C-GULL requires Python 3.12 or newer.
 
 Install the package from PyPI:
 
