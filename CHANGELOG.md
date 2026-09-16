@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-09-16
+
+### Changed
+- Parallelize independent TU/source preparation for multi-worker scans, including discovery-time include expansion and parsing, with bounded process submission, deterministic project-summary merging, and conservative per-source recovery (#488).
+
 ## [0.12.3] - 2026-09-16
 
 ### Changed

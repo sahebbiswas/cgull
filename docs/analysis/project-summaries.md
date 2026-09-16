@@ -141,3 +141,25 @@ existing CFG modules. The regression suites in
 caller-side findings, ownership/escape, provenance/validation, linkage
 conflicts, configuration separation, recursive convergence/degradation,
 worker parity, demand-driven domain selection, and legacy-rule compatibility.
+
+
+## Parallel preparation
+
+Multi-worker scans prepare independent sources in processes before deterministic
+project indexing and summary evaluation. This includes the include expansion
+used to classify orphan headers in TU mode. Each process owns its parser and
+preprocessor; scan configuration callbacks and custom rules stay in the
+coordinator during preparation. Compatible scan-local prepared units are reused.
+
+At most one source task per worker is outstanding. A task prepares that source's
+requested profiles and returns its ASTs before CFG/session caches are built.
+Completed units are merged by source/profile identity, and indexing proceeds in
+sorted source order regardless of completion order. AST serialization is an
+explicit cost of retaining the existing coordinator-owned cross-TU fixed point.
+Memory remains proportional to the retained project plus at most one in-flight
+source/profile bundle per worker; it is not a constant-memory project analysis.
+
+Ordinary expansion/parse failures retain conservative degradation. Pool/transport
+failures retry the affected source locally so healthy TUs can continue. `jobs=1`
+retains sequential preparation and lazy parsing. See the [performance evaluation](../benchmarks/parallel-preparation-488.md)
+for measured startup/IPC and memory tradeoffs.

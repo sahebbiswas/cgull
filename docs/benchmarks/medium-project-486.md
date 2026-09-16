@@ -44,6 +44,8 @@ The benchmark reports these timing fields for every arm:
 | `file_discovery_seconds` | Complete file-discovery interval, including traversal, candidate filtering, ignore checks, and candidate-list construction. |
 | `tu_include_expansion_seconds` | Include/TU expansion activity in project preparation plus any scan-local expansion. |
 | `parser_seconds` | AST parser activity in project preparation plus any scan-local parsing. |
+| `preparation_wall_seconds` | Non-overlapping preparation wall time, including TU-discovery preparation plus `prepare_project`. Use this for before/after comparisons when work moves between those phases. |
+| `independent_preparation_seconds` | Wall time in `prepare_units`, including worker startup and AST transfer. Sequential parsing remains lazy and is included in `prepare_project` instead. |
 | `project_preparation_seconds` | Full `prepare_project` wall time, including parse/expansion and summary work. |
 | `project_indexing_seconds` | Construction of cross-TU declaration/signature/binding indexes. |
 | `project_summary_construction_seconds` | Fixed-point construction of cross-TU summary domains. |
@@ -55,7 +57,7 @@ The benchmark reports these timing fields for every arm:
 
 The activity timings overlap by design. For example, parser and include-expansion time inside `prepare_project` is also contained in `project_preparation_seconds`. Do not sum every timing field and compare it with total wall time. Use the activity fields to locate expensive work and the wall fields to quantify end-to-end improvement.
 
-For the default multi-file HYBRID workload, `prepare_project()` performs parser/include work before sequential or parallel worker execution, and workers receive prepared units. That keeps parser/include activity comparable across `--jobs` arms without adding benchmark-specific IPC instrumentation. A run that degrades out of that prepared path should be treated as a different semantic/degradation baseline rather than compared as an ordinary performance arm.
+For the default multi-file HYBRID workload, preparation performs parser/include work before rule execution, and rule workers receive prepared units. Multi-worker preparation returns benchmark-only parser/include activity counters to the coordinator; these are aggregate activity durations, not wall time. TU discovery can now perform most independent work before `prepare_project`, so use `preparation_wall_seconds` to compare complete preparation. A run that degrades out of that prepared path should be treated as a different semantic/degradation baseline rather than compared as an ordinary performance arm.
 
 Production scan telemetry is intentionally unchanged: these hooks exist only inside the benchmark process, avoiding measurement instrumentation overhead during normal C-GULL use.
 
@@ -78,3 +80,7 @@ For an optimization PR:
 The FIFO worklist optimization has a [before/after evaluation (#493)](worklists-493.md).
 
 The disabled TRACE optimization has a [before/after evaluation (#494)](trace-hot-loop-494.md).
+
+Install optional `psutil` to record `sampled_peak_tree_rss_bytes`: the sum of coordinator and live descendant RSS sampled every 10 ms during the timed scan. This includes preparation and rule workers; shared pages are counted per process, and very brief peaks may be missed. The original `peak_rss_bytes` remains the coordinator process-lifetime high-water mark. Without psutil the sampled field is null.
+
+Parallel preparation has a [before/after evaluation (#488)](parallel-preparation-488.md).

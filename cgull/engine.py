@@ -304,6 +304,7 @@ class CGullScanner:
                 source_roots,
                 lambda path: self._config_for_file(preparation_config, path),
                 active_profiles,
+                jobs=resolved_jobs,
             )
 
             # Seed profiles are used for header reachability, while the actual
@@ -316,6 +317,7 @@ class CGullScanner:
                     lambda path: self._config_for_file(preparation_config, path),
                     None,
                     prepared_units=prepared_source_units,
+                    jobs=resolved_jobs,
                 )
                 source_preparation_diagnostics = tuple(sorted(set(
                     source_preparation_diagnostics + scan_preparation_diagnostics
@@ -385,6 +387,7 @@ class CGullScanner:
                     lambda path: self._config_for_file(config, path),
                     profiles,
                     prepared_units=self._project_units,
+                    jobs=resolved_jobs,
                 )
                 self.project_diagnostics = tuple(sorted(set(
                     self.project_diagnostics + project_diagnostics

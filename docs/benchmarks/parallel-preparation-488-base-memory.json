@@ -1,0 +1,470 @@
+{
+  "captured_at": "2026-09-16T14:14:30.624067+00:00",
+  "configuration": {
+    "jobs": [
+      1,
+      2,
+      4,
+      0
+    ],
+    "modes": [
+      "tu"
+    ],
+    "repetitions": 1,
+    "rules": "default"
+  },
+  "environment": {
+    "cgull_revision": "bc2bc230cdaf6bc3a9ba8e33f9fd9c5702b4beae",
+    "cgull_version": "0.12.3",
+    "cpu_count": 9,
+    "machine": "x86_64",
+    "platform": "Linux-6.18.44-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "python_executable": "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python"
+  },
+  "parity": {
+    "cross_mode_findings_match": true,
+    "differences": [],
+    "passes": true,
+    "within_mode_jobs_and_repetitions_match": true
+  },
+  "samples": [
+    {
+      "analyzed_lines": 2995,
+      "expanded_analysis_lines": 3395,
+      "finding_count": 3,
+      "jobs": 1,
+      "mode": "tu",
+      "parse_fallback_count": 0,
+      "peak_rss_bytes": 80150528,
+      "phases": {
+        "aggregate_file_analysis_seconds": 7.449479999999999,
+        "file_discovery_seconds": 0.0034794680000231892,
+        "independent_preparation_seconds": 0.043671953999933066,
+        "parser_seconds": 1.2886910580002677,
+        "preparation_wall_seconds": 2.261372875999882,
+        "project_indexing_seconds": 0.044516722000025766,
+        "project_preparation_seconds": 2.2182764640000414,
+        "project_summary_construction_seconds": 0.8783058939999364,
+        "rule_execution_aggregate_seconds": 7.449479999999999,
+        "total_wall_seconds": 9.750528599000063,
+        "tu_include_expansion_seconds": 0.04023449999976947,
+        "worker_execution_wall_seconds": 7.4745940269999664,
+        "worker_startup_ipc_collection_residual_seconds": 0.02511402699996701
+      },
+      "repetition": 0,
+      "sampled_peak_tree_rss_bytes": 80588800,
+      "semantic_digest": "2a18b2df0355b71855c431e2324b52bc70730423dd763f3ae077df445883e18d",
+      "semantics": {
+        "files_analyzed": 16,
+        "files_discovered": 16,
+        "files_failed": 0,
+        "files_ignored": 0,
+        "findings": [
+          [
+            "3ec7ffc83446cbe5",
+            "CGULL-001",
+            "src/module_15.c",
+            190,
+            12,
+            "Banned insecure function call 'gets': gets() allows arbitrary buffer overflow into the stack without bounds checking. [policy=unconditional; policy_reason=No call form provides a destination bound.; evidence=semantic facts are descriptive only for an unconditional policy ban]"
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'salt' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'value' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ]
+        ],
+        "parser_status_counts": [
+          [
+            "fallback-parser",
+            0
+          ],
+          [
+            "parse-failed",
+            0
+          ],
+          [
+            "pycparser-success",
+            16
+          ],
+          [
+            "regex",
+            0
+          ]
+        ],
+        "scan_errors": []
+      },
+      "throughput_kloc_per_sec": 0.30716283425979013,
+      "unique_source_lines": 2995,
+      "wall_seconds": 9.750528599000063
+    },
+    {
+      "analyzed_lines": 2995,
+      "expanded_analysis_lines": 3395,
+      "finding_count": 3,
+      "jobs": 2,
+      "mode": "tu",
+      "parse_fallback_count": 0,
+      "peak_rss_bytes": 82640896,
+      "phases": {
+        "aggregate_file_analysis_seconds": 8.16254,
+        "file_discovery_seconds": 0.00232469200000196,
+        "independent_preparation_seconds": 0.04148065900005804,
+        "parser_seconds": 1.8115863609998542,
+        "preparation_wall_seconds": 2.8360564159999058,
+        "project_indexing_seconds": 0.03349893400002202,
+        "project_preparation_seconds": 2.7951755020000064,
+        "project_summary_construction_seconds": 0.942116249000037,
+        "rule_execution_aggregate_seconds": 8.16254,
+        "total_wall_seconds": 7.015543103000027,
+        "tu_include_expansion_seconds": 0.037807916000133446,
+        "worker_execution_wall_seconds": 4.174471287000074,
+        "worker_startup_ipc_collection_residual_seconds": 0.09320128700007402
+      },
+      "repetition": 0,
+      "sampled_peak_tree_rss_bytes": 240353280,
+      "semantic_digest": "2a18b2df0355b71855c431e2324b52bc70730423dd763f3ae077df445883e18d",
+      "semantics": {
+        "files_analyzed": 16,
+        "files_discovered": 16,
+        "files_failed": 0,
+        "files_ignored": 0,
+        "findings": [
+          [
+            "3ec7ffc83446cbe5",
+            "CGULL-001",
+            "src/module_15.c",
+            190,
+            12,
+            "Banned insecure function call 'gets': gets() allows arbitrary buffer overflow into the stack without bounds checking. [policy=unconditional; policy_reason=No call form provides a destination bound.; evidence=semantic facts are descriptive only for an unconditional policy ban]"
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'salt' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'value' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ]
+        ],
+        "parser_status_counts": [
+          [
+            "fallback-parser",
+            0
+          ],
+          [
+            "parse-failed",
+            0
+          ],
+          [
+            "pycparser-success",
+            16
+          ],
+          [
+            "regex",
+            0
+          ]
+        ],
+        "scan_errors": []
+      },
+      "throughput_kloc_per_sec": 0.42690921515673685,
+      "unique_source_lines": 2995,
+      "wall_seconds": 7.015543103000027
+    },
+    {
+      "analyzed_lines": 2995,
+      "expanded_analysis_lines": 3395,
+      "finding_count": 3,
+      "jobs": 4,
+      "mode": "tu",
+      "parse_fallback_count": 0,
+      "peak_rss_bytes": 82903040,
+      "phases": {
+        "aggregate_file_analysis_seconds": 13.03312,
+        "file_discovery_seconds": 0.002172459999997045,
+        "independent_preparation_seconds": 0.05044950199999221,
+        "parser_seconds": 1.5458637000001545,
+        "preparation_wall_seconds": 2.8925333709998995,
+        "project_indexing_seconds": 0.04261962400005359,
+        "project_preparation_seconds": 2.8425826540000116,
+        "project_summary_construction_seconds": 1.229637288000049,
+        "rule_execution_aggregate_seconds": 13.03312,
+        "total_wall_seconds": 6.340681535000044,
+        "tu_include_expansion_seconds": 0.04556737999996585,
+        "worker_execution_wall_seconds": 3.441931608999994,
+        "worker_startup_ipc_collection_residual_seconds": 0.18365160899999378
+      },
+      "repetition": 0,
+      "sampled_peak_tree_rss_bytes": 402948096,
+      "semantic_digest": "2a18b2df0355b71855c431e2324b52bc70730423dd763f3ae077df445883e18d",
+      "semantics": {
+        "files_analyzed": 16,
+        "files_discovered": 16,
+        "files_failed": 0,
+        "files_ignored": 0,
+        "findings": [
+          [
+            "3ec7ffc83446cbe5",
+            "CGULL-001",
+            "src/module_15.c",
+            190,
+            12,
+            "Banned insecure function call 'gets': gets() allows arbitrary buffer overflow into the stack without bounds checking. [policy=unconditional; policy_reason=No call form provides a destination bound.; evidence=semantic facts are descriptive only for an unconditional policy ban]"
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'salt' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'value' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ]
+        ],
+        "parser_status_counts": [
+          [
+            "fallback-parser",
+            0
+          ],
+          [
+            "parse-failed",
+            0
+          ],
+          [
+            "pycparser-success",
+            16
+          ],
+          [
+            "regex",
+            0
+          ]
+        ],
+        "scan_errors": []
+      },
+      "throughput_kloc_per_sec": 0.47234670018796004,
+      "unique_source_lines": 2995,
+      "wall_seconds": 6.340681535000044
+    },
+    {
+      "analyzed_lines": 2995,
+      "expanded_analysis_lines": 3395,
+      "finding_count": 3,
+      "jobs": 0,
+      "mode": "tu",
+      "parse_fallback_count": 0,
+      "peak_rss_bytes": 82903040,
+      "phases": {
+        "aggregate_file_analysis_seconds": 18.666150000000002,
+        "file_discovery_seconds": 0.001552688000060698,
+        "independent_preparation_seconds": 0.039686977999963347,
+        "parser_seconds": 1.4426527340001485,
+        "preparation_wall_seconds": 2.6065404250000483,
+        "project_indexing_seconds": 0.05578109599991876,
+        "project_preparation_seconds": 2.567461592999962,
+        "project_summary_construction_seconds": 1.0600651610000114,
+        "rule_execution_aggregate_seconds": 18.666150000000002,
+        "total_wall_seconds": 5.100306694000096,
+        "tu_include_expansion_seconds": 0.03655232000039632,
+        "worker_execution_wall_seconds": 2.4892770200000314,
+        "worker_startup_ipc_collection_residual_seconds": 0.4152603533333643
+      },
+      "repetition": 0,
+      "sampled_peak_tree_rss_bytes": 802631680,
+      "semantic_digest": "2a18b2df0355b71855c431e2324b52bc70730423dd763f3ae077df445883e18d",
+      "semantics": {
+        "files_analyzed": 16,
+        "files_discovered": 16,
+        "files_failed": 0,
+        "files_ignored": 0,
+        "findings": [
+          [
+            "3ec7ffc83446cbe5",
+            "CGULL-001",
+            "src/module_15.c",
+            190,
+            12,
+            "Banned insecure function call 'gets': gets() allows arbitrary buffer overflow into the stack without bounds checking. [policy=unconditional; policy_reason=No call form provides a destination bound.; evidence=semantic facts are descriptive only for an unconditional policy ban]"
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'salt' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'value' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ]
+        ],
+        "parser_status_counts": [
+          [
+            "fallback-parser",
+            0
+          ],
+          [
+            "parse-failed",
+            0
+          ],
+          [
+            "pycparser-success",
+            16
+          ],
+          [
+            "regex",
+            0
+          ]
+        ],
+        "scan_errors": []
+      },
+      "throughput_kloc_per_sec": 0.5872195888775201,
+      "unique_source_lines": 2995,
+      "wall_seconds": 5.100306694000096
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "arms": {
+      "tu/jobs=0": {
+        "expanded_analysis_lines": 3395,
+        "jobs": 0,
+        "median_phases_seconds": {
+          "aggregate_file_analysis_seconds": 18.666150000000002,
+          "file_discovery_seconds": 0.001552688000060698,
+          "independent_preparation_seconds": 0.039686977999963347,
+          "parser_seconds": 1.4426527340001485,
+          "preparation_wall_seconds": 2.6065404250000483,
+          "project_indexing_seconds": 0.05578109599991876,
+          "project_preparation_seconds": 2.567461592999962,
+          "project_summary_construction_seconds": 1.0600651610000114,
+          "rule_execution_aggregate_seconds": 18.666150000000002,
+          "total_wall_seconds": 5.100306694000096,
+          "tu_include_expansion_seconds": 0.03655232000039632,
+          "worker_execution_wall_seconds": 2.4892770200000314,
+          "worker_startup_ipc_collection_residual_seconds": 0.4152603533333643
+        },
+        "median_throughput_kloc_per_sec": 0.5872195888775201,
+        "median_wall_seconds": 5.100306694000096,
+        "mode": "tu",
+        "samples": 1
+      },
+      "tu/jobs=1": {
+        "expanded_analysis_lines": 3395,
+        "jobs": 1,
+        "median_phases_seconds": {
+          "aggregate_file_analysis_seconds": 7.449479999999999,
+          "file_discovery_seconds": 0.0034794680000231892,
+          "independent_preparation_seconds": 0.043671953999933066,
+          "parser_seconds": 1.2886910580002677,
+          "preparation_wall_seconds": 2.261372875999882,
+          "project_indexing_seconds": 0.044516722000025766,
+          "project_preparation_seconds": 2.2182764640000414,
+          "project_summary_construction_seconds": 0.8783058939999364,
+          "rule_execution_aggregate_seconds": 7.449479999999999,
+          "total_wall_seconds": 9.750528599000063,
+          "tu_include_expansion_seconds": 0.04023449999976947,
+          "worker_execution_wall_seconds": 7.4745940269999664,
+          "worker_startup_ipc_collection_residual_seconds": 0.02511402699996701
+        },
+        "median_throughput_kloc_per_sec": 0.30716283425979013,
+        "median_wall_seconds": 9.750528599000063,
+        "mode": "tu",
+        "samples": 1
+      },
+      "tu/jobs=2": {
+        "expanded_analysis_lines": 3395,
+        "jobs": 2,
+        "median_phases_seconds": {
+          "aggregate_file_analysis_seconds": 8.16254,
+          "file_discovery_seconds": 0.00232469200000196,
+          "independent_preparation_seconds": 0.04148065900005804,
+          "parser_seconds": 1.8115863609998542,
+          "preparation_wall_seconds": 2.8360564159999058,
+          "project_indexing_seconds": 0.03349893400002202,
+          "project_preparation_seconds": 2.7951755020000064,
+          "project_summary_construction_seconds": 0.942116249000037,
+          "rule_execution_aggregate_seconds": 8.16254,
+          "total_wall_seconds": 7.015543103000027,
+          "tu_include_expansion_seconds": 0.037807916000133446,
+          "worker_execution_wall_seconds": 4.174471287000074,
+          "worker_startup_ipc_collection_residual_seconds": 0.09320128700007402
+        },
+        "median_throughput_kloc_per_sec": 0.42690921515673685,
+        "median_wall_seconds": 7.015543103000027,
+        "mode": "tu",
+        "samples": 1
+      },
+      "tu/jobs=4": {
+        "expanded_analysis_lines": 3395,
+        "jobs": 4,
+        "median_phases_seconds": {
+          "aggregate_file_analysis_seconds": 13.03312,
+          "file_discovery_seconds": 0.002172459999997045,
+          "independent_preparation_seconds": 0.05044950199999221,
+          "parser_seconds": 1.5458637000001545,
+          "preparation_wall_seconds": 2.8925333709998995,
+          "project_indexing_seconds": 0.04261962400005359,
+          "project_preparation_seconds": 2.8425826540000116,
+          "project_summary_construction_seconds": 1.229637288000049,
+          "rule_execution_aggregate_seconds": 13.03312,
+          "total_wall_seconds": 6.340681535000044,
+          "tu_include_expansion_seconds": 0.04556737999996585,
+          "worker_execution_wall_seconds": 3.441931608999994,
+          "worker_startup_ipc_collection_residual_seconds": 0.18365160899999378
+        },
+        "median_throughput_kloc_per_sec": 0.47234670018796004,
+        "median_wall_seconds": 6.340681535000044,
+        "mode": "tu",
+        "samples": 1
+      }
+    }
+  },
+  "timing_notes": {
+    "activity_timings_overlap": true,
+    "expanded_analysis_lines": "include-expanded line volume recomputed after the timed scan for exactly the analyzed roots; excluded from scan timing and peak-RSS measurement",
+    "peak_rss_bytes": "process-lifetime ru_maxrss sampled immediately after scan_path; null where the platform does not expose it",
+    "rule_execution_aggregate_seconds": "sum of per-file analysis durations minus scan-local parser/include work; it is CPU-like aggregate work and may exceed wall time in parallel mode",
+    "worker_startup_ipc_collection_residual_seconds": "worker-dispatch wall time minus a conservative ideal-compute lower bound; use for relative before/after comparisons on the same machine"
+  },
+  "workload": {
+    "file_count": 18,
+    "functions_per_module": 10,
+    "modules": 16,
+    "physical_lines": 3022,
+    "sha256": "8015bcd099fa5a593b3413ddcbd9dc882f74ce9fbfe67474270274d243444c95",
+    "statements_per_function": 12
+  }
+}
