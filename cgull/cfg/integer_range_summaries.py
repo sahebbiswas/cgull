@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import re
 from typing import Dict, Mapping, Optional, Set, Tuple
@@ -253,9 +254,11 @@ def _analyze_seeded(
     }
     facts_before: Dict[int, Dict[str, IntegerRange]] = {}
     processed: Dict[int, int] = {}
-    work = [cfg.entry]
+    work = deque([cfg.entry])
+    queued = set(work)
     while work:
-        node_id = work.pop(0)
+        node_id = work.popleft()
+        queued.remove(node_id)
         processed[node_id] = processed.get(node_id, 0) + 1
         state = incoming[node_id]
         facts_before[node_id] = dict(state)
@@ -298,8 +301,9 @@ def _analyze_seeded(
                 merged = {name: _widen(prior[name], merged[name]) for name in prior.keys() & merged.keys()}
             if prior != merged:
                 incoming[successor] = merged
-                if successor not in work:
+                if successor not in queued:
                     work.append(successor)
+                    queued.add(successor)
 
     return _SummaryAwareIntegerRangeAnalysis(ast_ctx, fn, cfg, facts_before, return_ranges)
 

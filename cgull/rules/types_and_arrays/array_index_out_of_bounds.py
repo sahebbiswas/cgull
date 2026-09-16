@@ -2,6 +2,7 @@
 Rules for Arrays, Integer Overflows, VLAs, Bitwise Operations, and Magic Numbers.
 """
 
+from collections import deque
 import re
 import logging
 from typing import Dict, List, Optional, Set, Tuple
@@ -496,9 +497,9 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 return {}
             in_states: Dict[int, Dict[str, int]] = {cfg.entry: {}}
             out_states: Dict[int, Dict[str, int]] = {}
-            worklist = [cfg.entry]
+            worklist = deque([cfg.entry])
             while worklist:
-                node_id = worklist.pop(0)
+                node_id = worklist.popleft()
                 new_out = transfer(in_states[node_id], cfg.nodes[node_id])
                 if out_states.get(node_id) == new_out:
                     continue

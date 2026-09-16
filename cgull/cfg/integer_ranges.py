@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import re
 from typing import Dict, Mapping, Optional
@@ -491,9 +492,11 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
     incoming: Dict[int, Dict[str, IntegerRange]] = {cfg.entry: {}}
     facts_before: Dict[int, Dict[str, IntegerRange]] = {}
     processed: Dict[int, int] = {}
-    work = [cfg.entry]
+    work = deque([cfg.entry])
+    queued = set(work)
     while work:
-        node_id = work.pop(0)
+        node_id = work.popleft()
+        queued.remove(node_id)
         processed[node_id] = processed.get(node_id, 0) + 1
         state = incoming[node_id]
         facts_before[node_id] = dict(state)
@@ -527,7 +530,8 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
                 merged = {name: _widen(prior[name], merged[name]) for name in prior.keys() & merged.keys()}
             if prior != merged:
                 incoming[successor] = merged
-                if successor not in work:
+                if successor not in queued:
                     work.append(successor)
+                    queued.add(successor)
 
     return IntegerRangeAnalysis(ast_ctx, fn, cfg, facts_before)

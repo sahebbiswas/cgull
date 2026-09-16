@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-16
+
+### Changed
+- Replace FIFO lists in CFG analyses and rule helpers with deques, and track pending fixed-point work in sets while preserving processing order (#493).
+
 ## [0.12.0] - 2026-09-15
 
 ### Fixed

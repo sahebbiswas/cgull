@@ -4,6 +4,7 @@ The mixin operates on the graph contract supplied by :class:`StructuredGraph`.
 It intentionally contains no node/edge construction or AST traversal helpers.
 """
 
+from collections import deque
 from typing import Dict, Optional, Set, Tuple
 
 from .ast_events import _find_value_producing_call, _is_nullish
@@ -63,9 +64,9 @@ class LegacyDataflowMixin:
 
         reachable_blocks: Set[int] = set()
         if entry_block_id in self.blocks:
-            queue = [entry_block_id]
+            queue = deque([entry_block_id])
             while queue:
-                b_id = queue.pop(0)
+                b_id = queue.popleft()
                 if b_id in reachable_blocks:
                     continue
                 reachable_blocks.add(b_id)
@@ -89,10 +90,12 @@ class LegacyDataflowMixin:
                 entry_block.loc_map_in[v] = {loc_id}
                 entry_block.loc_state_in[loc_id] = Allocation.NOT_ALLOCATED
 
-        worklist = [entry_block_id] if entry_block_id in reachable_blocks else []
+        worklist = deque([entry_block_id] if entry_block_id in reachable_blocks else [])
+        queued = set(worklist)
 
         while worklist:
-            b_id = worklist.pop(0)
+            b_id = worklist.popleft()
+            queued.remove(b_id)
             if b_id not in reachable_blocks:
                 continue
             block = self.blocks[b_id]
@@ -139,9 +142,9 @@ class LegacyDataflowMixin:
                                 size_is_zero = _is_nullish(val_call[1][1])
 
                         valid_blocks = {block.block_id}
-                        v_queue = [block.block_id]
+                        v_queue = deque([block.block_id])
                         while v_queue:
-                            curr_v = v_queue.pop(0)
+                            curr_v = v_queue.popleft()
                             for succ_b_id in self.blocks[curr_v].successors:
                                 succ_b = self.blocks.get(succ_b_id)
                                 if (
@@ -399,8 +402,9 @@ class LegacyDataflowMixin:
                         succ_block.alloc_in[v] = new_alloc
                         changed = True
 
-                if changed and succ_id not in worklist:
+                if changed and succ_id not in queued:
                     worklist.append(succ_id)
+                    queued.add(succ_id)
 
         self._compute_node_level_facts(all_vars)
 
@@ -486,9 +490,9 @@ class LegacyDataflowMixin:
                             if val_call and len(val_call[1]) >= 2:
                                 size_is_zero = _is_nullish(val_call[1][1])
                         valid_blocks = {block.block_id}
-                        v_queue = [block.block_id]
+                        v_queue = deque([block.block_id])
                         while v_queue:
-                            curr_v = v_queue.pop(0)
+                            curr_v = v_queue.popleft()
                             for succ_b_id in self.blocks[curr_v].successors:
                                 succ_b = self.blocks.get(succ_b_id)
                                 if (

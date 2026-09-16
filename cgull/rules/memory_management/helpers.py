@@ -2,6 +2,7 @@
 Helpers for Memory Management Rules.
 """
 
+from collections import deque
 import re
 import logging
 from typing import Dict, List, Optional, Set, Tuple
@@ -142,11 +143,11 @@ def _find_unsafe_allocation_use(
     summaries: Optional[Dict[str, FunctionSummary]] = None,
 ):
     """Return the first reachable unsafe use of ptr_name allocated at alloc_node_id, or None."""
-    work = list(cfg.nodes[alloc_node_id].successors)
+    work = deque(cfg.nodes[alloc_node_id].successors)
     visited = set()
     allocation_locations: Optional[Set[str]] = None
     while work:
-        nid = work.pop(0)
+        nid = work.popleft()
         if nid in visited:
             continue
         visited.add(nid)
@@ -175,10 +176,10 @@ def _find_unsafe_allocation_use(
 
 def _find_unsafe_param_deref(cfg: StructuredCFG, param: str):
     """Return the first reachable unsafe dereference of parameter `param`, or None."""
-    work = [cfg.entry] if cfg.entry is not None else []
+    work = deque([cfg.entry] if cfg.entry is not None else [])
     visited = set()
     while work:
-        nid = work.pop(0)
+        nid = work.popleft()
         if nid in visited:
             continue
         visited.add(nid)
@@ -202,10 +203,10 @@ def _find_uaf_uses(cfg: StructuredCFG, freed_node_id: int, ptr_name: str):
     if not freed_locs:
         freed_locs = {f"var_{ptr_name}"}
 
-    work = list(cfg.nodes[freed_node_id].successors)
+    work = deque(cfg.nodes[freed_node_id].successors)
     visited = set()
     while work:
-        nid = work.pop(0)
+        nid = work.popleft()
         if nid in visited:
             continue
         visited.add(nid)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import collections
 import re
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
@@ -55,10 +56,10 @@ def _consumes_tracked_location(
 def find_uses_after_free_effect(cfg, free_node_id: int, ptr_name: str):
     """Yield downstream accesses that still alias a location freed by a call effect."""
     freed_locations = _locations(cfg, free_node_id, ptr_name)
-    work = list(cfg.nodes[free_node_id].successors)
+    work = deque(cfg.nodes[free_node_id].successors)
     visited = set()
     while work:
-        node_id = work.pop(0)
+        node_id = work.popleft()
         if node_id in visited:
             continue
         visited.add(node_id)

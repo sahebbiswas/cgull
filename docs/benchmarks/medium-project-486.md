@@ -74,3 +74,5 @@ For an optimization PR:
 3. Confirm workload hashes and semantic parity match.
 4. Compare `median_wall_seconds`, throughput, expanded analysis volume, and the relevant phase/activity fields.
 5. Attach both JSON artifacts to the PR. Avoid claiming a regression/improvement from runs with different workload hashes, Python versions, or machines.
+
+The FIFO worklist optimization has a [before/after evaluation (#493)](worklists-493.md).

@@ -7,6 +7,7 @@ memory lifecycle rules can query without rediscovering calls from source text.
 
 from __future__ import annotations
 
+from collections import deque
 import re
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Mapping, Optional, Set, Tuple
@@ -289,9 +290,9 @@ def _reachable_and_predecessors(cfg):
     if cfg.entry is None or cfg.entry not in cfg.nodes:
         return set(), {}
     reachable: Set[int] = set()
-    queue = [cfg.entry]
+    queue = deque([cfg.entry])
     while queue:
-        node_id = queue.pop(0)
+        node_id = queue.popleft()
         if node_id in reachable or node_id not in cfg.nodes:
             continue
         reachable.add(node_id)
