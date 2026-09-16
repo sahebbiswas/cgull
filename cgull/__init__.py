@@ -8,7 +8,14 @@ __author__ = "Saheb Biswas"
 
 from .logging_config import configure_logging, TRACE_LEVEL_NUM
 from .models import Issue, Severity, ScanResult, RuleDefinition, AnalysisEngine, FixType, ScanConfig, ScanError, ParseTier, ConfigProfile, ScanMode, OUTPUT_SCHEMA_VERSION
-from .telemetry import ScanTelemetry, telemetry_for
+from .telemetry import CGullScanner as _TelemetryCGullScanner, ScanTelemetry, telemetry_for
+from .parallel_workers import ParallelWorkerMixin
+
+# Keep the telemetry scanner itself on the persistent-worker path.  The package
+# level CGullScanner currently aliases the compile-database subclass, but direct
+# users of cgull.telemetry.CGullScanner must receive the same parallel behavior.
+_TelemetryCGullScanner._scan_files_parallel = ParallelWorkerMixin._scan_files_parallel
+
 from .compile_database import CompileCommandIncludeDatabase, CompileDatabaseCGullScanner as CGullScanner
 from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander, expand_includes
