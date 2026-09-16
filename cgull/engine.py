@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union, Any
 from pathlib import Path
 
-from .logging_config import multiprocessing_logging_context
+from .logging_config import TRACE_LEVEL_NUM, multiprocessing_logging_context
 from .parse_diagnostics import map_attempts, report_attempts, format_attempts
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile, ScanMode
 from .ignore import CGullIgnoreFilter
@@ -1013,6 +1013,10 @@ def _scan_file_content(
 
         logger.info("Entering file scan: %s", file_path)
 
+        # Logging configuration is stable during a file scan. Avoid a logging
+        # method call for every rule/line pair when TRACE is disabled.
+        trace_enabled = logger.isEnabledFor(TRACE_LEVEL_NUM)
+
         # 1. Regex Pass
         if engine_mode in (AnalysisEngine.REGEX, AnalysisEngine.HYBRID):
             masked_lines = [mask_string_and_char_literals(line) for line in clean_lines]
@@ -1023,7 +1027,8 @@ def _scan_file_content(
                 for rule in rules:
                     if engine_mode == AnalysisEngine.HYBRID and rule.analysis_engine == AnalysisEngine.AST:
                         continue
-                    logger.log(5, "Executing regex rule %s (%s) on %s:%d", rule.rule_id, rule.name, file_path, line_no)
+                    if trace_enabled:
+                        logger.log(TRACE_LEVEL_NUM, "Executing regex rule %s (%s) on %s:%d", rule.rule_id, rule.name, file_path, line_no)
                     found = rule.scan_line(
                         file_path=file_path,
                         line_number=line_no,
@@ -1044,7 +1049,8 @@ def _scan_file_content(
                 parser_status = ast_ctx.parser_status
                 confidence_val = Confidence.FULL.value if parser_status == ParserStatus.PYCPARSER_SUCCESS.value else Confidence.FALLBACK.value
             for rule in rules:
-                logger.log(5, "Executing AST rule %s (%s) on %s", rule.rule_id, rule.name, file_path)
+                if trace_enabled:
+                    logger.log(TRACE_LEVEL_NUM, "Executing AST rule %s (%s) on %s", rule.rule_id, rule.name, file_path)
                 ast_found = rule.scan_ast(file_path=file_path, ast_ctx=ast_ctx)
                 for iss in ast_found:
                     if iss.confidence is None:
