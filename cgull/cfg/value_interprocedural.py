@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Dict, Mapping, Optional, Tuple
@@ -196,9 +197,9 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
 
     entry_block = cfg.node_to_block.get(cfg.entry) if cfg.entry else min(cfg.blocks)
     reachable = set()
-    queue = [entry_block]
+    queue = deque([entry_block])
     while queue:
-        bid = queue.pop(0)
+        bid = queue.popleft()
         if bid in reachable or bid not in cfg.blocks:
             continue
         reachable.add(bid)
@@ -209,9 +210,11 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
     seen = {entry_block}
     before = {}
     calls = {}
-    work = [entry_block]
+    work = deque([entry_block])
+    queued = set(work)
     while work:
-        bid = work.pop(0)
+        bid = work.popleft()
+        queued.remove(bid)
         if bid not in reachable:
             continue
         state = dict(incoming[bid])
@@ -260,8 +263,9 @@ def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_li
                 changed = merged != incoming[succ]
                 if changed:
                     incoming[succ] = merged
-            if changed and succ not in work:
+            if changed and succ not in queued:
                 work.append(succ)
+                queued.add(succ)
 
     return ValueDataflowResult(before), tuple(
         (callee, actuals) for (_, callee, _), actuals in sorted(calls.items())

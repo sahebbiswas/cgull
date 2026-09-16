@@ -8,6 +8,7 @@ engine carries parameter/return relationships through direct calls.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, FrozenSet, Mapping, Optional, Set, Tuple
@@ -254,9 +255,9 @@ def analyze_value_dataflow(
 
     entry = cfg.node_to_block.get(cfg.entry) if cfg.entry else min(cfg.blocks)
     reachable: Set[int] = set()
-    queue = [entry]
+    queue = deque([entry])
     while queue:
-        bid = queue.pop(0)
+        bid = queue.popleft()
         if bid in reachable or bid not in cfg.blocks:
             continue
         reachable.add(bid)
@@ -265,9 +266,11 @@ def analyze_value_dataflow(
     incoming: Dict[int, Dict[str, ValueFact]] = {bid: {} for bid in cfg.blocks}
     seen = {entry}
     before: Dict[int, Dict[str, ValueFact]] = {}
-    work = [entry]
+    work = deque([entry])
+    queued = set(work)
     while work:
-        bid = work.pop(0)
+        bid = work.popleft()
+        queued.remove(bid)
         if bid not in reachable:
             continue
         state = dict(incoming[bid])
@@ -287,8 +290,9 @@ def analyze_value_dataflow(
                 changed = merged != incoming[succ]
                 if changed:
                     incoming[succ] = merged
-            if changed and succ not in work:
+            if changed and succ not in queued:
                 work.append(succ)
+                queued.add(succ)
     return ValueDataflowResult(before)
 
 

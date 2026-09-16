@@ -7,6 +7,7 @@ recursively analyzing callees from rule code.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, FrozenSet, Mapping, Optional, Set, Tuple
@@ -151,9 +152,9 @@ def analyze_security_dataflow(
 
     entry_block_id = cfg.node_to_block.get(cfg.entry) if cfg.entry else min(cfg.blocks)
     reachable: Set[int] = set()
-    queue = [entry_block_id]
+    queue = deque([entry_block_id])
     while queue:
-        block_id = queue.pop(0)
+        block_id = queue.popleft()
         if block_id in reachable or block_id not in cfg.blocks:
             continue
         reachable.add(block_id)
@@ -165,9 +166,11 @@ def analyze_security_dataflow(
     provenance_before: Dict[int, Dict[str, Provenance]] = {}
     validations_before: Dict[int, Dict[str, FrozenSet[ValidationProperty]]] = {}
 
-    worklist = [entry_block_id]
+    worklist = deque([entry_block_id])
+    queued = set(worklist)
     while worklist:
-        block_id = worklist.pop(0)
+        block_id = worklist.popleft()
+        queued.remove(block_id)
         if block_id not in reachable:
             continue
         block = cfg.blocks[block_id]
@@ -202,8 +205,9 @@ def analyze_security_dataflow(
                 if merged_val != val_in[succ_id]:
                     val_in[succ_id] = merged_val
                     changed = True
-            if changed and succ_id not in worklist:
+            if changed and succ_id not in queued:
                 worklist.append(succ_id)
+                queued.add(succ_id)
 
     result = SecurityDataflowResult(provenance_before, validations_before)
     cfg.security_dataflow = result

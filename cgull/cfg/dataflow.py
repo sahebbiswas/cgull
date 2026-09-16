@@ -5,6 +5,8 @@ queries live in :mod:`cgull.cfg.legacy_dataflow`; domain joins live in
 :mod:`cgull.cfg.domains`.  This module retains the historic import surface.
 """
 
+from collections import deque
+
 from .domains import meet_allocation, meet_initialization, meet_nullness
 from .graph import StructuredGraph
 from .legacy_dataflow import LegacyDataflowMixin
@@ -29,9 +31,9 @@ class StructuredCFG(LegacyDataflowMixin, StructuredGraph):
             return
 
         affected_nodes = set(unknown_ids)
-        queue = list(sorted(unknown_ids))
+        queue = deque(sorted(unknown_ids))
         while queue:
-            node_id = queue.pop(0)
+            node_id = queue.popleft()
             for succ in self.nodes[node_id].successors:
                 if succ not in affected_nodes:
                     affected_nodes.add(succ)

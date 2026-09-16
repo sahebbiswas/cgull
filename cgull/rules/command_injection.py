@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .banned_functions import CommandInjectionRule as _LegacyCommandInjectionRule
@@ -90,9 +91,9 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
             entry = min(cfg.blocks)
 
         reachable: Set[int] = set()
-        queue = [entry]
+        queue = deque([entry])
         while queue:
-            block_id = queue.pop(0)
+            block_id = queue.popleft()
             if block_id in reachable or block_id not in cfg.blocks:
                 continue
             reachable.add(block_id)
@@ -103,10 +104,12 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
         }
         incoming[entry] = set()
         before: Dict[int, FrozenSet[str]] = {}
-        work = [entry]
+        work = deque([entry])
+        queued = set(work)
 
         while work:
-            block_id = work.pop(0)
+            block_id = work.popleft()
+            queued.remove(block_id)
             block_in = incoming.get(block_id)
             if block_in is None:
                 continue
@@ -146,8 +149,9 @@ class CommandInjectionRule(_LegacyCommandInjectionRule):
                 merged = set(state) if old is None else old & state
                 if old is None or merged != old:
                     incoming[successor] = merged
-                    if successor not in work:
+                    if successor not in queued:
                         work.append(successor)
+                        queued.add(successor)
 
         return before
 

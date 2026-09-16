@@ -7,6 +7,7 @@ names are never used heuristically.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
@@ -134,9 +135,9 @@ def capacity_in_states(cfg, initial: Mapping[str, str]) -> Dict[int, Dict[str, s
         return {}
     in_states: Dict[int, Dict[str, str]] = {cfg.entry: dict(initial)}
     out_states: Dict[int, Dict[str, str]] = {}
-    worklist = [cfg.entry]
+    worklist = deque([cfg.entry])
     while worklist:
-        node_id = worklist.pop(0)
+        node_id = worklist.popleft()
         new_out = transfer(in_states[node_id], cfg.nodes[node_id])
         if out_states.get(node_id) == new_out:
             continue

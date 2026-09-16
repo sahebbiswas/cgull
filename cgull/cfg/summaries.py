@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import json
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Mapping, Optional, Set, Tuple
@@ -232,9 +233,9 @@ def _summarize_output_initialization(
         node_may[node_id] = may
 
     reachable: Set[int] = set()
-    queue = [cfg.entry]
+    queue = deque([cfg.entry])
     while queue:
-        node_id = queue.pop(0)
+        node_id = queue.popleft()
         if node_id in reachable or node_id not in cfg.nodes:
             continue
         reachable.add(node_id)
