@@ -60,8 +60,16 @@ def _issue_keys(result):
     )
 
 
-def test_telemetry_scanner_uses_persistent_parallel_worker_path():
-    assert TelemetryCGullScanner._scan_files_parallel is ParallelWorkerMixin._scan_files_parallel
+def test_telemetry_scanner_routes_parallel_scans_through_persistent_workers(monkeypatch):
+    marker = object()
+
+    def fake_parallel_scan(self, *args, **kwargs):
+        return marker
+
+    monkeypatch.setattr(ParallelWorkerMixin, "_scan_files_parallel", fake_parallel_scan)
+    scanner = TelemetryCGullScanner(rules=[], engine_mode=AnalysisEngine.REGEX)
+
+    assert scanner._scan_files_parallel([], 2, scanner.config) is marker
 
 
 def test_compact_work_item_does_not_serialize_prepared_ast_graph(tmp_path):
