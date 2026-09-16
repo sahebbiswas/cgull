@@ -61,7 +61,9 @@ Production scan telemetry is intentionally unchanged: these hooks exist only ins
 
 ## Baseline and optimization workflow
 
-The pull-request benchmark workflow runs a compact one-repetition file/TU and jobs 1/2 matrix on Ubuntu for every supported Python release (3.10 through 3.14). Each Python job uploads its own JSON artifact. This cross-version CI run validates benchmark portability and semantic parity; it is not an absolute performance gate.
+The pull-request benchmark workflow runs a compact one-repetition file/TU and jobs 1/2 matrix on Ubuntu for every currently supported Python release (3.12 through 3.14). Each Python job uploads its own JSON artifact. This cross-version CI run validates benchmark portability and semantic parity; it is not an absolute performance gate.
+
+Issue #495 used this harness to capture the same workload on Python 3.10 through 3.14 before changing the support floor. The recorded comparison and decision are in [Python support-floor evaluation (#495)](python-version-495.md).
 
 `medium-project-486-baseline.json` records the first successful Python 3.12 compact run. Its `baseline.production_main_revision` identifies the production scanner source used for the measurement. The PR that introduced the harness changes only benchmark/docs/workflow code plus the package version, so the measured scanner implementation is identical to that `main` revision; the separately recorded capture revision is GitHub Actions' synthetic PR merge commit.
 
