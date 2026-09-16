@@ -86,18 +86,17 @@ class BaseRule(ABC):
 
         ``scan_line`` is intentionally kept source-compatible for custom rules.
         Built-in rules that need multiline lookahead can use this helper instead
-        of rebuilding the full masked source on every line.  The scanner passes
+        of rebuilding the full masked source on every line. The scanner passes
         the same ``source_lines`` object throughout a file scan, so identity is
         a cheap and sufficient cache key; a direct caller with a different list
         naturally invalidates the one-entry cache.
         """
-        cached_source = getattr(self, "_masked_source_cache_source", None)
-        if cached_source is source_lines:
-            return self._masked_source_cache_lines
+        cache = getattr(self, "_masked_source_cache", None)
+        if cache is not None and cache[0] is source_lines:
+            return cache[1]
 
         masked_lines = [mask_string_and_char_literals(line) for line in source_lines]
-        self._masked_source_cache_source = source_lines
-        self._masked_source_cache_lines = masked_lines
+        self._masked_source_cache = (source_lines, masked_lines)
         return masked_lines
 
     def scan_ast(
