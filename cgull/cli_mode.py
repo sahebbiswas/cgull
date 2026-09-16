@@ -60,21 +60,26 @@ def mode_aware_reporter(delegate: Any, mode: ScanMode, source: str):
 
     class ModeAwareReporter(metaclass=DelegateReporterMeta):
         @staticmethod
-        def to_json(result):
+        def to_json(result, pretty: bool = True):
             annotate(result)
-            rendered = delegate.to_json(result)
+            rendered = (
+                delegate.to_json(result)
+                if pretty
+                else delegate.to_json(result, pretty=False)
+            )
             if not rendered:
                 return rendered
             data = json.loads(rendered)
+            indent = 2 if pretty else None
             if not isinstance(data, dict):
-                return json.dumps(data, indent=2)
+                return json.dumps(data, indent=indent)
             meta = data.get("meta")
             if not isinstance(meta, dict):
                 meta = {}
                 data["meta"] = meta
             meta["scan_mode"] = mode.value
             meta["scan_mode_source"] = source
-            return json.dumps(data, indent=2)
+            return json.dumps(data, indent=indent)
 
         @staticmethod
         def to_sarif(result):

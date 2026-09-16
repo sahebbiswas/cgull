@@ -8,6 +8,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | --- | --- |
 | Installation, first scan, and common CLI workflows | [Getting started](getting-started.md) |
 | Complete project configuration reference | [Configuration](configuration.md) |
+| CLI worker defaults, explicit `--jobs` control, and worker metadata | [Scan parallelism](parallelism.md) |
 | `.cgullignore`, `.cgullincludes`, path boundaries, and inline suppressions | [Project files and suppressions](project-files.md) |
 | Per-translation-unit build include context from `compile_commands.json` | [Compilation database build context](compile-database.md) |
 | Engines, file/TU modes, preprocessing, configuration profiles, and fallback behavior | [Analysis model](analysis-model.md) |

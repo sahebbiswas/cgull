@@ -10,6 +10,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from . import cli_base as _base
+from .cli_jobs import CLI_JOBS_DEFAULT, jobs_aware_reporter, resolve_cli_jobs
 from .cli_mode import mode_aware_reporter, resolve_cli_scan_mode
 from .compile_database import (
     CompileCommandIncludeDatabase,
@@ -92,7 +93,19 @@ def build_parser() -> argparse.ArgumentParser:
                 "When omitted, configuration wins; otherwise mode is inferred from targets "
                 "(TU if any target is a directory, file mode otherwise)."
             )
-            break
+        elif action.dest == "jobs":
+            action.default = CLI_JOBS_DEFAULT
+            action.help = (
+                "Worker processes. When omitted, directory/multi-target scans use bounded "
+                "automatic parallelism and a single-file scan stays sequential. Use 1 to "
+                "force sequential execution, N for an explicit worker count, or 0 for "
+                "bounded automatic selection."
+            )
+    if parser.epilog:
+        parser.epilog = parser.epilog.replace(
+            "cgull scan src/ -j 0            # parallelize across all CPU cores",
+            "cgull scan src/ -j 0            # bounded automatic parallelism",
+        )
     scan_parser.add_argument(
         "--fix",
         action="store_true",
@@ -217,6 +230,25 @@ def _resolve_scan_mode_args(args):
     return internal, mode, source
 
 
+def _resolve_scan_jobs_args(args):
+    """Return a copy of args with omitted/automatic CLI jobs resolved."""
+    internal = argparse.Namespace(**vars(args))
+    targets = getattr(internal, "target", None)
+    if isinstance(targets, str):
+        targets = [targets]
+    targets = list(targets or ["."])
+    internal.target = targets
+
+    # Preserve cli_base's established missing/invalid target error path. There
+    # is no effective worker count or selection source when a scan cannot start.
+    if any(not os.path.exists(target) for target in targets):
+        return internal, None, None
+
+    jobs, source = resolve_cli_jobs(targets, getattr(internal, "jobs", None))
+    internal.jobs = jobs
+    return internal, jobs, source
+
+
 def _compile_database_for_args(
     args,
 ) -> Tuple[Optional[CompileCommandIncludeDatabase], Optional[List[object]], Optional[str]]:
@@ -308,9 +340,12 @@ def _reuse_loaded_config(args):
 
 def _run_original_scan(args, *, reporter=None):
     effective_args, scan_mode, mode_source = _resolve_scan_mode_args(args)
+    effective_args, selected_jobs, jobs_source = _resolve_scan_jobs_args(effective_args)
     active_reporter = reporter if reporter is not None else ReportGenerator
     if scan_mode is not None and mode_source is not None:
         active_reporter = mode_aware_reporter(active_reporter, scan_mode, mode_source)
+    if selected_jobs is not None and jobs_source is not None and selected_jobs >= 0:
+        active_reporter = jobs_aware_reporter(active_reporter, selected_jobs, jobs_source)
 
     previous_reporter = _base.ReportGenerator
     with _reuse_loaded_config(effective_args):
