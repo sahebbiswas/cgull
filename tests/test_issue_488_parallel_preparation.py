@@ -29,6 +29,12 @@ def _snapshot(units):
             for path, profiles in units.items()}
 
 
+@pytest.mark.parametrize('prepare', [project.prepare_units, project.prepare_project])
+def test_preparation_rejects_negative_jobs(prepare):
+    with pytest.raises(ValueError, match='jobs must be non-negative'):
+        prepare([], lambda _: pytest.fail('config should not be requested'), jobs=-1)
+
+
 @pytest.mark.parametrize('jobs', [2, 4, 0])
 def test_prepared_summaries_and_degradation_match_sequential(tmp_path, jobs):
     files = _sources(tmp_path) + [str(tmp_path / 'missing.c')]
