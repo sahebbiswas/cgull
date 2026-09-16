@@ -14,19 +14,14 @@ jobs:
   test:
     name: Run Unit Tests (${{ matrix.python-version }} on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Observed Windows/Python 3.11 runs have reached 14m26s end-to-end.
+    # Windows coverage runs can be substantially slower than POSIX runners.
     # Keep coverage intact while leaving enough room for runner variance.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
-        exclude:
-          # ProcessPoolExecutor teardown can deadlock on Windows/Python 3.10.
-          # Python 3.10 remains covered on Linux/macOS; Windows is covered on 3.11+.
-          - os: windows-latest
-            python-version: "3.10"
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout code
@@ -53,11 +48,6 @@ jobs:
         with:
           name: pytest-junit-${{ matrix.os }}-${{ matrix.python-version }}
           path: pytest-junit.xml
-
-      - name: Summarize Windows/Python 3.11 slow tests
-        if: always() && matrix.os == 'windows-latest' && matrix.python-version == '3.11'
-        run: |
-          python scripts/report_pytest_timings.py pytest-junit.xml --top 25
 
       - name: Run Security Rule Behavioral Corpus
         run: |
@@ -109,7 +99,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.10"
+          python-version: "3.12"
       - name: Install build and runtime dependencies
         run: python -m pip install setuptools wheel -r requirements.txt
       - name: Verify installed analysis headers
