@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Default directory and multi-target CLI scans to bounded automatic parallelism (up to eight workers), while keeping direct single-file scans sequential unless overridden. Preserve explicit `--jobs` control and programmatic scanner defaults, and report effective worker selection in human-readable and structured output (#491).
+- Raise the supported Python floor to 3.12 after cross-version medium-project compatibility and performance evaluation, remove the Python 3.10 `tomli` compatibility path, and test the retained 3.12–3.14 range across Linux, Windows, and macOS (#495).
 
 ## [0.11.29] - 2026-09-14
 
