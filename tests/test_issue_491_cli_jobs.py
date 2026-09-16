@@ -132,3 +132,30 @@ def test_worker_and_mode_metadata_compose_without_overwriting_each_other():
         "jobs": 2,
         "jobs_source": JOBS_SOURCE_AUTOMATIC,
     }
+
+
+def test_worker_and_mode_reporters_preserve_json_pretty_contract():
+    class Delegate:
+        calls = []
+
+        @staticmethod
+        def to_json(_result, pretty=True):
+            Delegate.calls.append(pretty)
+            return json.dumps({"meta": {}, "summary": {}}, indent=2 if pretty else None)
+
+    result = SimpleNamespace(files_analyzed=2, files_failed=0, scanned_files_count=2)
+    mode_reporter = mode_aware_reporter(Delegate, ScanMode.TU, MODE_SOURCE_INFERRED)
+    reporter = jobs_aware_reporter(mode_reporter, AUTO_JOBS_CAP, JOBS_SOURCE_AUTOMATIC)
+
+    pretty = reporter.to_json(result)
+    compact = reporter.to_json(result, pretty=False)
+
+    assert Delegate.calls == [True, False]
+    assert "\n" in pretty
+    assert "\n" not in compact
+    assert json.loads(compact)["meta"] == {
+        "scan_mode": "tu",
+        "scan_mode_source": MODE_SOURCE_INFERRED,
+        "jobs": 2,
+        "jobs_source": JOBS_SOURCE_AUTOMATIC,
+    }
