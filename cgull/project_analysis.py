@@ -11,6 +11,11 @@ import os
 
 from pycparser import c_ast
 
+from .analysis_requirements import (
+    normalize_project_summary_domains,
+    project_summary_domains,
+    required_analysis_for_rules,
+)
 from .analysis_session import AnalysisSession
 from .ast_analyzer import CASTParser
 from .cfg.call_graph import _bottom_up_scc_order, _strongly_connected_components
@@ -190,12 +195,21 @@ def prepare_units(files, config_for_file, profiles=None, prepared_units=None):
 class ProjectSummaryIndex:
     """One exact preprocessor/include/model configuration; never process-global."""
 
-    def __init__(self, contexts, semantic_models=EMPTY_SEMANTIC_MODELS, *, max_rounds=64):
+    def __init__(
+        self,
+        contexts,
+        semantic_models=EMPTY_SEMANTIC_MODELS,
+        *,
+        max_rounds=64,
+        required_domains=None,
+    ):
         if max_rounds < 1:
             raise ValueError("max_rounds must be positive")
         self.contexts = dict(sorted(contexts.items()))
         self.semantic_models = semantic_models
         self.max_rounds = max_rounds
+        self.required_domains = normalize_project_summary_domains(required_domains)
+        self.domain_evaluations = {domain: 0 for domain in DOMAINS}
         self.diagnostics = []
         self.iterations = {}
         self.sessions = {path: AnalysisSession(ctx, semantic_models=semantic_models) for path, ctx in self.contexts.items()}
@@ -269,15 +283,16 @@ class ProjectSummaryIndex:
         ))
 
     def _imports(self, path, snapshot):
-        return {
-            domain: {
-                name: snapshot[target][domain][name]
-                for name, target in self.bindings[path].items()
-                if target in snapshot and name in snapshot[target][domain]
-                and self._exportable(domain, snapshot[target][domain][name])
-            }
-            for domain in DOMAINS
-        }
+        imports = {}
+        for domain in self.required_domains:
+            imported = {}
+            for name, target in self.bindings[path].items():
+                summaries = snapshot.get(target, {}).get(domain, {})
+                summary = summaries.get(name)
+                if summary is not None and self._exportable(domain, summary):
+                    imported[name] = summary
+            imports[domain] = imported
+        return imports
 
     def _evaluate(self, path, imports):
         ctx = self.contexts[path]
@@ -287,14 +302,29 @@ class ProjectSummaryIndex:
         session._call_graph = self.sessions[path].call_graph
         self.sessions[path] = session
         ctx.analysis_session = session
-        return {
-            "function": dict(session.function_summaries),
-            "ownership": dict(session.ownership_summaries),
-            "value": dict(analyze_value_summaries_detailed(ctx, self.semantic_models, call_graph=session.call_graph).summaries),
-            "security": analyze_security_summaries(ctx, self.semantic_models),
-        }
+
+        outputs = {}
+        for domain in self.required_domains:
+            self.domain_evaluations[domain] += 1
+            if domain == "function":
+                outputs[domain] = dict(session.function_summaries)
+            elif domain == "ownership":
+                outputs[domain] = dict(session.ownership_summaries)
+            elif domain == "value":
+                outputs[domain] = dict(
+                    analyze_value_summaries_detailed(
+                        ctx,
+                        self.semantic_models,
+                        call_graph=session.call_graph,
+                    ).summaries
+                )
+            elif domain == "security":
+                outputs[domain] = analyze_security_summaries(ctx, self.semantic_models)
+        return outputs
 
     def build(self):
+        if not self.required_domains:
+            return self
         adjacency = {path: tuple(sorted(set(bindings.values()))) for path, bindings in self.bindings.items()}
         components = _strongly_connected_components(tuple(self.contexts), adjacency)
         depended_on = {target for targets in adjacency.values() for target in targets}
@@ -333,6 +363,7 @@ def prepare_project(files, config_for_file, profiles=None, prepared_units=None):
         prepared_units=prepared_units,
     )
     groups = defaultdict(dict)
+    group_requirements = defaultdict(set)
     models = {}
     diagnostics = list(preparation_diagnostics)
 
@@ -341,7 +372,9 @@ def prepare_project(files, config_for_file, profiles=None, prepared_units=None):
         if config.engine_mode == AnalysisEngine.REGEX:
             continue
 
-        registries = [getattr(rule, "_semantic_models", EMPTY_SEMANTIC_MODELS) for rule in config.get_rules()]
+        rules = config.get_rules()
+        requirements = required_analysis_for_rules(rules)
+        registries = [getattr(rule, "_semantic_models", EMPTY_SEMANTIC_MODELS) for rule in rules]
         registry = next((r for r in registries if r != EMPTY_SEMANTIC_MODELS), EMPTY_SEMANTIC_MODELS)
         if any(r != EMPTY_SEMANTIC_MODELS and r != registry for r in registries):
             diagnostics.append(f"INCOMPATIBLE_MODELS: {path}; cross-TU summaries omitted")
@@ -364,13 +397,23 @@ def prepare_project(files, config_for_file, profiles=None, prepared_units=None):
                 )
                 continue
             if ctx is not None and ctx.has_pycparser and ctx.pycparser_ast is not None:
-                groups[(key, roots, model_id)][path] = ctx
+                group_key = (key, roots, model_id)
+                groups[group_key][path] = ctx
+                group_requirements[group_key].update(requirements)
 
-    for (_, _, model_id), contexts in groups.items():
+    for group_key, contexts in groups.items():
         if len(contexts) < 2:
             continue
+        _, _, model_id = group_key
+        required_domains = project_summary_domains(group_requirements[group_key])
+        if not required_domains:
+            continue
         try:
-            index = ProjectSummaryIndex(contexts, models[model_id]).build()
+            index = ProjectSummaryIndex(
+                contexts,
+                models[model_id],
+                required_domains=required_domains,
+            ).build()
             diagnostics.extend(index.diagnostics)
         except Exception as exc:
             # Do not leave partially evaluated safety proofs attached if any

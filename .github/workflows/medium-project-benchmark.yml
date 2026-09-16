@@ -7,10 +7,12 @@ on:
       - "pyproject.toml"
       - "benchmarks/benchmark_medium_project.py"
       - "benchmarks/benchmark_cfg_cache.py"
+      - "benchmarks/benchmark_project_summary_requirements.py"
       - "tests/test_issue_486_medium_project_benchmark.py"
       - "tests/test_issue_490_cfg_session_cache.py"
       - "docs/benchmarks/medium-project-486.md"
       - "docs/benchmarks/medium-project-486-baseline.json"
+      - "docs/benchmarks/project-summary-requirements-489.md"
       - "docs/benchmarks/python-version-495.md"
       - ".github/workflows/medium-project-benchmark.yml"
   workflow_dispatch:
@@ -56,6 +58,54 @@ jobs:
             --modes file,tu \
             --output medium-project-490-cfg-cache-py${{ matrix.python-version }}.json
           cat medium-project-490-cfg-cache-py${{ matrix.python-version }}.json
+      - name: Capture project-summary requirement head artifact
+        if: matrix.python-version == '3.12'
+        run: |
+          python benchmarks/benchmark_project_summary_requirements.py \
+            --modules 4 \
+            --functions-per-module 3 \
+            --statements-per-function 4 \
+            --repetitions 1 \
+            --label head \
+            --output medium-project-489-head-py${{ matrix.python-version }}.json
+          cat medium-project-489-head-py${{ matrix.python-version }}.json
+      - name: Capture project-summary requirement base artifact
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          cp benchmarks/benchmark_project_summary_requirements.py /tmp/benchmark_project_summary_requirements.py
+          git fetch origin "$BASE_REF" --depth=1
+          git worktree add /tmp/cgull-489-base "origin/$BASE_REF"
+          cd /tmp/cgull-489-base
+          python /tmp/benchmark_project_summary_requirements.py \
+            --modules 4 \
+            --functions-per-module 3 \
+            --statements-per-function 4 \
+            --repetitions 1 \
+            --label base \
+            --output "$GITHUB_WORKSPACE/medium-project-489-base-py${{ matrix.python-version }}.json"
+          cat "$GITHUB_WORKSPACE/medium-project-489-base-py${{ matrix.python-version }}.json"
+      - name: Compare project-summary requirement artifacts
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          base = json.loads(Path("medium-project-489-base-py3.12.json").read_text())
+          head = json.loads(Path("medium-project-489-head-py3.12.json").read_text())
+          assert base["workload"]["sha256"] == head["workload"]["sha256"]
+          for name in ("default", "format-string-only"):
+              before = base["arms"][name]
+              after = head["arms"][name]
+              assert before["samples"][0]["semantic_digest"] == after["samples"][0]["semantic_digest"]
+              before_time = before["median_project_summary_construction_seconds"]
+              after_time = after["median_project_summary_construction_seconds"]
+              delta = 0.0 if before_time == 0 else (before_time - after_time) / before_time * 100.0
+              print(f"{name}: {before_time:.6f}s -> {after_time:.6f}s ({delta:+.1f}% reduction)")
+          assert head["arms"]["format-string-only"]["project_summary_domains"] == ["value"]
+          PY
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@v4
         with:
@@ -67,3 +117,12 @@ jobs:
         with:
           name: medium-project-490-cfg-cache-py${{ matrix.python-version }}
           path: medium-project-490-cfg-cache-py${{ matrix.python-version }}.json
+      - name: Upload project-summary requirement artifacts
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: medium-project-489-project-summaries-py${{ matrix.python-version }}
+          path: |
+            medium-project-489-head-py${{ matrix.python-version }}.json
+            medium-project-489-base-py${{ matrix.python-version }}.json
+          if-no-files-found: warn

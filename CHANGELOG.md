@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-09-16
+
+### Changed
+- Make project-level cross-TU summary construction demand-driven by enabled rule requirements, including deterministic dependency closure, conservative custom-rule compatibility, zero-work elision for unused domains, and reproducible base/head performance instrumentation (#489).
+
 ## [0.12.2] - 2026-09-16
 
 ### Changed
