@@ -8,15 +8,13 @@ independent progress output.
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 import os
 import time
 from typing import Any, Callable, List, Optional, TextIO
 
-from .engine import CGullScanner as _BaseCGullScanner, _emit_error, _scan_file_worker
+from .engine import CGullScanner as _BaseCGullScanner, _emit_error
 from .ignore import CGullIgnoreFilter
-from .logging_config import multiprocessing_logging_context
 from .models import (
     Confidence,
     ConfigProfile,
@@ -26,6 +24,7 @@ from .models import (
     ScanError,
     ScanResult,
 )
+from .parallel_workers import ParallelWorkerMixin
 from .utils import ProgressIndicator as _BaseProgressIndicator
 
 
@@ -565,95 +564,14 @@ class CGullScanner(_BaseCGullScanner):
         progress_active: bool = False,
         profiles: Optional[List[ConfigProfile]] = None,
     ):
-        import pickle
-
-        try:
-            pickle.dumps(config)
-            if profiles:
-                pickle.dumps(profiles)
-        except Exception as e:
-            raise ValueError(
-                f"Configuration/profiles cannot be serialized for parallel worker processes: {e}. "
-                "Ensure all custom rules and profiles are picklable or use jobs=1 for sequential scanning."
-            ) from e
-
-        results = []
-        total_files = len(files_to_scan)
-        multiplier = _profile_multiplier(profiles)
-        completed_count = 0
-        pool = ProcessPoolExecutor(max_workers=jobs)
-        futures = {}
-        with multiprocessing_logging_context() as (log_queue, effective_log_level):
-            try:
-                futures = {
-                    pool.submit(
-                        _scan_file_worker,
-                        file_path,
-                        self._prepared_config_for_file(config, file_path),
-                        profiles,
-                        quiet,
-                        progress_active,
-                        log_queue,
-                        effective_log_level,
-                    ): file_path
-                    for file_path in files_to_scan
-                }
-                for future in as_completed(futures):
-                    file_path = futures[future]
-                    completed_count += 1
-                    try:
-                        file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts = future.result()
-                        result = (file_path, file_issues, loc, duration_ms, parser_status, parse_tier, status, confidence, scan_err, parse_attempts)
-                    except Exception as e:
-                        scan_err = ScanError(
-                            file_path=file_path,
-                            error_type=type(e).__name__,
-                            message=str(e) or f"Worker execution failed for {file_path}",
-                        )
-                        _emit_error(file_path, scan_err.error_type, scan_err.message, quiet=quiet, progress_active=progress_active)
-                        result = (
-                            file_path,
-                            [],
-                            0,
-                            0.0,
-                            ParserStatus.PARSE_FAILED.value,
-                            ParseTier.REGEX_FALLBACK.value,
-                            "failed",
-                            Confidence.LIMITED.value,
-                            scan_err, [],
-                        )
-                    results.append(result)
-                    _, file_issues, loc, _, parser_status, _, status, _, _, _ = result
-                    self._record_progress_result(
-                        loc=loc,
-                        file_issues=file_issues,
-                        parser_status=parser_status,
-                        status=status,
-                        multiplier=multiplier,
-                        completed=completed_count,
-                        total=total_files,
-                        progress_callback=progress_callback,
-                        current_file=file_path,
-                    )
-                pool.shutdown(wait=True)
-            except BaseException:
-                procs = list((getattr(pool, "_processes", {}) or {}).values())
-                for future in futures:
-                    future.cancel()
-                for process in procs:
-                    if process and process.is_alive():
-                        process.terminate()
-
-                join_deadline = time.monotonic() + 1.0
-                for process in procs:
-                    if process:
-                        process.join(timeout=max(0.0, join_deadline - time.monotonic()))
-                for process in procs:
-                    if process and process.is_alive() and hasattr(process, "kill"):
-                        process.kill()
-                for process in procs:
-                    if process and process.is_alive():
-                        process.join(timeout=0.5)
-                pool.shutdown(wait=True, cancel_futures=True)
-                raise
-        return results
+        """Route all telemetry scans through the persistent worker context."""
+        return ParallelWorkerMixin._scan_files_parallel(
+            self,
+            files_to_scan,
+            jobs,
+            config,
+            progress_callback=progress_callback,
+            quiet=quiet,
+            progress_active=progress_active,
+            profiles=profiles,
+        )

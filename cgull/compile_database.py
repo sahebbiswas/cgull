@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Seque
 
 from .include_diagnostics import collect_include_warnings, invalid_root_warning
 from .models import ConfigProfile, ScanConfig
+from .parallel_workers import ParallelWorkerMixin
 from .preprocessor import ConfigReductionStats, reduce_generated_profiles
 from .telemetry import CGullScanner as _TelemetryCGullScanner
 
@@ -282,7 +283,7 @@ def activate_compile_command_database(
         _ACTIVE_DATABASE.reset(token)
 
 
-class CompileDatabaseCGullScanner(_TelemetryCGullScanner):
+class CompileDatabaseCGullScanner(ParallelWorkerMixin, _TelemetryCGullScanner):
     """Telemetry scanner that adds compile-command include roots per source TU."""
 
     def __init__(self, *args, compile_database: Optional[CompileCommandIncludeDatabase] = None, **kwargs):
