@@ -237,6 +237,8 @@ def prepare_units(files, config_for_file, profiles=None, prepared_units=None, *,
     Multi-worker preparation parses submitted sources eagerly and evaluates each
     unit.context before returning; the sequential path retains lazy parsing.
     """
+    if jobs < 0:
+        raise ValueError("jobs must be non-negative")
     paths = sorted(set(files))
     workers = min((os.cpu_count() or 1) if jobs == 0 else jobs, len(paths))
     if workers <= 1:
