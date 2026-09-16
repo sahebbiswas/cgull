@@ -10,7 +10,6 @@ from __future__ import annotations
 import copy
 import logging
 import multiprocessing
-import os
 import pickle
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -147,9 +146,7 @@ def _prepare_local_summary_units(
     return units
 
 
-def _scan_worker_item(
-    item: ParallelScanWorkItem,
-):
+def _scan_worker_item(item: ParallelScanWorkItem):
     """Execute one compact work item using the process-local scan context."""
     state = _WORKER_STATE
     if state is None:
@@ -225,13 +222,23 @@ def _config_overrides(base: ScanConfig, per_file: ScanConfig) -> Tuple[Tuple[str
     )
 
 
-def build_parallel_work_item(scanner: Any, base_config: ScanConfig, file_path: str) -> ParallelScanWorkItem:
+def build_parallel_work_item(
+    scanner: Any,
+    base_config: ScanConfig,
+    file_path: str,
+    *,
+    include_project_summaries: bool = True,
+) -> ParallelScanWorkItem:
     """Build the descriptor used by the pool and by payload-size benchmarks."""
     per_file = scanner._config_for_file(base_config, file_path)
     return ParallelScanWorkItem(
         file_path=file_path,
         config_overrides=_config_overrides(base_config, per_file),
-        project_summaries=_project_summary_payload(scanner, file_path),
+        project_summaries=(
+            _project_summary_payload(scanner, file_path)
+            if include_project_summaries
+            else None
+        ),
     )
 
 
@@ -292,7 +299,24 @@ class ParallelWorkerMixin:
                 "Ensure all custom rules and profiles are picklable or use jobs=1 for sequential scanning."
             ) from exc
 
-        tasks = [build_parallel_work_item(self, base_config, path) for path in files_to_scan]
+        context = multiprocessing.get_context()
+        start_method = context.get_start_method()
+        # Fork can inherit coordinator-prepared ASTs copy-on-write without IPC.
+        # Spawn/forkserver intentionally receive no PreparedUnit graph; their
+        # work items carry only compact project-summary imports and prepare the
+        # local TU in the worker when those imports are needed.
+        inherited_project_units = (
+            getattr(self, "_project_units", {}) if start_method == "fork" else {}
+        )
+        tasks = [
+            build_parallel_work_item(
+                self,
+                base_config,
+                path,
+                include_project_summaries=start_method != "fork",
+            )
+            for path in files_to_scan
+        ]
         try:
             # Fail before starting children if a compact descriptor accidentally
             # captures a non-picklable object graph.
@@ -303,16 +327,6 @@ class ParallelWorkerMixin:
                 f"Per-file parallel scan context cannot be serialized: {exc}. "
                 "Use jobs=1 or remove non-picklable per-file configuration."
             ) from exc
-
-        context = multiprocessing.get_context()
-        start_method = context.get_start_method()
-        # Fork can inherit coordinator-prepared ASTs copy-on-write without IPC.
-        # Spawn/forkserver intentionally receive no PreparedUnit graph; their
-        # work items carry only compact project-summary imports and prepare the
-        # local TU in the worker when those imports are needed.
-        inherited_project_units = (
-            getattr(self, "_project_units", {}) if start_method == "fork" else {}
-        )
 
         results = []
         total_files = len(files_to_scan)
