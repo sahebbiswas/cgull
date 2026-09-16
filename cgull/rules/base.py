@@ -9,6 +9,7 @@ import logging
 from ..ast_analyzer import CASTContext
 from ..analysis_session import analysis_session_for
 from ..semantic_models import EMPTY_SEMANTIC_MODELS, SemanticModelRegistry
+from ..utils import mask_string_and_char_literals
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,25 @@ class BaseRule(ABC):
         rules directly without going through CGullScanner.
         """
         return []
+
+    def _masked_source_lines(self, source_lines: List[str]) -> List[str]:
+        """Return one literal-masked view for the current source list.
+
+        ``scan_line`` is intentionally kept source-compatible for custom rules.
+        Built-in rules that need multiline lookahead can use this helper instead
+        of rebuilding the full masked source on every line.  The scanner passes
+        the same ``source_lines`` object throughout a file scan, so identity is
+        a cheap and sufficient cache key; a direct caller with a different list
+        naturally invalidates the one-entry cache.
+        """
+        cached_source = getattr(self, "_masked_source_cache_source", None)
+        if cached_source is source_lines:
+            return self._masked_source_cache_lines
+
+        masked_lines = [mask_string_and_char_literals(line) for line in source_lines]
+        self._masked_source_cache_source = source_lines
+        self._masked_source_cache_lines = masked_lines
+        return masked_lines
 
     def scan_ast(
         self,
