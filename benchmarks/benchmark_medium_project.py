@@ -29,11 +29,15 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 from typing import Any, Iterator, Sequence
 
 from cgull import CGullScanner, ScanConfig, ScanMode, __version__, telemetry_for
 from cgull.ast_analyzer import CASTParser
 from cgull.includes import IncludeResolver, TUIncludeExpander
+from cgull import project_analysis
+
+_ORIGINAL_PREPARE_SOURCE = getattr(project_analysis, "_prepare_source", None)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -86,6 +90,7 @@ class Sample:
     parse_fallback_count: int
     semantic_digest: str
     semantics: SemanticSnapshot
+    sampled_peak_tree_rss_bytes: int | None = None
 
 
 class BenchmarkScanner(CGullScanner):
@@ -334,6 +339,8 @@ def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
     original_walk = engine.os.walk
     original_expand = TUIncludeExpander.expand
     original_parse = CASTParser.parse
+    original_units = project_analysis.prepare_units
+    original_source = getattr(project_analysis, "_prepare_source", None)
     original_prepare = project_analysis.prepare_project
     original_index_init = project_analysis.ProjectSummaryIndex.__init__
     original_index_build = project_analysis.ProjectSummaryIndex.build
@@ -374,6 +381,25 @@ def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
                 "project_preparation_seconds", time.perf_counter() - started
             )
             recorder.project_depth -= 1
+            recorder.add("preparation_wall_seconds", time.perf_counter() - started)
+
+    def timed_units(*args: Any, **kwargs: Any):
+        started = time.perf_counter()
+        recorder.project_depth += 1
+        try:
+            units, errors = original_units(*args, **kwargs)
+            for values in units.values():
+                for unit in values.values():
+                    for name, elapsed in getattr(unit, '_benchmark_seconds', {}).items():
+                        recorder.add(name, elapsed)
+                    if hasattr(unit, '_benchmark_seconds'):
+                        del unit._benchmark_seconds
+            return units, errors
+        finally:
+            recorder.add('independent_preparation_seconds', time.perf_counter() - started)
+            recorder.project_depth -= 1
+            if recorder.project_depth == 0:
+                recorder.add("preparation_wall_seconds", time.perf_counter() - started)
 
     def timed_index_init(self: Any, *args: Any, **kwargs: Any) -> None:
         started = time.perf_counter()
@@ -395,6 +421,9 @@ def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
     engine.os.walk = timed_walk
     TUIncludeExpander.expand = timed_expand
     CASTParser.parse = timed_parse
+    project_analysis.prepare_units = timed_units
+    if original_source is not None:
+        project_analysis._prepare_source = _timed_prepare_source
     project_analysis.prepare_project = timed_prepare
     project_analysis.ProjectSummaryIndex.__init__ = timed_index_init
     project_analysis.ProjectSummaryIndex.build = timed_index_build
@@ -404,9 +433,82 @@ def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
         engine.os.walk = original_walk
         TUIncludeExpander.expand = original_expand
         CASTParser.parse = original_parse
+        project_analysis.prepare_units = original_units
+        if original_source is not None:
+            project_analysis._prepare_source = original_source
         project_analysis.prepare_project = original_prepare
         project_analysis.ProjectSummaryIndex.__init__ = original_index_init
         project_analysis.ProjectSummaryIndex.build = original_index_build
+
+
+def _timed_prepare_source(*args):
+    """Benchmark-only process entry point, including spawn on Windows/macOS."""
+    seconds = defaultdict(float)
+    original_parse = CASTParser.parse
+    original_expand = TUIncludeExpander.expand
+
+    def parse(*a, **kw):
+        started = time.perf_counter()
+        try:
+            return original_parse(*a, **kw)
+        finally:
+            seconds['project_parser_seconds'] += time.perf_counter() - started
+
+    def expand(*a, **kw):
+        started = time.perf_counter()
+        try:
+            return original_expand(*a, **kw)
+        finally:
+            seconds['project_tu_include_expansion_seconds'] += time.perf_counter() - started
+
+    CASTParser.parse, TUIncludeExpander.expand = parse, expand
+    try:
+        units, errors = _ORIGINAL_PREPARE_SOURCE(*args)
+        if units:
+            next(iter(units.values()))._benchmark_seconds = dict(seconds)
+        return units, errors
+    finally:
+        CASTParser.parse, TUIncludeExpander.expand = original_parse, original_expand
+
+
+@contextmanager
+def sample_tree_memory():
+    """Optional psutil sampling of coordinator plus live descendant RSS."""
+    peak = [None]
+    try:
+        import psutil
+    except ImportError:
+        yield peak
+        return
+    # /proc may be mounted from an outer PID namespace. Resolve the PID as
+    # seen by that mount, rather than accidentally sampling an unrelated PID 2.
+    process_pid = os.getpid()
+    if sys.platform.startswith("linux"):
+        try:
+            process_pid = int(Path("/proc/self/stat").read_text().split()[0])
+        except (OSError, ValueError):
+            pass
+    process = psutil.Process(process_pid)
+    stop = threading.Event()
+
+    def sample():
+        while not stop.is_set():
+            total = 0
+            for item in [process, *process.children(recursive=True)]:
+                try:
+                    total += item.memory_info().rss
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            peak[0] = max(peak[0] or 0, total)
+            stop.wait(0.01)
+
+    thread = threading.Thread(target=sample, daemon=True)
+    thread.start()
+    try:
+        yield peak
+    finally:
+        stop.set()
+        thread.join()
 
 
 def _peak_rss_bytes() -> int | None:
@@ -507,6 +609,8 @@ def _phase_output(
         "tu_include_expansion_seconds": expansion_seconds,
         "parser_seconds": parser_seconds,
         "project_preparation_seconds": recorder.value("project_preparation_seconds"),
+        "preparation_wall_seconds": recorder.value("preparation_wall_seconds"),
+        "independent_preparation_seconds": recorder.value("independent_preparation_seconds"),
         "project_indexing_seconds": recorder.value("project_indexing_seconds"),
         "project_summary_construction_seconds": recorder.value(
             "project_summary_construction_seconds"
@@ -526,7 +630,7 @@ def run_sample(project: Path, *, mode: str, jobs: int, repetition: int) -> Sampl
         include_roots=[str(project / "include")],
     )
     scanner = BenchmarkScanner(recorder, config=config)
-    with phase_instrumentation(recorder):
+    with sample_tree_memory() as tree_peak, phase_instrumentation(recorder):
         started = time.perf_counter()
         result = scanner.scan_path(str(project), jobs=jobs, quiet=True)
         wall_seconds = max(1e-9, time.perf_counter() - started)
@@ -547,6 +651,7 @@ def run_sample(project: Path, *, mode: str, jobs: int, repetition: int) -> Sampl
         if telemetry.analyzed_lines
         else 0.0,
         peak_rss_bytes=peak_rss,
+        sampled_peak_tree_rss_bytes=tree_peak[0],
         phases=_phase_output(
             recorder,
             result=result,

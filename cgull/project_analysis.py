@@ -6,7 +6,10 @@ supplies their external inputs; recursive TU components use snapshot rounds.
 from __future__ import annotations
 
 from collections import defaultdict
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from types import SimpleNamespace
 from dataclasses import dataclass
+from itertools import chain
 import os
 
 from pycparser import c_ast
@@ -22,6 +25,7 @@ from .cfg.call_graph import _bottom_up_scc_order, _strongly_connected_components
 from .cfg.security_dataflow import analyze_security_summaries
 from .cfg.value_facts import analyze_value_summaries_detailed
 from .includes import IncludeResolver, TUIncludeExpander
+from .logging_config import multiprocessing_logging_context
 from .models import AnalysisEngine
 from .semantic_models import EMPTY_SEMANTIC_MODELS
 
@@ -137,7 +141,7 @@ def _profile_flags(config, profiles):
     return [profile.flags for profile in profiles] if profiles else [config.defined_syms]
 
 
-def prepare_units(files, config_for_file, profiles=None, prepared_units=None):
+def _prepare_units_sequential(files, config_for_file, profiles=None, prepared_units=None):
     """Expand each requested file/profile at most once for this scan.
 
     ``prepared_units`` is scan-local state from an earlier phase (for example TU
@@ -190,6 +194,115 @@ def prepare_units(files, config_for_file, profiles=None, prepared_units=None):
                 )
 
     return dict(prepared), tuple(sorted(set(diagnostics)))
+
+
+def _initialize_preparation_worker(log_queue, level):
+    import logging
+    from logging.handlers import QueueHandler
+
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
+    root.addHandler(QueueHandler(log_queue) if log_queue is not None else logging.NullHandler())
+    root.setLevel(level)
+
+
+def _prepare_source(path, include_roots, engine_mode, flags, existing, parse):
+    """Process entry point; never send rules, callbacks, or parser state."""
+    config = SimpleNamespace(include_roots=include_roots, engine_mode=engine_mode)
+    profiles = [SimpleNamespace(flags=value) for value in flags]
+    prepared, diagnostics = _prepare_units_sequential(
+        [path], lambda _: config, profiles, {path: existing},
+    )
+    diagnostics = list(diagnostics)
+    if parse:
+        for unit in prepared[path].values():
+            try:
+                unit.context
+            except Exception as exc:
+                diagnostics.append(
+                    f"PROJECT_PREPARATION_FAILED: {path}: {exc}; cross-TU summaries omitted"
+                )
+    return prepared[path], diagnostics
+
+
+def prepare_units(files, config_for_file, profiles=None, prepared_units=None, *, jobs=1):
+    """Prepare independent sources with at most one outstanding task per worker.
+
+    Workers own their parser and preprocessor. Completed ASTs cross IPC once,
+    before any CFG/session caches exist. The coordinator retains the prepared
+    set needed by cross-TU indexing, but never queues an unbounded second set
+    of serialized results. Existing compatible units are reused without IPC.
+    Multi-worker preparation parses submitted sources eagerly and evaluates each
+    unit.context before returning; the sequential path retains lazy parsing.
+    """
+    if jobs < 0:
+        raise ValueError("jobs must be non-negative")
+    paths = sorted(set(files))
+    workers = min((os.cpu_count() or 1) if jobs == 0 else jobs, len(paths))
+    if workers <= 1:
+        return _prepare_units_sequential(paths, config_for_file, profiles, prepared_units)
+
+    prepared = {path: dict(units) for path, units in (prepared_units or {}).items()}
+    diagnostics = []
+
+    def tasks():
+        for path in paths:
+            config = config_for_file(path)
+            flags = _profile_flags(config, profiles)
+            existing = prepared.setdefault(path, {})
+            # Only missing/incompatible or not-yet-parsed units need a worker.
+            pending = [value for value in flags if (
+                (unit := existing.get(profile_key(value))) is None
+                or unit.preparation_key != _preparation_key(config, value)
+                or (unit.parse_enabled and unit._context is None)
+            )]
+            if pending:
+                reusable = {profile_key(value): existing[profile_key(value)]
+                            for value in pending if profile_key(value) in existing}
+                yield (path, tuple(config.include_roots), config.engine_mode,
+                       pending, reusable, True)
+
+    iterator = iter(tasks())
+    # Avoid starting a pool at all when discovery already prepared every TU.
+    first = next(iterator, None)
+    if first is None:
+        return dict(sorted(prepared.items())), ()
+    iterator = iter(chain((first,), iterator))
+    with multiprocessing_logging_context() as (log_queue, level), ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=_initialize_preparation_worker,
+        initargs=(log_queue, level),
+    ) as pool:
+        pending = {}
+        exhausted = False
+        while pending or not exhausted:
+            while len(pending) < workers and not exhausted:
+                task = next(iterator, None)
+                if task is None:
+                    exhausted = True
+                    break
+                try:
+                    pending[pool.submit(_prepare_source, *task)] = task
+                except Exception:
+                    # A broken pool must not prevent unrelated TUs from being
+                    # prepared. Fall back to the same isolated source routine.
+                    units, errors = _prepare_source(*task)
+                    prepared[task[0]].update(units)
+                    diagnostics.extend(errors)
+            if not pending:
+                continue
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                task = pending.pop(future)
+                try:
+                    units, errors = future.result()
+                except Exception:
+                    units, errors = _prepare_source(*task)
+                prepared[task[0]].update(units)
+                diagnostics.extend(errors)
+    return dict(sorted(prepared.items())), tuple(sorted(set(diagnostics)))
 
 
 class ProjectSummaryIndex:
@@ -354,13 +467,14 @@ class ProjectSummaryIndex:
         return self
 
 
-def prepare_project(files, config_for_file, profiles=None, prepared_units=None):
+def prepare_project(files, config_for_file, profiles=None, prepared_units=None, *, jobs=1):
     """Build cross-TU summaries from scan-local prepared units."""
     prepared, preparation_diagnostics = prepare_units(
         files,
         config_for_file,
         profiles,
         prepared_units=prepared_units,
+        jobs=jobs,
     )
     groups = defaultdict(dict)
     group_requirements = defaultdict(set)

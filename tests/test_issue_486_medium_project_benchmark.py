@@ -168,3 +168,15 @@ def test_cross_mode_parity_compares_findings_without_requiring_same_file_account
 
     assert result["passes"] is True
     assert result["cross_mode_findings_match"] is True
+
+
+def test_parallel_preparation_activity_is_collected_from_workers(tmp_path):
+    project = benchmark.generate_medium_project(
+        tmp_path, modules=2, functions_per_module=1, statements_per_function=1,
+    )
+    sample = benchmark.run_sample(project, mode='tu', jobs=2, repetition=0)
+    assert sample.phases['preparation_wall_seconds'] > 0
+    assert sample.phases['independent_preparation_seconds'] > 0
+    assert sample.phases['parser_seconds'] > 0
+    assert sample.phases['tu_include_expansion_seconds'] > 0
+    assert sample.semantics.files_failed == 0
