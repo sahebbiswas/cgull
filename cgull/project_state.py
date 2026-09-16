@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import os
+import tomllib
 from typing import Optional, Sequence, Union
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
-    import tomli as tomllib  # type: ignore
 
 
 DEFAULT_LOG_RETENTION_RUNS = 20
