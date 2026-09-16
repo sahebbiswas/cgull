@@ -8,7 +8,7 @@ Thank you for your interest in contributing to **C-GULL** (*Code Guardian for Un
 
 ### 1. Environment Setup
 
-C-GULL supports zero-dependency scanning with standard Python 3.10+, but running tests and developing AST/CFG rules requires optional AST dependencies (`pycparser`, `pcpp`) and development packages (`pytest`, `pytest-cov`, `jsonschema`).
+C-GULL supports zero-dependency scanning with standard Python 3.12+, but running tests and developing AST/CFG rules requires optional AST dependencies (`pycparser`, `pcpp`) and development packages (`pytest`, `pytest-cov`, `jsonschema`).
 
 Set up your local environment in editable mode with development extras:
 
