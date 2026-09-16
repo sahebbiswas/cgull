@@ -5,6 +5,7 @@ from cgull import CGullScanner
 from cgull.models import AnalysisEngine, Issue, ScanConfig, Severity
 from cgull.parallel_workers import (
     ParallelScanWorkItem,
+    ParallelWorkerMixin,
     _initialize_scan_worker,
     _prepare_local_summary_units,
     _scan_worker_item,
@@ -14,6 +15,7 @@ from cgull.parallel_workers import (
 import cgull.parallel_workers as parallel_workers
 from cgull.project_analysis import PreparedUnit, profile_key
 from cgull.rules.base import BaseRule
+from cgull.telemetry import CGullScanner as TelemetryCGullScanner
 
 
 class Issue492CustomRule(BaseRule):
@@ -56,6 +58,10 @@ def _issue_keys(result):
         (issue.rule_id, issue.file_path, issue.line_number, issue.message)
         for issue in result.issues
     )
+
+
+def test_telemetry_scanner_uses_persistent_parallel_worker_path():
+    assert TelemetryCGullScanner._scan_files_parallel is ParallelWorkerMixin._scan_files_parallel
 
 
 def test_compact_work_item_does_not_serialize_prepared_ast_graph(tmp_path):
