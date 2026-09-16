@@ -21,7 +21,8 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "benchmarks"))
 
 import benchmark_medium_project as medium  # noqa: E402
-from cgull import CGullScanner, ScanConfig, ScanMode  # noqa: E402
+from cgull import ScanConfig, ScanMode  # noqa: E402
+from cgull.project_analysis import DOMAINS  # noqa: E402
 from cgull.rules import FormatStringRule  # noqa: E402
 
 
@@ -63,7 +64,7 @@ def _requirements(config):
     except ImportError:
         return {
             "analysis_requirements": "legacy-all",
-            "project_summary_domains": list(medium.project_analysis.DOMAINS),
+            "project_summary_domains": list(DOMAINS),
         }
 
     requirements = required_analysis_for_rules(config.get_rules())
