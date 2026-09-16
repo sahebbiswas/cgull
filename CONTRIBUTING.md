@@ -45,10 +45,7 @@ For a quick-start summary of extending the ruleset, see the [Extending Ruleset: 
 
 ### 1. Rule Base Classes & Execution Engines
 
-Rules specify an `analysis_engine` (`AnalysisEngine.REGEX`, `AnalysisEngine.AST`, or `AnalysisEngine.HYBRID`) and implement line-by-line scanning (`scan_line`) and/or structural AST scanning (`scan_ast`).
-
-#### Regex-Based Rules (`AnalysisEngine.REGEX`)
-Use regex pattern matching for lightweight lexical checks across single lines.
+Rules specify an `analysis_engine` (`AnalysisEngine.REGEX`, `AnalysisEngine.AST`, or `AnalysisEngine.HYBRID`) and implement line-by-line scanning (`scan_line`) and/or structural AST scanning (`scan_ast`). `scan_ast` receives `ast_ctx: CASTContext`, which provides function lists (`ast_ctx.functions`), Control Flow Graphs (`fn.cfg_nodes` / `fn.structured_cfg`), variable declarations, and struct metadata (`ast_ctx.resolve_struct_def`).
 
 ```python
 from typing import List
