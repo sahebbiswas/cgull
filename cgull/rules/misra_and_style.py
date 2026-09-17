@@ -8,7 +8,6 @@ from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ..ast_analyzer import CASTContext
 import logging
-from ..utils import mask_string_and_char_literals
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ class NakedControlFlowStatementsRule(BaseRule):
             return issues
 
         line_idx = line_number - 1
-        masked_source_lines = [mask_string_and_char_literals(l) for l in source_lines]
+        masked_source_lines = self._masked_source_lines(source_lines)
 
         for m in re.finditer(r'\b(if|else|while|for|do)\b', line_content):
             kw = m.group(1)
