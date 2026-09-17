@@ -1,7 +1,8 @@
 """Rule-neutral direct-call signature resolution for parsed C translation units."""
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
+from types import MappingProxyType
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .standard_signatures import StandardCallableSignature, standard_callable_signature
 from .types import CASTContext, _format_pycparser_type, resolve_typedef_shape
@@ -155,35 +156,82 @@ def _reconcile(name: str, signatures: Sequence[CallableSignature]) -> Optional[C
     return chosen
 
 
+@dataclass(frozen=True)
+class _TranslationUnitCallableState:
+    """Immutable top-level callable signatures for one parsed translation unit."""
+
+    ast_root: object
+    callable_events: Mapping[str, Tuple[Tuple[int, CallableSignature], ...]]
+    function_positions: Mapping[int, int]
+
+    def visible_signatures(self, name: str, caller_position: int) -> Tuple[CallableSignature, ...]:
+        events = self.callable_events.get(name, ())
+        return tuple(signature for position, signature in events if position <= caller_position)
+
+
+_TU_STATE_ATTR = "_direct_call_signature_tu_state"
+
+
+def _build_translation_unit_callable_state(ast_ctx: CASTContext) -> _TranslationUnitCallableState:
+    from pycparser import c_ast
+
+    root = ast_ctx.pycparser_ast
+    events: Dict[str, List[Tuple[int, CallableSignature]]] = {}
+    function_positions: Dict[int, int] = {}
+
+    for position, ext in enumerate(getattr(root, "ext", None) or []):
+        if isinstance(ext, c_ast.FuncDef):
+            function_positions[id(ext)] = position
+            events.setdefault(ext.decl.name, []).append(
+                (position, _signature_from_decl(ast_ctx, ext.decl, "definition"))
+            )
+        elif isinstance(ext, c_ast.Decl) and isinstance(ext.type, c_ast.FuncDecl):
+            events.setdefault(ext.name, []).append(
+                (position, _signature_from_decl(ast_ctx, ext, "file-declaration"))
+            )
+
+    return _TranslationUnitCallableState(
+        ast_root=root,
+        callable_events=MappingProxyType({name: tuple(items) for name, items in events.items()}),
+        function_positions=MappingProxyType(dict(function_positions)),
+    )
+
+
+def _translation_unit_callable_state(ast_ctx: CASTContext) -> _TranslationUnitCallableState:
+    """Return context-local top-level callable state, building it once per AST."""
+
+    root = ast_ctx.pycparser_ast
+    cached = getattr(ast_ctx, _TU_STATE_ATTR, None)
+    if isinstance(cached, _TranslationUnitCallableState) and cached.ast_root is root:
+        return cached
+
+    state = _build_translation_unit_callable_state(ast_ctx)
+    setattr(ast_ctx, _TU_STATE_ATTR, state)
+    return state
+
+
 class DirectCallSignatureIndex:
     """Precomputed direct-call signature index for one function.
 
-    Construction walks the function body and translation-unit declarations once.
-    Individual call resolution is then an O(1) identity lookup plus reconciliation
-    of the small declaration set for that callee.
+    Translation-unit declarations/definitions are formatted once and cached on
+    the owning ``CASTContext``. Construction here only snapshots block-scope
+    bindings for this function. Individual call resolution is then an O(1)
+    identity lookup plus reconciliation of the small visible declaration set
+    for that callee.
     """
 
-    def __init__(self, ast_ctx: CASTContext, funcdef):
-        from pycparser import c_ast
-
+    def __init__(
+        self,
+        ast_ctx: CASTContext,
+        funcdef,
+        tu_state: Optional[_TranslationUnitCallableState] = None,
+    ):
         self.ast_ctx = ast_ctx
         self.funcdef = funcdef
-        self._globals: Dict[str, List[CallableSignature]] = {}
-        self._definitions: Dict[str, List[CallableSignature]] = {}
+        self._tu_state = tu_state or _translation_unit_callable_state(ast_ctx)
+        self._caller_position = self._tu_state.function_positions.get(id(funcdef))
         self._calls: Dict[int, object] = {}
-
-        caller_seen = False
-        for ext in getattr(ast_ctx.pycparser_ast, "ext", None) or []:
-            if isinstance(ext, c_ast.FuncDef):
-                self._definitions.setdefault(ext.decl.name, []).append(
-                    _signature_from_decl(ast_ctx, ext.decl, "definition")
-                )
-                if ext is funcdef:
-                    caller_seen = True
-            elif not caller_seen and isinstance(ext, c_ast.Decl) and isinstance(ext.type, c_ast.FuncDecl):
-                self._globals.setdefault(ext.name, []).append(
-                    _signature_from_decl(ast_ctx, ext, "file-declaration")
-                )
+        self._source_signatures: Dict[str, Optional[CallableSignature]] = {}
 
         self._index_calls()
 
@@ -232,16 +280,20 @@ class DirectCallSignatureIndex:
         block = self._calls.get(id(call_node))
         if block is False:
             # A same-named local object or function pointer is an explicit rejection,
-            # not an absent declaration.  Never fall through to a built-in model.
+            # not an absent declaration. Never fall through to a built-in model.
             return None
         if block:
             return _reconcile(name, block)
 
-        candidates = list(self._globals.get(name) or []) + list(self._definitions.get(name) or [])
-        source_signature = _reconcile(name, candidates)
+        if name not in self._source_signatures:
+            candidates: Sequence[CallableSignature] = ()
+            if self._caller_position is not None:
+                candidates = self._tu_state.visible_signatures(name, self._caller_position)
+            self._source_signatures[name] = _reconcile(name, candidates)
+        source_signature = self._source_signatures[name]
         if source_signature is not None:
             # Resolved, unspecified-parameter, and conflicting source declarations
-            # all outrank built-ins.  A rejected/ambiguous source declaration must
+            # all outrank built-ins. A rejected/ambiguous source declaration must
             # never be silently replaced by a standard-library shape.
             return source_signature
 
