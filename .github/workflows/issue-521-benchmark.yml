@@ -1,0 +1,113 @@
+name: Issue 521 base-head benchmark
+
+on:
+  push:
+    branches:
+      - issue-521-unsigned-type-regex
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install benchmark dependencies
+        run: python -m pip install -e ".[dev]" psutil
+      - name: Run focused type tests
+        run: |
+          python -m pytest -q \
+            tests/test_issue_521_unsigned_type_hot_path.py \
+            tests/test_issue_352_firmware_conversion_priority.py \
+            tests/test_issue_347_integer_narrowing_cast.py
+      - name: Prepare base worktree
+        run: git worktree add /tmp/cgull-521-base 049b6cfd7ca2df44fb7e3e63e77644a6e65c1386
+      - name: Capture base benchmark
+        env:
+          PYTHONPATH: /tmp/cgull-521-base
+        run: |
+          cd /tmp/cgull-521-base
+          python benchmarks/benchmark_medium_project.py \
+            --modules 96 \
+            --modes file \
+            --jobs 1 \
+            --repetitions 1 \
+            --workspace /tmp/issue-521-workload \
+            --output "$GITHUB_WORKSPACE/issue-521-base.json"
+      - name: Capture head benchmark
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python benchmarks/benchmark_medium_project.py \
+            --modules 96 \
+            --modes file \
+            --jobs 1 \
+            --repetitions 1 \
+            --workspace /tmp/issue-521-workload \
+            --output issue-521-head.json
+      - name: Compare base and head
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          base = json.loads(Path("issue-521-base.json").read_text())
+          head = json.loads(Path("issue-521-head.json").read_text())
+          assert base["workload"]["physical_lines"] == 18062
+          assert head["workload"]["physical_lines"] == 18062
+          assert base["workload"]["sha256"] == head["workload"]["sha256"]
+          assert base["parity"]["passes"] and head["parity"]["passes"]
+
+          before = base["samples"][0]
+          after = head["samples"][0]
+          assert before["semantics"] == after["semantics"]
+          assert before["semantic_digest"] == after["semantic_digest"]
+
+          metrics = (
+              "aggregate_file_analysis_seconds",
+              "rule_execution_aggregate_seconds",
+              "total_wall_seconds",
+          )
+          comparison = {
+              "python": head["environment"]["python"],
+              "platform": head["environment"]["platform"],
+              "workload_sha256": head["workload"]["sha256"],
+              "physical_lines": head["workload"]["physical_lines"],
+              "mode": after["mode"],
+              "jobs": after["jobs"],
+              "semantic_parity": True,
+              "base_revision": base["environment"]["cgull_revision"],
+              "head_revision": head["environment"]["cgull_revision"],
+              "metrics": {},
+          }
+          for metric in metrics:
+              b = before["phases"][metric]
+              h = after["phases"][metric]
+              reduction = 0.0 if b == 0 else (b - h) / b * 100.0
+              comparison["metrics"][metric] = {
+                  "base_seconds": b,
+                  "head_seconds": h,
+                  "reduction_percent": reduction,
+              }
+              print(f"{metric}: {b:.6f}s -> {h:.6f}s ({reduction:+.1f}% reduction)")
+          print("semantic parity: PASS")
+          Path("issue-521-comparison.json").write_text(
+              json.dumps(comparison, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+      - name: Upload comparison artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-521-base-head-py3.12
+          path: |
+            issue-521-base.json
+            issue-521-head.json
+            issue-521-comparison.json
