@@ -22,6 +22,7 @@ regex-only extraction exactly as before.
 import logging
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import List, Dict, Any, Optional, Set, Tuple, Union, Mapping
 
 from ..models import ParserStatus, ParseTier, ConfigProfile
@@ -943,6 +944,18 @@ STANDARD_UNSIGNED_TYPES = {
     "u_char", "u_int", "u_long", "u_short", "char16_t", "char32_t"
 }
 
+_STANDARD_UNSIGNED_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(t) for t in sorted(STANDARD_UNSIGNED_TYPES)) + r")\b"
+)
+
+
+@lru_cache(maxsize=128)
+def _custom_unsigned_re(custom_typedefs: Tuple[str, ...]):
+    """Compile a stable custom-typedef matcher once per normalized typedef set."""
+    return re.compile(
+        r"\b(?:" + "|".join(re.escape(t) for t in custom_typedefs) + r")\b"
+    )
+
 
 def is_unsigned_type(type_name: str, custom_typedefs: Optional[Set[str]] = None) -> bool:
     """
@@ -955,13 +968,12 @@ def is_unsigned_type(type_name: str, custom_typedefs: Optional[Set[str]] = None)
     tn = type_name.lower()
     if "unsigned" in tn:
         return True
-    for u_type in STANDARD_UNSIGNED_TYPES:
-        if re.search(r'\b' + re.escape(u_type) + r'\b', tn):
-            return True
+    if _STANDARD_UNSIGNED_RE.search(tn):
+        return True
     if custom_typedefs:
-        for u_type in custom_typedefs:
-            if re.search(r'\b' + re.escape(u_type.lower()) + r'\b', tn):
-                return True
+        custom_key = tuple(sorted({u_type.lower() for u_type in custom_typedefs}))
+        if _custom_unsigned_re(custom_key).search(tn):
+            return True
     return False
 
 
@@ -1005,5 +1017,3 @@ _STATEMENT_KEYWORDS = {
 # it unblocks the large fraction of files that only use directives for
 # includes/include-guards/simple constants.
 _PREPROCESSOR_LINE_RE = re.compile(r'^[ \t]*#')
-
-
