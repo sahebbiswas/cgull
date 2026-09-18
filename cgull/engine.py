@@ -1350,7 +1350,7 @@ def _scan_file_content_profiles(
         base_mode = ScanMode.FILE
 
     total_duration_ms = 0.0
-    merged_issues: Dict[str, Tuple[Issue, Set[ConfigProfile]]] = {}
+    profile_candidates: List[Issue] = []
     orig_loc = len(content.splitlines())
     loc = orig_loc
 
@@ -1361,7 +1361,7 @@ def _scan_file_content_profiles(
     has_profile_failure = False
     parse_attempts = []
 
-    for cp in profiles:
+    for profile_index, cp in enumerate(profiles):
         variant_config = ScanConfig.create(
             rules=base_rules,
             engine_mode=base_engine_mode,
@@ -1420,33 +1420,29 @@ def _scan_file_content_profiles(
                 provenance_path,
                 iss.code_snippet,
             )
-
-        # Resolve analyzer-path duplicates inside each concrete profile before
-        # using the occurrence-aware fingerprint to correlate the same source
-        # site across profiles.
-        v_issues = _deduplicate_issues_by_fingerprint(v_issues)
-        for iss in v_issues:
-            key = iss.fingerprint
-            if key not in merged_issues:
-                merged_issues[key] = (iss, {cp})
-            else:
-                existing, seen_profiles = merged_issues[key]
-                seen_profiles.add(cp)
-                merged_issues[key] = (
-                    _merge_duplicate_issues(existing, iss),
-                    seen_profiles,
-                )
+            # Carry profile membership through the shared site-merging path.
+            # The private token is converted back to public reachable_under
+            # labels after all profile candidates have been coalesced.
+            iss.reachable_under = [f"__cgull_profile__:{profile_index}"]
+            profile_candidates.append(iss)
 
     best_file_status = "failed" if has_profile_failure else "success"
     num_profiles = len(profiles)
-    final_issues: List[Issue] = []
+    final_issues = _deduplicate_issues_by_fingerprint(profile_candidates)
 
-    for key, (iss, seen_profs) in merged_issues.items():
-        if len(seen_profs) == num_profiles:
+    for iss in final_issues:
+        seen_indices = {
+            int(label.rsplit(":", 1)[1])
+            for label in iss.reachable_under
+            if label.startswith("__cgull_profile__:")
+        }
+        if len(seen_indices) == num_profiles:
             iss.reachable_under = ["unconditional"]
         else:
-            iss.reachable_under = sorted({p.reachable_under for p in seen_profs})
-        final_issues.append(iss)
+            iss.reachable_under = sorted({
+                profiles[index].reachable_under
+                for index in seen_indices
+            })
 
     final_issues.sort(key=lambda x: (x.line_number, x.column_number, x.rule_id, x.message))
 
