@@ -20,6 +20,7 @@ from .helpers import (
     _source_snippet,
     _ast_cfg_for_function,
 )
+from ..source_locations import format_related_site
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +122,17 @@ class DoubleFreeRule(BaseRule):
                     if re.search(rf'\b{re.escape(freed_ptr)}\s*=', next_line):
                         break
                     if re.search(rf'\b(?:free|cfree|vfree)\s*\(\s*{re.escape(freed_ptr)}\s*\)', next_line):
+                        first_free_site = format_related_site(
+                            ast_ctx,
+                            line_no,
+                            primary_site=next_line_no,
+                            fallback_file=file_path,
+                        )
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=next_line_no,
                             code_snippet=next_line,
-                            message=f"Potential Double Free: pointer '{freed_ptr}' was already freed at line {line_no}.",
+                            message=f"Potential Double Free: pointer '{freed_ptr}' was already freed at {first_free_site}.",
                             column_number=1,
                             engine="Regex",
                             fix_type=FixType.MANUAL_REVIEW,
