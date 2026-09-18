@@ -65,13 +65,13 @@ def format_related_site(
     )
 
     if related_path and primary_path:
-        related_real = os.path.normcase(os.path.realpath(related_path))
-        primary_real = os.path.normcase(os.path.realpath(primary_path))
-        if related_real != primary_real:
+        related_real = os.path.realpath(related_path)
+        primary_real = os.path.realpath(primary_path)
+        if os.path.normcase(related_real) != os.path.normcase(primary_real):
             try:
                 display_path = os.path.relpath(
-                    os.path.realpath(related_path),
-                    os.path.dirname(os.path.realpath(primary_path)),
+                    related_real,
+                    os.path.dirname(primary_real),
                 )
             except ValueError:
                 display_path = related_path
