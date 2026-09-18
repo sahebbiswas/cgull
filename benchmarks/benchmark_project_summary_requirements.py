@@ -74,6 +74,26 @@ def _requirements(config):
     }
 
 
+def _comparison_semantic_snapshot(result):
+    """Compare physical findings while allowing intentional fingerprint evolution."""
+    snapshot = medium._semantic_snapshot(result)
+    findings = tuple(
+        sorted(
+            ("", rule_id, path, line, column, message)
+            for _fingerprint, rule_id, path, line, column, message in snapshot.findings
+        )
+    )
+    return type(snapshot)(
+        findings=findings,
+        parser_status_counts=snapshot.parser_status_counts,
+        files_discovered=snapshot.files_discovered,
+        files_analyzed=snapshot.files_analyzed,
+        files_ignored=snapshot.files_ignored,
+        files_failed=snapshot.files_failed,
+        scan_errors=snapshot.scan_errors,
+    )
+
+
 def _capture(project, *, rules, repetition):
     recorder = medium.PhaseRecorder()
     config = ScanConfig.create(
@@ -87,7 +107,7 @@ def _capture(project, *, rules, repetition):
         result = scanner.scan_path(str(project), jobs=1, quiet=True)
         wall_seconds = max(1e-9, time.perf_counter() - started)
 
-    snapshot = medium._semantic_snapshot(result)
+    snapshot = _comparison_semantic_snapshot(result)
     return {
         "repetition": repetition,
         "wall_seconds": wall_seconds,
