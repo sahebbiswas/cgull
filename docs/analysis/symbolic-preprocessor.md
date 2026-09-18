@@ -227,11 +227,12 @@ Consider a configuration-heavy module:
 void log_backend(void);
 #elif defined(BOARD_A) && LOGGING && USB_LOG
 void usb_log_backend(void);     /* dead: earlier branch already covers it */
-#elif defined(BOARD_A) && (LOGGING || (LOGGING && TRACE))
-void trace_backend(void);       /* condition simplifies under remaining context */
 #endif
 
 #if defined(BOARD_A)
+#  if defined(BOARD_A) && TRACE
+void trace_backend(void);       /* simplify to TRACE under the parent context */
+#  endif
 #  if defined(BOARD_A)
 void board_init(void);          /* redundant nested test */
 #  endif
