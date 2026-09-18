@@ -197,6 +197,6 @@ and cross-call comparisons of two formal pointer origins are not modeled.
 
 ## Defensive local initialization (CGULL-042)
 
-CGULL-042 skips a declaration initializer when it can prove the initializer is side-effect-free. This includes literal values, null pointer constants, simple object addresses, and constant aggregate initializers. Calls, mutations, and unproven reads remain eligible for findings, as do later redundant assignments.
+CGULL-042 skips a declaration initializer when it can prove the initializer is side-effect-free. This includes literal values, null pointer constants, unshadowed file-scope enum constants, simple object addresses, and constant aggregate initializers. Object-like macros are covered when preprocessing expands them to one of those proven forms; unresolved identifiers remain conservative. Calls, mutations, and unproven reads remain eligible for findings, as do later redundant assignments.
 
 Lexical fallback applies this policy to verified declaration writes, including constant array initializers. Findings retain the concrete lexical binding and the starting line of the write statement. TU expansion restores the original file, line, and snippet once, before inline suppression and fingerprinting. Ambiguous compact statements or candidates without a verified write are withheld. Fallback dead-store findings require manual review; they never offer automatic deletion.
