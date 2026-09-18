@@ -1,9 +1,12 @@
+from types import SimpleNamespace
+
 from cgull import CGullScanner
 from cgull.ast_analyzer import CASTParser, _map_line, _map_source_line
 from cgull.cfg import build_cfg, find_function_def
 from cgull.models import AnalysisEngine, ScanConfig
 from cgull.project_analysis import PreparedUnit
 from cgull.rules.memory_management import MemoryLeakRule, UseAfterFreeRule
+from cgull.rules.source_locations import format_related_site
 
 
 def _write_fixture(tmp_path):
@@ -86,9 +89,19 @@ def test_tu_findings_render_primary_and_related_sites_in_original_sources(tmp_pa
     assert "freed at include/free_site.h:1" in uaf.message
 
     leak = next(issue for issue in result.issues if issue.rule_id == "CGULL-036")
-    assert leak.file_path == "include/alloc_site.h"
+    assert leak.file_path.replace("\\", "/") == "include/alloc_site.h"
     assert leak.line_number == 1
     assert "allocated for 'leaked' at line 1" in leak.message
+
+
+def test_related_site_ignores_malformed_source_location_line():
+    ctx = SimpleNamespace(line_map=None)
+    site = SimpleNamespace(
+        source_location=SimpleNamespace(file_path="test.c", line_number="not-a-line"),
+        line_number=3,
+    )
+
+    assert format_related_site(ctx, site, fallback_file="test.c") == "line 3"
 
 
 def test_file_mode_related_site_wording_is_unchanged():
