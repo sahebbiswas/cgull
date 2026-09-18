@@ -5,37 +5,92 @@ import re
 from pycparser import CParser, c_ast
 
 
-def pure_initializer(expr):
+def pure_initializer(expr, proven_constants=()):
     """Recognize value expressions without calls, volatile reads or mutations.
 
-    Unknown identifiers (including unexpanded macros) are deliberately excluded.
-    Addressing a named object does not read its value. Avoid sizeof/type-based
-    reasoning here because variably modified types can evaluate expressions.
+    Identifiers remain conservative unless the caller has proven them to be
+    compile-time constants. Addressing a named object does not read its value.
+    Avoid sizeof/type-based reasoning here because variably modified types can
+    evaluate expressions.
     """
     if isinstance(expr, c_ast.Constant):
         return True
     if isinstance(expr, c_ast.ID):
-        return expr.name == "NULL"
+        return expr.name == "NULL" or expr.name in proven_constants
     if isinstance(expr, c_ast.UnaryOp):
         if expr.op == "&":
             return isinstance(expr.expr, c_ast.ID)
-        return expr.op in {"+", "-", "~", "!"} and pure_initializer(expr.expr)
+        return (
+            expr.op in {"+", "-", "~", "!"}
+            and pure_initializer(expr.expr, proven_constants)
+        )
     if isinstance(expr, c_ast.Cast):
         # Only ordinary scalar/pointer casts; reject array/VLA type expressions.
         typ = expr.to_type.type
         while isinstance(typ, c_ast.PtrDecl):
             typ = typ.type
-        return isinstance(typ, c_ast.TypeDecl) and pure_initializer(expr.expr)
+        return (
+            isinstance(typ, c_ast.TypeDecl)
+            and pure_initializer(expr.expr, proven_constants)
+        )
     if isinstance(expr, c_ast.BinaryOp):
-        return pure_initializer(expr.left) and pure_initializer(expr.right)
+        return (
+            pure_initializer(expr.left, proven_constants)
+            and pure_initializer(expr.right, proven_constants)
+        )
     if isinstance(expr, c_ast.InitList):
-        return all(pure_initializer(item) for item in expr.exprs)
+        return all(
+            pure_initializer(item, proven_constants)
+            for item in expr.exprs
+        )
     if isinstance(expr, c_ast.NamedInitializer):
-        return all(isinstance(name, (c_ast.ID, c_ast.Constant)) for name in expr.name) and pure_initializer(expr.expr)
+        return (
+            all(
+                isinstance(name, (c_ast.ID, c_ast.Constant))
+                for name in expr.name
+            )
+            and pure_initializer(expr.expr, proven_constants)
+        )
     return False
 
 
-def pure_declaration_coordinates(funcdef):
+def file_scope_enum_constants(ast_root):
+    """Return enum constants proven to live at translation-unit scope.
+
+    Function-local enums are intentionally excluded so a same-named identifier
+    in another function cannot be mistaken for a constant.
+    """
+    constants = set()
+    for external in getattr(ast_root, "ext", ()) or ():
+        if isinstance(external, c_ast.FuncDef):
+            continue
+        pending = [external]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, c_ast.Enumerator) and node.name:
+                constants.add(node.name)
+            pending.extend(child for _, child in node.children())
+    return constants
+
+
+def unshadowed_constant_identifiers(funcdef, constants):
+    """Remove constants shadowed by an object or typedef in *funcdef*.
+
+    This is deliberately conservative: a declaration anywhere in the function
+    with the same ordinary-identifier name withholds the constant proof rather
+    than attempting source-order/scope reconstruction here.
+    """
+    shadowed = set()
+    pending = [funcdef]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (c_ast.Decl, c_ast.Typedef)) and node.name:
+            shadowed.add(node.name)
+        pending.extend(child for _, child in node.children())
+    return set(constants) - shadowed
+
+
+def pure_declaration_coordinates(funcdef, proven_constants=()):
     """Return identities of declarations whose original initializer is pure.
 
     The legacy helper name is retained for compatibility with the base rule. The
@@ -47,7 +102,10 @@ def pure_declaration_coordinates(funcdef):
     pending = [funcdef]
     while pending:
         node = pending.pop()
-        if isinstance(node, c_ast.Decl) and pure_initializer(node.init):
+        if (
+            isinstance(node, c_ast.Decl)
+            and pure_initializer(node.init, proven_constants)
+        ):
             declarations.add(id(node))
         pending.extend(child for _, child in node.children())
     return declarations
@@ -64,7 +122,6 @@ def suppress_cfg_initializer(_cfg, node, variable, pure_declarations):
         isinstance(decl, c_ast.Decl)
         and decl.name == variable
         and id(decl) in pure_declarations
-        and pure_initializer(decl.init)
     )
 
 
