@@ -113,7 +113,12 @@ def _deref_vars_with_lines(
         coord = getattr(node, "coord", None)
         if coord is not None:
             exp_line = max(1, coord.line - _PRELUDE_LINE_COUNT)
-            line = _map_line(exp_line, line_map)
+            mapped_line = _map_line(exp_line, line_map)
+            line = (
+                exp_line
+                if getattr(line_map, "preserve_expanded_coordinates", False)
+                else mapped_line
+            )
         elif default_line is not None:
             line = default_line
         else:
