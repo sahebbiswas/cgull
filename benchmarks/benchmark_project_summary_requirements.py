@@ -74,6 +74,45 @@ def _requirements(config):
     }
 
 
+def _logical_semantic_snapshot(result):
+    """Apply finalized fingerprint identity before base/head semantic comparison."""
+    snapshot = medium._semantic_snapshot(result)
+    by_fingerprint = {}
+    without_fingerprint = []
+
+    for finding in snapshot.findings:
+        fingerprint, _rule_id, path, line, column, message = finding
+        if not fingerprint:
+            without_fingerprint.append(finding)
+            continue
+
+        # Mirror the production representative's observable source preference.
+        # code_snippet is part of the fingerprint, so its presence is constant
+        # within a fingerprint group and does not affect which row wins here.
+        source_quality = (
+            int(bool(path))
+            + int(line > 0)
+            + int(column > 1)
+        )
+        candidate_key = (-source_quality, path, line, column, message)
+        existing = by_fingerprint.get(fingerprint)
+        if existing is None or candidate_key < existing[0]:
+            by_fingerprint[fingerprint] = (candidate_key, finding)
+
+    findings = tuple(sorted(
+        [entry[1] for entry in by_fingerprint.values()] + without_fingerprint
+    ))
+    return type(snapshot)(
+        findings=findings,
+        parser_status_counts=snapshot.parser_status_counts,
+        files_discovered=snapshot.files_discovered,
+        files_analyzed=snapshot.files_analyzed,
+        files_ignored=snapshot.files_ignored,
+        files_failed=snapshot.files_failed,
+        scan_errors=snapshot.scan_errors,
+    )
+
+
 def _capture(project, *, rules, repetition):
     recorder = medium.PhaseRecorder()
     config = ScanConfig.create(
@@ -87,7 +126,7 @@ def _capture(project, *, rules, repetition):
         result = scanner.scan_path(str(project), jobs=1, quiet=True)
         wall_seconds = max(1e-9, time.perf_counter() - started)
 
-    snapshot = medium._semantic_snapshot(result)
+    snapshot = _logical_semantic_snapshot(result)
     return {
         "repetition": repetition,
         "wall_seconds": wall_seconds,
