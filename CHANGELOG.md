@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Deduplicate finalized findings by stable fingerprint across analyzer paths, configuration profiles, and translation units while preserving deterministic source attribution, confidence, fix metadata, reachability, and explicit per-TU header reporting (#532).
 - Suppress CGULL-042 declaration initializers that use proven file-scope enum constants before an immediate conditional overwrite, including macro-expanded forms, while keeping shadowed or otherwise unproven identifiers conservative (#530).
 - Classify CGULL-010 array bounds using C integer constant-expression semantics so constant-foldable arithmetic/bitwise and object-like macro bounds are not reported as VLAs, while const-object/runtime bounds remain VLAs (#526).
 - Preserve original source provenance for TU-mode related-site diagnostics so use-after-free and memory-leak messages no longer expose expanded/preprocessed line numbers, including cross-file include sites (#525).
