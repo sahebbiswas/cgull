@@ -688,7 +688,7 @@ class CGullScanner:
                         # On macOS /var commonly resolves to /private/var; mixing
                         # unresolved original_path with base_dir would give the
                         # same header two different apparent paths/fingerprints.
-                        issue.file_path = normalized_canonical_path
+                        issue.file_path = canonical_rel_path
                         if display_path not in issue.related_tus:
                             issue.related_tus.append(display_path)
                     else:
