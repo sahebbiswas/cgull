@@ -6,7 +6,7 @@ knowledge of AST event extraction or state-domain transfer semantics.
 
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
+from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_line, _map_source_line
 from .diagnostics import CFGDiagnostic
 from .model import BasicBlock, CFGEvent, CFGSourceLocation
 
@@ -41,12 +41,8 @@ class StructuredGraph:
         coord_line = getattr(coord, "line", None) if coord is not None else None
         if coord_line is not None:
             exp_line = max(1, coord_line - _PRELUDE_LINE_COUNT)
-            mapped_line = _map_line(exp_line, line_map)
-            line = (
-                exp_line
-                if getattr(line_map, "preserve_expanded_coordinates", False)
-                else mapped_line
-            )
+            mapped_line = _map_source_line(exp_line, line_map)
+            line = _map_line(exp_line, line_map)
             mapped = line_map.get(exp_line) if line_map else None
             source_path = (
                 getattr(mapped, "file_path", None)
