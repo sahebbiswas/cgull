@@ -1,0 +1,138 @@
+import copy
+import json
+
+from cgull.engine import CGullScanner, _merge_duplicate_issues
+from cgull.models import Confidence, ConfigProfile, FixType, Issue, Severity
+from cgull.reporter import ReportGenerator
+from cgull.rules.banned_functions import BannedFunctionsRule
+from cgull.rules.crypto_and_safety import NonConstantTimeMemoryComparisonRule
+
+
+def _cgull_005_scanner():
+    return CGullScanner(rules=[NonConstantTimeMemoryComparisonRule()])
+
+
+def test_cgull_005_macro_raw_vs_resolved_emits_one_finding():
+    source = """
+#define LEVEL_NAME "LEVEL"
+
+void use(const char *value);
+
+int check_token(const char *token) {
+    if (!strcmp(token, LEVEL_NAME)) {
+        use(token);
+        return 1;
+    }
+    return 0;
+}
+"""
+
+    result = _cgull_005_scanner().scan_text(source, "macro_compare.c")
+    issues = [issue for issue in result.issues if issue.rule_id == "CGULL-005"]
+
+    assert len(issues) == 1
+    assert issues[0].fingerprint
+    assert result.total_issues_count == len(result.issues)
+
+    sarif = json.loads(ReportGenerator.to_sarif(result))
+    fingerprints = [
+        row["partialFingerprints"]["cgullFingerprint/v1"]
+        for row in sarif["runs"][0]["results"]
+        if row["ruleId"] == "CGULL-005"
+    ]
+    assert len(fingerprints) == len(set(fingerprints))
+
+
+def test_config_profiles_merge_message_variants_by_fingerprint():
+    source = """
+void use(const char *value);
+
+int check_token(const char *token) {
+    if (!strcmp(token, LEVEL_NAME)) {
+        use(token);
+        return 1;
+    }
+    return 0;
+}
+"""
+    profiles = [
+        ConfigProfile("level", {"LEVEL_NAME": '"LEVEL"'}),
+        ConfigProfile("alternate", {"LEVEL_NAME": '"ALT"'}),
+    ]
+
+    result = _cgull_005_scanner().scan_text_profiles(
+        source,
+        profiles=profiles,
+        file_path="profile_compare.c",
+    )
+    issues = [issue for issue in result.issues if issue.rule_id == "CGULL-005"]
+
+    assert len(issues) == 1
+    assert issues[0].reachable_under == ["unconditional"]
+    assert len({issue.fingerprint for issue in issues}) == 1
+
+
+def test_cgull_001_identical_fingerprint_is_scanner_wide_identity():
+    source = """
+void first(char *buf) {
+    gets(buf);
+}
+
+void second(char *buf) {
+    gets(buf);
+}
+"""
+    scanner = CGullScanner(rules=[BannedFunctionsRule()])
+    result = scanner.scan_text(source, "banned_calls.c")
+    issues = [issue for issue in result.issues if issue.rule_id == "CGULL-001"]
+
+    assert len(issues) == 1
+    assert issues[0].fingerprint
+    assert result.total_issues_count == len(result.issues)
+
+
+def test_duplicate_merge_preserves_best_source_confidence_fix_and_reachability():
+    coarse = Issue(
+        rule_id="CGULL-999",
+        rule_name="Synthetic",
+        impact=Severity.HIGH,
+        file_path="src/example.c",
+        line_number=10,
+        column_number=1,
+        code_snippet="danger();",
+        message="coarse",
+        fingerprint="same",
+        confidence=Confidence.FULL,
+        fix_type=FixType.MANUAL_REVIEW,
+        reachable_under=["+A"],
+        related_tus=["a.c"],
+    )
+    precise = Issue(
+        rule_id="CGULL-999",
+        rule_name="Synthetic",
+        impact=Severity.HIGH,
+        file_path="src/example.c",
+        line_number=10,
+        column_number=7,
+        code_snippet="danger();",
+        message="precise",
+        fingerprint="same",
+        confidence=Confidence.FALLBACK,
+        fix_type=FixType.SAFE_FIX,
+        auto_fix_replacement="safe();",
+        suggested_fix_replacement="consider_safe();",
+        reachable_under=["+B"],
+        related_tus=["b.c"],
+    )
+
+    merged = _merge_duplicate_issues(copy.deepcopy(coarse), copy.deepcopy(precise))
+    reversed_merge = _merge_duplicate_issues(copy.deepcopy(precise), copy.deepcopy(coarse))
+
+    assert merged.to_dict() == reversed_merge.to_dict()
+    assert merged.column_number == 7
+    assert merged.confidence == Confidence.FULL
+    assert merged.fix_type == FixType.SAFE_FIX
+    assert merged.auto_fix_replacement == "safe();"
+    assert merged.suggested_fix_replacement == "consider_safe();"
+    assert merged.reachable_under == ["+A", "+B"]
+    assert merged.related_tus == ["a.c", "b.c"]
