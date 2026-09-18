@@ -90,6 +90,99 @@ def unshadowed_constant_identifiers(funcdef, constants):
     return set(constants) - shadowed
 
 
+def _enum_names(source):
+    """Extract simple enumerator names from enum definitions in *source*."""
+    names = set()
+    for match in re.finditer(r"\\benum\\b[^{};]*\\{([^{}]*)\\}", source, re.DOTALL):
+        for item in match.group(1).split(","):
+            name = item.split("=", 1)[0].strip()
+            if re.fullmatch(r"[A-Za-z_]\\w*", name):
+                names.add(name)
+    return names
+
+
+def fallback_constant_identifiers(context, function):
+    """Return enum constants that fallback can prove for one function.
+
+    Only enum definitions outside recognized function bodies contribute. Names
+    defined as preprocessor macros are withheld because lexical fallback has not
+    expanded them. Function parameters, local objects, typedefs and local enum
+    constants conservatively shadow the file-scope proof.
+    """
+    source = getattr(context, "clean_source", "") or "\n".join(context.source_lines)
+    lines = source.splitlines()
+
+    function_lines = set()
+    for candidate in getattr(context, "functions", ()) or ():
+        start = int(
+            getattr(candidate, "start_line_exp", 0)
+            or getattr(candidate, "start_line", 0)
+            or 0
+        )
+        end = int(
+            getattr(candidate, "end_line_exp", 0)
+            or getattr(candidate, "end_line", 0)
+            or 0
+        )
+        if start > 0 and end >= start:
+            function_lines.update(range(start, end + 1))
+
+    file_scope_lines = []
+    in_directive = False
+    macro_names = set()
+    for line_no, line in enumerate(lines, 1):
+        stripped = line.lstrip()
+        directive = in_directive or stripped.startswith("#")
+        if directive:
+            match = re.match(r"\\s*#\\s*define\\s+([A-Za-z_]\\w*)", line)
+            if match:
+                macro_names.add(match.group(1))
+            in_directive = line.rstrip().endswith("\\")
+            file_scope_lines.append("")
+            continue
+        in_directive = False
+        file_scope_lines.append("" if line_no in function_lines else line)
+
+    constants = _enum_names("\n".join(file_scope_lines)) - macro_names
+
+    shadowed = {
+        getattr(param, "name", None)
+        for param in getattr(function, "parameters", ()) or ()
+        if getattr(param, "name", None)
+    }
+    variables = getattr(function, "variables", {}) or {}
+    bindings = dict.values(variables) if isinstance(variables, dict) else variables
+    shadowed.update(
+        getattr(variable, "name", None)
+        for variable in bindings
+        if getattr(variable, "name", None)
+    )
+
+    start = int(
+        getattr(function, "start_line_exp", 0)
+        or getattr(function, "start_line", 0)
+        or 0
+    )
+    end = int(
+        getattr(function, "end_line_exp", 0)
+        or getattr(function, "end_line", 0)
+        or 0
+    )
+    function_source = (
+        "\n".join(lines[start - 1:end])
+        if start > 0 and end >= start
+        else ""
+    )
+    shadowed.update(_enum_names(function_source))
+    for match in re.finditer(
+        r"\\btypedef\\b[^;{}]*\\b([A-Za-z_]\\w*)\\s*;",
+        function_source,
+    ):
+        shadowed.add(match.group(1))
+
+    return constants - shadowed
+
+
 def pure_declaration_coordinates(funcdef, proven_constants=()):
     """Return identities of declarations whose original initializer is pure.
 
@@ -125,7 +218,12 @@ def suppress_cfg_initializer(_cfg, node, variable, pure_declarations):
     )
 
 
-def suppress_lexical_initializer(context, variable, line):
+def suppress_lexical_initializer(
+    context,
+    variable,
+    line,
+    proven_constants=(),
+):
     """Suppress a fallback finding only for a proven pure declaration initializer.
 
     Fallback findings are line-based, so require the concrete binding metadata to
@@ -175,4 +273,7 @@ def suppress_lexical_initializer(context, variable, line):
     except Exception:
         return False
     declarations = unit.ext[0].body.block_items
-    return len(declarations) == 1 and pure_initializer(declarations[0].init)
+    return (
+        len(declarations) == 1
+        and pure_initializer(declarations[0].init, proven_constants)
+    )
