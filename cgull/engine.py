@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .logging_config import TRACE_LEVEL_NUM, multiprocessing_logging_context
 from .parse_diagnostics import map_attempts, report_attempts, format_attempts
-from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile, ScanMode
+from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, FixType, ScanConfig, ScanError, ConfigProfile, ScanMode
 from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander, HEADER_CACHE
 from .analysis_headers import is_analysis_header
@@ -124,6 +124,139 @@ def _validate_seed_flags_diagnostics(files: List[str], seed_profiles: List[Confi
                 fpath, lno = presence_locs[m_name]
                 loc_str = f" in {fpath}:{lno}"
             logger.warning("Warning: Seed value macro '%s' is configured with value '%s' but was only tested as a presence flag%s.", m_name, val, loc_str)
+
+
+_CONFIDENCE_RANK = {
+    Confidence.LIMITED: 0,
+    Confidence.FALLBACK: 1,
+    Confidence.FULL: 2,
+}
+
+_FIX_TYPE_RANK = {
+    FixType.MANUAL_REVIEW: 0,
+    FixType.SUGGESTED_FIX: 1,
+    FixType.SAFE_FIX: 2,
+}
+
+
+def _confidence_rank(value: Any) -> int:
+    try:
+        return _CONFIDENCE_RANK[Confidence(value)]
+    except (TypeError, ValueError, KeyError):
+        return -1
+
+
+def _fix_type_rank(value: Any) -> int:
+    try:
+        return _FIX_TYPE_RANK[FixType(value)]
+    except (TypeError, ValueError, KeyError):
+        return -1
+
+
+def _issue_representative_key(issue: Issue) -> Tuple[Any, ...]:
+    """Rank duplicate candidates without depending on discovery/worker order."""
+    source_quality = (
+        int(bool(issue.file_path))
+        + int(issue.line_number > 0)
+        + int(issue.column_number > 1)
+        + int(bool(issue.code_snippet))
+    )
+    return (
+        -_confidence_rank(issue.confidence),
+        -_fix_type_rank(issue.fix_type),
+        -int(bool(issue.auto_fix_replacement)),
+        -int(bool(issue.suggested_fix_replacement)),
+        -source_quality,
+        str(issue.file_path).replace("\\", "/"),
+        issue.line_number,
+        issue.column_number,
+        issue.message,
+        issue.engine,
+        issue.code_snippet,
+    )
+
+
+def _merge_reachable_under(left: List[str], right: List[str]) -> List[str]:
+    labels = {label for label in left + right if label}
+    if "unconditional" in labels:
+        return ["unconditional"]
+    return sorted(labels)
+
+
+def _merge_duplicate_issues(left: Issue, right: Issue) -> Issue:
+    """Return one deterministic representative while preserving stronger metadata."""
+    candidates = sorted((left, right), key=_issue_representative_key)
+    representative = candidates[0]
+
+    best_confidence = max(candidates, key=lambda issue: _confidence_rank(issue.confidence)).confidence
+    if best_confidence is not None:
+        representative.confidence = best_confidence
+
+    fix_candidates = sorted(
+        candidates,
+        key=lambda issue: (
+            -_fix_type_rank(issue.fix_type),
+            -int(bool(issue.auto_fix_replacement)),
+            -int(bool(issue.suggested_fix_replacement)),
+            str(issue.auto_fix_replacement or ""),
+            str(issue.suggested_fix_replacement or ""),
+            _issue_representative_key(issue),
+        ),
+    )
+    representative.fix_type = fix_candidates[0].fix_type
+    representative.auto_fix_replacement = next(
+        (issue.auto_fix_replacement for issue in fix_candidates if issue.auto_fix_replacement),
+        None,
+    )
+    representative.suggested_fix_replacement = next(
+        (issue.suggested_fix_replacement for issue in fix_candidates if issue.suggested_fix_replacement),
+        None,
+    )
+
+    for attr in ("remediation", "cwe_id", "rule_name"):
+        value = next((getattr(issue, attr) for issue in candidates if getattr(issue, attr)), "")
+        if value:
+            setattr(representative, attr, value)
+
+    representative.related_tus = sorted({
+        tu
+        for issue in candidates
+        for tu in issue.related_tus
+        if tu
+    })
+    representative.reachable_under = _merge_reachable_under(
+        left.reachable_under,
+        right.reachable_under,
+    )
+    return representative
+
+
+def _deduplicate_issues_by_fingerprint(issues: List[Issue]) -> List[Issue]:
+    """Collapse non-empty stable fingerprints while retaining empty-fingerprint rows."""
+    by_fingerprint: Dict[str, Issue] = {}
+    without_fingerprint: List[Issue] = []
+
+    for issue in issues:
+        if not issue.fingerprint:
+            without_fingerprint.append(issue)
+            continue
+        existing = by_fingerprint.get(issue.fingerprint)
+        by_fingerprint[issue.fingerprint] = (
+            issue if existing is None else _merge_duplicate_issues(existing, issue)
+        )
+
+    deduplicated = list(by_fingerprint.values()) + without_fingerprint
+    deduplicated.sort(
+        key=lambda issue: (
+            issue.file_path,
+            issue.line_number,
+            issue.column_number,
+            issue.rule_id,
+            issue.message,
+            issue.fingerprint,
+        )
+    )
+    return deduplicated
 
 
 class CGullScanner:
@@ -408,8 +541,12 @@ class CGullScanner:
         failed_count = 0
 
         real_base_dir = os.path.realpath(base_dir)
-        # Global deduplication across translation units
-        dedup_issues_map: Dict[Any, Issue] = {}
+        # Stable fingerprints are the finalized logical finding identity.
+        # Per-file dedup removes analyzer-path/profile duplicates. The global
+        # map additionally merges the same header-origin finding across TUs
+        # when header deduplication is enabled.
+        dedup_issues_map: Dict[str, Issue] = {}
+        dedup_headers = getattr(config, "dedup_headers", True)
         
         for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err, parse_attempts in results:
             display_path = os.path.relpath(file_path, base_dir) if os.path.exists(base_dir) else os.path.basename(file_path)
@@ -434,6 +571,7 @@ class CGullScanner:
                 analyzed_count += 1
                 if self.severity_filter:
                     file_issues = [i for i in file_issues if i.impact in self.severity_filter]
+                finalized_file_issues: Dict[str, Issue] = {}
                 for issue in file_issues:
                     # original_path is the provenance file path (header or translation unit)
                     original_path = issue.file_path
@@ -445,7 +583,8 @@ class CGullScanner:
 
                     normalized_canonical_path = canonical_rel_path.replace("\\", "/")
 
-                    # Compute stable project-relative fingerprint without line numbers
+                    # Compute stable project-relative fingerprint without line numbers.
+                    # This is the final identity used by baselines and SARIF.
                     issue.fingerprint = compute_issue_fingerprint(
                         issue.rule_id,
                         normalized_canonical_path,
@@ -476,30 +615,29 @@ class CGullScanner:
                                 norm_related.append(related)
                         else:
                             norm_related.append(related)
-                    issue.related_tus = norm_related
+                    issue.related_tus = sorted(set(norm_related))
 
-                    if getattr(config, "dedup_headers", True):
-                        # Disambiguation aggregation key across translation units
-                        dedup_key = (
-                            issue.fingerprint,
-                            normalized_canonical_path,
-                            issue.line_number,
-                            issue.column_number,
-                            issue.message,
+                    existing_file_issue = finalized_file_issues.get(issue.fingerprint)
+                    finalized_file_issues[issue.fingerprint] = (
+                        issue
+                        if existing_file_issue is None
+                        else _merge_duplicate_issues(existing_file_issue, issue)
+                    )
+
+                file_issues = _deduplicate_issues_by_fingerprint(list(finalized_file_issues.values()))
+
+                if dedup_headers:
+                    for issue in file_issues:
+                        existing_issue = dedup_issues_map.get(issue.fingerprint)
+                        dedup_issues_map[issue.fingerprint] = (
+                            issue
+                            if existing_issue is None
+                            else _merge_duplicate_issues(existing_issue, issue)
                         )
-                        if dedup_key not in dedup_issues_map:
-                            dedup_issues_map[dedup_key] = issue
-                            all_issues.append(issue)
-                        else:
-                            # Merge related_tus into existing deduplicated issue
-                            existing_issue = dedup_issues_map[dedup_key]
-                            for tu in issue.related_tus:
-                                if tu not in existing_issue.related_tus:
-                                    existing_issue.related_tus.append(tu)
-                    else:
-                        # No header deduplication: report each issue per translation unit,
-                        # preserving canonical header path as primary location and TU in related_tus
-                        all_issues.append(issue)
+                else:
+                    # Preserve the explicit per-TU mode while still collapsing
+                    # duplicate analyzer paths inside each translation unit.
+                    all_issues.extend(file_issues)
 
             total_loc += loc
 
@@ -521,6 +659,9 @@ class CGullScanner:
                 parse_tier=parse_tier,
                 parse_attempts=report_attempts(parse_attempts, base_dir),
             ))
+
+        if dedup_headers:
+            all_issues.extend(dedup_issues_map.values())
 
         duration = time.time() - start_time
         logger.info("Scan completed for '%s' in %.2fs: %d files analyzed, %d issues, %d failed", report_target_str, duration, analyzed_count, len(all_issues), failed_count)
@@ -757,6 +898,8 @@ class CGullScanner:
 
         if self.severity_filter:
             file_issues = [i for i in file_issues if i.impact in self.severity_filter]
+
+        file_issues = _deduplicate_issues_by_fingerprint(file_issues)
 
         duration = time.time() - start_time
         high_total = sum(1 for i in file_issues if i.impact == Severity.HIGH)
@@ -1132,7 +1275,7 @@ def _scan_file_content_profiles(
         base_mode = ScanMode.FILE
 
     total_duration_ms = 0.0
-    merged_issues: Dict[Tuple[str, int, str], Tuple[Issue, Set[ConfigProfile]]] = {}
+    merged_issues: Dict[str, Tuple[Issue, Set[ConfigProfile]]] = {}
     orig_loc = len(content.splitlines())
     loc = orig_loc
 
@@ -1197,12 +1340,22 @@ def _scan_file_content_profiles(
 
         for iss in v_issues:
             if not iss.fingerprint:
-                iss.fingerprint = compute_issue_fingerprint(iss.rule_id, file_path, iss.code_snippet)
-            key = (iss.fingerprint, iss.line_number, iss.message)
+                provenance_path = str(iss.file_path).replace("\\", "/")
+                iss.fingerprint = compute_issue_fingerprint(
+                    iss.rule_id,
+                    provenance_path,
+                    iss.code_snippet,
+                )
+            key = iss.fingerprint
             if key not in merged_issues:
                 merged_issues[key] = (iss, {cp})
             else:
-                merged_issues[key][1].add(cp)
+                existing, seen_profiles = merged_issues[key]
+                seen_profiles.add(cp)
+                merged_issues[key] = (
+                    _merge_duplicate_issues(existing, iss),
+                    seen_profiles,
+                )
 
     best_file_status = "failed" if has_profile_failure else "success"
     num_profiles = len(profiles)
