@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Classify CGULL-010 array bounds using C integer constant-expression semantics so constant-foldable arithmetic/bitwise and object-like macro bounds are not reported as VLAs, while const-object/runtime bounds remain VLAs (#526).
 - Preserve original source provenance for TU-mode related-site diagnostics so use-after-free and memory-leak messages no longer expose expanded/preprocessed line numbers, including cross-file include sites (#525).
 
 ## [0.12.4] - 2026-09-16
