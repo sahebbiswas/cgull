@@ -100,7 +100,8 @@ class CFGNode:
     next_nodes: List["CFGNode"] = field(default_factory=list)
 
 
-def _map_line(exp_line: int, line_map: Optional[Dict[int, Any]]) -> int:
+def _map_source_line(exp_line: int, line_map: Optional[Dict[int, Any]]) -> int:
+    """Map an expanded-TU line to its original source line when provenance exists."""
     if line_map and exp_line in line_map:
         src_loc = line_map[exp_line]
         if isinstance(src_loc, int):
@@ -110,6 +111,13 @@ def _map_line(exp_line: int, line_map: Optional[Dict[int, Any]]) -> int:
         if hasattr(src_loc, "line"):
             return src_loc.line
     return exp_line
+
+
+def _map_line(exp_line: int, line_map: Optional[Dict[int, Any]]) -> int:
+    """Map a rule-facing line unless the scan engine still owns final remapping."""
+    if getattr(line_map, "preserve_expanded_coordinates", False):
+        return exp_line
+    return _map_source_line(exp_line, line_map)
 
 
 @dataclass
