@@ -128,6 +128,26 @@ def test_malformed_conditions_disable_behavior_based_reduction_conservatively():
     assert result.stats.removed_count == 0
 
 
+def test_structural_diagnostics_disable_behavior_based_reduction():
+    source = "#if A\nint a;\n"
+    candidates = [
+        _profile("a", "A"),
+        _profile("a-b", "A", "B"),
+    ]
+
+    result = reduce_generated_profiles([source], candidates)
+
+    # The unterminated block still yields a partial symbolic branch tree. Do not
+    # use that partial model to collapse distinct effective flag maps.
+    assert result.stats.candidate_count == 2
+    assert result.stats.retained_count == 2
+    assert result.stats.removed_count == 0
+    assert [dict(profile.flags) for profile in result.profiles] == [
+        {"A": None},
+        {"A": None, "B": None},
+    ]
+
+
 def test_exact_duplicate_flag_maps_are_safe_even_without_modeled_branches():
     candidates = [ConfigProfile("z", {"A": None}), ConfigProfile("a", {"A": None})]
 

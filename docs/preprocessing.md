@@ -2,6 +2,14 @@
 
 C-GULL's AST and Hybrid analysis modes depend on both `pycparser` and `pcpp`. These are core runtime dependencies for supported installations, not optional precision enhancements.
 
+## Concrete preprocessing vs symbolic analysis
+
+This document describes the **concrete** preprocessing path used to obtain parseable source for AST-backed rules. It selects active source under one macro environment and, at the strongest tier, expands macros with `pcpp`.
+
+C-GULL also has an independent **symbolic preprocessor** layer that preserves all conditional branches and reasons about their Boolean configuration space without selecting one active branch. That layer powers the focused `cgull preprocessor` command, `CGULL-054`/`CGULL-055`, branch witnesses, and safe generated-profile reduction.
+
+See [Symbolic preprocessor analysis](analysis/symbolic-preprocessor.md) for supported directives, opaque predicate semantics, contextual/effective conditions, witnesses, reduction behavior, and resource limits. Symbolic results do not imply that concrete preprocessing or AST parsing succeeded for every configuration.
+
 ## Why preprocessing is required
 
 Several AST-backed analyses rely on macro expansion before parsing. In particular, `offsetof(T, member)` must be expanded into the pointer/member expression understood by C-GULL's layout and container-recovery reasoning. If it survives preprocessing as a function call, analyses that depend on member offsets can silently lose security coverage.

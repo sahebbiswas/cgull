@@ -101,6 +101,10 @@ Configuration seeds can come from headers/directories/JSON through repeated `--c
 cgull scan . --compile-commands build/compile_commands.json
 ```
 
+When C-GULL generates configuration profiles for a non-default expansion strategy, it can use symbolic conditional analysis to collapse profiles that are equivalent with respect to modeled branch reachability. Explicit user-provided profiles are not reduced. Opaque value-bearing predicates remain unconstrained, and malformed structure or Boolean resource exhaustion falls back to exact flag-map deduplication rather than dropping a potentially distinct configuration.
+
+For the proof model, witness semantics, and reduction limits, see [Symbolic preprocessor analysis](analysis/symbolic-preprocessor.md).
+
 ## Interprocedural analysis
 
 C-GULL has a shared interprocedural analysis layer for facts that must cross function boundaries, including call effects, ownership, provenance, and other rule-specific queries. Analysis sessions cache shared translation-unit facts so multiple rules can reuse the same work.

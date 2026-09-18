@@ -12,6 +12,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | `.cgullignore`, `.cgullincludes`, path boundaries, and inline suppressions | [Project files and suppressions](project-files.md) |
 | Per-translation-unit build include context from `compile_commands.json` | [Compilation database build context](compile-database.md) |
 | Engines, file/TU modes, preprocessing, configuration profiles, and fallback behavior | [Analysis model](analysis-model.md) |
+| Symbolic conditional analysis, `cgull preprocessor`, witnesses, configuration reduction, and limits | [Symbolic preprocessor analysis](analysis/symbolic-preprocessor.md) |
 | Text, JSON, Markdown, SARIF, baselines, exit policy, and safe fixes | [Reporting and CI](reporting-and-ci.md) |
 | Automatic diagnostic capture, verbosity, retention, privacy, and `--log-file` | [Diagnostic logging](logging.md) |
 | pre-commit and GitHub Actions adoption | [Development integration](development-integration.md) |
@@ -29,7 +30,6 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | Cross-file summaries, linkage, configuration isolation, and limitations | [Project-level direct-call summaries](analysis/project-summaries.md) |
 | Intra-TU integer argument/return range summaries used by CGULL-049 | [Integer range summaries](analysis/integer-range-summaries.md) |
 | Interprocedural architecture | [Interprocedural analysis](interprocedural-analysis.md) |
-| Immutable symbolic preprocessor expressions, normalization, and serialization | [Symbolic preprocessor API](analysis/symbolic-preprocessor.md) |
 | Interprocedural fact/query contract | [Interprocedural fact query contract](interprocedural-fact-query-contract.md) |
 | Trust-boundary semantic models | [Trust-boundary semantic models](trust-boundary-semantic-models.md) |
 | Historical interprocedural work plan | [Interprocedural analysis issues](interprocedural-analysis-issues.md) |
