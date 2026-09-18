@@ -29,20 +29,11 @@ class _ASTFunctionAnalyzer:
     function calls, dataflow events, and CFG nodes.
     """
 
-    def __init__(
-        self,
-        owning_fn: CFunction,
-        prelude_offset: int,
-        clean_lines: List[str],
-        custom_typedefs: Optional[Set[str]] = None,
-        typedef_shapes: Optional[Dict[str, TypedefShape]] = None,
-        line_map: Optional[Dict[int, Any]] = None,
-        clean_code: str = "",
-    ):
+    def __init__(self, owning_fn: CFunction, prelude_offset: int, clean_lines: List[str], custom_typedefs: Optional[Set[str]] = None, typedef_shapes: Optional[Dict[str, TypedefShape]] = None, line_map: Optional[Dict[int, Any]] = None):
         self.owning_fn = owning_fn
         self.prelude_offset = prelude_offset
         self.clean_lines = clean_lines
-        self.clean_code = clean_code
+        self.clean_code = "\n".join(clean_lines)
         self.custom_typedefs = custom_typedefs
         self.typedef_shapes = typedef_shapes or {}
         self.line_map = line_map
@@ -1338,15 +1329,7 @@ class CASTParser:
                 )
 
                 if ext.body:
-                    _ASTFunctionAnalyzer(
-                        fn,
-                        _PRELUDE_LINE_COUNT,
-                        clean_lines,
-                        custom_typedefs,
-                        typedef_shapes=self.typedef_shapes,
-                        line_map=line_map,
-                        clean_code=clean_code,
-                    ).analyze(ext.body)
+                    _ASTFunctionAnalyzer(fn, _PRELUDE_LINE_COUNT, clean_lines, custom_typedefs, typedef_shapes=self.typedef_shapes, line_map=line_map).analyze(ext.body)
 
                 functions.append(fn)
 

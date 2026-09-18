@@ -725,46 +725,31 @@ def parse_member_declarations(stmt: str, clean_code: str) -> List[FieldInfo]:
     return fields
 
 
-def _eval_integer_constant_text(expr_str: str) -> Optional[int]:
-    """Evaluate an identifier-free C integer expression, or return None."""
-    remaining_idents = set(re.findall(r'\b[a-zA-Z_]\w*\b', expr_str)) - {"true", "false"}
-    if remaining_idents:
-        return None
-
-    tokens = _tokenize_c_prep_expr(expr_str, {})
-    if not tokens:
-        return None
-    try:
-        return _eval_c_prep_tokens(tokens)
-    except Exception:
-        return None
-
-
-def _resolve_constant_expr(
+def resolve_constant_expr(
     expr_str: str,
     clean_code: str,
-    max_depth: int,
+    max_depth: int = 20,
     *,
-    include_const_objects: bool,
+    allow_const_objects: bool = True,
 ) -> Optional[int]:
+    """
+    Resolves a constant expression string (digit, hex, expression-valued macro #define,
+    const int variable, or enum constant) to an integer value if compile-time constant,
+    else returns None. Recursively expands object-like macros with cycle protection.
+    """
     if not expr_str or not expr_str.strip():
         return None
 
     s = expr_str.strip()
 
-    # Direct integer literal (e.g. 100, 0x64, 0144).
+    # Direct integer literal (e.g. 100, 0x64, 0144)
     m_num = re.match(r'^-?(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*$', s)
     if m_num:
         parsed_int = _parse_c_int_literal(s)
         if parsed_int is not None:
             return parsed_int
 
-    # Avoid rescanning the source for the common post-preprocessing case.
-    direct_value = _eval_integer_constant_text(s)
-    if direct_value is not None:
-        return direct_value
-
-    # Collect object-like macros (#define MACRO body) from clean_code.
+    # Collect object-like macros (#define MACRO body) from clean_code
     macro_defs: Dict[str, str] = {}
     for line in clean_code.splitlines():
         line_s = line.strip()
@@ -777,19 +762,17 @@ def _resolve_constant_expr(
                 if m_val:
                     macro_defs[m_name] = m_val
 
-    # Preserve the broad resolver's historic const-object support. C integer
-    # constant expressions deliberately exclude const-qualified objects, so VLA
-    # classification uses the strict wrapper below instead.
-    if include_const_objects:
+    # Collect const int variables for broad constant-value resolution.
+    if allow_const_objects:
         for const_m in re.finditer(
             r'\bconst\s+(?:int|size_t|uint\w+_t|int\w+_t|unsigned\s+int|long|short)\s+([a-zA-Z_]\w*)\s*=\s*([^;]+);',
-            clean_code,
+            clean_code
         ):
             c_name = const_m.group(1)
             c_val = const_m.group(2).strip()
             macro_defs[c_name] = c_val
 
-    # Collect enum constants.
+    # Collect enum constants
     enum_regex = re.compile(r'\benum\b[^{}]*\{([^}]+)\}')
     for enum_m in enum_regex.finditer(clean_code):
         enum_body = enum_m.group(1)
@@ -813,7 +796,7 @@ def _resolve_constant_expr(
                 macro_defs[e_name] = str(curr_val)
                 curr_val += 1
 
-    # Recursive macro/enum replacement with cycle protection.
+    # Recursive macro replacement with cycle protection
     def expand_expr(target_str: str, visited: Set[str], depth: int = 0) -> str:
         if depth > max_depth:
             return target_str
@@ -828,21 +811,23 @@ def _resolve_constant_expr(
 
         return re.sub(r'\b[a-zA-Z_]\w*\b', replace_ident, target_str)
 
-    return _eval_integer_constant_text(expand_expr(s, set()))
+    expanded = expand_expr(s, set())
 
+    # Ensure all identifiers in expression are resolved before evaluating
+    remaining_idents = set(re.findall(r'\b[a-zA-Z_]\w*\b', expanded)) - {"true", "false"}
+    if remaining_idents:
+        return None
 
-def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -> Optional[int]:
-    """
-    Resolves a constant expression string (digit, hex, expression-valued macro #define,
-    const int variable, or enum constant) to an integer value if compile-time constant,
-    else returns None. Recursively expands object-like macros with cycle protection.
-    """
-    return _resolve_constant_expr(
-        expr_str,
-        clean_code,
-        max_depth,
-        include_const_objects=True,
-    )
+    numeric_macros: Dict[str, int] = {}
+    tokens = _tokenize_c_prep_expr(expanded, numeric_macros)
+    if tokens:
+        try:
+            val = _eval_c_prep_tokens(tokens)
+            return val
+        except Exception:
+            pass
+
+    return None
 
 
 def resolve_integer_constant_expr(
@@ -852,15 +837,17 @@ def resolve_integer_constant_expr(
 ) -> Optional[int]:
     """Resolve a C integer constant expression for array-bound classification.
 
-    Unlike resolve_constant_expr(), this intentionally does not treat a
-    const-qualified object as an integer constant expression. In C,
-    const int n = 8; char a[n]; is a VLA even though n has a known value.
+    Const-qualified objects are deliberately excluded: in C,
+    const int n = 8; char a[n]; is still a VLA.
     """
-    return _resolve_constant_expr(
+    source = clean_code
+    if not re.search(r'\b[a-zA-Z_]\w*\b', expr_str):
+        source = ""
+    return resolve_constant_expr(
         expr_str,
-        clean_code,
+        source,
         max_depth,
-        include_const_objects=False,
+        allow_const_objects=False,
     )
 
 
