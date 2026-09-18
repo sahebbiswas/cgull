@@ -163,10 +163,6 @@ def _issue_representative_key(issue: Issue) -> Tuple[Any, ...]:
     )
     return (
         -source_quality,
-        -_confidence_rank(issue.confidence),
-        -_fix_type_rank(issue.fix_type),
-        -int(bool(issue.auto_fix_replacement)),
-        -int(bool(issue.suggested_fix_replacement)),
         str(issue.file_path).replace("\\", "/"),
         issue.line_number,
         issue.column_number,
@@ -188,35 +184,40 @@ def _merge_duplicate_issues(left: Issue, right: Issue) -> Issue:
     candidates = sorted((left, right), key=_issue_representative_key)
     representative = candidates[0]
 
-    best_confidence = max(candidates, key=lambda issue: _confidence_rank(issue.confidence)).confidence
-    if best_confidence is not None:
-        representative.confidence = best_confidence
+    confidence_candidates = [issue.confidence for issue in candidates if issue.confidence is not None]
+    if confidence_candidates:
+        representative.confidence = max(
+            confidence_candidates,
+            key=lambda value: (_confidence_rank(value), str(value)),
+        )
 
-    fix_candidates = sorted(
-        candidates,
-        key=lambda issue: (
-            -_fix_type_rank(issue.fix_type),
-            -int(bool(issue.auto_fix_replacement)),
-            -int(bool(issue.suggested_fix_replacement)),
-            str(issue.auto_fix_replacement or ""),
-            str(issue.suggested_fix_replacement or ""),
-            _issue_representative_key(issue),
-        ),
+    fix_types = [issue.fix_type for issue in candidates]
+    representative.fix_type = max(
+        fix_types,
+        key=lambda value: (_fix_type_rank(value), str(value)),
     )
-    representative.fix_type = fix_candidates[0].fix_type
-    representative.auto_fix_replacement = next(
-        (issue.auto_fix_replacement for issue in fix_candidates if issue.auto_fix_replacement),
-        None,
-    )
-    representative.suggested_fix_replacement = next(
-        (issue.suggested_fix_replacement for issue in fix_candidates if issue.suggested_fix_replacement),
-        None,
-    )
+
+    auto_fixes = sorted({
+        issue.auto_fix_replacement
+        for issue in candidates
+        if issue.auto_fix_replacement
+    })
+    suggested_fixes = sorted({
+        issue.suggested_fix_replacement
+        for issue in candidates
+        if issue.suggested_fix_replacement
+    })
+    representative.auto_fix_replacement = auto_fixes[0] if auto_fixes else None
+    representative.suggested_fix_replacement = suggested_fixes[0] if suggested_fixes else None
 
     for attr in ("remediation", "cwe_id", "rule_name"):
-        value = next((getattr(issue, attr) for issue in candidates if getattr(issue, attr)), "")
-        if value:
-            setattr(representative, attr, value)
+        values = sorted({
+            getattr(issue, attr)
+            for issue in candidates
+            if getattr(issue, attr)
+        })
+        if values:
+            setattr(representative, attr, values[0])
 
     representative.related_tus = sorted({
         tu
@@ -1339,13 +1340,12 @@ def _scan_file_content_profiles(
             best_parse_tier = ParseTier.DIRECTIVE_STRIPPED.value
 
         for iss in v_issues:
-            if not iss.fingerprint:
-                provenance_path = str(iss.file_path).replace("\\", "/")
-                iss.fingerprint = compute_issue_fingerprint(
-                    iss.rule_id,
-                    provenance_path,
-                    iss.code_snippet,
-                )
+            provenance_path = str(iss.file_path).replace("\\", "/")
+            iss.fingerprint = compute_issue_fingerprint(
+                iss.rule_id,
+                provenance_path,
+                iss.code_snippet,
+            )
             key = iss.fingerprint
             if key not in merged_issues:
                 merged_issues[key] = (iss, {cp})
