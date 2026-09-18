@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from ..cfg import analyze_function_summaries, build_cfg, find_function_def
 from ..cfg.expression_effects import StorageEffect, ordered_storage_effects
 from ..models import FixType
+from .dead_store_initializers import file_scope_enum_constants
 from .dead_stores import DeadStoresRule as _BaseDeadStoresRule
 from .dead_store_parameters import (
     fallback_parameter_dead_store_issues,
@@ -216,6 +217,7 @@ def _member_dead_store_issues(rule, file_path, ast_ctx):
         else None
     )
     reported: Set[Tuple[int, str, Tuple[str, ...]]] = set()
+    file_scope_constants = file_scope_enum_constants(ast_ctx.pycparser_ast)
 
     for fn in getattr(ast_ctx, "functions", ()):
         eligible_roots = _eligible_member_roots(fn)
@@ -243,6 +245,7 @@ def _member_dead_store_issues(rule, file_path, ast_ctx):
                     fn,
                     funcdef,
                     cfg,
+                    file_scope_constants=file_scope_constants,
                 )
             )
 

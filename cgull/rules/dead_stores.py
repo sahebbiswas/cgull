@@ -283,7 +283,10 @@ class DeadStoresRule(_BaseDeadStoresRule):
             return super().scan_ast(file_path, ast_ctx)
 
         from ..models import FixType
-        from .dead_store_initializers import suppress_lexical_initializer
+        from .dead_store_initializers import (
+            fallback_constant_identifiers,
+            suppress_lexical_initializer,
+        )
         from .fallback_writes import WriteSource, verified_write
 
         context = _expanded_context(ast_ctx)
@@ -295,6 +298,7 @@ class DeadStoresRule(_BaseDeadStoresRule):
         }
         issues = []
         for fn in context.functions:
+            constant_identifiers = fallback_constant_identifiers(context, fn)
             for variable in _eligible_variables(fn):
                 writes = sorted(set(variable.assigned_lines))
                 reads = variable.read_lines
@@ -309,7 +313,15 @@ class DeadStoresRule(_BaseDeadStoresRule):
                     event = verified_write(context, fn, variable, line, source)
                     if event is None:
                         continue
-                    if event.kind == "initializer" and suppress_lexical_initializer(context, variable, line):
+                    if (
+                        event.kind == "initializer"
+                        and suppress_lexical_initializer(
+                            context,
+                            variable,
+                            line,
+                            constant_identifiers,
+                        )
+                    ):
                         continue
                     end_line = event.expanded_line + event.statement.count("\n")
                     issue = self.create_issue(

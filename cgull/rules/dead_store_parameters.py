@@ -10,8 +10,10 @@ from ..cfg.expression_effects import StorageEffect, ordered_storage_effects
 from ..models import FixType
 from ..utils import mask_string_and_char_literals
 from .dead_store_initializers import (
+    file_scope_enum_constants,
     pure_declaration_coordinates,
     suppress_cfg_initializer,
+    unshadowed_constant_identifiers,
 )
 
 
@@ -315,13 +317,30 @@ def _bound_issue(rule, file_path, ast_ctx, fn, node, binding):
     )
 
 
-def parameter_dead_store_issues(rule, file_path, ast_ctx, fn, funcdef, cfg):
+def parameter_dead_store_issues(
+    rule,
+    file_path,
+    ast_ctx,
+    fn,
+    funcdef,
+    cfg,
+    *,
+    file_scope_constants=None,
+):
     """Report dead explicit stores to parameters and colliding local bindings."""
     if not has_tracked_parameters(fn):
         return []
 
     scopes = _BindingScopes(fn, funcdef)
-    pure_coordinates = pure_declaration_coordinates(funcdef)
+    constants = (
+        file_scope_enum_constants(ast_ctx.pycparser_ast)
+        if file_scope_constants is None
+        else file_scope_constants
+    )
+    constant_identifiers = unshadowed_constant_identifiers(funcdef, constants)
+    pure_coordinates = pure_declaration_coordinates(
+        funcdef, constant_identifiers
+    )
     issues = []
     reported = set()
 
