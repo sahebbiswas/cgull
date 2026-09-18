@@ -160,6 +160,8 @@ def reduce_generated_profiles(
     unsafe = False
     for source_index, source in enumerate(sources):
         tree = parse_conditional_directives(source)
+        if tree.diagnostics:
+            return _duplicate_only_result(ordered_profiles)
         for witness in derive_branch_witnesses(tree, limits=limits):
             if witness.status in (WitnessStatus.UNSUPPORTED, WitnessStatus.LIMIT_EXCEEDED):
                 unsafe = True
