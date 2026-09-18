@@ -64,7 +64,8 @@ def test_effectful_initializer_before_conditional_overwrite_remains(fallback):
     assert {issue.line_number for issue in issues} == {2}
 
 
-def test_file_scope_enum_initializer_is_proven_pure():
+@pytest.mark.parametrize("fallback", [False, True])
+def test_file_scope_enum_initializer_is_proven_pure(fallback):
     source = "\n".join([
         "enum Status { OS_SUCCESS = 0, OS_FAILURE = 1 };",
         "void f(int flag) {",
@@ -75,7 +76,7 @@ def test_file_scope_enum_initializer_is_proven_pure():
         "    use(rc);",
         "}",
     ])
-    _, issues = scan(source)
+    _, issues = scan(source, fallback=fallback)
     assert issues == []
 
 
@@ -93,6 +94,59 @@ def test_shadowed_enum_name_remains_conservative():
         "}",
     ])
     _, issues = scan(source)
+    assert {issue.line_number for issue in issues} == {5}
+
+
+def scan_regex(source):
+    parser = CASTParser()
+    parser._try_pycparser = lambda *args, **kwargs: (
+        None,
+        False,
+        ParseTier.REGEX_FALLBACK.value,
+    )
+    context = parser.parse(source)
+    assert context.parse_tier == ParseTier.REGEX_FALLBACK.value
+    issues = get_rule_by_id("CGULL-042").scan_ast("test.c", context)
+    return context, issues
+
+
+def test_regex_fallback_proves_file_scope_enum_initializer():
+    source = "\n".join([
+        "enum Status { OS_SUCCESS = 0, OS_FAILURE = 1 };",
+        "void f(void) {",
+        "    int rc = OS_SUCCESS;",
+        "    rc = api();",
+        "    use(rc);",
+        "}",
+    ])
+    _, issues = scan_regex(source)
+    assert issues == []
+
+
+def test_regex_fallback_keeps_arbitrary_identifier_initializer():
+    source = "\n".join([
+        "void f(void) {",
+        "    int rc = DEFAULT_STATUS;",
+        "    rc = api();",
+        "    use(rc);",
+        "}",
+    ])
+    _, issues = scan_regex(source)
+    assert {issue.line_number for issue in issues} == {2}
+
+
+def test_regex_fallback_withholds_shadowed_enum_proof():
+    source = "\n".join([
+        "enum Status { OS_SUCCESS = 0, OS_FAILURE = 1 };",
+        "void f(void) {",
+        "    int OS_SUCCESS = initialize_device();",
+        "    use(OS_SUCCESS);",
+        "    int rc = OS_SUCCESS;",
+        "    rc = api();",
+        "    use(rc);",
+        "}",
+    ])
+    _, issues = scan_regex(source)
     assert {issue.line_number for issue in issues} == {5}
 
 
