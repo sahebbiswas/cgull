@@ -1,1 +1,74 @@
-"""Source-location helpers for rule diagnostics.\n\nRule primary locations stay in expanded-TU coordinates until the scan engine\nnormalizes them. Related sites embedded in messages, however, must be rendered\nfrom source provenance before that final normalization step.\n"""\n\nfrom __future__ import annotations\n\nimport os\nfrom typing import Any, Optional, Tuple\n\n\ndef _source_site(\n    ast_ctx: Any,\n    site: Any,\n    *,\n    fallback_file: Optional[str] = None,\n) -> Tuple[Optional[str], int]:\n    """Resolve a CFG event or expanded line number to its original source site."""\n    location = getattr(site, "source_location", None)\n    location_line = int(getattr(location, "line_number", 0) or 0)\n    if location_line > 0:\n        return getattr(location, "file_path", None) or fallback_file, location_line\n\n    expanded_line = int(getattr(site, "line_number", site) or 0)\n    line_map = getattr(ast_ctx, "line_map", None)\n    mapped = line_map.get(expanded_line) if line_map and expanded_line > 0 else None\n    if mapped is not None:\n        return (\n            getattr(mapped, "file_path", None) or fallback_file,\n            int(getattr(mapped, "line_number", expanded_line) or expanded_line),\n        )\n    return fallback_file, expanded_line\n\n\ndef format_related_site(\n    ast_ctx: Any,\n    site: Any,\n    *,\n    primary_site: Any = None,\n    fallback_file: Optional[str] = None,\n) -> str:\n    """Format a related site without exposing expanded/preprocessed coordinates.\n\n    Same-file references retain the established "line N" wording. When the\n    related site comes from a different included file, include a stable path\n    relative to the primary site directory so the message preserves file\n    identity without embedding machine-specific absolute paths.\n    """\n    related_path, related_line = _source_site(\n        ast_ctx, site, fallback_file=fallback_file\n    )\n    primary_path, _ = _source_site(\n        ast_ctx,\n        site if primary_site is None else primary_site,\n        fallback_file=fallback_file,\n    )\n\n    if related_path and primary_path:\n        related_real = os.path.normcase(os.path.realpath(related_path))\n        primary_real = os.path.normcase(os.path.realpath(primary_path))\n        if related_real != primary_real:\n            try:\n                display_path = os.path.relpath(\n                    os.path.realpath(related_path),\n                    os.path.dirname(os.path.realpath(primary_path)),\n                )\n            except ValueError:\n                display_path = related_path\n            return f"{display_path.replace(chr(92), '/')}:{related_line}"\n\n    return f"line {related_line}"\n
+"""Source-location helpers for rule diagnostics.
+
+Rule primary locations stay in expanded-TU coordinates until the scan engine
+normalizes them. Related sites embedded in messages, however, must be rendered
+from source provenance before that final normalization step.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any, Optional, Tuple
+
+
+def _source_site(
+    ast_ctx: Any,
+    site: Any,
+    *,
+    fallback_file: Optional[str] = None,
+) -> Tuple[Optional[str], int]:
+    """Resolve a CFG event or expanded line number to its original source site."""
+    location = getattr(site, "source_location", None)
+    location_line = int(getattr(location, "line_number", 0) or 0)
+    if location_line > 0:
+        return getattr(location, "file_path", None) or fallback_file, location_line
+
+    expanded_line = int(getattr(site, "line_number", site) or 0)
+    line_map = getattr(ast_ctx, "line_map", None)
+    mapped = line_map.get(expanded_line) if line_map and expanded_line > 0 else None
+    if mapped is not None:
+        return (
+            getattr(mapped, "file_path", None) or fallback_file,
+            int(getattr(mapped, "line_number", expanded_line) or expanded_line),
+        )
+    return fallback_file, expanded_line
+
+
+def format_related_site(
+    ast_ctx: Any,
+    site: Any,
+    *,
+    primary_site: Any = None,
+    fallback_file: Optional[str] = None,
+) -> str:
+    """Format a related site without exposing expanded/preprocessed coordinates.
+
+    Same-file references retain the established "line N" wording. When the
+    related site comes from a different included file, include a stable path
+    relative to the primary site directory so the message preserves file
+    identity without embedding machine-specific absolute paths.
+    """
+    related_path, related_line = _source_site(
+        ast_ctx, site, fallback_file=fallback_file
+    )
+    primary_path, _ = _source_site(
+        ast_ctx,
+        site if primary_site is None else primary_site,
+        fallback_file=fallback_file,
+    )
+
+    if related_path and primary_path:
+        related_real = os.path.normcase(os.path.realpath(related_path))
+        primary_real = os.path.normcase(os.path.realpath(primary_path))
+        if related_real != primary_real:
+            try:
+                display_path = os.path.relpath(
+                    os.path.realpath(related_path),
+                    os.path.dirname(os.path.realpath(primary_path)),
+                )
+            except ValueError:
+                display_path = related_path
+            display_path = display_path.replace("\\", "/")
+            return f"{display_path}:{related_line}"
+
+    return f"line {related_line}"
