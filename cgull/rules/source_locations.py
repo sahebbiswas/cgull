@@ -23,7 +23,14 @@ def _source_site(
     if location_line > 0:
         return getattr(location, "file_path", None) or fallback_file, location_line
 
-    expanded_line = int(getattr(site, "line_number", site) or 0)
+    raw_line = getattr(site, "line_number", None)
+    if raw_line is None and isinstance(site, int):
+        raw_line = site
+    try:
+        expanded_line = int(raw_line or 0)
+    except (TypeError, ValueError):
+        expanded_line = 0
+
     line_map = getattr(ast_ctx, "line_map", None)
     mapped = line_map.get(expanded_line) if line_map and expanded_line > 0 else None
     if mapped is not None:
