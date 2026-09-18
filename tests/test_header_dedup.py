@@ -90,10 +90,8 @@ class TestHeaderDeduplication(unittest.TestCase):
         self.assertIn(os.path.relpath(self.file1, self.temp_dir), all_related_tus)
         self.assertIn(os.path.relpath(self.file2, self.temp_dir), all_related_tus)
 
-    def test_header_multiple_findings_disambiguated(self):
-        """If a header contains multiple identical vulnerabilities on different lines,
-        deduplication must preserve both distinct occurrences while merging their related_tus.
-        """
+    def test_header_identical_fingerprint_collapses_to_one_logical_finding(self):
+        """Stable fingerprint identity wins even when identical source text occurs twice."""
         multi_header = """
 #ifndef MULTI_HEADER_H
 #define MULTI_HEADER_H
@@ -114,17 +112,24 @@ void f2(char *b) {
         scanner = CGullScanner()  # dedup_headers=True
         result = scanner.scan_path(self.temp_dir)
         gets_issues = [i for i in result.issues if i.rule_id == "CGULL-001"]
-        # Should have 2 distinct deduplicated issues (for the 2 distinct lines in header.h)
-        self.assertEqual(len(gets_issues), 2)
-        # Both issues share the same fingerprint since rule, relpath, and snippet are identical
-        self.assertEqual(gets_issues[0].fingerprint, gets_issues[1].fingerprint)
-        # But their line numbers are distinct
-        self.assertNotEqual(gets_issues[0].line_number, gets_issues[1].line_number)
-        # And both have both TUs in related_tus
-        for issue in gets_issues:
-            self.assertTrue(issue.file_path.endswith("header.h"))
-            self.assertIn(os.path.relpath(self.file1, self.temp_dir), issue.related_tus)
-            self.assertIn(os.path.relpath(self.file2, self.temp_dir), issue.related_tus)
+        self.assertEqual(len(gets_issues), 1)
+        issue = gets_issues[0]
+        self.assertTrue(issue.fingerprint)
+        self.assertTrue(issue.file_path.endswith("header.h"))
+        self.assertIn(os.path.relpath(self.file1, self.temp_dir), issue.related_tus)
+        self.assertIn(os.path.relpath(self.file2, self.temp_dir), issue.related_tus)
+
+    def test_parallel_and_sequential_header_dedup_are_identical(self):
+        scanner = CGullScanner()
+        sequential = scanner.scan_path(self.temp_dir, jobs=1)
+        parallel = scanner.scan_path(self.temp_dir, jobs=2)
+
+        self.assertEqual(
+            [issue.to_dict() for issue in sequential.issues],
+            [issue.to_dict() for issue in parallel.issues],
+        )
+        fingerprints = [issue.fingerprint for issue in parallel.issues if issue.fingerprint]
+        self.assertEqual(len(fingerprints), len(set(fingerprints)))
 
     def test_sarif_header_location_preserved_when_dedup_disabled(self):
         """SARIF report must maintain the canonical header URI and region coordinates
