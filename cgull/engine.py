@@ -684,10 +684,11 @@ class CGullScanner:
 
                     # Preserve the canonical header path as the primary location in both modes
                     if is_from_header:
-                        try:
-                            issue.file_path = os.path.relpath(original_path, base_dir)
-                        except ValueError:
-                            issue.file_path = canonical_rel_path
+                        # Use the realpath-based project-relative spelling.
+                        # On macOS /var commonly resolves to /private/var; mixing
+                        # unresolved original_path with base_dir would give the
+                        # same header two different apparent paths/fingerprints.
+                        issue.file_path = normalized_canonical_path
                         if display_path not in issue.related_tus:
                             issue.related_tus.append(display_path)
                     else:
