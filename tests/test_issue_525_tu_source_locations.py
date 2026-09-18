@@ -1,5 +1,5 @@
 from cgull import CGullScanner
-from cgull.ast_analyzer import CASTParser
+from cgull.ast_analyzer import CASTParser, _map_line, _map_source_line
 from cgull.cfg import build_cfg, find_function_def
 from cgull.models import AnalysisEngine, ScanConfig
 from cgull.project_analysis import PreparedUnit
@@ -58,6 +58,8 @@ def test_prepared_tu_context_keeps_provenance_without_remapping_cfg_primary_line
         if location.file_path == str(free_site.resolve()) and location.line_number == 1
     )
     assert expanded_free_line > len(source.read_text(encoding="utf-8").splitlines())
+    assert _map_line(expanded_free_line, ctx.line_map) == expanded_free_line
+    assert _map_source_line(expanded_free_line, ctx.line_map) == 1
 
     cfg = build_cfg(find_function_def(ctx.pycparser_ast, "uaf"), line_map=ctx.line_map)
     free_event = next(node for node in cfg.nodes.values() if node.freed)
