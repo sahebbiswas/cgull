@@ -4,12 +4,42 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import unittest
+from urllib.parse import unquote, urlsplit
 
 from cgull.cli import build_parser
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_MARKDOWN_LINK = re.compile(r"\\[[^\\]]+\\]\\(([^)]+)\\)")
+_GITHUB_BLOB_PREFIX = "/sahebbiswas/cgull/blob/main/"
+
+
+def _repository_link_targets(document: Path) -> set[Path]:
+    """Resolve repository-local Markdown link targets from one document."""
+
+    targets: set[Path] = set()
+    for match in _MARKDOWN_LINK.finditer(document.read_text(encoding="utf-8")):
+        raw_target = match.group(1).strip().strip("<>")
+        # A Markdown title, when present, follows the URL after whitespace.
+        target = raw_target.split(maxsplit=1)[0]
+        parsed = urlsplit(target)
+
+        if parsed.scheme:
+            if parsed.scheme not in ("http", "https") or parsed.netloc != "github.com":
+                continue
+            if not parsed.path.startswith(_GITHUB_BLOB_PREFIX):
+                continue
+            relative = unquote(parsed.path[len(_GITHUB_BLOB_PREFIX):])
+            targets.add((REPO_ROOT / relative).resolve())
+            continue
+
+        if target.startswith("#") or not parsed.path:
+            continue
+        targets.add((document.parent / unquote(parsed.path)).resolve())
+
+    return targets
 
 
 class TestIssue429SymbolicPreprocessorDocs(unittest.TestCase):
@@ -64,23 +94,30 @@ class TestIssue429SymbolicPreprocessorDocs(unittest.TestCase):
             self.assertIn(phrase, guide)
 
     def test_public_docs_link_to_the_symbolic_contract(self):
-        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        docs_index = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
-        preprocessing = (REPO_ROOT / "docs" / "preprocessing.md").read_text(
-            encoding="utf-8"
+        documents = (
+            REPO_ROOT / "README.md",
+            REPO_ROOT / "docs" / "README.md",
+            REPO_ROOT / "docs" / "preprocessing.md",
+            REPO_ROOT / "docs" / "analysis-model.md",
+            REPO_ROOT / "docs" / "configuration.md",
         )
-        analysis_model = (REPO_ROOT / "docs" / "analysis-model.md").read_text(
-            encoding="utf-8"
-        )
-        configuration = (REPO_ROOT / "docs" / "configuration.md").read_text(
-            encoding="utf-8"
-        )
+        symbolic_guide = (
+            REPO_ROOT / "docs" / "analysis" / "symbolic-preprocessor.md"
+        ).resolve()
 
-        self.assertIn("docs/analysis/symbolic-preprocessor.md", readme)
-        self.assertIn("analysis/symbolic-preprocessor.md", docs_index)
-        self.assertIn("analysis/symbolic-preprocessor.md", preprocessing)
-        self.assertIn("analysis/symbolic-preprocessor.md", analysis_model)
-        self.assertIn("analysis/symbolic-preprocessor.md", configuration)
+        for document in documents:
+            targets = _repository_link_targets(document)
+            self.assertIn(
+                symbolic_guide,
+                targets,
+                f"{document.relative_to(REPO_ROOT)} must link to the symbolic guide",
+            )
+            for target in targets:
+                self.assertTrue(
+                    target.exists(),
+                    f"{document.relative_to(REPO_ROOT)} links to missing "
+                    f"repository target {target}",
+                )
 
 
 if __name__ == "__main__":
