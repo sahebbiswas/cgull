@@ -33,6 +33,7 @@ def _write_fixture(tmp_path):
         "}\n"
         "void leak(void) {\n"
         '#include "alloc_site.h"\n'
+        "    return;\n"
         "}\n",
         encoding="utf-8",
     )
