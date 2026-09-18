@@ -316,6 +316,34 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
     return sites
 
 
+def _issue_occurrence_key(issue: Issue) -> Tuple[Any, ...]:
+    """Order preserved finding occurrences independently of worker completion order."""
+    return (
+        str(issue.file_path or "").replace("\\", "/"),
+        issue.line_number,
+        issue.column_number,
+        issue.rule_id,
+        issue.message,
+        tuple(sorted(str(tu).replace("\\", "/") for tu in issue.related_tus if tu)),
+        issue.engine,
+        issue.code_snippet,
+    )
+
+
+def _assign_unique_occurrence_fingerprints(issues: List[Issue]) -> None:
+    """Give preserved rows unique fingerprints without merging any occurrences."""
+    by_base_fingerprint: Dict[str, List[Issue]] = {}
+    for issue in issues:
+        if not issue.fingerprint:
+            continue
+        by_base_fingerprint.setdefault(issue.fingerprint, []).append(issue)
+
+    for base_fingerprint, candidates in sorted(by_base_fingerprint.items()):
+        ordered = sorted(candidates, key=_issue_occurrence_key)
+        for occurrence, issue in enumerate(ordered):
+            issue.fingerprint = _derived_occurrence_fingerprint(base_fingerprint, occurrence)
+
+
 def _deduplicate_issues_by_fingerprint(issues: List[Issue]) -> List[Issue]:
     """Finalize logical sites and ensure every normal-scan fingerprint is unique."""
     by_base_fingerprint: Dict[str, List[Issue]] = {}
@@ -747,6 +775,18 @@ class CGullScanner:
                     issue.code_snippet,
                 )
             all_issues.extend(_deduplicate_issues_by_fingerprint(dedup_candidates))
+        else:
+            # Per-TU reporting intentionally preserves separate rows for the
+            # same header site. Rebuild their base identity after per-file
+            # finalization, then uniquify the preserved occurrences without
+            # coalescing them so SARIF partial fingerprints cannot collide.
+            for issue in all_issues:
+                issue.fingerprint = compute_issue_fingerprint(
+                    issue.rule_id,
+                    str(issue.file_path or "").replace("\\", "/"),
+                    issue.code_snippet,
+                )
+            _assign_unique_occurrence_fingerprints(all_issues)
 
         duration = time.time() - start_time
         logger.info("Scan completed for '%s' in %.2fs: %d files analyzed, %d issues, %d failed", report_target_str, duration, analyzed_count, len(all_issues), failed_count)
