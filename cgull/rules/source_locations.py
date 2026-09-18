@@ -11,6 +11,14 @@ import os
 from typing import Any, Optional, Tuple
 
 
+def _coerce_line(value: Any, fallback: int = 0) -> int:
+    """Return an integer line number without letting malformed provenance escape."""
+    try:
+        return int(value or fallback)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _source_site(
     ast_ctx: Any,
     site: Any,
@@ -19,24 +27,21 @@ def _source_site(
 ) -> Tuple[Optional[str], int]:
     """Resolve a CFG event or expanded line number to its original source site."""
     location = getattr(site, "source_location", None)
-    location_line = int(getattr(location, "line_number", 0) or 0)
+    location_line = _coerce_line(getattr(location, "line_number", 0))
     if location_line > 0:
         return getattr(location, "file_path", None) or fallback_file, location_line
 
     raw_line = getattr(site, "line_number", None)
     if raw_line is None and isinstance(site, int):
         raw_line = site
-    try:
-        expanded_line = int(raw_line or 0)
-    except (TypeError, ValueError):
-        expanded_line = 0
+    expanded_line = _coerce_line(raw_line)
 
     line_map = getattr(ast_ctx, "line_map", None)
     mapped = line_map.get(expanded_line) if line_map and expanded_line > 0 else None
     if mapped is not None:
         return (
             getattr(mapped, "file_path", None) or fallback_file,
-            int(getattr(mapped, "line_number", expanded_line) or expanded_line),
+            _coerce_line(getattr(mapped, "line_number", expanded_line), expanded_line),
         )
     return fallback_file, expanded_line
 
