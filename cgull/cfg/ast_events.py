@@ -13,6 +13,7 @@ from ..ast_analyzer import (
     _extract_identifiers_from_ast,
     _format_pycparser_expr,
     _map_line,
+    _map_source_line,
 )
 from .model import CFGCall, CFGSourceLocation, FunctionSummary, Nullness
 
@@ -113,12 +114,7 @@ def _deref_vars_with_lines(
         coord = getattr(node, "coord", None)
         if coord is not None:
             exp_line = max(1, coord.line - _PRELUDE_LINE_COUNT)
-            mapped_line = _map_line(exp_line, line_map)
-            line = (
-                exp_line
-                if getattr(line_map, "preserve_expanded_coordinates", False)
-                else mapped_line
-            )
+            line = _map_line(exp_line, line_map)
         elif default_line is not None:
             line = default_line
         else:
@@ -395,7 +391,7 @@ def _call_source_location(call_node, line_map: Optional[Dict[int, Any]]) -> CFGS
     file_path = getattr(mapped, "file_path", None) if mapped is not None else getattr(coord, "file", None)
     return CFGSourceLocation(
         file_path=file_path,
-        line_number=_map_line(exp_line, line_map),
+        line_number=_map_source_line(exp_line, line_map),
         column_number=getattr(coord, "column", 0) or 0,
     )
 
