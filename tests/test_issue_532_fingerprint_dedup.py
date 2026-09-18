@@ -72,7 +72,7 @@ int check_token(const char *token) {
     assert len({issue.fingerprint for issue in issues}) == 1
 
 
-def test_cgull_001_identical_fingerprint_is_scanner_wide_identity():
+def test_cgull_001_repeated_source_sites_remain_distinct_with_unique_fingerprints():
     source = """
 void first(char *buf) {
     gets(buf);
@@ -86,8 +86,9 @@ void second(char *buf) {
     result = scanner.scan_text(source, "banned_calls.c")
     issues = [issue for issue in result.issues if issue.rule_id == "CGULL-001"]
 
-    assert len(issues) == 1
-    assert issues[0].fingerprint
+    assert len(issues) == 2
+    assert len({issue.fingerprint for issue in issues}) == 2
+    assert {issue.line_number for issue in issues} == {3, 7}
     assert result.total_issues_count == len(result.issues)
 
 
