@@ -12,7 +12,7 @@ from cgull.cli import build_parser
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-_MARKDOWN_LINK = re.compile(r"\\[[^\\]]+\\]\\(([^)]+)\\)")
+_MARKDOWN_LINK = re.compile(r"\[[^]]+\]\(([^)]+)\)")
 _GITHUB_BLOB_PREFIX = "/sahebbiswas/cgull/blob/main/"
 
 
