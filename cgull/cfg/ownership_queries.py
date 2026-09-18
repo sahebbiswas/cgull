@@ -53,31 +53,76 @@ def _consumes_tracked_location(
     return False
 
 
-def find_uses_after_free_effect(cfg, free_node_id: int, ptr_name: str):
-    """Yield downstream accesses that still alias a location freed by a call effect."""
-    freed_locations = _locations(cfg, free_node_id, ptr_name)
-    work = deque(cfg.nodes[free_node_id].successors)
-    visited = set()
-    while work:
-        node_id = work.popleft()
-        if node_id in visited:
-            continue
-        visited.add(node_id)
-        node = cfg.nodes[node_id]
-        loc_map = cfg.get_loc_map_at_node(node_id)
-        accessed = node.derefs | (node.reads - node.writes)
-        for variable in sorted(accessed):
-            if freed_locations & set(loc_map.get(variable, {f"var_{variable}"})):
-                allocation = cfg.query_allocation(variable, node_id)
-                if (
-                    allocation in (Allocation.FREED, Allocation.MAYBE_FREED)
-                    and not node.kind.endswith("_cond")
-                ):
-                    yield node, variable
-        for successor in node.successors:
-            if successor not in visited:
-                work.append(successor)
+def _aliases_for_locations(cfg, node_id: int, locations: Set[str]) -> Set[str]:
+    """Return variables that alias any supplied location before the node executes."""
+    loc_map = cfg.get_loc_map_at_node(node_id)
+    return {
+        variable
+        for variable, variable_locations in loc_map.items()
+        if locations & set(variable_locations)
+    }
 
+
+def _advance_freed_aliases(node, aliases: Set[str]) -> Set[str]:
+    """Apply one node's definite pointer rebindings to path-local UAF aliases."""
+    previous = set(aliases)
+    result = set(aliases)
+
+    # Assignment events describe simple aliasing explicitly. Evaluate the RHS
+    # against the pre-node alias state so q = p carries the freed object
+    # forward, while p = live severs the tracked alias.
+    for target in node.writes:
+        if target in node.alias_writes:
+            source = node.alias_writes[target]
+            if source in previous:
+                result.add(target)
+            else:
+                result.discard(target)
+        else:
+            # Allocation, NULL assignment, address rebinding, and other
+            # non-alias writes all create a location distinct from the freed
+            # object in the legacy location model.
+            result.discard(target)
+
+    return result
+
+
+def find_uses_after_free_effect(cfg, free_node_id: int, ptr_name: str):
+    """Yield downstream accesses that still alias a freed location on that path."""
+    freed_locations = _locations(cfg, free_node_id, ptr_name)
+    initial_aliases = _aliases_for_locations(cfg, free_node_id, freed_locations)
+    initial_aliases.add(ptr_name)
+
+    work = deque(
+        (successor, frozenset(initial_aliases))
+        for successor in cfg.nodes[free_node_id].successors
+    )
+    visited: Set[Tuple[int, frozenset[str]]] = set()
+    while work:
+        node_id, raw_aliases = work.popleft()
+        aliases = set(raw_aliases)
+        state = (node_id, raw_aliases)
+        if state in visited:
+            continue
+        visited.add(state)
+
+        node = cfg.nodes[node_id]
+        accessed = node.derefs | (node.reads - node.writes)
+        for variable in sorted(accessed & aliases):
+            allocation = cfg.query_allocation(variable, node_id)
+            if (
+                allocation in (Allocation.FREED, Allocation.MAYBE_FREED)
+                and not node.kind.endswith("_cond")
+            ):
+                yield node, variable
+
+        aliases = _advance_freed_aliases(node, aliases)
+        if not aliases:
+            continue
+
+        next_aliases = frozenset(aliases)
+        for successor in node.successors:
+            work.append((successor, next_aliases))
 
 def build_ownership_predecessors(cfg) -> Dict[int, Set[int]]:
     """Build the predecessor map reused by backward ownership queries."""
