@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import logging
+import hashlib
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union, Any
@@ -232,22 +233,100 @@ def _merge_duplicate_issues(left: Issue, right: Issue) -> Issue:
     return representative
 
 
+def _derived_occurrence_fingerprint(base_fingerprint: str, occurrence: int) -> str:
+    """Disambiguate repeated physical occurrences without making line numbers identity."""
+    if occurrence == 0:
+        return base_fingerprint
+    payload = f"{base_fingerprint}\0occurrence:{occurrence}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def _merge_issue_cluster(cluster: List[Issue]) -> Issue:
+    ordered = sorted(cluster, key=_issue_representative_key)
+    merged = ordered[0]
+    for candidate in ordered[1:]:
+        merged = _merge_duplicate_issues(merged, candidate)
+    return merged
+
+
+def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
+    """Merge analyzer variants at one site while preserving repeated source occurrences.
+
+    The content fingerprint intentionally omits line numbers for baseline stability.
+    It is therefore only a *base* identity until physical occurrences are separated.
+    Precise columns distinguish multiple same-line findings; a coarse column (1)
+    is merged into the sole precise site on that line when one exists, which covers
+    AST-vs-regex variants of the same call without conflating separate calls.
+    """
+    by_line: Dict[int, List[Issue]] = {}
+    for issue in candidates:
+        by_line.setdefault(issue.line_number, []).append(issue)
+
+    sites: List[Issue] = []
+    for line_number in sorted(by_line):
+        line_candidates = sorted(by_line[line_number], key=_issue_representative_key)
+        precise: Dict[int, List[Issue]] = {}
+        coarse: List[Issue] = []
+        for issue in line_candidates:
+            if issue.column_number > 1:
+                precise.setdefault(issue.column_number, []).append(issue)
+            else:
+                coarse.append(issue)
+
+        clusters: List[List[Issue]] = [
+            precise[column]
+            for column in sorted(precise)
+        ]
+
+        if len(clusters) == 1:
+            clusters[0].extend(coarse)
+        elif len(clusters) > 1:
+            for issue in coarse:
+                matching = [
+                    cluster
+                    for cluster in clusters
+                    if any(candidate.message == issue.message for candidate in cluster)
+                ]
+                if len(matching) == 1:
+                    matching[0].append(issue)
+                else:
+                    clusters.append([issue])
+        elif coarse:
+            engines = {issue.engine for issue in coarse}
+            if len(engines) > 1 and all(
+                sum(1 for candidate in coarse if candidate.engine == engine) == 1
+                for engine in engines
+            ):
+                clusters = [coarse]
+            else:
+                clusters = [[issue] for issue in coarse]
+
+        sites.extend(_merge_issue_cluster(cluster) for cluster in clusters)
+
+    sites.sort(key=_issue_representative_key)
+    return sites
+
+
 def _deduplicate_issues_by_fingerprint(issues: List[Issue]) -> List[Issue]:
-    """Collapse non-empty stable fingerprints while retaining empty-fingerprint rows."""
-    by_fingerprint: Dict[str, Issue] = {}
+    """Finalize logical sites and ensure every normal-scan fingerprint is unique."""
+    by_base_fingerprint: Dict[str, List[Issue]] = {}
     without_fingerprint: List[Issue] = []
 
     for issue in issues:
         if not issue.fingerprint:
             without_fingerprint.append(issue)
             continue
-        existing = by_fingerprint.get(issue.fingerprint)
-        by_fingerprint[issue.fingerprint] = (
-            issue if existing is None else _merge_duplicate_issues(existing, issue)
-        )
+        by_base_fingerprint.setdefault(issue.fingerprint, []).append(issue)
 
-    deduplicated = list(by_fingerprint.values()) + without_fingerprint
-    deduplicated.sort(
+    finalized: List[Issue] = []
+    for base_fingerprint in sorted(by_base_fingerprint):
+        sites = _coalesce_same_fingerprint_sites(by_base_fingerprint[base_fingerprint])
+        for occurrence, issue in enumerate(sites):
+            issue.fingerprint = _derived_occurrence_fingerprint(base_fingerprint, occurrence)
+            finalized.append(issue)
+
+    finalized.extend(without_fingerprint)
+    finalized.sort(
         key=lambda issue: (
             issue.file_path,
             issue.line_number,
@@ -257,7 +336,7 @@ def _deduplicate_issues_by_fingerprint(issues: List[Issue]) -> List[Issue]:
             issue.fingerprint,
         )
     )
-    return deduplicated
+    return finalized
 
 
 class CGullScanner:
@@ -546,7 +625,7 @@ class CGullScanner:
         # Per-file dedup removes analyzer-path/profile duplicates. The global
         # map additionally merges the same header-origin finding across TUs
         # when header deduplication is enabled.
-        dedup_issues_map: Dict[str, Issue] = {}
+        dedup_candidates: List[Issue] = []
         dedup_headers = getattr(config, "dedup_headers", True)
         
         for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err, parse_attempts in results:
@@ -572,7 +651,6 @@ class CGullScanner:
                 analyzed_count += 1
                 if self.severity_filter:
                     file_issues = [i for i in file_issues if i.impact in self.severity_filter]
-                finalized_file_issues: Dict[str, Issue] = {}
                 for issue in file_issues:
                     # original_path is the provenance file path (header or translation unit)
                     original_path = issue.file_path
@@ -618,23 +696,10 @@ class CGullScanner:
                             norm_related.append(related)
                     issue.related_tus = sorted(set(norm_related))
 
-                    existing_file_issue = finalized_file_issues.get(issue.fingerprint)
-                    finalized_file_issues[issue.fingerprint] = (
-                        issue
-                        if existing_file_issue is None
-                        else _merge_duplicate_issues(existing_file_issue, issue)
-                    )
-
-                file_issues = _deduplicate_issues_by_fingerprint(list(finalized_file_issues.values()))
+                file_issues = _deduplicate_issues_by_fingerprint(file_issues)
 
                 if dedup_headers:
-                    for issue in file_issues:
-                        existing_issue = dedup_issues_map.get(issue.fingerprint)
-                        dedup_issues_map[issue.fingerprint] = (
-                            issue
-                            if existing_issue is None
-                            else _merge_duplicate_issues(existing_issue, issue)
-                        )
+                    dedup_candidates.extend(file_issues)
                 else:
                     # Preserve the explicit per-TU mode while still collapsing
                     # duplicate analyzer paths inside each translation unit.
@@ -662,7 +727,16 @@ class CGullScanner:
             ))
 
         if dedup_headers:
-            all_issues.extend(dedup_issues_map.values())
+            # Per-file finalization is used for file summaries. Rebuild each
+            # base fingerprint from canonical source provenance here so
+            # occurrence numbering is global and identical across TUs.
+            for issue in dedup_candidates:
+                issue.fingerprint = compute_issue_fingerprint(
+                    issue.rule_id,
+                    str(issue.file_path).replace("\\", "/"),
+                    issue.code_snippet,
+                )
+            all_issues.extend(_deduplicate_issues_by_fingerprint(dedup_candidates))
 
         duration = time.time() - start_time
         logger.info("Scan completed for '%s' in %.2fs: %d files analyzed, %d issues, %d failed", report_target_str, duration, analyzed_count, len(all_issues), failed_count)
@@ -1346,6 +1420,12 @@ def _scan_file_content_profiles(
                 provenance_path,
                 iss.code_snippet,
             )
+
+        # Resolve analyzer-path duplicates inside each concrete profile before
+        # using the occurrence-aware fingerprint to correlate the same source
+        # site across profiles.
+        v_issues = _deduplicate_issues_by_fingerprint(v_issues)
+        for iss in v_issues:
             key = iss.fingerprint
             if key not in merged_issues:
                 merged_issues[key] = (iss, {cp})
