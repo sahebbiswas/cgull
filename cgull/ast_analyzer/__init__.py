@@ -20,7 +20,7 @@ from .callable_signatures import *
 from .coverage import CASTParser, ASTAnalyzer, CoverageDegradedError
 from .configuration import _PRELUDE_LINE_COUNT, _PYCPARSER_PRELUDE
 from .preprocessor import _normalize_macro_dict
-from .types import _extract_identifiers_from_ast, _format_pycparser_expr, _format_pycparser_type, _map_line
+from .types import _extract_identifiers_from_ast, _format_pycparser_expr, _format_pycparser_type, _map_line, _map_source_line
 
 
 # The legacy module did not define __all__; retain its observable public API.

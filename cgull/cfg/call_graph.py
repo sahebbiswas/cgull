@@ -5,7 +5,7 @@ from heapq import heappop, heappush
 from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
-from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_line
+from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_source_line
 from .construction import build_cfg, build_function_def_index
 from .dataflow import StructuredCFG
 from .indirect_calls import resolve_indirect_calls
@@ -239,7 +239,7 @@ def _function_source_location(funcdef: Any, line_map: Optional[Dict[int, Any]]) 
     mapped = line_map.get(expanded_line) if line_map else None
     return CFGSourceLocation(
         file_path=getattr(mapped, "file_path", None) if mapped is not None else getattr(coord, "file", None),
-        line_number=_map_line(expanded_line, line_map),
+        line_number=_map_source_line(expanded_line, line_map),
         column_number=getattr(coord, "column", 0) or 0,
     )
 

@@ -15,6 +15,7 @@ from .helpers import (
     _source_snippet,
     _ast_cfg_for_function,
 )
+from ..source_locations import format_related_site
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +80,17 @@ class UseAfterFreeRule(BaseRule):
                             reported_uafs.add(key)
                             use_line = use_node.line_number
                             snippet = _source_snippet(ast_ctx, use_line, use_node.expr_str)
+                            free_site = format_related_site(
+                                ast_ctx,
+                                node,
+                                primary_site=use_node,
+                                fallback_file=file_path,
+                            )
                             issues.append(self.create_issue(
                                 file_path=file_path,
                                 line_number=use_line,
                                 code_snippet=snippet,
-                                message=f"Potential Use-After-Free: pointer '{accessed_var}' was freed at line {node.line_number} and accessed here.",
+                                message=f"Potential Use-After-Free: pointer '{accessed_var}' was freed at {free_site} and accessed here.",
                                 column_number=1,
                                 engine="AST",
                                 fix_type=FixType.MANUAL_REVIEW,
@@ -108,11 +115,17 @@ class UseAfterFreeRule(BaseRule):
                     if re.search(rf'\b{re.escape(freed_ptr)}\s*=', next_line):
                         break
                     if re.search(rf'(?:\*\s*{re.escape(freed_ptr)}\b|{re.escape(freed_ptr)}\s*->|{re.escape(freed_ptr)}\s*\[|\b\w+\s*\([^)]*?\b{re.escape(freed_ptr)}\b)', next_line):
+                        free_site = format_related_site(
+                            ast_ctx,
+                            line_no,
+                            primary_site=next_line_no,
+                            fallback_file=file_path,
+                        )
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=next_line_no,
                             code_snippet=next_line,
-                            message=f"Potential Use-After-Free: pointer '{freed_ptr}' was freed at line {line_no} and accessed here.",
+                            message=f"Potential Use-After-Free: pointer '{freed_ptr}' was freed at {free_site} and accessed here.",
                             column_number=1,
                             engine="AST",
                             fix_type=FixType.MANUAL_REVIEW,
