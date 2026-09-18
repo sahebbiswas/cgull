@@ -162,11 +162,11 @@ def _issue_representative_key(issue: Issue) -> Tuple[Any, ...]:
         + int(bool(issue.code_snippet))
     )
     return (
+        -source_quality,
         -_confidence_rank(issue.confidence),
         -_fix_type_rank(issue.fix_type),
         -int(bool(issue.auto_fix_replacement)),
         -int(bool(issue.suggested_fix_replacement)),
-        -source_quality,
         str(issue.file_path).replace("\\", "/"),
         issue.line_number,
         issue.column_number,
