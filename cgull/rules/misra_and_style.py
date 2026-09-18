@@ -481,13 +481,18 @@ class DeadStoresRule(BaseRule):
         issues = []
         from ..cfg import build_cfg, find_function_def
         from .dead_store_initializers import (
-            pure_declaration_coordinates, suppress_cfg_initializer,
+            file_scope_enum_constants,
+            pure_declaration_coordinates,
+            suppress_cfg_initializer,
+            unshadowed_constant_identifiers,
         )
 
         summaries = None
         if hasattr(ast_ctx, "functions") and ast_ctx.functions:
             from ..cfg import analyze_function_summaries
             summaries = analyze_function_summaries(ast_ctx)
+
+        file_scope_constants = file_scope_enum_constants(ast_ctx.pycparser_ast)
 
         for fn in ast_ctx.functions:
             param_names = {p.name for p in fn.parameters if p.name}
@@ -512,7 +517,12 @@ class DeadStoresRule(BaseRule):
 
             if cfg is not None and cfg.nodes:
                 # AST/CFG path reachability check
-                pure_coordinates = pure_declaration_coordinates(funcdef)
+                constant_identifiers = unshadowed_constant_identifiers(
+                    funcdef, file_scope_constants
+                )
+                pure_coordinates = pure_declaration_coordinates(
+                    funcdef, constant_identifiers
+                )
                 initial_initialized = set(p.name for p in fn.parameters if p.name) | set(getattr(ast_ctx, "global_variables", {}).keys()) | {var.name for var in fn.variables.values() if getattr(var, "has_initializer", False) and var.name}
                 cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
 
