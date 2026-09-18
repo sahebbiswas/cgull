@@ -90,8 +90,8 @@ class TestHeaderDeduplication(unittest.TestCase):
         self.assertIn(os.path.relpath(self.file1, self.temp_dir), all_related_tus)
         self.assertIn(os.path.relpath(self.file2, self.temp_dir), all_related_tus)
 
-    def test_header_identical_fingerprint_collapses_to_one_logical_finding(self):
-        """Stable fingerprint identity wins even when identical source text occurs twice."""
+    def test_header_identical_text_at_distinct_sites_gets_unique_fingerprints(self):
+        """Repeated identical source occurrences remain distinct logical findings."""
         multi_header = """
 #ifndef MULTI_HEADER_H
 #define MULTI_HEADER_H
@@ -112,12 +112,13 @@ void f2(char *b) {
         scanner = CGullScanner()  # dedup_headers=True
         result = scanner.scan_path(self.temp_dir)
         gets_issues = [i for i in result.issues if i.rule_id == "CGULL-001"]
-        self.assertEqual(len(gets_issues), 1)
-        issue = gets_issues[0]
-        self.assertTrue(issue.fingerprint)
-        self.assertTrue(issue.file_path.endswith("header.h"))
-        self.assertIn(os.path.relpath(self.file1, self.temp_dir), issue.related_tus)
-        self.assertIn(os.path.relpath(self.file2, self.temp_dir), issue.related_tus)
+        self.assertEqual(len(gets_issues), 2)
+        self.assertEqual(len({i.fingerprint for i in gets_issues}), 2)
+        self.assertNotEqual(gets_issues[0].line_number, gets_issues[1].line_number)
+        for issue in gets_issues:
+            self.assertTrue(issue.file_path.endswith("header.h"))
+            self.assertIn(os.path.relpath(self.file1, self.temp_dir), issue.related_tus)
+            self.assertIn(os.path.relpath(self.file2, self.temp_dir), issue.related_tus)
 
     def test_parallel_and_sequential_header_dedup_are_identical(self):
         scanner = CGullScanner()
