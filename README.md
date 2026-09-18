@@ -133,6 +133,7 @@ The [documentation knowledgebase](https://github.com/sahebbiswas/cgull/blob/main
 - [Configuration reference](https://github.com/sahebbiswas/cgull/blob/main/docs/configuration.md) — `.cgull.toml`, `pyproject.toml`, rules, functions, paths, output policy, and semantic models.
 - [Project files and suppressions](https://github.com/sahebbiswas/cgull/blob/main/docs/project-files.md) — canonical project configuration, legacy migration, baselines, include boundaries, and inline suppression.
 - [Analysis model](https://github.com/sahebbiswas/cgull/blob/main/docs/analysis-model.md) — engines, TU mode, parser tiers, configuration profiles, and interprocedural analysis.
+- [Symbolic preprocessor analysis](https://github.com/sahebbiswas/cgull/blob/main/docs/analysis/symbolic-preprocessor.md) — `cgull preprocessor`, conditional semantics, witnesses, configuration-space reduction, and conservative limits.
 - [Reporting and CI](https://github.com/sahebbiswas/cgull/blob/main/docs/reporting-and-ci.md) — report formats, failure policy, baselines, fixes, and CI adoption.
 - [Diagnostic logging](https://github.com/sahebbiswas/cgull/blob/main/docs/logging.md) — automatic local JSONL capture, verbosity, retention, privacy, and `--log-file` coexistence.
 - [Development integration](https://github.com/sahebbiswas/cgull/blob/main/docs/development-integration.md) — pre-commit, GitHub Actions, SARIF, and build-aware integration.
