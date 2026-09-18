@@ -41,7 +41,6 @@ def _write_fixture(tmp_path):
 
 def test_prepared_tu_context_keeps_provenance_without_remapping_cfg_primary_lines(tmp_path):
     source, include_dir, free_site, _ = _write_fixture(tmp_path)
-    ScanConfig.create(include_roots=[str(include_dir)], mode="tu")
 
     from cgull.includes import IncludeResolver, TUIncludeExpander
 
