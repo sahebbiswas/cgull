@@ -1,10 +1,250 @@
-# Symbolic preprocessor expression API
+# Symbolic preprocessor analysis
 
-`cgull.preprocessor` provides the expression IR introduced in issue #420. It is
-independent of `cgull.ast_analyzer.preprocessor`: it does not replace
-`eval_preprocessor_expr`, resolve active branches, or emit
-scanner diagnostics. The model and local Boolean identities are adapted from
-the [CPRE prototype](https://github.com/sahebbiswas/tools/blob/084cf086b93aeaf559c4ffd3d9940abb3850bda0/preprocessor_conditions.py).
+C-GULL has two deliberately separate preprocessing layers:
+
+| Layer | Purpose | Configuration semantics |
+| --- | --- | --- |
+| **Concrete preprocessing** | Produce source for AST-backed analysis by expanding macros and selecting active branches. The strongest parser tier uses `pcpp` before `pycparser`; resilient fallback tiers may strip directives when full preprocessing cannot be used. | One concrete macro environment at a time. |
+| **Symbolic preprocessor analysis** | Preserve the complete conditional-directive tree and reason about which branches are possible, impossible, redundant, or Boolean-equivalent without selecting one active configuration. | A conservative Boolean abstraction over the configuration space. |
+
+The symbolic layer lives in `cgull.preprocessor`. It does **not** replace concrete preprocessing, macro expansion, or parser fallback behavior. See [AST preprocessing and coverage guarantees](../preprocessing.md) and [Analysis model](../analysis-model.md) for the concrete path.
+
+## Focused CLI: `cgull preprocessor`
+
+Use the focused command when you want to inspect conditional compilation without running the full security rule set:
+
+```bash
+cgull preprocessor src/
+cgull preprocessor src/ --verbose
+cgull preprocessor src/ --json
+```
+
+The target may be one supported C/C++ source file or a directory. Directory discovery honors configured path exclusions, `--ignore-file`, and repeated `--ignore-pattern` values. `-c/--config` selects an explicit `.cgull.toml` or `pyproject.toml`.
+
+Default human-readable output reports only semantically interesting entries: `dead`, `redundant`, and `simplified`. `--verbose` also includes `unchanged` branches and their reachability. Structural parser diagnostics are always shown.
+
+`--json` emits schema version 1 with:
+
+- `target`, per-file `entries`, structural `diagnostics`, I/O `errors`, and a run `summary`;
+- for each entry: directive `kind`, semantic `status`, `reachability`, source `location`/`range`, `original_condition`, `simplified_condition`, `context_condition`, `effective_condition`, and `contextual_simplification`;
+- summary counts for all analyzed entries, even when unchanged entries are omitted from the non-verbose `entries` arrays.
+
+For example, this source:
+
+```c
+#if FEATURE_A
+int a(void);
+#elif FEATURE_A && FEATURE_B
+int b(void);
+#endif
+```
+
+reports the `#elif` as `dead`, because reaching it already requires `!FEATURE_A`.
+
+The command returns exit status 2 for discovery, UTF-8/I/O, or conditional-structure errors. A successfully proven dead/redundant/simplified condition is analysis output, not a CLI failure by itself.
+
+## Supported directives and Boolean abstraction
+
+The conditional parser recognizes all eight standard/C23 conditional forms used by C-GULL:
+
+`#if`, `#ifdef`, `#ifndef`, `#elif`, `#elifdef`, `#elifndef`, `#else`, and `#endif`.
+
+It preserves nesting, source ranges, comments, continuations, and malformed structure. Conditions model:
+
+- bare macro truth such as `#if FEATURE` as a `Variable("FEATURE")`;
+- definedness such as `#ifdef FEATURE` as a distinct `Defined("FEATURE")`;
+- integer constants and Boolean `!`, `&&`, `||` with parentheses;
+- more complex value-bearing C expressions such as `VERSION >= 3` or `BOARD_ID == PROD_BOARD` as opaque `Predicate` atoms.
+
+These atom kinds are intentionally independent. In particular, `Variable("X")`, `Defined("X")`, and `Predicate("X")` are not interchangeable. The symbolic engine does not infer C integer relationships between opaque predicates: `VERSION >= 3` and `VERSION < 3` remain independent Boolean atoms unless a future analysis explicitly supplies integer reasoning.
+
+This conservatism is important for firmware-style configuration code: C-GULL can prove Boolean relationships that follow from the conditional structure it models, but it does not pretend to solve arbitrary preprocessor arithmetic.
+
+## Contextual and effective conditions
+
+C-GULL analyzes a branch in the context in which that branch can actually be reached.
+
+For each `#if` / `#elif` / `#else` chain:
+
+1. the **context condition** combines enclosing parent branches with the negation of earlier siblings;
+2. a conditional branch's **effective condition** is that context AND the branch's own condition;
+3. an `#else` branch's effective condition is simply the remaining context.
+
+For example:
+
+```c
+#if PLATFORM_A
+#  if PLATFORM_A && DEBUG
+int trace_enabled;
+#  endif
+#endif
+```
+
+The inner condition is analyzed under the parent context `PLATFORM_A`. Under that context, `PLATFORM_A && DEBUG` can be simplified to `DEBUG`.
+
+Sibling ordering matters too:
+
+```c
+#if WIFI
+int wifi_impl;
+#elif WIFI && DIAGNOSTICS
+int diagnostic_impl;   /* effective condition: !WIFI && WIFI && DIAGNOSTICS */
+#endif
+```
+
+The second branch is unreachable even though `WIFI && DIAGNOSTICS` is satisfiable in isolation.
+
+## Semantic diagnostics
+
+The focused CLI uses four statuses. Scanner-facing rules expose the same semantic analysis as low-severity control-flow findings.
+
+### Dead / unreachable
+
+A branch is `dead` only when its effective Boolean condition is provably unsatisfiable. Scanner rule `CGULL-054` reports these as **Low** severity, CWE-561 findings that require review.
+
+```c
+#if FEATURE
+int enabled;
+#elif FEATURE && DEBUG
+int impossible;        /* dead: FEATURE is already false here */
+#endif
+```
+
+### Redundant
+
+A branch is `redundant` when the remaining context already guarantees its condition. `CGULL-054` also reports this case as **Low** severity.
+
+```c
+#if FEATURE
+#  if FEATURE
+int nested;            /* redundant: parent already guarantees FEATURE */
+#  endif
+#endif
+```
+
+### Simplified
+
+A condition is `simplified` when C-GULL proves a smaller Boolean expression equivalent in the branch context. Scanner rule `CGULL-055` reports this as **Low** severity guidance.
+
+```c
+#if FEATURE || (FEATURE && DEBUG)
+int enabled;           /* simplify to FEATURE */
+#endif
+```
+
+Context can also enable a simplification that is not valid globally:
+
+```c
+#if FEATURE
+#  if FEATURE && DEBUG
+int trace;             /* simplify to DEBUG under FEATURE */
+#  endif
+#endif
+```
+
+### Unchanged
+
+`unchanged` means the branch is modeled and no dead/redundant/smaller equivalent proof was produced. It is hidden by the focused CLI unless `--verbose` is used.
+
+Structural errors such as a missing condition, duplicate `#else`, branch after `#else`, or missing `#endif` are separate parser diagnostics, not semantic statuses.
+
+## Witness configurations
+
+`derive_branch_witnesses(tree)` can produce one deterministic Boolean witness for each satisfiable branch. A witness contains truth assignments to the atoms needed to satisfy that branch's effective condition.
+
+Witness terms keep their meaning explicit:
+
+- `macro_value` — truth of a bare macro-value test;
+- `defined` — macro definedness;
+- `predicate` — truth of an opaque value-bearing expression.
+
+For an opaque condition such as `VERSION >= 3`, a witness may say only that the predicate must be true. It does **not** invent `VERSION=3` or any other integer macro value.
+
+Witness status is one of `satisfiable`, `unreachable`, `unsupported`, or `limit_exceeded`. Malformed conditions are unsupported instead of guessed.
+
+A witness is evidence inside C-GULL's Boolean abstraction. It is **not** proof that every Boolean assignment corresponds to a realizable C-preprocessor macro environment, and it is not an enumeration of all possible macro-value combinations.
+
+## Configuration-space reduction
+
+Normal configuration exploration is controlled by the scan CLI, for example:
+
+```bash
+cgull scan . --config-strategy baseline
+cgull scan . --config-strategy one-at-a-time
+cgull scan . --config-strategy pairwise
+cgull scan . --config-strategy exhaustive --exhaustive-threshold 8
+```
+
+C-GULL can reduce generated profiles by modeled branch behavior before scanning equivalent variants. For each generated profile, it computes which modeled conditional branches can be active and keeps one deterministic representative for each distinct branch signature.
+
+Important semantics:
+
+- reduction applies to generated/derived profiles; explicit user-supplied profiles remain authoritative and bypass it;
+- known macro values choose known Boolean edges;
+- opaque predicates remain free, so reduction asks whether a branch **can** be active without fabricating an integer value;
+- a profile that reaches no modeled conditional branch is still retained as a valid class because unconditional source must still be scanned;
+- if malformed structure or Boolean resource limits prevent a safe equivalence proof, C-GULL falls back to exact flag-map deduplication rather than dropping a potentially distinct configuration.
+
+The reduction therefore removes work only when equivalence is safe under the symbolic model. It does not claim complete equivalence across all C-preprocessor arithmetic or macro-expansion behavior.
+
+See [Configuration reference](../configuration.md#configuration-space-inputs) and [Analysis model](../analysis-model.md#preprocessor-configuration-profiles) for scan-facing configuration controls.
+
+## Resource limits and conservative fallback
+
+Exact Boolean queries use a reduced ordered binary decision diagram (ROBDD) with deterministic default limits per analysis:
+
+- at most 64 distinct Boolean atoms;
+- at most 100,000 BDD nodes;
+- at most 500,000 work units.
+
+When a public Boolean query reaches a limit, it fails in the non-assertive direction:
+
+- satisfiability assumes the expression may be satisfiable, so C-GULL will not create a dead-code proof from exhaustion;
+- implication/equivalence return no proof, so C-GULL will not claim redundancy or exact equivalence;
+- witness derivation reports `limit_exceeded`;
+- exact simplification falls back to the local algebraic simplifier;
+- profile reduction falls back to exact flag-map deduplication.
+
+Malformed conditions similarly stop proof across the affected sibling chain instead of guessing later branch reachability.
+
+## Interaction with `pcpp` and parser fallback tiers
+
+Symbolic analysis reads the original conditional-directive structure. It does not need `pcpp` to decide which branch is active because it deliberately does not choose an active branch.
+
+AST-backed security rules have a different job: they need parseable source for a concrete configuration. Their strongest tier uses `pcpp` plus `pycparser`; if preprocessing cannot be used, C-GULL may fall back to directive stripping plus `pycparser`, then to lighter extraction. Those fallback tiers can reduce structural precision, and known security-critical losses are surfaced as coverage degradation rather than silently described as full analysis.
+
+The two layers therefore complement each other:
+
+- concrete preprocessing answers "what source is active under this configuration?";
+- symbolic analysis answers "what can be proven about the conditional configuration space without selecting one configuration?".
+
+## Firmware-style example
+
+Consider a configuration-heavy module:
+
+```c
+#if defined(BOARD_A) && LOGGING
+void log_backend(void);
+#elif defined(BOARD_A) && LOGGING && USB_LOG
+void usb_log_backend(void);     /* dead: earlier branch already covers it */
+#elif defined(BOARD_A) && (LOGGING || (LOGGING && TRACE))
+void trace_backend(void);       /* condition simplifies under remaining context */
+#endif
+
+#if defined(BOARD_A)
+#  if defined(BOARD_A)
+void board_init(void);          /* redundant nested test */
+#  endif
+#endif
+
+#if FW_VERSION >= 3
+void modern_protocol(void);     /* opaque value-bearing predicate */
+#else
+void legacy_protocol(void);
+#endif
+```
+
+C-GULL can reason exactly about the Boolean relationships among `defined(BOARD_A)`, `LOGGING`, `USB_LOG`, and `TRACE`. It retains `FW_VERSION >= 3` as an opaque predicate and can reason about its truth as one atom, but it does not infer integer ranges for `FW_VERSION`.
 
 ## Nodes and atom identity
 
