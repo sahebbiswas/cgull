@@ -93,10 +93,10 @@ def unshadowed_constant_identifiers(funcdef, constants):
 def _enum_names(source):
     """Extract simple enumerator names from enum definitions in *source*."""
     names = set()
-    for match in re.finditer(r"\\benum\\b[^{};]*\\{([^{}]*)\\}", source, re.DOTALL):
+    for match in re.finditer(r"\benum\b[^{};]*\{([^{}]*)\}", source, re.DOTALL):
         for item in match.group(1).split(","):
             name = item.split("=", 1)[0].strip()
-            if re.fullmatch(r"[A-Za-z_]\\w*", name):
+            if re.fullmatch(r"[A-Za-z_]\w*", name):
                 names.add(name)
     return names
 
@@ -134,7 +134,7 @@ def fallback_constant_identifiers(context, function):
         stripped = line.lstrip()
         directive = in_directive or stripped.startswith("#")
         if directive:
-            match = re.match(r"\\s*#\\s*define\\s+([A-Za-z_]\\w*)", line)
+            match = re.match(r"\s*#\s*define\s+([A-Za-z_]\w*)", line)
             if match:
                 macro_names.add(match.group(1))
             in_directive = line.rstrip().endswith("\\")
@@ -175,7 +175,7 @@ def fallback_constant_identifiers(context, function):
     )
     shadowed.update(_enum_names(function_source))
     for match in re.finditer(
-        r"\\btypedef\\b[^;{}]*\\b([A-Za-z_]\\w*)\\s*;",
+        r"\btypedef\b[^;{}]*\b([A-Za-z_]\w*)\s*;",
         function_source,
     ):
         shadowed.add(match.group(1))
