@@ -104,6 +104,12 @@ def _signature_key(node, types):
     return _type_key(node), tuple(sorted(dependencies.items()))
 
 
+class _PreparedLineMap(dict):
+    """Prepared-TU provenance while numeric rule coordinates stay expanded."""
+
+    preserve_expanded_coordinates = True
+
+
 @dataclass
 class PreparedUnit:
     source: str
@@ -120,6 +126,10 @@ class PreparedUnit:
                 self.expanded.expanded_text,
                 defined_syms=self.parse_flags,
             )
+        if self._context is not None and getattr(self._context, "line_map", None) is None:
+            line_map = getattr(self.expanded, "line_map", None)
+            if line_map is not None:
+                self._context.line_map = _PreparedLineMap(line_map)
         return self._context
 
     @context.setter
