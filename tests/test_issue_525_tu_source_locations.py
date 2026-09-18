@@ -1,1 +1,105 @@
-from cgull import CGullScanner\nfrom cgull.ast_analyzer import CASTParser\nfrom cgull.cfg import build_cfg, find_function_def\nfrom cgull.models import AnalysisEngine, ScanConfig\nfrom cgull.project_analysis import PreparedUnit\nfrom cgull.rules.memory_management import MemoryLeakRule, UseAfterFreeRule\n\n\ndef _write_fixture(tmp_path):\n    include_dir = tmp_path / "include"\n    include_dir.mkdir()\n    padding = include_dir / "padding.h"\n    padding.write_text(\n        "".join(f"typedef int issue525_pad_{index};\\n" for index in range(180)),\n        encoding="utf-8",\n    )\n    free_site = include_dir / "free_site.h"\n    free_site.write_text("free(p);\\n", encoding="utf-8")\n    alloc_site = include_dir / "alloc_site.h"\n    alloc_site.write_text(\n        "int *leaked = (int *)malloc(sizeof(int));\\n",\n        encoding="utf-8",\n    )\n\n    source = tmp_path / "main.c"\n    source.write_text(\n        '#include "padding.h"\\n'\n        "void free(void *);\\n"\n        "void *malloc(unsigned long);\\n"\n        "int uaf(int *p) {\\n"\n        '#include "free_site.h"\\n'\n        "    return *p;\\n"\n        "}\\n"\n        "void leak(void) {\\n"\n        '#include "alloc_site.h"\\n'\n        "}\\n",\n        encoding="utf-8",\n    )\n    return source, include_dir, free_site, alloc_site\n\n\ndef test_prepared_tu_context_keeps_provenance_without_remapping_cfg_primary_lines(tmp_path):\n    source, include_dir, free_site, _ = _write_fixture(tmp_path)\n    config = ScanConfig.create(include_roots=[str(include_dir)], mode="tu")\n\n    from cgull.includes import IncludeResolver, TUIncludeExpander\n\n    resolver = IncludeResolver(include_roots=[str(include_dir)], base_dir=str(tmp_path))\n    expanded = TUIncludeExpander(resolver=resolver).expand(\n        source.read_text(encoding="utf-8"), str(source)\n    )\n    prepared = PreparedUnit(source=source.read_text(encoding="utf-8"), expanded=expanded)\n    ctx = prepared.context\n\n    assert ctx.line_map is not None\n    expanded_free_line = next(\n        line\n        for line, location in expanded.line_map.items()\n        if location.file_path == str(free_site.resolve()) and location.line_number == 1\n    )\n    assert expanded_free_line > len(source.read_text(encoding="utf-8").splitlines())\n\n    cfg = build_cfg(find_function_def(ctx.pycparser_ast, "uaf"), line_map=ctx.line_map)\n    free_event = next(node for node in cfg.nodes.values() if node.freed)\n    assert free_event.line_number == expanded_free_line\n    assert free_event.source_location.file_path == str(free_site.resolve())\n    assert free_event.source_location.line_number == 1\n\n\ndef test_tu_findings_render_primary_and_related_sites_in_original_sources(tmp_path):\n    source, include_dir, _, _ = _write_fixture(tmp_path)\n    config = ScanConfig.create(\n        rules=[UseAfterFreeRule(), MemoryLeakRule()],\n        engine_mode=AnalysisEngine.AST,\n        include_roots=[str(include_dir)],\n        mode="tu",\n    )\n    result = CGullScanner(config=config).scan_path(str(tmp_path), jobs=1, quiet=True)\n\n    assert result.files_failed == 0\n    uaf = next(issue for issue in result.issues if issue.rule_id == "CGULL-022")\n    assert uaf.file_path == "main.c"\n    assert uaf.line_number == 6\n    assert "freed at include/free_site.h:1" in uaf.message\n\n    leak = next(issue for issue in result.issues if issue.rule_id == "CGULL-036")\n    assert leak.file_path == "include/alloc_site.h"\n    assert leak.line_number == 1\n    assert "allocated for 'leaked' at line 1" in leak.message\n\n\ndef test_file_mode_related_site_wording_is_unchanged():\n    source = (\n        "void free(void *);\\n"\n        "int f(int *p) {\\n"\n        "    free(p);\\n"\n        "    return *p;\\n"\n        "}\\n"\n    )\n    ctx = CASTParser().parse(source)\n    issues = UseAfterFreeRule().scan_ast("test.c", ctx)\n\n    assert len(issues) == 1\n    assert issues[0].line_number == 4\n    assert "freed at line 3 and accessed here" in issues[0].message\n
+from cgull import CGullScanner
+from cgull.ast_analyzer import CASTParser
+from cgull.cfg import build_cfg, find_function_def
+from cgull.models import AnalysisEngine, ScanConfig
+from cgull.project_analysis import PreparedUnit
+from cgull.rules.memory_management import MemoryLeakRule, UseAfterFreeRule
+
+
+def _write_fixture(tmp_path):
+    include_dir = tmp_path / "include"
+    include_dir.mkdir()
+    padding = include_dir / "padding.h"
+    padding.write_text(
+        "".join(f"typedef int issue525_pad_{index};\n" for index in range(180)),
+        encoding="utf-8",
+    )
+    free_site = include_dir / "free_site.h"
+    free_site.write_text("free(p);\n", encoding="utf-8")
+    alloc_site = include_dir / "alloc_site.h"
+    alloc_site.write_text(
+        "int *leaked = (int *)malloc(sizeof(int));\n",
+        encoding="utf-8",
+    )
+
+    source = tmp_path / "main.c"
+    source.write_text(
+        '#include "padding.h"\n'
+        "void free(void *);\n"
+        "void *malloc(unsigned long);\n"
+        "int uaf(int *p) {\n"
+        '#include "free_site.h"\n'
+        "    return *p;\n"
+        "}\n"
+        "void leak(void) {\n"
+        '#include "alloc_site.h"\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    return source, include_dir, free_site, alloc_site
+
+
+def test_prepared_tu_context_keeps_provenance_without_remapping_cfg_primary_lines(tmp_path):
+    source, include_dir, free_site, _ = _write_fixture(tmp_path)
+    ScanConfig.create(include_roots=[str(include_dir)], mode="tu")
+
+    from cgull.includes import IncludeResolver, TUIncludeExpander
+
+    resolver = IncludeResolver(include_roots=[str(include_dir)], base_dir=str(tmp_path))
+    expanded = TUIncludeExpander(resolver=resolver).expand(
+        source.read_text(encoding="utf-8"), str(source)
+    )
+    prepared = PreparedUnit(source=source.read_text(encoding="utf-8"), expanded=expanded)
+    ctx = prepared.context
+
+    assert ctx.line_map is not None
+    expanded_free_line = next(
+        line
+        for line, location in expanded.line_map.items()
+        if location.file_path == str(free_site.resolve()) and location.line_number == 1
+    )
+    assert expanded_free_line > len(source.read_text(encoding="utf-8").splitlines())
+
+    cfg = build_cfg(find_function_def(ctx.pycparser_ast, "uaf"), line_map=ctx.line_map)
+    free_event = next(node for node in cfg.nodes.values() if node.freed)
+    assert free_event.line_number == expanded_free_line
+    assert free_event.source_location.file_path == str(free_site.resolve())
+    assert free_event.source_location.line_number == 1
+
+
+def test_tu_findings_render_primary_and_related_sites_in_original_sources(tmp_path):
+    _, include_dir, _, _ = _write_fixture(tmp_path)
+    config = ScanConfig.create(
+        rules=[UseAfterFreeRule(), MemoryLeakRule()],
+        engine_mode=AnalysisEngine.AST,
+        include_roots=[str(include_dir)],
+        mode="tu",
+    )
+    result = CGullScanner(config=config).scan_path(str(tmp_path), jobs=1, quiet=True)
+
+    assert result.files_failed == 0
+    uaf = next(issue for issue in result.issues if issue.rule_id == "CGULL-022")
+    assert uaf.file_path == "main.c"
+    assert uaf.line_number == 6
+    assert "freed at include/free_site.h:1" in uaf.message
+
+    leak = next(issue for issue in result.issues if issue.rule_id == "CGULL-036")
+    assert leak.file_path == "include/alloc_site.h"
+    assert leak.line_number == 1
+    assert "allocated for 'leaked' at line 1" in leak.message
+
+
+def test_file_mode_related_site_wording_is_unchanged():
+    source = (
+        "void free(void *);\n"
+        "int f(int *p) {\n"
+        "    free(p);\n"
+        "    return *p;\n"
+        "}\n"
+    )
+    ctx = CASTParser().parse(source)
+    issues = UseAfterFreeRule().scan_ast("test.c", ctx)
+
+    assert len(issues) == 1
+    assert issues[0].line_number == 4
+    assert "freed at line 3 and accessed here" in issues[0].message
