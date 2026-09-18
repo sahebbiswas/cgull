@@ -229,7 +229,7 @@ cgull scan . --config-strategy pairwise
 
 Available configuration expansion strategies are `baseline`, `one-at-a-time` (the CLI default), `pairwise`, and `exhaustive`. `--exhaustive-threshold` bounds exhaustive expansion. Use `cgull flags .` or `cgull scan . --list-flags` to inspect discovered conditional symbols.
 
-For how these profiles affect analysis, see [Analysis model](analysis-model.md).
+For how these profiles affect analysis, see [Analysis model](analysis-model.md). For symbolic branch witnesses, generated-profile reduction, opaque predicate handling, and conservative limit fallback, see [Symbolic preprocessor analysis](analysis/symbolic-preprocessor.md).
 
 ### Standard/POSIX and Linux analysis headers
 
