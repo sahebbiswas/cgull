@@ -725,7 +725,13 @@ def parse_member_declarations(stmt: str, clean_code: str) -> List[FieldInfo]:
     return fields
 
 
-def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -> Optional[int]:
+def resolve_constant_expr(
+    expr_str: str,
+    clean_code: str,
+    max_depth: int = 20,
+    *,
+    allow_const_objects: bool = True,
+) -> Optional[int]:
     """
     Resolves a constant expression string (digit, hex, expression-valued macro #define,
     const int variable, or enum constant) to an integer value if compile-time constant,
@@ -756,14 +762,15 @@ def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -
                 if m_val:
                     macro_defs[m_name] = m_val
 
-    # Collect const int variables
-    for const_m in re.finditer(
-        r'\bconst\s+(?:int|size_t|uint\w+_t|int\w+_t|unsigned\s+int|long|short)\s+([a-zA-Z_]\w*)\s*=\s*([^;]+);',
-        clean_code
-    ):
-        c_name = const_m.group(1)
-        c_val = const_m.group(2).strip()
-        macro_defs[c_name] = c_val
+    # Collect const int variables for broad constant-value resolution.
+    if allow_const_objects:
+        for const_m in re.finditer(
+            r'\bconst\s+(?:int|size_t|uint\w+_t|int\w+_t|unsigned\s+int|long|short)\s+([a-zA-Z_]\w*)\s*=\s*([^;]+);',
+            clean_code
+        ):
+            c_name = const_m.group(1)
+            c_val = const_m.group(2).strip()
+            macro_defs[c_name] = c_val
 
     # Collect enum constants
     enum_regex = re.compile(r'\benum\b[^{}]*\{([^}]+)\}')
@@ -823,6 +830,27 @@ def resolve_constant_expr(expr_str: str, clean_code: str, max_depth: int = 20) -
     return None
 
 
+def resolve_integer_constant_expr(
+    expr_str: str,
+    clean_code: str = "",
+    max_depth: int = 20,
+) -> Optional[int]:
+    """Resolve a C integer constant expression for array-bound classification.
+
+    Const-qualified objects are deliberately excluded: in C,
+    const int n = 8; char a[n]; is still a VLA.
+    """
+    source = clean_code
+    if not re.search(r'\b[a-zA-Z_]\w*\b', expr_str):
+        source = ""
+    return resolve_constant_expr(
+        expr_str,
+        source,
+        max_depth,
+        allow_const_objects=False,
+    )
+
+
 def _format_pycparser_expr(node) -> str:
     """Recursively formats a pycparser expression node to a C code string."""
     if node is None:
@@ -864,7 +892,11 @@ def _format_pycparser_expr(node) -> str:
     return ""
 
 
-def _format_pycparser_type(node, custom_typedefs: Optional[Set[str]] = None) -> Tuple[str, bool, bool, bool, bool, bool, Optional[str], bool]:
+def _format_pycparser_type(
+    node,
+    custom_typedefs: Optional[Set[str]] = None,
+    constant_source: str = "",
+) -> Tuple[str, bool, bool, bool, bool, bool, Optional[str], bool]:
     """
     Recursively formats a pycparser type node.
     Returns:
@@ -879,7 +911,7 @@ def _format_pycparser_type(node, custom_typedefs: Optional[Set[str]] = None) -> 
     type_name = type(node).__name__
 
     if type_name == "PtrDecl":
-        sub_t, sub_ptr, is_fp, sub_vol, sub_sig, sub_vla, sub_dim, is_arr = _format_pycparser_type(node.type, custom_typedefs)
+        sub_t, sub_ptr, is_fp, sub_vol, sub_sig, sub_vla, sub_dim, is_arr = _format_pycparser_type(node.type, custom_typedefs, constant_source)
         vol = is_volatile or sub_vol
         sig = is_signed and sub_sig
         if is_fp:
@@ -887,25 +919,15 @@ def _format_pycparser_type(node, custom_typedefs: Optional[Set[str]] = None) -> 
         return f"{sub_t} *", True, False, vol, sig, False, None, False
 
     elif type_name == "ArrayDecl":
-        sub_t, sub_ptr, sub_fp, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type, custom_typedefs)
-        dim_str = None
-        is_vla = False
-        if node.dim:
-            if type(node.dim).__name__ == "Constant":
-                dim_str = str(node.dim.value)
-                is_vla = False
-            elif type(node.dim).__name__ == "ID":
-                dim_str = str(node.dim.name)
-                is_vla = True
-            else:
-                dim_str = _format_pycparser_expr(node.dim)
-                is_vla = True
+        sub_t, sub_ptr, sub_fp, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type, custom_typedefs, constant_source)
+        dim_str = _format_pycparser_expr(node.dim) if node.dim else None
+        is_vla = bool(dim_str) and resolve_integer_constant_expr(dim_str, constant_source) is None
         vol = is_volatile or sub_vol
         sig = is_signed and sub_sig
         return f"{sub_t}[{dim_str or ''}]", sub_ptr, sub_fp, vol, sig, is_vla, dim_str, True
 
     elif type_name == "FuncDecl":
-        ret_t, _, _, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type, custom_typedefs)
+        ret_t, _, _, sub_vol, sub_sig, _, _, _ = _format_pycparser_type(node.type, custom_typedefs, constant_source)
         p_list = []
         if node.args and getattr(node.args, "params", None):
             for p in node.args.params:
@@ -913,10 +935,10 @@ def _format_pycparser_type(node, custom_typedefs: Optional[Set[str]] = None) -> 
                 if p_type_name == "EllipsisParam" or not hasattr(p, "type"):
                     p_list.append("...")
                 elif p_type_name == "Typename":
-                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type, custom_typedefs)
+                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type, custom_typedefs, constant_source)
                     p_list.append(pt)
                 elif p_type_name == "Decl":
-                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type, custom_typedefs)
+                    pt, _, _, _, _, _, _, _ = _format_pycparser_type(p.type, custom_typedefs, constant_source)
                     p_list.append(f"{pt} {p.name}" if getattr(p, "name", None) else pt)
         params_str = ", ".join(p_list) if p_list else "void"
         return f"{ret_t} ({params_str})", False, True, sub_vol, sub_sig, False, None, False
@@ -950,7 +972,7 @@ def _format_pycparser_type(node, custom_typedefs: Optional[Set[str]] = None) -> 
         return tname, False, False, False, sig, False, None, False
 
     elif type_name == "Typename":
-        return _format_pycparser_type(node.type, custom_typedefs)
+        return _format_pycparser_type(node.type, custom_typedefs, constant_source)
 
     return "int", False, False, False, True, False, None, False
 

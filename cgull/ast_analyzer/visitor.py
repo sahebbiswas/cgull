@@ -17,7 +17,8 @@ from .types import  _format_pycparser_expr, _format_pycparser_type, _extract_ide
 from .types import (
     CASTContext, CFunction, CParameter, CVariable, CFGNode, FieldInfo,
     ScopedVarDict, StructDef, TypedefShape, _map_line, parse_member_declarations,
-    resolve_constant_expr, resolve_typedef_shape, split_c_statements_at_outer_depth,
+    resolve_constant_expr, resolve_integer_constant_expr, resolve_typedef_shape,
+    split_c_statements_at_outer_depth,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class _ASTFunctionAnalyzer:
         self.owning_fn = owning_fn
         self.prelude_offset = prelude_offset
         self.clean_lines = clean_lines
+        self.clean_code = "\n".join(clean_lines)
         self.custom_typedefs = custom_typedefs
         self.typedef_shapes = typedef_shapes or {}
         self.line_map = line_map
@@ -74,7 +76,7 @@ class _ASTFunctionAnalyzer:
                     self.current_target_var = node.name
                     exp_line = (node.coord.line - self.outer.prelude_offset) if node.coord else self.outer.owning_fn.start_line_exp
                     line_no = _map_line(exp_line, self.outer.line_map)
-                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(node.type, self.outer.custom_typedefs)
+                    tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(node.type, self.outer.custom_typedefs, self.outer.clean_code)
                     shape = resolve_typedef_shape(tname, self.outer.typedef_shapes) if hasattr(self.outer, "typedef_shapes") and self.outer.typedef_shapes else None
                     v_is_array = is_arr or (shape.is_array if shape else False)
                     v_is_pointer = (is_ptr or is_fp) or (shape.is_pointer if shape else False)
@@ -1238,7 +1240,7 @@ class CASTParser:
             elif isinstance(ext, c_ast.Decl) and type(ext.type).__name__ != "FuncDecl" and type(ext).__name__ != "Typedef":
                 exp_line = (ext.coord.line - _PRELUDE_LINE_COUNT) if ext.coord else 1
                 line_no = _map_line(exp_line, line_map)
-                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(ext.type, custom_typedefs)
+                tname, is_ptr, is_fp, is_vol, is_sig, is_vla, arr_dim, is_arr = _format_pycparser_type(ext.type, custom_typedefs, clean_code)
                 shape = resolve_typedef_shape(tname, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
                 v_is_array = is_arr or (shape.is_array if shape else False)
                 v_is_pointer = (is_ptr or is_fp) or (shape.is_pointer if shape else False)
@@ -1440,6 +1442,7 @@ class CASTParser:
 
         body_lines = list(body_statements(fn.body))
         fn_start_exp = fn.body_start_line_exp or fn.body_start_line or fn.start_line_exp or fn.start_line
+        constant_source = "\n".join(all_lines)
 
         # Detect assertions
         if "assert(" in fn.body or "ASSERT(" in fn.body or "assert_param(" in fn.body:
@@ -1543,8 +1546,11 @@ class CASTParser:
                             is_vla = False
                             if array_dim is not None:
                                 dim_clean = array_dim.strip()
-                                if dim_clean and not dim_clean.isdigit() and not dim_clean.isupper() and not dim_clean.startswith('0x'):
-                                    is_vla = True
+                                if dim_clean:
+                                    is_vla = resolve_integer_constant_expr(
+                                        dim_clean,
+                                        constant_source,
+                                    ) is None
 
                             curr_block = scope_stack[-1]
                             shape = resolve_typedef_shape(type_prefix, self.typedef_shapes) if hasattr(self, "typedef_shapes") and self.typedef_shapes else None
