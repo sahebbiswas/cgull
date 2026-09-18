@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Preserve original source provenance for TU-mode related-site diagnostics so use-after-free and memory-leak messages no longer expose expanded/preprocessed line numbers, including cross-file include sites (#525).
+
 ## [0.12.4] - 2026-09-16
 
 ### Changed
