@@ -164,7 +164,7 @@ def _issue_representative_key(issue: Issue) -> Tuple[Any, ...]:
     )
     return (
         -source_quality,
-        str(issue.file_path).replace("\\", "/"),
+        str(issue.file_path or "").replace("\\", "/"),
         issue.line_number,
         issue.column_number,
         issue.message,
@@ -337,7 +337,7 @@ def _deduplicate_issues_by_fingerprint(issues: List[Issue]) -> List[Issue]:
     finalized.extend(without_fingerprint)
     finalized.sort(
         key=lambda issue: (
-            issue.file_path,
+            str(issue.file_path or "").replace("\\", "/"),
             issue.line_number,
             issue.column_number,
             issue.rule_id,
