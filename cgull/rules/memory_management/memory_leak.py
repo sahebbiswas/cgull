@@ -16,6 +16,7 @@ from .helpers import (
     _ast_cfg_for_function,
     _find_memory_leak_exits,
 )
+from ..source_locations import format_related_site
 
 logger = logging.getLogger(__name__)
 
@@ -110,11 +111,17 @@ class MemoryLeakRule(BaseRule):
                             reported_allocs.add(key)
                             line_no = node.line_number
                             snippet = _source_snippet(ast_ctx, line_no, node.expr_str)
+                            allocation_site = format_related_site(
+                                ast_ctx,
+                                node,
+                                primary_site=node,
+                                fallback_file=file_path,
+                            )
                             issues.append(self.create_issue(
                                 file_path=file_path,
                                 line_number=line_no,
                                 code_snippet=snippet,
-                                message=f"Memory leak: memory allocated for '{ptr_name}' at line {line_no} is never freed or transferred before scope exit.",
+                                message=f"Memory leak: memory allocated for '{ptr_name}' at {allocation_site} is never freed or transferred before scope exit.",
                                 column_number=1,
                                 engine="AST",
                                 fix_type=FixType.SUGGESTED_FIX,
@@ -148,11 +155,17 @@ class MemoryLeakRule(BaseRule):
                         break
                 if not has_dealloc_or_transfer:
                     snippet = _source_snippet(ast_ctx, line_no, line)
+                    allocation_site = format_related_site(
+                        ast_ctx,
+                        line_no,
+                        primary_site=line_no,
+                        fallback_file=file_path,
+                    )
                     issues.append(self.create_issue(
                         file_path=file_path,
                         line_number=line_no,
                         code_snippet=snippet,
-                        message=f"Memory leak: memory allocated for '{ptr_name}' at line {line_no} is never freed or transferred before scope exit.",
+                        message=f"Memory leak: memory allocated for '{ptr_name}' at {allocation_site} is never freed or transferred before scope exit.",
                         column_number=m.start() + 1,
                         engine="Regex",
                         fix_type=FixType.SUGGESTED_FIX,
