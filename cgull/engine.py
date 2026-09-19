@@ -254,9 +254,10 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
 
     The content fingerprint intentionally omits line numbers for baseline stability.
     It is therefore only a *base* identity until physical occurrences are separated.
-    Precise columns distinguish multiple same-line findings; a coarse column (1)
-    is merged into the sole precise site on that line when one exists, which covers
-    AST-vs-regex variants of the same call without conflating separate calls.
+    Precise columns distinguish same-line findings and are the only direct
+    coordinate evidence used for site merging. Coarse column-1 rows remain
+    separate from precise rows; only independent TU/profile representations are
+    aligned by occurrence multiplicity.
     """
     by_line: Dict[int, List[Issue]] = {}
     for issue in candidates:
@@ -278,26 +279,13 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
             for column in sorted(precise)
         ]
 
-        if len(clusters) == 1:
-            clusters[0].extend(coarse)
-        elif len(clusters) > 1:
-            for issue in coarse:
-                matching = [
-                    cluster
-                    for cluster in clusters
-                    if any(candidate.message == issue.message for candidate in cluster)
-                ]
-                if len(matching) == 1:
-                    matching[0].append(issue)
-                else:
-                    clusters.append([issue])
-        elif coarse:
-            # Column 1 is only a coarse location marker, so engine/message
-            # equality is not enough to prove two rows are one physical site.
+        if coarse:
+            # Column 1 is only a coarse location marker, so neither
+            # engine/message equality nor the presence of one precise row can
+            # prove that two reports describe one physical source occurrence.
             # Independent TU/profile representations do provide provenance
-            # evidence, though: align their occurrence multiplicity instead of
-            # flattening each origin. Thus one row from each TU/profile merges,
-            # while two identical same-line rows from every origin remain two.
+            # evidence: align their occurrence multiplicity without ever
+            # merging a coarse row into a precise-coordinate cluster.
             def representation_origin(issue: Issue) -> Optional[Tuple[str, str]]:
                 profile_tokens = sorted(
                     label
@@ -329,18 +317,20 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
                     origin: sorted(rows, key=_issue_representative_key)
                     for origin, rows in sorted(by_origin.items())
                 }
-                clusters = [
+                clusters.extend(
                     [
-                        rows[occurrence]
-                        for rows in ordered_origins.values()
-                        if occurrence < len(rows)
+                        [
+                            rows[occurrence]
+                            for rows in ordered_origins.values()
+                            if occurrence < len(rows)
+                        ]
+                        for occurrence in range(
+                            max(len(rows) for rows in ordered_origins.values())
+                        )
                     ]
-                    for occurrence in range(
-                        max(len(rows) for rows in ordered_origins.values())
-                    )
-                ]
+                )
             else:
-                clusters = [[issue] for issue in coarse]
+                clusters.extend([[issue] for issue in coarse])
 
         sites.extend(_merge_issue_cluster(cluster) for cluster in clusters)
 
