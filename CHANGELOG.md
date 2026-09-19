@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Model nullable non-allocation returns and non-NULL argument requirements, and report unchecked nullable locals through CGULL-004 (#538).
 - Add CGULL-056 for possible reverse reads/writes below an explicitly derived logical base, including loop conditions, postfix and separated updates, and ordered lower-bound guards (#537).
 - Deduplicate finalized findings by stable fingerprint across analyzer paths, configuration profiles, and translation units while preserving deterministic source attribution, confidence, fix metadata, reachability, and explicit per-TU header reporting (#532).
 - Suppress CGULL-042 declaration initializers that use proven file-scope enum constants before an immediate conditional overwrite, including macro-expanded forms, while keeping shadowed or otherwise unproven identifiers conservative (#530).

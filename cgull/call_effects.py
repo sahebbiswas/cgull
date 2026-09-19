@@ -19,6 +19,7 @@ class CallEffectConfigError(ValueError):
 class ReturnEffect(str, Enum):
     NONE = "none"
     ALLOCATION = "allocation"
+    NULLABLE = "nullable"
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class CallEffectModel:
     sanitizes: FrozenSet[int] = frozenset()
     takes_ownership: FrozenSet[int] = frozenset()
     escapes: FrozenSet[int] = frozenset()
+    nonnull: FrozenSet[int] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.function or not self.function.isidentifier():
@@ -44,6 +46,7 @@ class CallEffectModel:
             | set(self.sanitizes)
             | set(self.takes_ownership)
             | set(self.escapes)
+            | set(self.nonnull)
         )
         if self.format_argument is not None:
             indexes.add(self.format_argument)
@@ -125,6 +128,13 @@ _BUILTIN_EFFECTS = {
         _effect("valloc", return_effect=ReturnEffect.ALLOCATION, size_relationships=((0, 0),)),
         _effect("pvalloc", return_effect=ReturnEffect.ALLOCATION, size_relationships=((0, 0),)),
         _effect("memalign", return_effect=ReturnEffect.ALLOCATION, size_relationships=((0, 1),)),
+        _effect("crypt", return_effect=ReturnEffect.NULLABLE, nonnull=frozenset({0, 1})),
+        _effect("getenv", return_effect=ReturnEffect.NULLABLE, nonnull=frozenset({0})),
+        _effect("strchr", return_effect=ReturnEffect.NULLABLE, nonnull=frozenset({0})),
+        _effect("strrchr", return_effect=ReturnEffect.NULLABLE, nonnull=frozenset({0})),
+        _effect("fopen", return_effect=ReturnEffect.NULLABLE, nonnull=frozenset({0, 1})),
+        _effect("strcmp", nonnull=frozenset({0, 1})),
+        _effect("strlen", nonnull=frozenset({0})),
         _effect("free", deallocates=frozenset({0})),
         _effect("cfree", deallocates=frozenset({0})),
         _effect("vfree", deallocates=frozenset({0})),
@@ -171,7 +181,7 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
     allowed = {
         "function", "returns", "deallocates", "outputs", "output_value_sources",
         "format_argument", "size_relationships", "buffer_capacities", "sanitizes",
-        "takes_ownership", "escapes",
+        "takes_ownership", "escapes", "nonnull",
     }
     for index, entry in enumerate(raw):
         if not isinstance(entry, Mapping):
@@ -262,6 +272,7 @@ def parse_call_effects(raw: object) -> CallEffectRegistry:
                 sanitizes=sanitizes,
                 takes_ownership=takes_ownership,
                 escapes=escapes,
+                nonnull=_indexes(entry.get("nonnull", []), "nonnull"),
             )
         except ValueError as exc:
             raise CallEffectConfigError(f"call effect '{function}': {exc}") from exc
