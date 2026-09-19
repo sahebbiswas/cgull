@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Group repeated CGULL-007 accesses with the same conservative CFG bounds obligation, retain related source locations in all reports, and preserve them through TU mapping and deduplication (#533).
 - Model nullable non-allocation returns and non-NULL argument requirements, and report unchecked nullable locals through CGULL-004 (#538).
 - Add CGULL-056 for possible reverse reads/writes below an explicitly derived logical base, including loop conditions, postfix and separated updates, and ordered lower-bound guards (#537).
 - Deduplicate finalized findings by stable fingerprint across analyzer paths, configuration profiles, and translation units while preserving deterministic source attribution, confidence, fix metadata, reachability, and explicit per-TU header reporting (#532).

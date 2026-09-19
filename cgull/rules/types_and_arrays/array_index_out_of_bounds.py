@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..base import BaseRule
-from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
+from ...models import Severity, RuleCategory, Issue, RelatedLocation, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext, get_type_byte_size, is_unsigned_type
 
 logger = logging.getLogger(__name__)
@@ -530,6 +530,9 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 capacity_in = cfg_capacity_in_states(cfg, fn)
                 from .array_bounds_guards import access_events, guarded_access
                 event_for_access = access_events(cfg)
+                from .bounds_obligations import BoundsObligations
+                obligations = BoundsObligations(cfg, funcdef)
+                groups = {}
 
                 class ArrayCheckVisitor(c_ast.NodeVisitor):
                     def visit_ArrayRef(v_self, node):
@@ -551,7 +554,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                         except ValueError:
                             pass
                         if index_value is not None and arr_size is not None and index_value >= arr_size:
-                            key = (line_no, arr_name, index_value)
+                            key = (line_no, node.coord.column if node.coord else 1, arr_name, index_value)
                             if key not in reported_lines:
                                 snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{arr_name}[{sub_expr}]"
                                 issues.append(self.create_issue(
@@ -559,17 +562,14 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                                     line_number=line_no,
                                     code_snippet=snippet,
                                     message=f"Static Array Out-of-Bounds: index [{index_value}] exceeds declared dimension of '{arr_name}[{arr_size}]'.",
-                                    column_number=1,
+                                    column_number=node.coord.column if node.coord else 1,
                                     engine="AST",
                                     fix_type=FixType.SUGGESTED_FIX,
                                     suggested_fix_replacement=f"{arr_name}[{arr_size - 1}]",
                                 ))
                                 reported_lines.add(key)
 
-                        for idx_var in sub_ids:
-                            key = (line_no, arr_name, idx_var)
-                            if key in reported_lines:
-                                continue
+                        for idx_var in sorted(sub_ids):
 
                             is_signed = is_index_var_signed(idx_var, fn)
 
@@ -578,18 +578,23 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                             )
 
                             if not guarded:
+                                group_key = (idx_var, obligations.key(node, target_node_id, arr_size))
+                                column = node.coord.column if node.coord else 1
+                                if group_key in groups:
+                                    groups[group_key].related_locations.append(RelatedLocation(file_path, line_no, column))
+                                    continue
                                 snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{arr_name}[{sub_expr}]"
                                 issues.append(self.create_issue(
                                     file_path=file_path,
                                     line_number=line_no,
                                     code_snippet=snippet,
                                     message=f"Unchecked Array Indexing: variable '{idx_var}' is used as an index for '{arr_name}' without preceding bounds validation.",
-                                    column_number=1,
+                                    column_number=column,
                                     engine="AST",
                                     fix_type=FixType.SUGGESTED_FIX,
                                     suggested_fix_replacement=f"if ({idx_var} >= 0 && {idx_var} < ARRAY_SIZE) {{\n    {snippet}\n}}"
                                 ))
-                                reported_lines.add(key)
+                                groups[group_key] = issues[-1]
 
                         v_self.generic_visit(node)
 

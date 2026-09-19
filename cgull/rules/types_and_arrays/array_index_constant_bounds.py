@@ -143,7 +143,7 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
                                     if node.coord
                                     else fn.start_line
                                 )
-                                safe.add((line, arr_name, index))
+                                safe.add((line, node.coord.column if node.coord else 1, arr_name, index))
                     v_self.generic_visit(node)
 
             ContractVisitor().visit(funcdef)
@@ -165,8 +165,20 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
             filtered = []
             for issue in issues:
                 match = unchecked.match(issue.message)
-                if match and (issue.line_number, match.group(2), match.group(1)) in contract_safe:
-                    continue
+                if match:
+                    from ...models import RelatedLocation
+                    locations = [RelatedLocation(issue.file_path, issue.line_number, issue.column_number),
+                                 *issue.related_locations]
+                    locations = [loc for loc in locations
+                                 if (loc.line_number, loc.column_number, match.group(2), match.group(1)) not in contract_safe]
+                    if not locations:
+                        continue
+                    primary, *issue.related_locations = locations
+                    if primary.line_number != issue.line_number or primary.column_number != issue.column_number:
+                        issue.line_number = primary.line_number
+                        issue.column_number = primary.column_number
+                        issue.code_snippet = ast_ctx.source_lines[primary.line_number - 1].strip()
+                        issue.suggested_fix_replacement = None
                 filtered.append(issue)
             issues = filtered
 

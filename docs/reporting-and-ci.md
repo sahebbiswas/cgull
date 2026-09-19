@@ -139,3 +139,30 @@ fallback file, and retains its existing exit status of 1. Debug logging also
 records fallback reasons. Successful higher-tier parses emit no fallback warning;
 a successful regex fallback does not become a scan error. Normal successful-scan
 output remains concise, and JSON/SARIF on stdout remain machine-readable.
+
+
+### Repeated unchecked array accesses
+
+CGULL-007 groups simple array/index accesses within one function when both
+names identify unique automatic bindings and the accesses share the same
+capacity and reaching CFG definition/guard epoch. Assignments, mutations,
+scalar comparisons, and calls passing the base object split epochs. Escaped,
+static/global, volatile, shadowed, complex, or fallback bindings stay separate;
+functions containing goto also retain individual findings. This conservative
+first implementation may leave several findings for one broader root cause.
+Constant out-of-bounds accesses remain independent.
+
+The first access is primary; `related_locations` contains the remaining
+`file_path`, `line_number`, and `column_number` records in JSON. SARIF uses
+`relatedLocations`; text and Markdown show an “Also affects N accesses” list.
+TU mapping restores each location independently, and inline suppressions apply
+to each occurrence (a suppressed primary promotes the next remaining access).
+
+Fingerprints continue to use the primary source context and the existing
+multiplicity slots. Related locations do not enter the fingerprint: adding or
+removing a secondary access preserves the root finding's baseline identity.
+Changing/removing the primary or splitting epochs can change that identity.
+Full JSON/SARIF reports preserve occurrence changes for comparison; baseline
+new/resolved counts track roots, not individual related accesses. Baseline
+filtering hides known roots together with their related locations, so retain a
+full report when comparing affected-access changes.

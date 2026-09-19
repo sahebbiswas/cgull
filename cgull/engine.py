@@ -220,6 +220,7 @@ def _merge_duplicate_issues(left: Issue, right: Issue) -> Issue:
         if values:
             setattr(representative, attr, values[0])
 
+    representative.related_locations = sorted({loc for issue in candidates for loc in issue.related_locations})
     representative.related_tus = sorted({
         tu
         for issue in candidates
@@ -783,6 +784,14 @@ class CGullScanner:
                     else:
                         issue.file_path = display_path
 
+                    from .models import RelatedLocation
+                    issue.related_locations = sorted({
+                        RelatedLocation(
+                            os.path.relpath(os.path.realpath(loc.file_path), real_base_dir)
+                            if os.path.isabs(loc.file_path) else loc.file_path,
+                            loc.line_number, loc.column_number,
+                        ) for loc in issue.related_locations
+                    })
                     # Normalize any absolute paths in related_tus
                     norm_related: List[str] = []
                     for related in issue.related_tus:
@@ -1295,9 +1304,31 @@ def _scan_file_content(
             orig_snippet = "\n".join(location.line_content for location in locations).strip()
         issue.expanded_end_line = None
 
+        from .models import RelatedLocation
+        related = []
+        related_snippets = {}
+        for location in issue.related_locations:
+            mapped = line_map.get(location.line_number)
+            if mapped and mapped.is_analysis:
+                continue
+            path = mapped.file_path if mapped else file_path
+            line = mapped.line_number if mapped else location.line_number
+            suppression = get_suppression_map(path)
+            if not suppression or not suppression.is_suppressed(line, issue.rule_id):
+                restored = RelatedLocation(path, line, location.column_number)
+                related.append(restored)
+                related_snippets[restored] = (mapped.line_content.strip() if mapped else
+                    raw_lines[line - 1].strip() if 0 < line <= len(raw_lines) else "")
+        issue.related_locations = sorted(set(related))
         f_supp = get_suppression_map(orig_file)
         if f_supp and f_supp.is_suppressed(orig_line, issue.rule_id):
-            return
+            if not issue.related_locations:
+                return
+            promoted = issue.related_locations.pop(0)
+            orig_file, orig_line = promoted.file_path, promoted.line_number
+            issue.column_number = promoted.column_number
+            orig_snippet = related_snippets[promoted]
+            issue.suggested_fix_replacement = None
         if sev_filter and issue.impact not in sev_filter:
             return
 
