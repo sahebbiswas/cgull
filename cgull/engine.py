@@ -1218,8 +1218,6 @@ def _scan_file_content(
     raw_lines = content.splitlines()
     loc = orig_loc
     issues: List[Issue] = []
-    seen_keys: Set[str] = set()
-
     suppressions = SuppressionMap.from_source(original_lines) if enable_suppressions else None
 
     # Cache per-file suppression maps so inline ignore comments work across included headers
@@ -1282,10 +1280,13 @@ def _scan_file_content(
         issue.line_number = orig_line
         issue.code_snippet = orig_snippet
 
-        key = f"{issue.rule_id}:{issue.file_path}:{issue.line_number}:{issue.message}"
-        if key not in seen_keys:
-            seen_keys.add(key)
-            issues.append(issue)
+        # Preserve every analyzer candidate until source provenance has been
+        # restored and the stable fingerprint is available.  Earlier
+        # message/line-based deduplication can erase distinct same-line
+        # occurrences (especially column-1/coarse findings) and can also throw
+        # away stronger metadata from a second analyzer path.  The shared
+        # fingerprint finalizer owns logical deduplication.
+        issues.append(issue)
 
     parser_status = ParserStatus.FALLBACK_PARSER.value
     parse_tier = ParseTier.REGEX_FALLBACK.value
