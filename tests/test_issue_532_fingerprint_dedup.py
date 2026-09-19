@@ -199,7 +199,14 @@ def test_coarse_cross_tu_representations_merge_by_occurrence_multiplicity():
             related_tus=[tu],
         )
 
+    standalone_first = make_issue("standalone")
+    standalone_second = make_issue("standalone")
+    standalone_first.related_tus = []
+    standalone_second.related_tus = []
+
     issues = [
+        standalone_first,
+        standalone_second,
         make_issue("a.c"),
         make_issue("a.c"),
         make_issue("b.c"),
