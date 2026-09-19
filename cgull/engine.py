@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import logging
+import hashlib
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Dict, Tuple, Callable, Union, Any
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from .logging_config import TRACE_LEVEL_NUM, multiprocessing_logging_context
 from .parse_diagnostics import map_attempts, report_attempts, format_attempts
-from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, ScanConfig, ScanError, ConfigProfile, ScanMode
+from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, FixType, ScanConfig, ScanError, ConfigProfile, ScanMode
 from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander, HEADER_CACHE
 from .analysis_headers import is_analysis_header
@@ -124,6 +125,316 @@ def _validate_seed_flags_diagnostics(files: List[str], seed_profiles: List[Confi
                 fpath, lno = presence_locs[m_name]
                 loc_str = f" in {fpath}:{lno}"
             logger.warning("Warning: Seed value macro '%s' is configured with value '%s' but was only tested as a presence flag%s.", m_name, val, loc_str)
+
+
+_CONFIDENCE_RANK = {
+    Confidence.LIMITED: 0,
+    Confidence.FALLBACK: 1,
+    Confidence.FULL: 2,
+}
+
+_FIX_TYPE_RANK = {
+    FixType.MANUAL_REVIEW: 0,
+    FixType.SUGGESTED_FIX: 1,
+    FixType.SAFE_FIX: 2,
+}
+
+
+def _confidence_rank(value: Any) -> int:
+    try:
+        return _CONFIDENCE_RANK[Confidence(value)]
+    except (TypeError, ValueError, KeyError):
+        return -1
+
+
+def _fix_type_rank(value: Any) -> int:
+    try:
+        return _FIX_TYPE_RANK[FixType(value)]
+    except (TypeError, ValueError, KeyError):
+        return -1
+
+
+def _issue_representative_key(issue: Issue) -> Tuple[Any, ...]:
+    """Rank duplicate candidates without depending on discovery/worker order."""
+    source_quality = (
+        int(bool(issue.file_path))
+        + int(issue.line_number > 0)
+        + int(issue.column_number > 1)
+        + int(bool(issue.code_snippet))
+    )
+    return (
+        -source_quality,
+        str(issue.file_path or "").replace("\\", "/"),
+        issue.line_number,
+        issue.column_number,
+        str(issue.message or ""),
+        str(issue.engine or ""),
+        str(issue.code_snippet or ""),
+    )
+
+
+def _merge_reachable_under(left: List[str], right: List[str]) -> List[str]:
+    labels = {label for label in left + right if label}
+    if "unconditional" in labels:
+        return ["unconditional"]
+    return sorted(labels)
+
+
+def _merge_duplicate_issues(left: Issue, right: Issue) -> Issue:
+    """Return one deterministic representative while preserving stronger metadata."""
+    candidates = sorted((left, right), key=_issue_representative_key)
+    representative = candidates[0]
+
+    confidence_candidates = [issue.confidence for issue in candidates if issue.confidence is not None]
+    if confidence_candidates:
+        representative.confidence = max(
+            confidence_candidates,
+            key=lambda value: (_confidence_rank(value), str(value)),
+        )
+
+    fix_types = [issue.fix_type for issue in candidates]
+    representative.fix_type = max(
+        fix_types,
+        key=lambda value: (_fix_type_rank(value), str(value)),
+    )
+
+    auto_fixes = sorted({
+        issue.auto_fix_replacement
+        for issue in candidates
+        if issue.auto_fix_replacement
+    })
+    suggested_fixes = sorted({
+        issue.suggested_fix_replacement
+        for issue in candidates
+        if issue.suggested_fix_replacement
+    })
+    representative.auto_fix_replacement = auto_fixes[0] if auto_fixes else None
+    representative.suggested_fix_replacement = suggested_fixes[0] if suggested_fixes else None
+
+    for attr in ("remediation", "cwe_id", "rule_name"):
+        values = sorted({
+            getattr(issue, attr)
+            for issue in candidates
+            if getattr(issue, attr)
+        })
+        if values:
+            setattr(representative, attr, values[0])
+
+    representative.related_tus = sorted({
+        tu
+        for issue in candidates
+        for tu in issue.related_tus
+        if tu
+    })
+    representative.reachable_under = _merge_reachable_under(
+        left.reachable_under,
+        right.reachable_under,
+    )
+    return representative
+
+
+def _derived_occurrence_fingerprint(base_fingerprint: str, occurrence: int) -> str:
+    """Disambiguate repeated occurrences without making source coordinates identity.
+
+    The suffix is a stable multiplicity slot, not a per-line identity: N
+    identical logical occurrences always produce slots 0..N-1. Adding or
+    removing an occurrence therefore adds or removes one fingerprint without
+    churning the fingerprint set for the remaining multiplicity.
+    """
+    if occurrence == 0:
+        return base_fingerprint
+    payload = f"{base_fingerprint}\0occurrence:{occurrence}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def _merge_issue_cluster(cluster: List[Issue]) -> Issue:
+    ordered = sorted(cluster, key=_issue_representative_key)
+    merged = ordered[0]
+    for candidate in ordered[1:]:
+        merged = _merge_duplicate_issues(merged, candidate)
+    return merged
+
+
+def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
+    """Merge analyzer variants at one site while preserving repeated source occurrences.
+
+    The content fingerprint intentionally omits line numbers for baseline stability.
+    It is therefore only a *base* identity until physical occurrences are separated.
+    Precise columns distinguish same-line findings. A coarse column-1 row may
+    pair with a precise site only when its message and base fingerprint agree,
+    and pairing is multiplicity-preserving. Otherwise coarse rows stay separate
+    except for independent TU/profile representations aligned by occurrence.
+    """
+    by_line: Dict[int, List[Issue]] = {}
+    for issue in candidates:
+        by_line.setdefault(issue.line_number, []).append(issue)
+
+    sites: List[Issue] = []
+    for line_number in sorted(by_line):
+        line_candidates = sorted(by_line[line_number], key=_issue_representative_key)
+        precise: Dict[int, List[Issue]] = {}
+        coarse: List[Issue] = []
+        for issue in line_candidates:
+            if issue.column_number > 1:
+                precise.setdefault(issue.column_number, []).append(issue)
+            else:
+                coarse.append(issue)
+
+        clusters: List[List[Issue]] = [
+            precise[column]
+            for column in sorted(precise)
+        ]
+
+        if coarse:
+            # A coarse column-1 report may be another analyzer representation
+            # of a precise site. Exact message equality plus the same
+            # rule/path/snippet/line base fingerprint is useful evidence, but
+            # never collapse multiplicity: pair at most one coarse row with
+            # each precise site and preserve any excess coarse rows as distinct
+            # occurrences.
+            remaining_coarse: List[Issue] = []
+            coarse_by_message: Dict[str, List[Issue]] = {}
+            for issue in coarse:
+                coarse_by_message.setdefault(str(issue.message or ""), []).append(issue)
+
+            paired_precise_clusters: Set[int] = set()
+            for message in sorted(coarse_by_message):
+                rows = sorted(coarse_by_message[message], key=_issue_representative_key)
+                matching_clusters = [
+                    cluster
+                    for cluster in clusters
+                    if id(cluster) not in paired_precise_clusters
+                    and any(str(candidate.message or "") == message for candidate in cluster)
+                ]
+                for cluster, issue in zip(matching_clusters, rows):
+                    cluster.append(issue)
+                    paired_precise_clusters.add(id(cluster))
+                remaining_coarse.extend(rows[len(matching_clusters):])
+
+            coarse = remaining_coarse
+
+        if coarse:
+            # Unmatched column-1 rows have no precise-site evidence.
+            # Independent TU/profile representations can still be aligned by
+            # occurrence multiplicity without flattening distinct findings.
+            def representation_origin(issue: Issue) -> Optional[Tuple[str, str]]:
+                profile_tokens = sorted(
+                    label
+                    for label in issue.reachable_under
+                    if label.startswith("__cgull_profile__:")
+                )
+                if len(profile_tokens) == 1:
+                    return ("profile", profile_tokens[0])
+                related_tus = sorted(
+                    str(tu).replace("\\", "/")
+                    for tu in issue.related_tus
+                    if tu
+                )
+                if len(related_tus) == 1:
+                    return ("tu", related_tus[0])
+                source_path = str(issue.file_path or "").replace("\\", "/")
+                if not related_tus and source_path:
+                    # A standalone root scan is an independent representation
+                    # origin just like an including TU. This lets file mode
+                    # align a directly scanned header with its TU-expanded
+                    # copies without merging distinct occurrences within the
+                    # standalone header itself.
+                    return ("source", source_path)
+                return None
+
+            by_origin: Dict[Tuple[str, str], List[Issue]] = {}
+            origin_known = True
+            for issue in coarse:
+                origin = representation_origin(issue)
+                if origin is None:
+                    origin_known = False
+                    break
+                by_origin.setdefault(origin, []).append(issue)
+
+            if origin_known and len(by_origin) > 1:
+                ordered_origins = {
+                    origin: sorted(rows, key=_issue_representative_key)
+                    for origin, rows in sorted(by_origin.items())
+                }
+                clusters.extend(
+                    [
+                        [
+                            rows[occurrence]
+                            for rows in ordered_origins.values()
+                            if occurrence < len(rows)
+                        ]
+                        for occurrence in range(
+                            max(len(rows) for rows in ordered_origins.values())
+                        )
+                    ]
+                )
+            else:
+                clusters.extend([[issue] for issue in coarse])
+
+        sites.extend(_merge_issue_cluster(cluster) for cluster in clusters)
+
+    sites.sort(key=_issue_representative_key)
+    return sites
+
+
+def _issue_occurrence_key(issue: Issue) -> Tuple[Any, ...]:
+    """Order preserved finding occurrences independently of worker completion order."""
+    return (
+        str(issue.file_path or "").replace("\\", "/"),
+        issue.line_number,
+        issue.column_number,
+        str(issue.rule_id or ""),
+        str(issue.message or ""),
+        tuple(sorted(str(tu).replace("\\", "/") for tu in issue.related_tus if tu)),
+        str(issue.engine or ""),
+        str(issue.code_snippet or ""),
+    )
+
+
+def _assign_unique_occurrence_fingerprints(issues: List[Issue]) -> None:
+    """Give preserved rows unique fingerprints without merging any occurrences."""
+    by_base_fingerprint: Dict[str, List[Issue]] = {}
+    for issue in issues:
+        if not issue.fingerprint:
+            continue
+        by_base_fingerprint.setdefault(issue.fingerprint, []).append(issue)
+
+    for base_fingerprint, candidates in sorted(by_base_fingerprint.items()):
+        ordered = sorted(candidates, key=_issue_occurrence_key)
+        for occurrence, issue in enumerate(ordered):
+            issue.fingerprint = _derived_occurrence_fingerprint(base_fingerprint, occurrence)
+
+
+def _deduplicate_issues_by_fingerprint(issues: List[Issue]) -> List[Issue]:
+    """Finalize logical sites and ensure every normal-scan fingerprint is unique."""
+    by_base_fingerprint: Dict[str, List[Issue]] = {}
+    without_fingerprint: List[Issue] = []
+
+    for issue in issues:
+        if not issue.fingerprint:
+            without_fingerprint.append(issue)
+            continue
+        by_base_fingerprint.setdefault(issue.fingerprint, []).append(issue)
+
+    finalized: List[Issue] = []
+    for base_fingerprint in sorted(by_base_fingerprint):
+        sites = _coalesce_same_fingerprint_sites(by_base_fingerprint[base_fingerprint])
+        for occurrence, issue in enumerate(sites):
+            issue.fingerprint = _derived_occurrence_fingerprint(base_fingerprint, occurrence)
+            finalized.append(issue)
+
+    finalized.extend(without_fingerprint)
+    finalized.sort(
+        key=lambda issue: (
+            str(issue.file_path or "").replace("\\", "/"),
+            issue.line_number,
+            issue.column_number,
+            issue.rule_id,
+            issue.message,
+            issue.fingerprint,
+        )
+    )
+    return finalized
 
 
 class CGullScanner:
@@ -408,8 +719,12 @@ class CGullScanner:
         failed_count = 0
 
         real_base_dir = os.path.realpath(base_dir)
-        # Global deduplication across translation units
-        dedup_issues_map: Dict[Any, Issue] = {}
+        # Stable fingerprints are the finalized logical finding identity.
+        # Per-file dedup removes analyzer-path/profile duplicates. The global
+        # map additionally merges the same header-origin finding across TUs
+        # when header deduplication is enabled.
+        dedup_candidates: List[Issue] = []
+        dedup_headers = getattr(config, "dedup_headers", True)
         
         for file_path, file_issues, loc, duration_ms, parser_status, parse_tier, file_status, file_confidence, scan_err, parse_attempts in results:
             display_path = os.path.relpath(file_path, base_dir) if os.path.exists(base_dir) else os.path.basename(file_path)
@@ -445,7 +760,8 @@ class CGullScanner:
 
                     normalized_canonical_path = canonical_rel_path.replace("\\", "/")
 
-                    # Compute stable project-relative fingerprint without line numbers
+                    # Compute stable project-relative fingerprint without line numbers.
+                    # This is the final identity used by baselines and SARIF.
                     issue.fingerprint = compute_issue_fingerprint(
                         issue.rule_id,
                         normalized_canonical_path,
@@ -457,10 +773,11 @@ class CGullScanner:
 
                     # Preserve the canonical header path as the primary location in both modes
                     if is_from_header:
-                        try:
-                            issue.file_path = os.path.relpath(original_path, base_dir)
-                        except ValueError:
-                            issue.file_path = canonical_rel_path
+                        # Use the realpath-based project-relative spelling.
+                        # On macOS /var commonly resolves to /private/var; mixing
+                        # unresolved original_path with base_dir would give the
+                        # same header two different apparent paths/fingerprints.
+                        issue.file_path = canonical_rel_path
                         if display_path not in issue.related_tus:
                             issue.related_tus.append(display_path)
                     else:
@@ -476,30 +793,16 @@ class CGullScanner:
                                 norm_related.append(related)
                         else:
                             norm_related.append(related)
-                    issue.related_tus = norm_related
+                    issue.related_tus = sorted(set(norm_related))
 
-                    if getattr(config, "dedup_headers", True):
-                        # Disambiguation aggregation key across translation units
-                        dedup_key = (
-                            issue.fingerprint,
-                            normalized_canonical_path,
-                            issue.line_number,
-                            issue.column_number,
-                            issue.message,
-                        )
-                        if dedup_key not in dedup_issues_map:
-                            dedup_issues_map[dedup_key] = issue
-                            all_issues.append(issue)
-                        else:
-                            # Merge related_tus into existing deduplicated issue
-                            existing_issue = dedup_issues_map[dedup_key]
-                            for tu in issue.related_tus:
-                                if tu not in existing_issue.related_tus:
-                                    existing_issue.related_tus.append(tu)
-                    else:
-                        # No header deduplication: report each issue per translation unit,
-                        # preserving canonical header path as primary location and TU in related_tus
-                        all_issues.append(issue)
+                file_issues = _deduplicate_issues_by_fingerprint(file_issues)
+
+                if dedup_headers:
+                    dedup_candidates.extend(file_issues)
+                else:
+                    # Preserve the explicit per-TU mode while still collapsing
+                    # duplicate analyzer paths inside each translation unit.
+                    all_issues.extend(file_issues)
 
             total_loc += loc
 
@@ -521,6 +824,30 @@ class CGullScanner:
                 parse_tier=parse_tier,
                 parse_attempts=report_attempts(parse_attempts, base_dir),
             ))
+
+        if dedup_headers:
+            # Per-file finalization is used for file summaries. Rebuild each
+            # base fingerprint from canonical source provenance here so
+            # occurrence numbering is global and identical across TUs.
+            for issue in dedup_candidates:
+                issue.fingerprint = compute_issue_fingerprint(
+                    issue.rule_id,
+                    str(issue.file_path or "").replace("\\", "/"),
+                    issue.code_snippet,
+                )
+            all_issues.extend(_deduplicate_issues_by_fingerprint(dedup_candidates))
+        else:
+            # Per-TU reporting intentionally preserves separate rows for the
+            # same header site. Rebuild their base identity after per-file
+            # finalization, then uniquify the preserved occurrences without
+            # coalescing them so SARIF partial fingerprints cannot collide.
+            for issue in all_issues:
+                issue.fingerprint = compute_issue_fingerprint(
+                    issue.rule_id,
+                    str(issue.file_path or "").replace("\\", "/"),
+                    issue.code_snippet,
+                )
+            _assign_unique_occurrence_fingerprints(all_issues)
 
         duration = time.time() - start_time
         logger.info("Scan completed for '%s' in %.2fs: %d files analyzed, %d issues, %d failed", report_target_str, duration, analyzed_count, len(all_issues), failed_count)
@@ -758,6 +1085,8 @@ class CGullScanner:
         if self.severity_filter:
             file_issues = [i for i in file_issues if i.impact in self.severity_filter]
 
+        file_issues = _deduplicate_issues_by_fingerprint(file_issues)
+
         duration = time.time() - start_time
         high_total = sum(1 for i in file_issues if i.impact == Severity.HIGH)
         med_total = sum(1 for i in file_issues if i.impact == Severity.MEDIUM)
@@ -914,8 +1243,6 @@ def _scan_file_content(
     raw_lines = content.splitlines()
     loc = orig_loc
     issues: List[Issue] = []
-    seen_keys: Set[str] = set()
-
     suppressions = SuppressionMap.from_source(original_lines) if enable_suppressions else None
 
     # Cache per-file suppression maps so inline ignore comments work across included headers
@@ -978,10 +1305,13 @@ def _scan_file_content(
         issue.line_number = orig_line
         issue.code_snippet = orig_snippet
 
-        key = f"{issue.rule_id}:{issue.file_path}:{issue.line_number}:{issue.message}"
-        if key not in seen_keys:
-            seen_keys.add(key)
-            issues.append(issue)
+        # Preserve every analyzer candidate until source provenance has been
+        # restored and the stable fingerprint is available.  Earlier
+        # message/line-based deduplication can erase distinct same-line
+        # occurrences (especially column-1/coarse findings) and can also throw
+        # away stronger metadata from a second analyzer path.  The shared
+        # fingerprint finalizer owns logical deduplication.
+        issues.append(issue)
 
     parser_status = ParserStatus.FALLBACK_PARSER.value
     parse_tier = ParseTier.REGEX_FALLBACK.value
@@ -1132,7 +1462,7 @@ def _scan_file_content_profiles(
         base_mode = ScanMode.FILE
 
     total_duration_ms = 0.0
-    merged_issues: Dict[Tuple[str, int, str], Tuple[Issue, Set[ConfigProfile]]] = {}
+    profile_candidates: List[Issue] = []
     orig_loc = len(content.splitlines())
     loc = orig_loc
 
@@ -1143,7 +1473,7 @@ def _scan_file_content_profiles(
     has_profile_failure = False
     parse_attempts = []
 
-    for cp in profiles:
+    for profile_index, cp in enumerate(profiles):
         variant_config = ScanConfig.create(
             rules=base_rules,
             engine_mode=base_engine_mode,
@@ -1196,24 +1526,35 @@ def _scan_file_content_profiles(
             best_parse_tier = ParseTier.DIRECTIVE_STRIPPED.value
 
         for iss in v_issues:
-            if not iss.fingerprint:
-                iss.fingerprint = compute_issue_fingerprint(iss.rule_id, file_path, iss.code_snippet)
-            key = (iss.fingerprint, iss.line_number, iss.message)
-            if key not in merged_issues:
-                merged_issues[key] = (iss, {cp})
-            else:
-                merged_issues[key][1].add(cp)
+            provenance_path = str(iss.file_path or "").replace("\\", "/")
+            iss.fingerprint = compute_issue_fingerprint(
+                iss.rule_id,
+                provenance_path,
+                iss.code_snippet,
+            )
+            # Carry profile membership through the shared site-merging path.
+            # The private token is converted back to public reachable_under
+            # labels after all profile candidates have been coalesced.
+            iss.reachable_under = [f"__cgull_profile__:{profile_index}"]
+            profile_candidates.append(iss)
 
     best_file_status = "failed" if has_profile_failure else "success"
     num_profiles = len(profiles)
-    final_issues: List[Issue] = []
+    final_issues = _deduplicate_issues_by_fingerprint(profile_candidates)
 
-    for key, (iss, seen_profs) in merged_issues.items():
-        if len(seen_profs) == num_profiles:
+    for iss in final_issues:
+        seen_indices = {
+            int(label.rsplit(":", 1)[1])
+            for label in iss.reachable_under
+            if label.startswith("__cgull_profile__:")
+        }
+        if len(seen_indices) == num_profiles:
             iss.reachable_under = ["unconditional"]
         else:
-            iss.reachable_under = sorted({p.reachable_under for p in seen_profs})
-        final_issues.append(iss)
+            iss.reachable_under = sorted({
+                profiles[index].reachable_under
+                for index in seen_indices
+            })
 
     final_issues.sort(key=lambda x: (x.line_number, x.column_number, x.rule_id, x.message))
 

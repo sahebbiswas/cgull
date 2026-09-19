@@ -8,7 +8,7 @@ from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 import logging
 from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
-from ..utils import extract_balanced_parens, split_call_args
+from ..utils import extract_balanced_parens, mask_string_and_char_literals, split_call_args, strip_comments_keep_lines
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,10 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
         issues = []
         target_funcs = {"memcmp", "strcmp", "strncmp", "bcmp"}
 
+        column_lines, _ = strip_comments_keep_lines("\n".join(ast_ctx.source_lines))
+        column_lines = [mask_string_and_char_literals(line) for line in column_lines]
+        call_occurrences: Dict[Tuple[int, str], int] = {}
+
         for fn in ast_ctx.functions:
             fn_is_sec_ctx = _is_security_function_context(fn.name)
 
@@ -153,6 +157,27 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
             for call in fn.calls:
                 callee, line_no, raw_args = call[0], call[1], call[2]
                 if callee in target_funcs:
+                    occurrence_key = (line_no, callee)
+                    occurrence = call_occurrences.get(occurrence_key, 0)
+                    call_occurrences[occurrence_key] = occurrence + 1
+                    source_line = (
+                        ast_ctx.source_lines[line_no - 1]
+                        if 0 < line_no <= len(ast_ctx.source_lines)
+                        else ""
+                    )
+                    column_line = (
+                        column_lines[line_no - 1]
+                        if 0 < line_no <= len(column_lines)
+                        else mask_string_and_char_literals(source_line)
+                    )
+                    call_matches = list(
+                        re.finditer(rf"\b{re.escape(callee)}\s*\(", column_line)
+                    )
+                    column_number = (
+                        call_matches[occurrence].start() + 1
+                        if occurrence < len(call_matches)
+                        else 1
+                    )
                     arg_list = split_call_args(raw_args) if raw_args else []
 
                     if callee == "bcmp":
@@ -193,13 +218,13 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                                 should_flag = True
 
                     if should_flag:
-                        snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{callee}({raw_args})"
+                        snippet = source_line.strip() if source_line else f"{callee}({raw_args})"
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=line_no,
                             code_snippet=snippet,
                             message=f"Standard comparison '{callee}()' on security-sensitive values ({raw_args.strip()}) is vulnerable to timing side-channel attacks (CWE-208).",
-                            column_number=1,
+                            column_number=column_number,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"CRYPTO_memcmp({raw_args})"
@@ -738,6 +763,9 @@ class WeakCryptoPrimitivesRule(BaseRule):
 
         for fn in ast_ctx.functions:
             fn_is_sec_ctx = _is_security_function_context(fn.name)
+            direct_callees_by_line: Dict[int, Set[str]] = {}
+            for recorded_call in fn.calls:
+                direct_callees_by_line.setdefault(recorded_call[1], set()).add(recorded_call[0])
 
             for call in fn.calls:
                 callee, line_no, raw_args = call[0], call[1], call[2]
@@ -771,6 +799,13 @@ class WeakCryptoPrimitivesRule(BaseRule):
                 elif re.search(r'\b(?:EVP_md5|EVP_sha1|EVP_md5_sha1|EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*|DES_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(\s*\)', raw_args):
                     weak_m = re.search(r'\b(EVP_md5|EVP_sha1|EVP_md5_sha1|EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*|DES_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(\s*\)', raw_args)
                     weak_fn = weak_m.group(1) if weak_m else "weak primitive"
+                    # pycparser records nested FuncCall nodes independently.
+                    # Do not also report the parent call merely because its
+                    # argument text contains the same weak primitive. Retain
+                    # this fallback only for contexts that did not surface the
+                    # inner call separately.
+                    if weak_fn in direct_callees_by_line.get(line_no, set()):
+                        continue
                     if "sha1" in weak_fn:
                         primitive_kind = "SHA1"
                         message = f"Use of weak cryptographic hash function '{weak_fn}()' in security-sensitive context (CWE-327)."

@@ -89,11 +89,12 @@ class TestHeaderDeduplication(unittest.TestCase):
         all_related_tus = {tu for issue in gets_issues for tu in issue.related_tus}
         self.assertIn(os.path.relpath(self.file1, self.temp_dir), all_related_tus)
         self.assertIn(os.path.relpath(self.file2, self.temp_dir), all_related_tus)
+        fingerprints = [issue.fingerprint for issue in gets_issues]
+        self.assertTrue(all(fingerprints))
+        self.assertEqual(len(fingerprints), len(set(fingerprints)))
 
-    def test_header_multiple_findings_disambiguated(self):
-        """If a header contains multiple identical vulnerabilities on different lines,
-        deduplication must preserve both distinct occurrences while merging their related_tus.
-        """
+    def test_header_identical_text_at_distinct_sites_gets_unique_fingerprints(self):
+        """Repeated identical source occurrences remain distinct logical findings."""
         multi_header = """
 #ifndef MULTI_HEADER_H
 #define MULTI_HEADER_H
@@ -114,17 +115,25 @@ void f2(char *b) {
         scanner = CGullScanner()  # dedup_headers=True
         result = scanner.scan_path(self.temp_dir)
         gets_issues = [i for i in result.issues if i.rule_id == "CGULL-001"]
-        # Should have 2 distinct deduplicated issues (for the 2 distinct lines in header.h)
         self.assertEqual(len(gets_issues), 2)
-        # Both issues share the same fingerprint since rule, relpath, and snippet are identical
-        self.assertEqual(gets_issues[0].fingerprint, gets_issues[1].fingerprint)
-        # But their line numbers are distinct
+        self.assertEqual(len({i.fingerprint for i in gets_issues}), 2)
         self.assertNotEqual(gets_issues[0].line_number, gets_issues[1].line_number)
-        # And both have both TUs in related_tus
         for issue in gets_issues:
             self.assertTrue(issue.file_path.endswith("header.h"))
             self.assertIn(os.path.relpath(self.file1, self.temp_dir), issue.related_tus)
             self.assertIn(os.path.relpath(self.file2, self.temp_dir), issue.related_tus)
+
+    def test_parallel_and_sequential_header_dedup_are_identical(self):
+        scanner = CGullScanner()
+        sequential = scanner.scan_path(self.temp_dir, jobs=1)
+        parallel = scanner.scan_path(self.temp_dir, jobs=2)
+
+        self.assertEqual(
+            [issue.to_dict() for issue in sequential.issues],
+            [issue.to_dict() for issue in parallel.issues],
+        )
+        fingerprints = [issue.fingerprint for issue in parallel.issues if issue.fingerprint]
+        self.assertEqual(len(fingerprints), len(set(fingerprints)))
 
     def test_sarif_header_location_preserved_when_dedup_disabled(self):
         """SARIF report must maintain the canonical header URI and region coordinates
@@ -140,13 +149,34 @@ void f2(char *b) {
         results = [r for r in sarif_obj["runs"][0]["results"] if r["ruleId"] == "CGULL-001"]
         self.assertGreaterEqual(len(results), 2)
         including_tus = set()
+        fingerprints = []
         for r in results:
             uri = r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
             self.assertTrue(uri.endswith("header.h"))
+            fingerprints.append(r["partialFingerprints"]["cgullFingerprint/v1"])
             for tu in r["properties"].get("relatedTUs", []):
                 including_tus.add(tu)
         self.assertIn(os.path.relpath(self.file1, self.temp_dir), including_tus)
         self.assertIn(os.path.relpath(self.file2, self.temp_dir), including_tus)
+        self.assertEqual(len(fingerprints), len(set(fingerprints)))
+
+    def test_no_deduplication_fingerprints_are_parallel_deterministic(self):
+        def snapshot(jobs):
+            config = ScanConfig.create(dedup_headers=False)
+            result = CGullScanner(config=config).scan_path(self.temp_dir, jobs=jobs)
+            return sorted(
+                (
+                    issue.file_path.replace("\\", "/"),
+                    issue.line_number,
+                    issue.column_number,
+                    tuple(sorted(tu.replace("\\", "/") for tu in issue.related_tus)),
+                    issue.fingerprint,
+                )
+                for issue in result.issues
+                if issue.rule_id == "CGULL-001"
+            )
+
+        self.assertEqual(snapshot(1), snapshot(2))
 
     def test_fingerprint_checkout_location_independence(self):
         """Fingerprints must depend only on rule_id, project-relative canonical path, and normalized snippet,
