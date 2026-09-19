@@ -113,4 +113,10 @@ def test_null_guard_does_not_hide_use_after_free():
             return p ? *p : 0;
         }
     '''
-    assert scan(code, "CGULL-022")
+    issues = scan(code, "CGULL-022")
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue.rule_id == "CGULL-022"
+    assert issue.cwe_id == "CWE-416"
+    assert issue.line_number == 6
+    assert issue.code_snippet.strip() == "return p ? *p : 0;"
