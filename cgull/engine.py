@@ -307,6 +307,14 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
                 )
                 if len(related_tus) == 1:
                     return ("tu", related_tus[0])
+                source_path = str(issue.file_path or "").replace("\\", "/")
+                if not related_tus and source_path:
+                    # A standalone root scan is an independent representation
+                    # origin just like an including TU. This lets file mode
+                    # align a directly scanned header with its TU-expanded
+                    # copies without merging distinct occurrences within the
+                    # standalone header itself.
+                    return ("source", source_path)
                 return None
 
             by_origin: Dict[Tuple[str, str], List[Issue]] = {}
