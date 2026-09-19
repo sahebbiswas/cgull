@@ -793,7 +793,7 @@ class CGullScanner:
             for issue in dedup_candidates:
                 issue.fingerprint = compute_issue_fingerprint(
                     issue.rule_id,
-                    str(issue.file_path).replace("\\", "/"),
+                    str(issue.file_path or "").replace("\\", "/"),
                     issue.code_snippet,
                 )
             all_issues.extend(_deduplicate_issues_by_fingerprint(dedup_candidates))
@@ -1486,7 +1486,7 @@ def _scan_file_content_profiles(
             best_parse_tier = ParseTier.DIRECTIVE_STRIPPED.value
 
         for iss in v_issues:
-            provenance_path = str(iss.file_path).replace("\\", "/")
+            provenance_path = str(iss.file_path or "").replace("\\", "/")
             iss.fingerprint = compute_issue_fingerprint(
                 iss.rule_id,
                 provenance_path,
