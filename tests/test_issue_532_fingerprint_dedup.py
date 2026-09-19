@@ -211,3 +211,43 @@ def test_coarse_cross_tu_representations_merge_by_occurrence_multiplicity():
     assert len(finalized) == 2
     assert len({issue.fingerprint for issue in finalized}) == 2
     assert all(issue.related_tus == ["a.c", "b.c"] for issue in finalized)
+
+
+def test_mixed_precise_and_coarse_same_line_findings_stay_distinct_without_site_evidence():
+    precise = Issue(
+        rule_id="CGULL-999",
+        rule_name="Synthetic",
+        impact=Severity.HIGH,
+        file_path="src/example.c",
+        line_number=10,
+        column_number=8,
+        code_snippet="danger(); danger();",
+        message="precise finding",
+        fingerprint="same",
+        engine="Regex",
+    )
+    coarse = copy.deepcopy(precise)
+    coarse.column_number = 1
+    coarse.message = "distinct coarse finding"
+    coarse.engine = "AST"
+
+    finalized = _deduplicate_issues_by_fingerprint([precise, coarse])
+
+    assert len(finalized) == 2
+    assert {issue.column_number for issue in finalized} == {1, 8}
+    assert len({issue.fingerprint for issue in finalized}) == 2
+
+
+def test_cgull_005_same_line_calls_keep_distinct_precise_occurrences():
+    source = """
+int check_token(const char *token) {
+    return strcmp(token, "token") == 0 || strcmp(token, "token") == 0;
+}
+"""
+    result = _cgull_005_scanner().scan_text(source, "same_line_compare.c")
+    issues = [issue for issue in result.issues if issue.rule_id == "CGULL-005"]
+
+    assert len(issues) == 2
+    assert all(issue.column_number > 1 for issue in issues)
+    assert len({issue.column_number for issue in issues}) == 2
+    assert len({issue.fingerprint for issue in issues}) == 2
