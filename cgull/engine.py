@@ -167,9 +167,9 @@ def _issue_representative_key(issue: Issue) -> Tuple[Any, ...]:
         str(issue.file_path or "").replace("\\", "/"),
         issue.line_number,
         issue.column_number,
-        issue.message,
-        issue.engine,
-        issue.code_snippet,
+        str(issue.message or ""),
+        str(issue.engine or ""),
+        str(issue.code_snippet or ""),
     )
 
 
@@ -344,11 +344,11 @@ def _issue_occurrence_key(issue: Issue) -> Tuple[Any, ...]:
         str(issue.file_path or "").replace("\\", "/"),
         issue.line_number,
         issue.column_number,
-        issue.rule_id,
-        issue.message,
+        str(issue.rule_id or ""),
+        str(issue.message or ""),
         tuple(sorted(str(tu).replace("\\", "/") for tu in issue.related_tus if tu)),
-        issue.engine,
-        issue.code_snippet,
+        str(issue.engine or ""),
+        str(issue.code_snippet or ""),
     )
 
 
