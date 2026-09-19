@@ -260,10 +260,10 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
 
     The content fingerprint intentionally omits line numbers for baseline stability.
     It is therefore only a *base* identity until physical occurrences are separated.
-    Precise columns distinguish same-line findings and are the only direct
-    coordinate evidence used for site merging. Coarse column-1 rows remain
-    separate from precise rows; only independent TU/profile representations are
-    aligned by occurrence multiplicity.
+    Precise columns distinguish same-line findings. A coarse column-1 row may
+    pair with a precise site only when its message and base fingerprint agree,
+    and pairing is multiplicity-preserving. Otherwise coarse rows stay separate
+    except for independent TU/profile representations aligned by occurrence.
     """
     by_line: Dict[int, List[Issue]] = {}
     for issue in candidates:
