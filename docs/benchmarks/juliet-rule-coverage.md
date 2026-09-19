@@ -10,7 +10,7 @@ The machine-readable source of truth is [`benchmarks/juliet/rule_coverage.json`]
 
 CI cross-checks the matrix against the live `RULE_REGISTRY`. Adding or removing a C-GULL rule without updating the matrix fails the test suite. CI also rejects a `measured` claim unless the rule is present in the benchmark's canonical `CWE_RULE_MAP`, preventing documentation from overstating empirical coverage.
 
-The current active registry contains 55 rules. With CGULL-042 measured against CWE-563, 16 are Juliet-measured, 8 are explicitly classified as having no suitable Juliet equivalent, and 31 remain to be measured. Dedicated non-Juliet quality corpora, such as the embedded trust-boundary corpus for CGULL-047, remain valuable regression gates but do not change the Juliet status.
+The current active registry contains 56 rules. With CGULL-042 measured against CWE-563, 16 are Juliet-measured, 8 are explicitly classified as having no suitable Juliet equivalent, and 32 remain to be measured. Dedicated non-Juliet quality corpora, such as the embedded trust-boundary corpus for CGULL-047, remain valuable regression gates but do not change the Juliet status.
 
 ## Extending coverage
 

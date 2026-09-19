@@ -59,6 +59,7 @@ from .types_and_arrays import (
     IntegerNarrowingCastRule,
     PointerRangeBoundsRule,
     ValidatedPointerRangeRule,
+    ReversePointerWalkRule,
     PointerEndpointWraparoundRule,
     PointerProvenanceRule,
 )
@@ -112,6 +113,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     UnvalidatedExternalDataSinkRule,
     PointerRangeBoundsRule,
     ValidatedPointerRangeRule,
+    ReversePointerWalkRule,
     PointerEndpointWraparoundRule,
     PointerProvenanceRule,
     # Medium Impact
@@ -167,6 +169,7 @@ UnvalidatedExternalDataSinkRule.analysis_requirements = frozenset({SECURITY_SUMM
 for _rule_cls in (
     PointerRangeBoundsRule,
     ValidatedPointerRangeRule,
+    ReversePointerWalkRule,
     PointerEndpointWraparoundRule,
     PointerProvenanceRule,
 ):
