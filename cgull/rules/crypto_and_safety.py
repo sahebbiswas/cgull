@@ -8,7 +8,7 @@ from .base import BaseRule
 from ..models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 import logging
 from ..ast_analyzer import CASTContext, _format_pycparser_type, _format_pycparser_expr, _extract_identifiers_from_ast, _PRELUDE_LINE_COUNT
-from ..utils import extract_balanced_parens, split_call_args
+from ..utils import extract_balanced_parens, mask_string_and_char_literals, split_call_args, strip_comments_keep_lines
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,10 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
         issues = []
         target_funcs = {"memcmp", "strcmp", "strncmp", "bcmp"}
 
+        column_lines, _ = strip_comments_keep_lines("\n".join(ast_ctx.source_lines))
+        column_lines = [mask_string_and_char_literals(line) for line in column_lines]
+        call_occurrences: Dict[Tuple[int, str], int] = {}
+
         for fn in ast_ctx.functions:
             fn_is_sec_ctx = _is_security_function_context(fn.name)
 
@@ -150,7 +154,6 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                 if g_name not in var_types:
                     var_types[g_name] = g_obj.type_name.lower()
 
-            call_occurrences: Dict[Tuple[int, str], int] = {}
             for call in fn.calls:
                 callee, line_no, raw_args = call[0], call[1], call[2]
                 if callee in target_funcs:
@@ -162,8 +165,13 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                         if 0 < line_no <= len(ast_ctx.source_lines)
                         else ""
                     )
+                    column_line = (
+                        column_lines[line_no - 1]
+                        if 0 < line_no <= len(column_lines)
+                        else mask_string_and_char_literals(source_line)
+                    )
                     call_matches = list(
-                        re.finditer(rf"\b{re.escape(callee)}\s*\(", source_line)
+                        re.finditer(rf"\b{re.escape(callee)}\s*\(", column_line)
                     )
                     column_number = (
                         call_matches[occurrence].start() + 1
