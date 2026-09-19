@@ -234,7 +234,13 @@ def _merge_duplicate_issues(left: Issue, right: Issue) -> Issue:
 
 
 def _derived_occurrence_fingerprint(base_fingerprint: str, occurrence: int) -> str:
-    """Disambiguate repeated physical occurrences without making line numbers identity."""
+    """Disambiguate repeated occurrences without making source coordinates identity.
+
+    The suffix is a stable multiplicity slot, not a per-line identity: N
+    identical logical occurrences always produce slots 0..N-1. Adding or
+    removing an occurrence therefore adds or removes one fingerprint without
+    churning the fingerprint set for the remaining multiplicity.
+    """
     if occurrence == 0:
         return base_fingerprint
     payload = f"{base_fingerprint}\0occurrence:{occurrence}".encode("utf-8")
