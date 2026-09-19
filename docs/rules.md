@@ -239,3 +239,15 @@ facts. Functions with shadowing, `goto`, labels or `switch` are conservatively
 excluded. Complex control-flow exits and interprocedural cursor updates are not
 fully modeled. Behavioral corpus coverage is provided; Juliet coverage is
 **not yet measured**.
+
+## Nullable pointers (CGULL-004)
+
+Local pointers include results of calls with known nullable return contracts,
+including same-TU helper summaries. CGULL-004 reports definite or possible NULL
+values at `*p`, `p[i]`, `p->field`, and modeled non-NULL argument uses such as
+`strcmp(p, other)`. Dominating guards and expression-local short-circuit or
+conditional guards suppress these findings. Unknown call results alone do not
+establish nullable evidence. This requires AST/CFG analysis; lexical fallback
+retains its direct-NULL and parameter checks. CGULL-003 remains allocation-specific.
+
+See [nullable call contracts](trust-boundary-semantic-models.md#nullable-call-contracts).

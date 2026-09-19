@@ -63,8 +63,9 @@ def _get_builtin_summaries(
             summary.freed_params.update(effect.deallocates)
         if effect.output_parameters:
             summary.may_initialize_params.update(effect.output_parameters)
-        if effect.return_effect is ReturnEffect.ALLOCATION:
-            summary.returns_allocation = True
+        summary.unsafe_deref_params.update(effect.nonnull)
+        if effect.return_effect in {ReturnEffect.ALLOCATION, ReturnEffect.NULLABLE}:
+            summary.returns_allocation = effect.return_effect is ReturnEffect.ALLOCATION
             summary.return_nullness = Nullness.MAYBE_NULL
         builtins[function] = summary
     return builtins
@@ -422,6 +423,9 @@ def _analyze_one_function(
                     ret_nullness = callee_summary.return_nullness
                     if callee_summary.returns_allocation:
                         returns_alloc = True
+            elif (expr_ast is not None and type(expr_ast).__name__ == "UnaryOp"
+                  and expr_ast.op == "&" and type(expr_ast.expr).__name__ == "ID"):
+                ret_nullness = Nullness.NON_NULL
             elif expr_ast is not None and _is_nullish(expr_ast):
                 ret_nullness = Nullness.NULL
             elif ret_expr in {"NULL", "nullptr", "0", "0x0", "(void*)0", "(void *)0"}:
