@@ -297,15 +297,18 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
             for issue in coarse:
                 coarse_by_message.setdefault(str(issue.message or ""), []).append(issue)
 
+            paired_precise_clusters: Set[int] = set()
             for message in sorted(coarse_by_message):
                 rows = sorted(coarse_by_message[message], key=_issue_representative_key)
                 matching_clusters = [
                     cluster
                     for cluster in clusters
-                    if any(str(candidate.message or "") == message for candidate in cluster)
+                    if id(cluster) not in paired_precise_clusters
+                    and any(str(candidate.message or "") == message for candidate in cluster)
                 ]
                 for cluster, issue in zip(matching_clusters, rows):
                     cluster.append(issue)
+                    paired_precise_clusters.add(id(cluster))
                 remaining_coarse.extend(rows[len(matching_clusters):])
 
             coarse = remaining_coarse
