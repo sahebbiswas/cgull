@@ -287,3 +287,17 @@ def test_matching_coarse_and_precise_rows_merge_by_multiplicity_without_losing_o
     assert len(finalized) == 2
     assert {issue.column_number for issue in finalized} == {8, 20}
     assert len({issue.fingerprint for issue in finalized}) == 2
+
+
+def test_cgull_005_column_mapping_ignores_literal_and_comment_lookalikes():
+    source = """
+int check_token(const char *token) {
+    const char *note = "strcmp("; /* strcmp( */ return strcmp(token, "token") == 0;
+}
+"""
+    result = _cgull_005_scanner().scan_text(source, "column_compare.c")
+    issues = [issue for issue in result.issues if issue.rule_id == "CGULL-005"]
+
+    assert len(issues) == 1
+    source_line = source.splitlines()[2]
+    assert issues[0].column_number == source_line.index("strcmp(token") + 1
