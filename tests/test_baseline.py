@@ -129,16 +129,48 @@ class TestApplyBaseline(unittest.TestCase):
         self.assertEqual(diffed.baseline_new_count, 0)
         self.assertEqual(diffed.baseline_resolved_count, len(vulnerable.issues))
 
-    def test_duplicate_fingerprint_multiset_diff(self):
-        # Two identical-looking findings on two different lines share a
-        # fingerprint; a second occurrence beyond what the baseline had
-        # must still be recognized as new (not silently absorbed by a
-        # plain set-membership check).
-        one_call = CGullScanner().scan_text("void f(char *a) {\n    gets(a);\n}\n", "app.c")
-        two_calls = CGullScanner().scan_text("void f(char *a, char *b) {\n    gets(a);\n    gets(b);\n}\n", "app.c")
-        baseline_counts = Counter(i.fingerprint for i in one_call.issues)
-        diffed = apply_baseline(two_calls, baseline_counts)
-        gets_new = [i for i in diffed.issues if i.rule_id == "CGULL-001"]
+    def test_repeated_occurrence_fingerprint_slots_preserve_baseline_multiplicity(self):
+        # Occurrence suffixes represent multiplicity slots rather than
+        # persistent line identities. Inserting an identical occurrence before
+        # existing ones must preserve the old fingerprint set and add exactly
+        # one new slot even though the physical line numbers move.
+        baseline = CGullScanner().scan_text(
+            "void f(char *a) {\n"
+            "    gets(a);\n"
+            "    int marker = 0;\n"
+            "    gets(a);\n"
+            "}\n",
+            "app.c",
+        )
+        current = CGullScanner().scan_text(
+            "void f(char *a) {\n"
+            "    gets(a);\n"
+            "    gets(a);\n"
+            "    int marker = 0;\n"
+            "    gets(a);\n"
+            "}\n",
+            "app.c",
+        )
+        baseline_gets = {
+            issue.fingerprint
+            for issue in baseline.issues
+            if issue.rule_id == "CGULL-001"
+        }
+        current_gets = {
+            issue.fingerprint
+            for issue in current.issues
+            if issue.rule_id == "CGULL-001"
+        }
+
+        self.assertEqual(len(baseline_gets), 2)
+        self.assertEqual(len(current_gets), 3)
+        self.assertLessEqual(baseline_gets, current_gets)
+
+        diffed = apply_baseline(
+            current,
+            Counter(issue.fingerprint for issue in baseline.issues),
+        )
+        gets_new = [issue for issue in diffed.issues if issue.rule_id == "CGULL-001"]
         self.assertEqual(len(gets_new), 1)
 
     def test_result_fields_marked_as_baseline_filtered(self):
