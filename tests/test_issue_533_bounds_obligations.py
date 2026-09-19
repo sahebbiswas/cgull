@@ -152,3 +152,28 @@ def test_new_proof_and_later_definition_split_groups():
     }"""
     issues = scan(code)
     assert [(i.line_number, [loc.line_number for loc in i.related_locations]) for i in issues] == [(3, [4]), (7, [8])]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("other_site", [("test.c", 9, 7), ("header.h", 2, 13)])
+def test_duplicate_merge_preserves_alternate_primary(reverse, other_site):
+    from copy import deepcopy
+    from cgull.engine import _merge_duplicate_issues
+    from cgull.models import RelatedLocation
+
+    issue = scan(CODE)[0]
+    other = deepcopy(issue)
+    other.file_path, other.line_number, other.column_number = other_site
+    first_primary = RelatedLocation(issue.file_path, issue.line_number, issue.column_number)
+    second_primary = RelatedLocation(*other_site)
+    # Neither alternate primary need appear in the other's related locations.
+    # Include duplicate secondary sites and a self-reference to test cleanup.
+    issue.related_locations.append(first_primary)
+    other.related_locations.append(other.related_locations[0])
+    expected = {first_primary, second_primary, *issue.related_locations, *other.related_locations}
+    left, right = (other, issue) if reverse else (issue, other)
+    merged = _merge_duplicate_issues(left, right)
+    primary = RelatedLocation(merged.file_path, merged.line_number, merged.column_number)
+    assert merged.related_locations == sorted(expected - {primary})
+    assert primary == min(first_primary, second_primary)
+    assert {primary, *merged.related_locations} == expected

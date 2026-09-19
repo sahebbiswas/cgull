@@ -220,7 +220,16 @@ def _merge_duplicate_issues(left: Issue, right: Issue) -> Issue:
         if values:
             setattr(representative, attr, values[0])
 
-    representative.related_locations = sorted({loc for issue in candidates for loc in issue.related_locations})
+    from .models import RelatedLocation
+    primary = RelatedLocation(
+        representative.file_path, representative.line_number, representative.column_number,
+    )
+    locations = {loc for issue in candidates for loc in issue.related_locations}
+    locations.update(
+        RelatedLocation(issue.file_path, issue.line_number, issue.column_number)
+        for issue in candidates
+    )
+    representative.related_locations = sorted(locations - {primary})
     representative.related_tus = sorted({
         tu
         for issue in candidates
