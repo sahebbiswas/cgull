@@ -150,9 +150,26 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                 if g_name not in var_types:
                     var_types[g_name] = g_obj.type_name.lower()
 
+            call_occurrences: Dict[Tuple[int, str], int] = {}
             for call in fn.calls:
                 callee, line_no, raw_args = call[0], call[1], call[2]
                 if callee in target_funcs:
+                    occurrence_key = (line_no, callee)
+                    occurrence = call_occurrences.get(occurrence_key, 0)
+                    call_occurrences[occurrence_key] = occurrence + 1
+                    source_line = (
+                        ast_ctx.source_lines[line_no - 1]
+                        if 0 < line_no <= len(ast_ctx.source_lines)
+                        else ""
+                    )
+                    call_matches = list(
+                        re.finditer(rf"\b{re.escape(callee)}\s*\(", source_line)
+                    )
+                    column_number = (
+                        call_matches[occurrence].start() + 1
+                        if occurrence < len(call_matches)
+                        else 1
+                    )
                     arg_list = split_call_args(raw_args) if raw_args else []
 
                     if callee == "bcmp":
@@ -193,13 +210,13 @@ class NonConstantTimeMemoryComparisonRule(BaseRule):
                                 should_flag = True
 
                     if should_flag:
-                        snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else f"{callee}({raw_args})"
+                        snippet = source_line.strip() if source_line else f"{callee}({raw_args})"
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=line_no,
                             code_snippet=snippet,
                             message=f"Standard comparison '{callee}()' on security-sensitive values ({raw_args.strip()}) is vulnerable to timing side-channel attacks (CWE-208).",
-                            column_number=1,
+                            column_number=column_number,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"CRYPTO_memcmp({raw_args})"
