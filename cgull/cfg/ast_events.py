@@ -477,6 +477,24 @@ def _event_payload(
     else:
         default_line = 1
     deref_lines = _deref_vars_with_lines(ast_node, default_line=default_line, line_map=line_map)
+    # Known callees consume pointer arguments just like explicit dereferences.
+    for use_kind, payload, guarded in _guarded_expression_uses(ast_node):
+        if use_kind == "deref":
+            continue
+        summary = (summaries or {}).get(_format_pycparser_expr(payload.name))
+        if summary is None:
+            continue
+        args = list(getattr(payload.args, "exprs", []) or [])
+        for index in sorted(summary.unsafe_deref_params):
+            if index >= len(args):
+                continue
+            arg = _unwrap_cast(args[index])
+            if type(arg).__name__ != "ID":
+                continue
+            coord = getattr(payload, "coord", None)
+            line = (_map_line(max(1, coord.line - _PRELUDE_LINE_COUNT), line_map)
+                    if coord is not None else default_line)
+            deref_lines.setdefault(arg.name, line)
     derefs = set(deref_lines.keys())
     alias_writes: Dict[str, str] = {}
     realloc_inputs: Set[str] = set()

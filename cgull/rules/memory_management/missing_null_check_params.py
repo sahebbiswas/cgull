@@ -18,6 +18,7 @@ from .helpers import (
     _ast_cfg_for_function,
     _find_unsafe_allocation_use,
     _find_unsafe_param_deref,
+    _unchecked_deref_vars,
     _find_uaf_uses,
     _find_memory_leak_exits,
 )
@@ -38,6 +39,9 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
     sample_remediated_code = "int process_data(int *data, char *tag) {\n    if (data == NULL || tag == NULL) return -EINVAL;\n    *data = 100;\n    return 0;\n}"
     analysis_engine = AnalysisEngine.AST
 
+    def set_semantic_models(self, registry):
+        self._semantic_models = registry
+
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         summaries = self.get_analysis_session(ast_ctx).function_summaries
@@ -47,14 +51,14 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
 
             if cfg is not None:
                 reported_nodes = set()
-                # 1. Direct NULL pointer dereferences (known to be NULL)
+                # 1. Definite or possible NULL dereferences with known contracts.
                 sorted_nodes = sorted(cfg.nodes.values(), key=lambda n: n.node_id)
                 for node in sorted_nodes:
                     if not node.derefs:
                         continue
-                    for deref_var in sorted(node.derefs):
+                    for deref_var in sorted(_unchecked_deref_vars(node, summaries)):
                         null_status = cfg.query_nullness(deref_var, node.node_id)
-                        if null_status == Nullness.NULL:
+                        if null_status in {Nullness.NULL, Nullness.MAYBE_NULL}:
                             deref_line = node.get_deref_line(deref_var)
                             key = (deref_line, deref_var, "null_deref")
                             if key not in reported_nodes:
@@ -64,7 +68,9 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                                     file_path=file_path,
                                     line_number=deref_line,
                                     code_snippet=snippet,
-                                    message=f"Null pointer dereference: pointer '{deref_var}' is known to be NULL when dereferenced.",
+                                    message=(f"Null pointer dereference: pointer '{deref_var}' "
+                                             + ("is known to be NULL" if null_status == Nullness.NULL else "may be NULL")
+                                             + " when dereferenced."),
                                     column_number=1,
                                     engine="AST",
                                     fix_type=FixType.SUGGESTED_FIX,
@@ -73,12 +79,12 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
 
                 # 2. Pointer parameters dereferenced without a preceding NULL check
                 for param in ptr_params:
-                    unsafe = _find_unsafe_param_deref(cfg, param.name)
+                    unsafe = _find_unsafe_param_deref(cfg, param.name, summaries)
                     if unsafe is None:
                         continue
                     null_status = cfg.query_nullness(param.name, unsafe.node_id)
-                    if null_status == Nullness.NULL:
-                        continue  # Already reported above under direct NULL dereference
+                    if null_status in {Nullness.NULL, Nullness.MAYBE_NULL}:
+                        continue  # Already reported above
                     deref_line = unsafe.get_deref_line(param.name)
                     key = (deref_line, param.name, "param_missing_check")
                     if key not in reported_nodes:

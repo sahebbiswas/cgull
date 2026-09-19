@@ -153,3 +153,27 @@ access, `memcpy`, `memmove`, `memcmp`, and configured call-effect
 A successful check on only one path does not establish a proof after a merge;
 a fail-closed early return does. Pointer reassignment replaces its facts.
 Separate successful checks may cover adjacent intervals of the same origin.
+## Nullable call contracts
+
+```toml
+[[semantic_models.effects]]
+function = "lookup_record"
+returns = "nullable"
+
+[[semantic_models.effects]]
+function = "consume_record"
+nonnull = [0]
+```
+
+`returns = "nullable"` seeds a MAYBE_NULL return summary without allocation or
+ownership. Existing `returns = "allocation"` retains its allocation semantics;
+`returns = "none"` supplies no return contract. `nonnull` lists zero-based argument
+positions whose pointer values are consumed without a NULL check. Model only
+unconditional requirements; APIs with flag- or length-dependent behavior need
+a more specific contract. Project effects replace built-ins by function name.
+
+Built-in nullable sources are `crypt`, `getenv`, `strchr`, `strrchr`, and `fopen`.
+Their required string arguments, both `strcmp` arguments, and the `strlen`
+argument have non-NULL contracts. Conditional `realpath` ownership forms are
+not modeled here. These contracts feed shared summaries and CGULL-004; a
+nullable return does not cause CGULL-003 to treat it as a heap allocation.

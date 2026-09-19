@@ -174,7 +174,34 @@ def _find_unsafe_allocation_use(
     return None
 
 
-def _find_unsafe_param_deref(cfg: StructuredCFG, param: str):
+def _unchecked_deref_vars(node: CFGEvent, summaries=None):
+    """Nullness uses excluding expression-local non-NULL proofs.
+
+    Keep these proofs out of CFG derefs: a checked pointer can still be freed
+    or out of bounds, so other consumers must retain all dereference uses.
+    """
+    ast_node = getattr(node, "_ast_node", None)
+    if ast_node is None:
+        return node.derefs
+    result = set()
+    for kind, payload, guarded in _guarded_expression_uses(ast_node):
+        if kind == "deref":
+            if payload not in guarded:
+                result.add(payload)
+            continue
+        summary = (summaries or {}).get(_format_pycparser_expr(payload.name))
+        if summary is None:
+            continue
+        args = list(getattr(payload.args, "exprs", []) or [])
+        for index in summary.unsafe_deref_params:
+            if index < len(args):
+                arg = _unwrap_call_arg(args[index])
+                if type(arg).__name__ == "ID" and arg.name not in guarded:
+                    result.add(arg.name)
+    return result
+
+
+def _find_unsafe_param_deref(cfg: StructuredCFG, param: str, summaries=None):
     """Return the first reachable unsafe dereference of parameter `param`, or None."""
     work = deque([cfg.entry] if cfg.entry is not None else [])
     visited = set()
@@ -185,7 +212,7 @@ def _find_unsafe_param_deref(cfg: StructuredCFG, param: str):
         visited.add(nid)
         node = cfg.nodes[nid]
 
-        if param in node.derefs and cfg.query_nullness(param, nid) != Nullness.NON_NULL:
+        if param in _unchecked_deref_vars(node, summaries) and cfg.query_nullness(param, nid) != Nullness.NON_NULL:
             return node
 
         if param in node.writes:
