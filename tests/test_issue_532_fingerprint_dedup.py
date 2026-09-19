@@ -1,7 +1,7 @@
 import copy
 import json
 
-from cgull.engine import CGullScanner, _merge_duplicate_issues
+from cgull.engine import CGullScanner, _deduplicate_issues_by_fingerprint, _merge_duplicate_issues
 from cgull.models import Confidence, ConfigProfile, FixType, Issue, Severity
 from cgull.reporter import ReportGenerator
 from cgull.rules.banned_functions import BannedFunctionsRule
@@ -137,3 +137,47 @@ def test_duplicate_merge_preserves_best_source_confidence_fix_and_reachability()
     assert merged.suggested_fix_replacement == "consider_safe();"
     assert merged.reachable_under == ["+A", "+B"]
     assert merged.related_tus == ["a.c", "b.c"]
+
+
+def test_coarse_same_line_occurrences_are_preserved_without_precise_coordinates():
+    first = Issue(
+        rule_id="CGULL-999",
+        rule_name="Synthetic",
+        impact=Severity.HIGH,
+        file_path="src/example.c",
+        line_number=10,
+        column_number=1,
+        code_snippet="danger(); danger();",
+        message="same coarse finding",
+        fingerprint="same",
+        engine="AST",
+    )
+    second = copy.deepcopy(first)
+
+    finalized = _deduplicate_issues_by_fingerprint([first, second])
+
+    assert len(finalized) == 2
+    assert len({issue.fingerprint for issue in finalized}) == 2
+
+
+def test_coarse_same_line_cross_engine_rows_are_preserved_without_site_evidence():
+    ast_issue = Issue(
+        rule_id="CGULL-999",
+        rule_name="Synthetic",
+        impact=Severity.HIGH,
+        file_path="src/example.c",
+        line_number=10,
+        column_number=1,
+        code_snippet="danger(); danger();",
+        message="AST coarse finding",
+        fingerprint="same",
+        engine="AST",
+    )
+    regex_issue = copy.deepcopy(ast_issue)
+    regex_issue.engine = "Regex"
+    regex_issue.message = "Regex coarse finding"
+
+    finalized = _deduplicate_issues_by_fingerprint([ast_issue, regex_issue])
+
+    assert len(finalized) == 2
+    assert len({issue.fingerprint for issue in finalized}) == 2
