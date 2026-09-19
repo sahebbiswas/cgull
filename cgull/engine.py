@@ -292,12 +292,55 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
                 else:
                     clusters.append([issue])
         elif coarse:
-            # Column 1 is only a coarse location marker. With no precise
-            # coordinate or source range to relate these rows, merging by
-            # engine/message would conflate distinct same-line occurrences.
-            # Keep each row as an occurrence and let the final fingerprint
-            # pass disambiguate them deterministically.
-            clusters = [[issue] for issue in coarse]
+            # Column 1 is only a coarse location marker, so engine/message
+            # equality is not enough to prove two rows are one physical site.
+            # Independent TU/profile representations do provide provenance
+            # evidence, though: align their occurrence multiplicity instead of
+            # flattening each origin. Thus one row from each TU/profile merges,
+            # while two identical same-line rows from every origin remain two.
+            def representation_origin(issue: Issue) -> Optional[Tuple[str, str]]:
+                profile_tokens = sorted(
+                    label
+                    for label in issue.reachable_under
+                    if label.startswith("__cgull_profile__:")
+                )
+                if len(profile_tokens) == 1:
+                    return ("profile", profile_tokens[0])
+                related_tus = sorted(
+                    str(tu).replace("\\", "/")
+                    for tu in issue.related_tus
+                    if tu
+                )
+                if len(related_tus) == 1:
+                    return ("tu", related_tus[0])
+                return None
+
+            by_origin: Dict[Tuple[str, str], List[Issue]] = {}
+            origin_known = True
+            for issue in coarse:
+                origin = representation_origin(issue)
+                if origin is None:
+                    origin_known = False
+                    break
+                by_origin.setdefault(origin, []).append(issue)
+
+            if origin_known and len(by_origin) > 1:
+                ordered_origins = {
+                    origin: sorted(rows, key=_issue_representative_key)
+                    for origin, rows in sorted(by_origin.items())
+                }
+                clusters = [
+                    [
+                        rows[occurrence]
+                        for rows in ordered_origins.values()
+                        if occurrence < len(rows)
+                    ]
+                    for occurrence in range(
+                        max(len(rows) for rows in ordered_origins.values())
+                    )
+                ]
+            else:
+                clusters = [[issue] for issue in coarse]
 
         sites.extend(_merge_issue_cluster(cluster) for cluster in clusters)
 
