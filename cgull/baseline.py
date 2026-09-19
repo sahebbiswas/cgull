@@ -38,14 +38,11 @@ def load_baseline_fingerprints(path: str) -> Tuple[Counter, Optional[int]]:
     Loads a baseline JSON report and returns a tuple of:
     (Counter of fingerprint -> occurrence count, rules_applied_count or None).
 
-    A Counter (multiset) rather than a plain set is used deliberately: if
-    a rule matches textually-identical code at two different call sites,
-    both share a fingerprint (see utils.compute_issue_fingerprint). Using
-    a set would mean "one of them got fixed" is invisible -- as soon as
-    at least one instance is in the baseline, both would be silently
-    treated as pre-existing forever. A Counter lets `apply_baseline`
-    correctly recognize that a *second* occurrence beyond what the
-    baseline had is genuinely new.
+    A Counter (multiset) rather than a plain set is retained deliberately.
+    Finalized current scans assign unique occurrence fingerprints to repeated
+    logical findings, but older baseline reports may contain repeated base
+    fingerprints. Keeping counts preserves compatibility with those reports
+    and continues to model finding multiplicity correctly.
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
