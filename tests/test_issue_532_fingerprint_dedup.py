@@ -181,3 +181,33 @@ def test_coarse_same_line_cross_engine_rows_are_preserved_without_site_evidence(
 
     assert len(finalized) == 2
     assert len({issue.fingerprint for issue in finalized}) == 2
+
+
+def test_coarse_cross_tu_representations_merge_by_occurrence_multiplicity():
+    def make_issue(tu):
+        return Issue(
+            rule_id="CGULL-999",
+            rule_name="Synthetic",
+            impact=Severity.HIGH,
+            file_path="include/example.h",
+            line_number=10,
+            column_number=1,
+            code_snippet="danger(); danger();",
+            message="same coarse finding",
+            fingerprint="same",
+            engine="AST",
+            related_tus=[tu],
+        )
+
+    issues = [
+        make_issue("a.c"),
+        make_issue("a.c"),
+        make_issue("b.c"),
+        make_issue("b.c"),
+    ]
+
+    finalized = _deduplicate_issues_by_fingerprint(issues)
+
+    assert len(finalized) == 2
+    assert len({issue.fingerprint for issue in finalized}) == 2
+    assert all(issue.related_tus == ["a.c", "b.c"] for issue in finalized)
