@@ -5,7 +5,7 @@ from cgull.engine import CGullScanner, _deduplicate_issues_by_fingerprint, _merg
 from cgull.models import Confidence, ConfigProfile, FixType, Issue, Severity
 from cgull.reporter import ReportGenerator
 from cgull.rules.banned_functions import BannedFunctionsRule
-from cgull.rules.crypto_and_safety import NonConstantTimeMemoryComparisonRule
+from cgull.rules.crypto_and_safety import NonConstantTimeMemoryComparisonRule, WeakCryptoPrimitivesRule
 
 
 def _cgull_005_scanner():
@@ -301,3 +301,47 @@ int check_token(const char *token) {
     assert len(issues) == 1
     source_line = source.splitlines()[2]
     assert issues[0].column_number == source_line.index("strcmp(token") + 1
+
+
+def test_one_precise_site_accepts_at_most_one_coarse_representation():
+    precise_a = Issue(
+        rule_id="CGULL-999",
+        rule_name="Synthetic",
+        impact=Severity.HIGH,
+        file_path="src/example.c",
+        line_number=10,
+        column_number=8,
+        code_snippet="danger();",
+        message="message A",
+        fingerprint="same",
+        engine="Regex",
+    )
+    precise_b = copy.deepcopy(precise_a)
+    precise_b.message = "message B"
+    precise_b.engine = "AST"
+
+    coarse_a = copy.deepcopy(precise_a)
+    coarse_a.column_number = 1
+    coarse_b = copy.deepcopy(precise_b)
+    coarse_b.column_number = 1
+
+    finalized = _deduplicate_issues_by_fingerprint(
+        [precise_a, precise_b, coarse_a, coarse_b]
+    )
+
+    assert len(finalized) == 2
+    assert len({issue.fingerprint for issue in finalized}) == 2
+
+
+def test_weak_crypto_nested_same_primitive_keeps_both_ast_occurrences():
+    source = """
+void authenticate(void) {
+    EVP_sha1(EVP_sha1());
+}
+"""
+    scanner = CGullScanner(rules=[WeakCryptoPrimitivesRule()])
+    result = scanner.scan_text(source, "nested_weak_crypto.c")
+    issues = [issue for issue in result.issues if issue.rule_id == "CGULL-031"]
+
+    assert len(issues) == 2
+    assert len({issue.fingerprint for issue in issues}) == 2
