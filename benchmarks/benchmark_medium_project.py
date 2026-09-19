@@ -14,7 +14,7 @@ pay the monkeypatch/wrapper overhead used here.
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -696,6 +696,20 @@ def validate_parity(samples: Sequence[Sample]) -> dict[str, Any]:
         )
         if not cross_mode_findings_match:
             differences.append("file and TU modes produced different findings/fingerprints")
+            baseline_mode = sorted(by_mode)[0]
+            baseline_findings = Counter(by_mode[baseline_mode][0].semantics.findings)
+            for mode in sorted(by_mode)[1:]:
+                mode_findings = Counter(by_mode[mode][0].semantics.findings)
+                missing = list((baseline_findings - mode_findings).elements())[:5]
+                extra = list((mode_findings - baseline_findings).elements())[:5]
+                if missing:
+                    differences.append(
+                        f"{mode} missing findings present in {baseline_mode}: {missing}"
+                    )
+                if extra:
+                    differences.append(
+                        f"{mode} extra findings vs {baseline_mode}: {extra}"
+                    )
 
     return {
         "passes": not differences,
