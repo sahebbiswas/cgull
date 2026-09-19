@@ -755,6 +755,9 @@ class WeakCryptoPrimitivesRule(BaseRule):
 
         for fn in ast_ctx.functions:
             fn_is_sec_ctx = _is_security_function_context(fn.name)
+            direct_callees_by_line: Dict[int, Set[str]] = {}
+            for recorded_call in fn.calls:
+                direct_callees_by_line.setdefault(recorded_call[1], set()).add(recorded_call[0])
 
             for call in fn.calls:
                 callee, line_no, raw_args = call[0], call[1], call[2]
@@ -788,6 +791,13 @@ class WeakCryptoPrimitivesRule(BaseRule):
                 elif re.search(r'\b(?:EVP_md5|EVP_sha1|EVP_md5_sha1|EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*|DES_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(\s*\)', raw_args):
                     weak_m = re.search(r'\b(EVP_md5|EVP_sha1|EVP_md5_sha1|EVP_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*|DES_[A-Za-z0-9_]*ecb[A-Za-z0-9_]*)\s*\(\s*\)', raw_args)
                     weak_fn = weak_m.group(1) if weak_m else "weak primitive"
+                    # pycparser records nested FuncCall nodes independently.
+                    # Do not also report the parent call merely because its
+                    # argument text contains the same weak primitive. Retain
+                    # this fallback only for contexts that did not surface the
+                    # inner call separately.
+                    if weak_fn in direct_callees_by_line.get(line_no, set()):
+                        continue
                     if "sha1" in weak_fn:
                         primitive_kind = "SHA1"
                         message = f"Use of weak cryptographic hash function '{weak_fn}()' in security-sensitive context (CWE-327)."
