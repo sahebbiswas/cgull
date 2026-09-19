@@ -258,3 +258,32 @@ int check_token(const char *token) {
     assert all(issue.column_number > 1 for issue in issues)
     assert len({issue.column_number for issue in issues}) == 2
     assert len({issue.fingerprint for issue in issues}) == 2
+
+
+def test_matching_coarse_and_precise_rows_merge_by_multiplicity_without_losing_occurrences():
+    def make_issue(column, engine):
+        return Issue(
+            rule_id="CGULL-999",
+            rule_name="Synthetic",
+            impact=Severity.HIGH,
+            file_path="src/example.c",
+            line_number=10,
+            column_number=column,
+            code_snippet="danger(); danger();",
+            message="same logical finding",
+            fingerprint="same",
+            engine=engine,
+        )
+
+    issues = [
+        make_issue(8, "Regex"),
+        make_issue(20, "Regex"),
+        make_issue(1, "AST"),
+        make_issue(1, "AST"),
+    ]
+
+    finalized = _deduplicate_issues_by_fingerprint(issues)
+
+    assert len(finalized) == 2
+    assert {issue.column_number for issue in finalized} == {8, 20}
+    assert len({issue.fingerprint for issue in finalized}) == 2
