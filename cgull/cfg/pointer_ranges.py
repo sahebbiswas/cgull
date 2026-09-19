@@ -256,6 +256,7 @@ class PointerRangeFunctionResult:
     ) -> None:
         self.endpoint_checks = tuple(getattr(snapshots, "endpoint_checks", ()))
         self.calls = tuple(getattr(snapshots, "calls", ()))
+        self.reverse_accesses = tuple(getattr(snapshots, "reverse_accesses", ()))
         self.events = tuple(events)
         self._snapshots = {line: dict(facts) for line, facts in snapshots.items()}
         self._final_facts = dict(final_facts) if final_facts is not None else None
@@ -423,6 +424,8 @@ def analyze_translation_unit_pointer_ranges(
         snapshots = _Snapshots()
         snapshots.semantic_models = semantic_models
         snapshots.suppress_events = not _supports_definite_events(funcdef, state.typedefs)
+        from .pointer_reverse_walks import reverse_walk_accesses
+        snapshots.reverse_accesses = reverse_walk_accesses(funcdef, state.facts)
         final_state = _analyze_statement(funcdef.body, state, snapshots)
         results[name] = PointerRangeFunctionResult(snapshots, final_state.facts, snapshots.events)
     from .pointer_interprocedural import propagate_pointer_requirements

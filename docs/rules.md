@@ -103,7 +103,7 @@ Unknown offsets and incompatible origins do not report.
 
 This first drop is intraprocedural and uses the shared domain's scalar width
 model (including 8-byte `long` and pointer widths), not target ABI discovery.
-Unsupported types have unknown stride. Loop-body diagnostics are deferred, and
+Unsupported types have unknown stride. Loop-body diagnostics in CGULL-050 are deferred (CGULL-056 separately checks possible reverse lower-bound accesses), and
 unstable loop facts widen to unknown. Functions with `goto`, labels, `switch`,
 shadowed local names, address-taken local variables, or nested update side
 effects are conservatively excluded from definite diagnostics until those
@@ -200,3 +200,42 @@ and cross-call comparisons of two formal pointer origins are not modeled.
 CGULL-042 skips a declaration initializer when it can prove the initializer is side-effect-free. This includes literal values, null pointer constants, unshadowed file-scope enum constants, simple object addresses, and constant aggregate initializers. Object-like macros are covered when preprocessing expands them to one of those proven forms; unresolved identifiers remain conservative. Calls, mutations, and unproven reads remain eligible for findings, as do later redundant assignments.
 
 Lexical fallback applies this policy to verified declaration writes, including constant array initializers. Findings retain the concrete lexical binding and the starting line of the write statement. TU expansion restores the original file, line, and snippet once, before inline suppression and fingerprinting. Ambiguous compact statements or candidates without a verified write are withheld. Fallback dead-store findings require manual review; they never offer automatic deletion.
+
+
+## CGULL-056: unguarded reverse pointer walk
+
+This AST rule reports a **possible** read (CWE-125) or write (CWE-787) below a
+logical base established by an explicit pointer alias or derivation. For example,
+`char *p = base; use(*--p);` and the reverse trim loop
+`char *p = base + strlen(base); while (isspace(*--p)) ;` report. `strlen` does
+not establish a positive length: empty input remains possible.
+
+The shared pointer analysis has a separate lower-bound domain that preserves
+observations in `while`, `do` and `for` conditions, bodies and steps. Descending
+loop offsets widen before a final observation pass. Prefix decrement affects the
+current access; postfix decrement affects subsequent uses/iterations. A single
+`use(*p--)` starting at the base is not an underflow read. Separated updates,
+constant pointer subtraction, aliases, and constant array subscripts are covered.
+
+Check the lower bound **before** the decrement/access, for example:
+
+```c
+while (p > base && isspace((unsigned char)*--p)) ;
+```
+
+Ordered short-circuit guards, reversed comparisons and early-exit guards are
+recognized. `p >= base` is sufficient for `*p--`, but not `*--p`. A guard checked
+after the access does not protect it. `sizeof` and address formation are not
+memory accesses.
+
+This medium-false-positive rule does not infer the allocation boundary from an
+incoming pointer or change CGULL-050's definite-only contract. An unrelated
+external pointer without an explicit base relationship is not reported. An
+incoming pointer may itself point into a larger allocation; findings require
+manual review of the logical base contract. The analysis is intraprocedural and
+does not prove iteration counts or data-dependent termination. Pointer casts
+lose the relationship; pointer-variable address escapes lose that variable's
+facts. Functions with shadowing, `goto`, labels or `switch` are conservatively
+excluded. Complex control-flow exits and interprocedural cursor updates are not
+fully modeled. Behavioral corpus coverage is provided; Juliet coverage is
+**not yet measured**.

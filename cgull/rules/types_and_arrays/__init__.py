@@ -20,7 +20,10 @@ from .pointer_endpoint_wraparound import PointerEndpointWraparoundRule
 
 from .pointer_provenance import PointerProvenanceRule
 
+from .reverse_pointer_walk import ReversePointerWalkRule
+
 __all__ = [
+    "ReversePointerWalkRule",
     "PointerProvenanceRule",
     "PointerEndpointWraparoundRule",
     "VariableLengthArraysRule",
