@@ -286,12 +286,34 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
         ]
 
         if coarse:
-            # Column 1 is only a coarse location marker, so neither
-            # engine/message equality nor the presence of one precise row can
-            # prove that two reports describe one physical source occurrence.
-            # Independent TU/profile representations do provide provenance
-            # evidence: align their occurrence multiplicity without ever
-            # merging a coarse row into a precise-coordinate cluster.
+            # A coarse column-1 report may be another analyzer representation
+            # of a precise site. Exact message equality plus the same
+            # rule/path/snippet/line base fingerprint is useful evidence, but
+            # never collapse multiplicity: pair at most one coarse row with
+            # each precise site and preserve any excess coarse rows as distinct
+            # occurrences.
+            remaining_coarse: List[Issue] = []
+            coarse_by_message: Dict[str, List[Issue]] = {}
+            for issue in coarse:
+                coarse_by_message.setdefault(str(issue.message or ""), []).append(issue)
+
+            for message in sorted(coarse_by_message):
+                rows = sorted(coarse_by_message[message], key=_issue_representative_key)
+                matching_clusters = [
+                    cluster
+                    for cluster in clusters
+                    if any(str(candidate.message or "") == message for candidate in cluster)
+                ]
+                for cluster, issue in zip(matching_clusters, rows):
+                    cluster.append(issue)
+                remaining_coarse.extend(rows[len(matching_clusters):])
+
+            coarse = remaining_coarse
+
+        if coarse:
+            # Unmatched column-1 rows have no precise-site evidence.
+            # Independent TU/profile representations can still be aligned by
+            # occurrence multiplicity without flattening distinct findings.
             def representation_origin(issue: Issue) -> Optional[Tuple[str, str]]:
                 profile_tokens = sorted(
                     label
