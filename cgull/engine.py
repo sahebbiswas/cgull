@@ -292,23 +292,12 @@ def _coalesce_same_fingerprint_sites(candidates: List[Issue]) -> List[Issue]:
                 else:
                     clusters.append([issue])
         elif coarse:
-            coarse_groups: Dict[Tuple[str, str], List[Issue]] = {}
-            for issue in coarse:
-                coarse_groups.setdefault((issue.engine, issue.message), []).append(issue)
-
-            # Identical coarse rows from the same analyzer are duplicate
-            # representations, not separate physical sites.
-            clusters = [
-                coarse_groups[key]
-                for key in sorted(coarse_groups)
-            ]
-
-            # If each remaining coarse representation came from a different
-            # analyzer engine, they describe the same site even when their
-            # message wording differs slightly.
-            engines = [cluster[0].engine for cluster in clusters]
-            if len(clusters) > 1 and len(set(engines)) == len(clusters):
-                clusters = [coarse]
+            # Column 1 is only a coarse location marker. With no precise
+            # coordinate or source range to relate these rows, merging by
+            # engine/message would conflate distinct same-line occurrences.
+            # Keep each row as an occurrence and let the final fingerprint
+            # pass disambiguate them deterministically.
+            clusters = [[issue] for issue in coarse]
 
         sites.extend(_merge_issue_cluster(cluster) for cluster in clusters)
 
