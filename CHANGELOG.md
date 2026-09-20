@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opt-in persistent content-addressed per-file result cache for repeat scans (`--cache-dir` / `--cache-path` / `CGULL_CACHE_DIR`, disable with `--no-cache` / `CGULL_NO_CACHE`); keys cover canonical path + source + expanded TU text, config/rule fingerprint, semantic-model digest, and C-GULL version, with atomic best-effort writes, path rebinding on hit, and corrupt-entry misses (#545).
 
 ### Changed
+- Reduce residual large-function/TU scan cost by copying CFG basic-block topology on analysis clones, reusing session function summaries for ownership and CGULL-042 consumers, and using a worklist for summary output-initialization (#548).
 - Reuse whole-TU function summaries per session and effective semantic-input key across ownership, dead-store, MISRA/style, and custom memory-rule consumers; isolate returned results and invalidate on imported-summary or registry changes (#544).
 - Add `scan/rules --profile focused|comprehensive`, include CGULL-018 in focused policy exclusions, and separate security/correctness from policy/quality report counts without changing severity or CI thresholds (#557).
 - Document focused security defaults, baselines, and the cJSON corpus budget checklist; human reports also label **security actionable** vs **policy/quality** per finding (#561).

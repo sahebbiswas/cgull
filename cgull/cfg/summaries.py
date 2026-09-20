@@ -350,35 +350,44 @@ def _summarize_output_initialization(
     may_in: Dict[int, Set[int]] = {node_id: set() for node_id in reachable}
     must_out: Dict[int, Set[int]] = {node_id: set() for node_id in reachable}
     may_out: Dict[int, Set[int]] = {node_id: set() for node_id in reachable}
-    changed = True
-    while changed:
-        changed = False
-        for node_id in sorted(reachable):
-            preds = predecessors[node_id]
-            if node_id == cfg.entry or not preds:
-                in_must: Set[int] = set()
-                in_may: Set[int] = set()
-            else:
-                pred_iter = iter(preds)
-                first = next(pred_iter)
-                in_must = set(must_out[first])
-                for pred in pred_iter:
-                    in_must.intersection_update(must_out[pred])
-                in_may = set().union(*(may_out[pred] for pred in preds))
+    # Seed every reachable node so local gens apply even when predecessors
+    # stay at bottom, then re-queue only along changed successor edges.
+    # Straight-line CFGs therefore stay near-linear instead of one full
+    # sweep per hop.
+    worklist = deque(reachable)
+    queued = set(reachable)
+    while worklist:
+        node_id = worklist.popleft()
+        queued.discard(node_id)
+        preds = predecessors[node_id]
+        if node_id == cfg.entry or not preds:
+            in_must: Set[int] = set()
+            in_may: Set[int] = set()
+        else:
+            pred_iter = iter(preds)
+            first = next(pred_iter)
+            in_must = set(must_out[first])
+            for pred in pred_iter:
+                in_must.intersection_update(must_out[pred])
+            in_may = set().union(*(may_out[pred] for pred in preds))
 
-            new_must = in_must | node_must.get(node_id, set())
-            new_may = in_may | node_may.get(node_id, set())
-            if (
-                in_must != must_in[node_id]
-                or in_may != may_in[node_id]
-                or new_must != must_out[node_id]
-                or new_may != may_out[node_id]
-            ):
-                must_in[node_id] = in_must
-                may_in[node_id] = in_may
-                must_out[node_id] = new_must
-                may_out[node_id] = new_may
-                changed = True
+        new_must = in_must | node_must.get(node_id, set())
+        new_may = in_may | node_may.get(node_id, set())
+        if (
+            in_must == must_in[node_id]
+            and in_may == may_in[node_id]
+            and new_must == must_out[node_id]
+            and new_may == may_out[node_id]
+        ):
+            continue
+        must_in[node_id] = in_must
+        may_in[node_id] = in_may
+        must_out[node_id] = new_must
+        may_out[node_id] = new_may
+        for successor in cfg.nodes[node_id].successors:
+            if successor in reachable and successor not in queued:
+                worklist.append(successor)
+                queued.add(successor)
 
     exit_states: list[Tuple[Set[int], Set[int]]] = []
     for node_id in reachable:

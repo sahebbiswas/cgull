@@ -33,7 +33,17 @@ python benchmarks/benchmark_medium_project.py \
   --output medium-project-large.json
 ```
 
-Use this preset when an optimization is expected to remove repeated CFG, event-semantics, summary, or preprocessor work whose growth is hard to see on the standard workload. Explicit `--modules`, `--functions-per-module`, and `--statements-per-function` values override the selected preset, and the artifact records both the resolved dimensions and the preset name.
+Use this preset when an optimization is expected to remove repeated CFG, event-semantics, summary, or preprocessor work whose growth is hard to see on the standard workload.
+
+### Residual scaling matrix (issue #548)
+
+After #542/#543, re-run a one-dimension matrix with `--modules 4`, `--jobs 1`, `--modes tu`, and either:
+
+- `--statements-per-function 12,30,60,120` at fixed `--functions-per-module 10`, or
+- `--functions-per-module 10,20,40,80,160` at fixed `--statements-per-function 12`.
+
+Record physical LOC, wall time, ms/LOC, and `median_pass_metrics` for `build_cfg`, `clone_structural_cfg`, `apply_cfg_event_semantics`, and `analyze_function_summaries_detailed`. Artifacts and before/after notes for the first mitigation slice live under `benchmarks/results/issue-548/`.
+ Explicit `--modules`, `--functions-per-module`, and `--statements-per-function` values override the selected preset, and the artifact records both the resolved dimensions and the preset name.
 
 ## JSON artifact
 

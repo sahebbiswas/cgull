@@ -24,7 +24,7 @@ from .ast_events import (
 from .dataflow import StructuredCFG
 from .diagnostics import CFGDiagnostic
 from .expression_effects import expression_read_write_sets
-from .model import FunctionSummary
+from .model import BasicBlock, FunctionSummary
 
 # Process-terminating callees: CFG edges stop here (no fall-through).
 # Shared with post-sprintf bail recognition in CGULL-048.
@@ -489,7 +489,13 @@ def find_function_def(ast, name: str):
 
 
 def clone_structural_cfg(cfg: StructuredCFG) -> StructuredCFG:
-    """Clone graph/event topology while discarding mutable analysis results."""
+    """Clone graph/event topology while discarding mutable analysis results.
+
+    Basic-block topology is copied from the structural source when present so
+    analysis views avoid an O(nodes) rebuild on every clone. Event fact
+    containers and edge fact sets remain fresh so later annotation cannot
+    mutate the cached structural CFG.
+    """
     clone = type(cfg)()
     clone.entry = cfg.entry
     clone._next_id = cfg._next_id
@@ -518,7 +524,27 @@ def clone_structural_cfg(cfg: StructuredCFG) -> StructuredCFG:
         event.successors = list(node.successors)
         clone.nodes[node_id] = event
 
-    clone.build_basic_blocks()
+    if cfg.blocks and cfg.node_to_block:
+        clone.node_to_block = dict(cfg.node_to_block)
+        for block_id, block in cfg.blocks.items():
+            cloned_block = BasicBlock(block_id=block.block_id)
+            cloned_block.nodes = [clone.nodes[node.node_id] for node in block.nodes]
+            cloned_block.predecessors = list(block.predecessors)
+            cloned_block.successors = list(block.successors)
+            if cloned_block.nodes:
+                last = cloned_block.nodes[-1]
+                for succ_block_id in cloned_block.successors:
+                    succ_block = cfg.blocks.get(succ_block_id)
+                    if succ_block is None or not succ_block.nodes:
+                        continue
+                    edge_fact = clone.edge_facts.get(
+                        (last.node_id, succ_block.nodes[0].node_id)
+                    )
+                    if edge_fact:
+                        cloned_block.edge_facts[succ_block_id] = edge_fact
+            clone.blocks[block_id] = cloned_block
+    else:
+        clone.build_basic_blocks()
     return clone
 
 

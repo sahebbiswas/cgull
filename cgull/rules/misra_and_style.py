@@ -489,8 +489,7 @@ class DeadStoresRule(BaseRule):
 
         summaries = None
         if hasattr(ast_ctx, "functions") and ast_ctx.functions:
-            from ..cfg import analyze_function_summaries
-            summaries = analyze_function_summaries(ast_ctx)
+            summaries = self.get_analysis_session(ast_ctx).function_summaries
 
         file_scope_constants = file_scope_enum_constants(ast_ctx.pycparser_ast)
 

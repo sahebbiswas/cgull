@@ -474,6 +474,7 @@ def analyze_ownership_summaries_detailed(
     fixed_point_config: Optional[FixedPointConfig] = None,
     call_graph=None,
     event_cache=None,
+    function_summaries=None,
 ) -> OwnershipSummaryAnalysisResult:
     """Compute ownership summaries using the shared SCC fixed-point engine."""
     functions = [fn for fn in getattr(ast_ctx, "functions", ()) if getattr(fn, "name", None)]
@@ -485,9 +486,10 @@ def analyze_ownership_summaries_detailed(
 
     external = imported_summaries(ast_ctx, "ownership")
     registry = call_effects or BUILTIN_CALL_EFFECTS
-    function_summaries = analyze_function_summaries(
-        ast_ctx, call_effects=registry, event_cache=event_cache,
-    )
+    if function_summaries is None:
+        function_summaries = analyze_function_summaries(
+            ast_ctx, call_effects=registry, event_cache=event_cache,
+        )
     graph = call_graph or build_translation_unit_call_graph(ast_ctx)
     parameter_counts = {
         name: len([p for p in fn.parameters if p.name])
