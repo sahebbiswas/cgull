@@ -10,6 +10,7 @@ from cgull.rules.crypto_and_safety import (
     IllegalFunctionPointerConversionsRule,
     _FUNC_PTR_CAST_RE,
     _is_macro_type_declarator_cast,
+    _macro_declarator_overlaps_cast,
 )
 
 
@@ -143,3 +144,59 @@ double get_nan(void) {
 }
 """
     assert _scan("CGULL-034", code) == []
+
+
+def test_float_zero_with_nonzero_exponent_nan_not_flagged():
+    """0.0eN / 0eN are still IEEE zeros; treat as NaN materialization (#556 review)."""
+    code = """
+double a(void) { return 0.0e1 / 0.0e1; }
+double b(void) { return 0e-3 / 0e0; }
+double c(void) { return 0.0E2 / .0e1; }
+double d(void) { return 0e+10 / 0.e-1; }
+"""
+    assert _scan("CGULL-034", code) == []
+
+
+def test_true_div_by_zero_still_flagged_alongside_nan_exponents():
+    code = """
+int literal_int_zero(void) { return 0 / 0; }
+double float_inf(void) { return 1.0 / 0.0; }
+int runtime(int y) { return 100 / y; }
+"""
+    issues = _scan("CGULL-034", code)
+    assert len(issues) == 3
+
+
+def test_ast_cast_not_suppressed_by_export_macro_elsewhere_on_line():
+    """EXPORT(int) foo(...) on the same line must not hide a real (void *)foo cast."""
+    code = """
+int foo(void) { return 0; }
+void bad(void) {
+    /* EXPORT(int) foo(void); */ void *p = (void *)foo;
+}
+"""
+    issues = _scan("CGULL-011", code)
+    assert len(issues) == 1
+    assert "foo" in issues[0].message
+
+
+def test_ast_cast_not_suppressed_by_export_declarator_before_cast():
+    code = """
+int foo(void) { return 0; }
+#define EXPORT(t) t
+void bad(void) {
+    EXPORT(int) foo(void); void *p = (void *)foo;
+}
+"""
+    issues = _scan("CGULL-011", code)
+    assert any("foo" in i.message for i in issues)
+
+
+def test_macro_declarator_overlap_helper_requires_cast_column():
+    line = "    /* EXPORT(int) foo(void); */ void *p = (void *)foo;"
+    # Cast '(' of (void *)foo — column of '(' in 1-based coords
+    cast_col = line.index("(void *)foo") + 1
+    export_col = line.index("(int) foo") + 1
+    assert not _macro_declarator_overlaps_cast(line, "foo", cast_col)
+    assert _macro_declarator_overlaps_cast(line, "foo", export_col)
+    assert not _macro_declarator_overlaps_cast(line, "foo", None)

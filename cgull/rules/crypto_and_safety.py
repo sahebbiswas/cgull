@@ -413,6 +413,28 @@ def _is_macro_type_declarator_cast(line: str, match: re.Match) -> bool:
     return bool(re.match(r"\s*\(", line[match.end() :]))
 
 
+def _macro_declarator_overlaps_cast(
+    source_line: str, target: str, cast_column: Optional[int]
+) -> bool:
+    """True when a MACRO(type) declarator match overlaps the AST cast column.
+
+    The AST guard must not suppress a real cast merely because an export-macro
+    prototype (or the same shape in a comment) appears elsewhere on the line.
+    ``cast_column`` is pycparser's 1-based column for the cast node.
+    """
+    if not source_line or cast_column is None or cast_column < 1:
+        return False
+    cast_col0 = cast_column - 1
+    for match in _FUNC_PTR_CAST_RE.finditer(source_line):
+        if match.group(1) != target:
+            continue
+        if not _is_macro_type_declarator_cast(source_line, match):
+            continue
+        if match.start() <= cast_col0 < match.end():
+            return True
+    return False
+
+
 class IllegalFunctionPointerConversionsRule(BaseRule):
     rule_id = "CGULL-011"
     name = "Illegal Function Pointer Conversions"
@@ -465,11 +487,16 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
                         if fn_ids:
                             line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else 1
                             target = sorted(list(fn_ids))[0]
-                            snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else _format_pycparser_expr(node)
-                            # Guard AST path against MACRO(type) declarator lines
-                            # (same shape as the fallback regex false positive).
-                            macro_match = _FUNC_PTR_CAST_RE.search(snippet)
-                            if macro_match and macro_match.group(1) == target and _is_macro_type_declarator_cast(snippet, macro_match):
+                            raw_line = (
+                                ast_ctx.source_lines[line_no - 1]
+                                if line_no <= len(ast_ctx.source_lines)
+                                else ""
+                            )
+                            snippet = raw_line.strip() if raw_line else _format_pycparser_expr(node)
+                            # Only suppress when a MACRO(type) declarator overlaps
+                            # this cast's source span — not merely elsewhere on the line.
+                            cast_col = node.coord.column if node.coord else None
+                            if _macro_declarator_overlaps_cast(raw_line, target, cast_col):
                                 self.generic_visit(node)
                                 return
                             issues.append(self.outer_rule.create_issue(
