@@ -481,43 +481,63 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                 names.add(name)
         return names
 
-    def _iter_alloc_calls(self, line: str) -> List[Tuple[str, List[str], int]]:
-        """Return ``(callee, args, start_index)`` using balanced-paren parsing."""
+    def _iter_alloc_calls(self, text: str) -> List[Tuple[str, List[str], int]]:
+        """Return ``(callee, args, start_index)`` using balanced-paren parsing.
+
+        ``text`` may be a single line or a newline-joined fragment so calls that
+        span physical lines are still discovered.
+        """
         found: List[Tuple[str, List[str], int]] = []
-        for match in self.ALLOC_CALLEE_PATTERN.finditer(line):
+        for match in self.ALLOC_CALLEE_PATTERN.finditer(text):
             callee = match.group(1)
             paren_pos = match.end() - 1
-            inner, _ = extract_balanced_parens(line, paren_pos)
+            inner, _ = extract_balanced_parens(text, paren_pos)
             if inner is None:
                 continue
             found.append((callee, split_call_args(inner), match.start()))
         return found
 
-    def _alloc_size_args(self, line: str) -> List[str]:
-        """Size-related argument expressions from allocation calls on ``line``.
+    def _iter_body_alloc_calls(
+        self, body_lines: List[str]
+    ) -> List[Tuple[str, List[str], int, int]]:
+        """Return ``(callee, args, line_index, column)`` across the function body.
+
+        Joins the body so multiline ``malloc``/``realloc``/``calloc``/
+        ``aligned_alloc`` calls are collected as one expression before argument
+        analysis.
+        """
+        if not body_lines:
+            return []
+        text = "\n".join(body_lines)
+        found: List[Tuple[str, List[str], int, int]] = []
+        for callee, call_args, start in self._iter_alloc_calls(text):
+            line_idx = text.count("\n", 0, start)
+            line_start = text.rfind("\n", 0, start) + 1
+            column = start - line_start
+            found.append((callee, call_args, line_idx, column))
+        return found
+
+    def _alloc_size_args_from_call(self, callee: str, call_args: List[str]) -> List[str]:
+        """Size-related argument expressions from one allocation call.
 
         ``calloc`` contributes both the count and the element-size arguments.
         ``malloc`` uses its single size argument; ``realloc`` / ``aligned_alloc``
         use the trailing size argument.
         """
-        args: List[str] = []
-        for callee, call_args, _ in self._iter_alloc_calls(line):
-            if not call_args:
-                continue
-            if callee == "calloc":
-                args.extend(call_args)
-            elif callee == "malloc":
-                args.append(call_args[0])
-            else:
-                # realloc(ptr, size) / aligned_alloc(alignment, size)
-                args.append(call_args[-1])
-        return args
+        if not call_args:
+            return []
+        if callee == "calloc":
+            return list(call_args)
+        if callee == "malloc":
+            return [call_args[0]]
+        # realloc(ptr, size) / aligned_alloc(alignment, size)
+        return [call_args[-1]]
 
     def _alloc_size_related_vars(self, body_lines: List[str]) -> Set[str]:
         """Variables whose values may flow into a malloc/realloc size argument."""
         related: Set[str] = set()
-        for line in body_lines:
-            for arg in self._alloc_size_args(line):
+        for callee, call_args, _, _ in self._iter_body_alloc_calls(body_lines):
+            for arg in self._alloc_size_args_from_call(callee, call_args):
                 related.update(self._identifiers_in(arg))
 
         # Expand through assignments / compound size updates into related vars.
@@ -539,6 +559,120 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             if not grew:
                 break
         return related
+
+
+    @classmethod
+    def _is_sizeof_expr(cls, expr: str) -> bool:
+        return bool(re.match(r'^sizeof\b', cls._strip_outer_parens(expr).strip()))
+
+    @classmethod
+    def _is_numeric_literal_expr(cls, expr: str) -> bool:
+        return bool(re.fullmatch(r'\d+', cls._strip_outer_parens(expr).strip()))
+
+    @classmethod
+    def _top_level_arith_split(cls, expr: str) -> Tuple[str, str, str] | None:
+        """Split ``expr`` on a top-level ``*`` or ``+`` (prefer ``*`` for sizes)."""
+        text = cls._strip_outer_parens(expr.strip())
+        if not text:
+            return None
+        depth = 0
+        in_string = False
+        in_char = False
+        escape = False
+        candidates: List[Tuple[int, str]] = []
+        i = 0
+        while i < len(text):
+            c = text[i]
+            if escape:
+                escape = False
+                i += 1
+                continue
+            if c == "\\" and (in_string or in_char):
+                escape = True
+                i += 1
+                continue
+            if c == '"' and not in_char:
+                in_string = not in_string
+                i += 1
+                continue
+            if c == "'" and not in_string:
+                in_char = not in_char
+                i += 1
+                continue
+            if in_string or in_char:
+                i += 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth = max(0, depth - 1)
+            elif depth == 0 and c in "*+":
+                # Skip compound assignments and comparisons / pointer members.
+                prev = text[i - 1] if i > 0 else ""
+                nxt = text[i + 1] if i + 1 < len(text) else ""
+                if c == "+" and (prev in "+=" or nxt in "+="):
+                    i += 1
+                    continue
+                if c == "*" and nxt == "=":
+                    i += 1
+                    continue
+                # Unary + / * (deref) at expr start or after another operator.
+                if i == 0 or prev in "([,?:<>!~&^|%*/+-":
+                    i += 1
+                    continue
+                candidates.append((i, c))
+            i += 1
+        if not candidates:
+            return None
+        star = [item for item in candidates if item[1] == "*"]
+        idx, op = star[0] if star else candidates[0]
+        left = text[:idx].strip()
+        right = text[idx + 1:].strip()
+        if not left or not right:
+            return None
+        return left, op, right
+
+    def _parse_alloc_size_arith(
+        self, arg_str: str
+    ) -> Tuple[str, str, str, str, str, List[str]] | None:
+        """Parse alloc-arg arithmetic, including ``sizeof(T) * count`` order.
+
+        Returns ``(display_left, op, display_right, guard_lhs, guard_rhs, check_vars)``.
+        """
+        split = self._top_level_arith_split(arg_str)
+        if not split:
+            return None
+        left, op, right = split
+        if self._is_numeric_literal_expr(left) and self._is_numeric_literal_expr(right):
+            return None
+        left_sizeof = self._is_sizeof_expr(left)
+        right_sizeof = self._is_sizeof_expr(right)
+        if left_sizeof and right_sizeof:
+            return None
+        # Prefer the non-sizeof operand as the SIZE_MAX guard LHS
+        # (``count > SIZE_MAX / sizeof(T)``).
+        if left_sizeof and not right_sizeof:
+            guard_lhs, guard_rhs = right, left
+        else:
+            guard_lhs, guard_rhs = left, right
+        check_vars: List[str] = []
+        for part in (left, right):
+            if self._is_sizeof_expr(part) or self._is_numeric_literal_expr(part):
+                continue
+            check_vars.extend(
+                name for name in self._identifiers_in(part) if name not in check_vars
+            )
+        if not check_vars:
+            return None
+        return left, op, right, guard_lhs, guard_rhs, check_vars
+
+    def _alloc_arg_is_constant_like(self, expr: str) -> bool:
+        text = self._strip_outer_parens(expr.strip())
+        if not text:
+            return True
+        if self._is_numeric_literal_expr(text) or self._is_sizeof_expr(text):
+            return True
+        return not self._identifiers_in(text)
 
     def _rhs_has_nonconstant_size_arith(self, rhs: str) -> bool:
         """True when RHS looks like size arithmetic with a non-literal operand."""
@@ -723,77 +857,122 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                         ),
                     ))
 
-            for i, line in enumerate(body_lines):
-                line_no = body_start + i
-                for callee, call_args, alloc_start in self._iter_alloc_calls(line):
-                    if callee == "calloc":
-                        size_args = list(call_args)
-                    elif not call_args:
+            for callee, call_args, line_idx, alloc_col in self._iter_body_alloc_calls(body_lines):
+                line_no = body_start + line_idx
+                line = body_lines[line_idx] if line_idx < len(body_lines) else ""
+                size_args = self._alloc_size_args_from_call(callee, call_args)
+                for arg_str in size_args:
+                    parsed = self._parse_alloc_size_arith(arg_str)
+                    if not parsed:
                         continue
-                    elif callee == "malloc":
-                        size_args = [call_args[0]]
-                    else:
-                        size_args = [call_args[-1]]
-                    for arg_str in size_args:
-                        m_arith = re.search(
-                            r'\b([A-Za-z_]\w*)\s*([\*\+])\s*(.+)$',
-                            arg_str.strip(),
+                    var1, op, var2, guard_lhs, guard_rhs, check_vars = parsed
+                    if self._has_alloc_size_overflow_check(
+                        ast_ctx.source_lines,
+                        line_no,
+                        check_vars,
+                        lhs=guard_lhs,
+                        op=op,
+                        rhs=guard_rhs,
+                    ):
+                        continue
+                    key = (line_no, var1, op, var2)
+                    if key in reported_lines:
+                        continue
+                    reported_lines.add(key)
+                    snippet = (
+                        ast_ctx.source_lines[line_no - 1].strip()
+                        if line_no <= len(ast_ctx.source_lines)
+                        else line.strip()
+                    )
+                    gate_note = ""
+                    if self._has_partial_type_max_gate(
+                        ast_ctx.source_lines, line_no, check_vars
+                    ):
+                        gate_note = (
+                            " A preceding INT_MAX-style gate does not prove this allocation size is safe."
                         )
-                        if not m_arith:
-                            continue
-                        var1 = m_arith.group(1)
-                        op = m_arith.group(2)
-                        var2 = m_arith.group(3).strip()
-                        # Prefer variable * sizeof(...) form; skip leading sizeof ident noise.
-                        if var1 in {"sizeof", "struct"}:
-                            continue
-                        if var1.isdigit() and re.fullmatch(r'\d+', var2 or ""):
-                            continue
-                        if self._has_alloc_size_overflow_check(
+                    guard_expr = (
+                        f"{guard_lhs} > SIZE_MAX - ({guard_rhs})"
+                        if op == "+"
+                        else f"{guard_lhs} > SIZE_MAX / ({guard_rhs})"
+                    )
+                    issues.append(self.create_issue(
+                        file_path=file_path,
+                        line_number=line_no,
+                        code_snippet=snippet,
+                        message=(
+                            f"Unchecked integer arithmetic '{var1} {op} {var2}' in memory allocation "
+                            f"argument. May wrap around to small buffer causing heap corruption.{gate_note}"
+                        ),
+                        column_number=alloc_col + 1,
+                        engine="AST",
+                        fix_type=FixType.SUGGESTED_FIX,
+                        suggested_fix_replacement=(
+                            f"if ({guard_expr}) return -EOVERFLOW;\n{snippet}"
+                        ),
+                    ))
+
+                # calloc(nmemb, size) multiplies its arguments even without explicit * / +.
+                if callee == "calloc" and len(call_args) >= 2:
+                    left = call_args[0].strip()
+                    right = call_args[1].strip()
+                    if not (
+                        self._alloc_arg_is_constant_like(left)
+                        and self._alloc_arg_is_constant_like(right)
+                    ):
+                        check_vars = [
+                            name
+                            for name in (
+                                list(self._identifiers_in(left))
+                                + list(self._identifiers_in(right))
+                            )
+                            if name
+                        ]
+                        # Prefer a non-sizeof / non-literal operand as guard LHS.
+                        if self._is_sizeof_expr(left) or self._is_numeric_literal_expr(left):
+                            guard_lhs, guard_rhs = right, left
+                        else:
+                            guard_lhs, guard_rhs = left, right
+                        if check_vars and not self._has_alloc_size_overflow_check(
                             ast_ctx.source_lines,
                             line_no,
-                            [var1, var2],
-                            lhs=var1,
-                            op=op,
-                            rhs=var2,
+                            check_vars or [guard_lhs, guard_rhs],
+                            lhs=guard_lhs,
+                            op="*",
+                            rhs=guard_rhs,
                         ):
-                            continue
-                        key = (line_no, var1, op, var2)
-                        if key in reported_lines:
-                            continue
-                        reported_lines.add(key)
-                        snippet = (
-                            ast_ctx.source_lines[line_no - 1].strip()
-                            if line_no <= len(ast_ctx.source_lines)
-                            else line.strip()
-                        )
-                        gate_note = ""
-                        if self._has_partial_type_max_gate(
-                            ast_ctx.source_lines, line_no, [var1, var2]
-                        ):
-                            gate_note = (
-                                " A preceding INT_MAX-style gate does not prove this allocation size is safe."
-                            )
-                        guard_expr = (
-                            f"{var1} > SIZE_MAX - ({var2})"
-                            if op == "+"
-                            else f"{var1} > SIZE_MAX / ({var2})"
-                        )
-                        issues.append(self.create_issue(
-                            file_path=file_path,
-                            line_number=line_no,
-                            code_snippet=snippet,
-                            message=(
-                                f"Unchecked integer arithmetic '{var1} {op} {var2}' in memory allocation "
-                                f"argument. May wrap around to small buffer causing heap corruption.{gate_note}"
-                            ),
-                            column_number=alloc_start + 1,
-                            engine="AST",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=(
-                                f"if ({guard_expr}) return -EOVERFLOW;\n{snippet}"
-                            ),
-                        ))
+                            key = (line_no, "calloc-product", left, right)
+                            if key not in reported_lines:
+                                reported_lines.add(key)
+                                snippet = (
+                                    ast_ctx.source_lines[line_no - 1].strip()
+                                    if line_no <= len(ast_ctx.source_lines)
+                                    else line.strip()
+                                )
+                                gate_note = ""
+                                if self._has_partial_type_max_gate(
+                                    ast_ctx.source_lines, line_no, check_vars
+                                ):
+                                    gate_note = (
+                                        " A preceding INT_MAX-style gate does not prove this "
+                                        "allocation size is safe."
+                                    )
+                                guard_expr = f"{guard_lhs} > SIZE_MAX / ({guard_rhs})"
+                                issues.append(self.create_issue(
+                                    file_path=file_path,
+                                    line_number=line_no,
+                                    code_snippet=snippet,
+                                    message=(
+                                        f"Unchecked calloc size product '{left} * {right}' may wrap "
+                                        f"before the allocation.{gate_note}"
+                                    ),
+                                    column_number=alloc_col + 1,
+                                    engine="AST",
+                                    fix_type=FixType.SUGGESTED_FIX,
+                                    suggested_fix_replacement=(
+                                        f"if ({guard_expr}) return -EOVERFLOW;\n{snippet}"
+                                    ),
+                                ))
 
             tainted: Set[str] = set()
             argv_names = self._argv_names(fn)

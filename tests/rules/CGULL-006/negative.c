@@ -68,3 +68,21 @@ void *test_tn_size_max_guard_realloc_add(void *buf, size_t needed, size_t offset
     }
     return realloc(buf, needed + offset);
 }
+
+/* True Negative: SIZE_MAX product guard before calloc (#560 re-review) */
+void *test_tn_calloc_size_max_product(size_t count, size_t elem_size) {
+    if (count > SIZE_MAX / elem_size) {
+        return 0;
+    }
+    return calloc(count, elem_size);
+}
+
+/* True Negative: SIZE_MAX / sizeof guard before sizeof*count malloc (#560 re-review) */
+struct item_tn { int x; };
+void *test_tn_malloc_sizeof_times_count_guarded(size_t count) {
+    if (count > SIZE_MAX / sizeof(struct item_tn)) {
+        return 0;
+    }
+    return malloc(sizeof(struct item_tn) * count);
+}
+

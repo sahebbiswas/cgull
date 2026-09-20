@@ -122,12 +122,36 @@ void *test_tp_lower_bound_early_return_accum(void *buf, size_t needed, size_t of
 /* True Positive: calloc count argument is allocation-size related (#560) */
 void *test_tp_calloc_count_accum(size_t count, size_t offset) {
     count += offset; // expect: CGULL-006
-    return calloc(count, sizeof(int));
+    return calloc(count, sizeof(int)); // expect: CGULL-006
 }
 
 /* True Positive: nested sizeof in malloc size still marks count related (#560) */
 struct item { int x; };
 void *test_tp_malloc_sizeof_nested_accum(size_t count, size_t offset) {
     count += offset; // expect: CGULL-006
-    return malloc(sizeof(struct item) * count);
+    return malloc(sizeof(struct item) * count); // expect: CGULL-006
+}
+
+/* True Positive: sizeof(T) * count order in malloc size (#560 re-review) */
+void *test_tp_malloc_sizeof_times_count(size_t count) {
+    return malloc(sizeof(struct item) * count); // expect: CGULL-006
+}
+
+/* True Positive: multiline malloc still sees sizeof * count (#560 re-review) */
+void *test_tp_multiline_malloc_sizeof_count(size_t count) {
+    return malloc( // expect: CGULL-006
+        sizeof(struct item) * count);
+}
+
+/* True Positive: multiline realloc size var still allocation-related (#560 re-review) */
+void *test_tp_multiline_realloc_accum(void *buf, size_t needed, size_t offset) {
+    needed += offset; // expect: CGULL-006
+    return realloc(
+        buf,
+        needed);
+}
+
+/* True Positive: calloc implicit product of two variable args (#560 re-review) */
+void *test_tp_calloc_implicit_product(size_t count, size_t elem_size) {
+    return calloc(count, elem_size); // expect: CGULL-006
 }

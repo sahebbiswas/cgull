@@ -201,3 +201,77 @@ def test_bare_size_max_without_relative_op_still_reports():
     )
     accum = [i for i in issues if "allocation-size accumulation" in i.message]
     assert len(accum) >= 1
+
+
+def test_multiline_realloc_accum_reports():
+    """Allocation calls split across lines still mark size vars related."""
+    issues = _scan_ast(
+        "needed += offset;\n"
+        "void *p = realloc(\n"
+        "    buf,\n"
+        "    needed);\n"
+    )
+    accum = [i for i in issues if "allocation-size accumulation" in i.message]
+    assert len(accum) == 1
+    assert accum[0].line_number == 1
+
+
+def test_malloc_sizeof_times_count_reports_direct_arg():
+    """sizeof(T) * count must not be skipped when sizeof is the first operand."""
+    issues = _scan_ast(
+        "void *p = malloc(sizeof(struct item) * count);\n"
+    )
+    alloc = [i for i in issues if "memory allocation argument" in i.message]
+    assert len(alloc) == 1
+    assert "sizeof(struct item) * count" in alloc[0].message
+
+
+def test_multiline_malloc_sizeof_times_count_reports():
+    issues = _scan_ast(
+        "void *p = malloc(\n"
+        "    sizeof(struct item) * count);\n"
+    )
+    alloc = [i for i in issues if "memory allocation argument" in i.message]
+    assert len(alloc) == 1
+    assert alloc[0].line_number == 1
+
+
+def test_sizeof_times_count_size_max_guard_suppresses():
+    issues = _scan_ast(
+        "if (count > SIZE_MAX / sizeof(struct item)) return;\n"
+        "void *p = malloc(sizeof(struct item) * count);\n"
+    )
+    assert [i for i in issues if "memory allocation argument" in i.message] == []
+
+
+def test_calloc_implicit_product_reports():
+    """calloc(count, elem_size) models the implicit multiply of both args."""
+    issues = _scan_ast(
+        "void *p = calloc(count, elem_size);\n"
+    )
+    prod = [i for i in issues if "calloc size product" in i.message]
+    assert len(prod) == 1
+    assert prod[0].line_number == 1
+
+
+def test_calloc_implicit_product_size_max_suppresses():
+    issues = _scan_ast(
+        "if (count > SIZE_MAX / elem_size) return;\n"
+        "void *p = calloc(count, elem_size);\n"
+    )
+    assert [i for i in issues if "calloc size product" in i.message] == []
+
+
+def test_calloc_count_sizeof_product_reports_without_guard():
+    issues = _scan_ast(
+        "void *p = calloc(count, sizeof(int));\n"
+    )
+    prod = [i for i in issues if "calloc size product" in i.message]
+    assert len(prod) == 1
+
+
+def test_calloc_constant_args_are_silent():
+    issues = _scan_ast(
+        "void *p = calloc(10, 4);\n"
+    )
+    assert issues == []
