@@ -108,10 +108,60 @@ def _loop_body_span(source: str, start: int) -> Optional[Tuple[int, int]]:
 
 
 
+def _is_ident_char(char: str) -> bool:
+    return char.isalnum() or char == "_"
+
+
 def _skip_space(source: str, pos: int) -> int:
-    while pos < len(source) and source[pos].isspace():
-        pos += 1
+    """Advance past whitespace and C comments (`/* ... */`, `// ...`)."""
+    n = len(source)
+    while pos < n:
+        if source[pos].isspace():
+            pos += 1
+            continue
+        if source.startswith("//", pos):
+            newline = source.find("\n", pos + 2)
+            pos = n if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", pos):
+            end = source.find("*/", pos + 2)
+            if end < 0:
+                return n
+            pos = end + 2
+            continue
+        break
     return pos
+
+
+def _skip_space_backward(source: str, pos: int) -> int:
+    """Retreat to the last non-whitespace / non-comment index at or before *pos*."""
+    while pos >= 0:
+        if source[pos].isspace():
+            pos -= 1
+            continue
+        if pos > 0 and source[pos - 1:pos + 1] == "*/":
+            start = source.rfind("/*", 0, pos - 1)
+            if start < 0:
+                return pos
+            pos = start - 1
+            continue
+        line_start = source.rfind("\n", 0, pos) + 1
+        comment = source.find("//", line_start, pos + 1)
+        if comment >= 0:
+            pos = comment - 1
+            continue
+        break
+    return pos
+
+
+def _at_keyword(source: str, pos: int, keyword: str) -> bool:
+    """True when *keyword* starts at *pos* with trailing identifier boundary."""
+    end = pos + len(keyword)
+    if not source.startswith(keyword, pos):
+        return False
+    if end < len(source) and _is_ident_char(source[end]):
+        return False
+    return True
 
 
 def _body_span_positions(source: str, start: int) -> Optional[Tuple[int, int, int]]:
@@ -130,10 +180,13 @@ def _body_span_positions(source: str, start: int) -> Optional[Tuple[int, int, in
 
 def _preceded_by_else(masked: str, if_start: int) -> bool:
     """True when *if_start* is the `if` in an `else if` continuation."""
-    pos = if_start - 1
-    while pos >= 0 and masked[pos].isspace():
-        pos -= 1
-    return masked[max(0, pos - 3):pos + 1] == "else"
+    pos = _skip_space_backward(masked, if_start - 1)
+    if pos < 3 or masked[pos - 3:pos + 1] != "else":
+        return False
+    # Leading word boundary so identifiers like `some_else` / `belse` do not match.
+    if pos >= 4 and _is_ident_char(masked[pos - 4]):
+        return False
+    return True
 
 
 def _braced_arm_line_span(masked: str, body_start: int, body_end: int) -> Tuple[int, int]:
@@ -169,7 +222,7 @@ def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
 
     while True:
         # Consume leading `if` (first arm or `else if`).
-        if not masked.startswith("if", pos):
+        if not _at_keyword(masked, pos, "if"):
             return None
         pos = _skip_space(masked, pos + 2)
         if pos >= len(masked) or masked[pos] != "(":
@@ -184,10 +237,10 @@ def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
         arms.append(_arm_line_span(masked, body_start, body_end))
 
         pos = _skip_space(masked, pos)
-        if not masked.startswith("else", pos):
+        if not _at_keyword(masked, pos, "else"):
             break
         pos = _skip_space(masked, pos + 4)
-        if masked.startswith("if", pos):
+        if _at_keyword(masked, pos, "if"):
             continue
         # Final else arm.
         body = _body_span_positions(masked, pos)
