@@ -9,6 +9,39 @@ C-GULL has two deliberately separate preprocessing layers:
 
 The symbolic layer lives in `cgull.preprocessor`. It does **not** replace concrete preprocessing, macro expansion, or parser fallback behavior. See [AST preprocessing and coverage guarantees](../preprocessing.md) and [Analysis model](../analysis-model.md) for the concrete path.
 
+## CPRE dependency and ownership boundary
+
+Issue #436 replaces the long-term in-tree adaptation of CPRE-derived symbolic
+preprocessor functionality with an explicit, versioned dependency on the
+[`cpre`](https://github.com/sahebbiswas/cpre) package.
+
+- **Supported range:** `cpre>=0.11.0,<0.12` (first release with the public
+  symbolic expression, lossless conditional-structure, and exact proof/witness
+  APIs required for migration).
+- **Import boundary:** analyzer code must use `cgull.preprocessor.cpre_api`
+  (or top-level `cpre` symbols that module re-exports). Do not import
+  `cpre.model`, `cpre.expressions`, `cpre.structure`, `cpre.proofs`,
+  `cpre.robdd`, `cpre.parser`, or `cpre.cpre`.
+- **cpre owns:** shared IR, structure, and exact Boolean reasoning plus their
+  compatibility contract.
+- **C-GULL owns:** CGULL-054/055 and related diagnostics, CLI/reporting, scan
+  orchestration, and configuration-profile reduction policy layered on those
+  primitives.
+
+This release only declares the dependency and the pinned API entry point; the
+local `cgull.preprocessor` implementation remains the active engine until later
+#436 slices migrate call sites through `cpre_api` and remove superseded modules
+after parity coverage.
+
+Two accepted naming differences are recorded for the future adapter (from
+cpre's symbolic migration readiness gate):
+
+- witness definedness category: C-GULL `defined` ↔ cpre `macro_defined`
+- structural diagnostic codes: `invalid_macro` ↔ `malformed_macro_directive`,
+  `unexpected_tokens` ↔ `trailing_directive_text`,
+  `misplaced_directive` ↔ `unmatched_directive`,
+  `unterminated_block` ↔ `unterminated_conditional`
+
 ## Focused CLI: `cgull preprocessor`
 
 Use the focused command when you want to inspect conditional compilation without running the full security rule set:

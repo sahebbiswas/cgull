@@ -10,6 +10,26 @@ C-GULL also has an independent **symbolic preprocessor** layer that preserves al
 
 See [Symbolic preprocessor analysis](analysis/symbolic-preprocessor.md) for supported directives, opaque predicate semantics, contextual/effective conditions, witnesses, reduction behavior, and resource limits. Symbolic results do not imply that concrete preprocessing or AST parsing succeeded for every configuration.
 
+## Explicit CPRE dependency
+
+C-GULL declares the [`cpre`](https://github.com/sahebbiswas/cpre) package as an
+explicit runtime dependency (`cpre>=0.11.0,<0.12`). The concrete AST path in this
+document still uses `pcpp` today; the symbolic preprocessor migration tracked by
+issue #436 consumes CPRE through the pinned public surface in
+`cgull.preprocessor.cpre_api` (top-level `cpre` imports only).
+
+Ownership boundary:
+
+- **cpre** owns symbolic expression IR/algebra, lossless conditional structure and
+  source ranges, exact Boolean proof/witness primitives, and the versioned public
+  API contract.
+- **C-GULL** owns rule IDs/messages/severity, scan-profile orchestration, build and
+  translation-unit policy, mapping CPRE facts into findings, and local reporting
+  integration.
+
+See [Symbolic preprocessor analysis](analysis/symbolic-preprocessor.md) for the
+symbolic layer and the migration boundary details.
+
 ## Why preprocessing is required
 
 Several AST-backed analyses rely on macro expansion before parsing. In particular, `offsetof(T, member)` must be expanded into the pointer/member expression understood by C-GULL's layout and container-recovery reasoning. If it survives preprocessing as a function call, analyses that depend on member offsets can silently lose security coverage.
