@@ -186,3 +186,40 @@ def test_recursive_summaries_keep_explicit_cache_with_ambiguous_session_ownershi
     assert summaries.serialize_function_summaries(actual.summaries) == summaries.serialize_function_summaries(expected.summaries)
     assert actual.iterations_by_scc == expected.iterations_by_scc
     assert actual.iterations_by_scc[("recur",)] > 1
+
+
+@pytest.mark.parametrize("statement", ["wrap(p);", "int *a = wrap(p);"])
+def test_empty_to_unrelated_summaries_reuses_overlay(statement):
+    node = c_parser.CParser().parse("void f() { " + statement + " }").ext[0].body.block_items[0]
+    cache = EventFactsCache()
+    summaries = {}
+    with patch("cgull.cfg.event_cache._overlay", wraps=event_cache._overlay) as overlay:
+        first = cache.payload(node, summaries=summaries)
+        summaries["unrelated"] = FunctionSummary(returns_allocation=True)
+        assert cache.payload(node, summaries=summaries) is first
+        summaries.clear()
+        assert cache.payload(node, summaries=summaries) is first
+        assert overlay.call_count == 1
+        summaries["wrap"] = FunctionSummary(freed_params={0})
+        assert cache.payload(node, summaries=summaries)[5] == {"p"}
+        assert overlay.call_count == 2
+
+
+def test_summary_presence_gate_preserves_custom_reallocator_effects():
+    node = c_parser.CParser().parse(
+        "void f() { int *a = resize(p, 8) + grow(q, 8); }"
+    ).ext[0].body.block_items[0]
+    cache = EventFactsCache()
+    effects = dict(alloc_funcs={"resize", "grow"}, realloc_funcs={"resize", "grow"})
+    results = []
+    for summaries in ({}, {"unrelated": FunctionSummary()}, {}):
+        expected = list(ast_events._event_payload(node, summaries=summaries, **effects))
+        expected[1:3] = expression_read_write_sets(node)
+        actual = cache.payload(node, summaries=summaries, **effects)
+        assert actual == tuple(expected)
+        results.append(actual)
+    # With no summaries the legacy first-match allocation loop records one
+    # input; a nonempty map enables call effects for both reallocators.
+    assert len(results[0][11]) == 1
+    assert results[1][11] == {"p", "q"}
+    assert results[2] == results[0]

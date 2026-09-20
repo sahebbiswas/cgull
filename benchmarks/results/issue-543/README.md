@@ -84,3 +84,16 @@ The failures are environment-dependent multiprocessing diagnostic-transport test
 
 All 19 added cache regressions pass, including recursive fixed-point parity,
 custom effects, source maps, mutable-state isolation, and concurrent requests.
+
+## Review follow-up
+
+Overlay signatures ignore changes between empty and unrelated-only summary maps
+unless the node contains a targeted syntactic allocator call. Those allocator
+calls retain the legacy nonempty-map gate: for example, two custom reallocators
+in one initializer record different input sets with an empty versus nonempty
+map. Removing that gate unconditionally would reuse stale facts. Three added
+regressions cover unrelated-summary reuse for standalone/assigned calls and
+legacy custom-reallocator parity across both transition directions.
+
+Review follow-up validation: all 103 focused cache, deallocation, session,
+CFG/dataflow, summary-engine, and interprocedural-corpus tests pass.

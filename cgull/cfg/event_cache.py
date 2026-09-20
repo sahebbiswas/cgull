@@ -68,6 +68,7 @@ class _BaseFacts:
     allocation_calls: tuple[tuple[str, tuple[str, ...]], ...]
     targets: frozenset[str]
     callees: tuple[str, ...]
+    summary_presence_sensitive: bool
 
 
 def _base_facts(node, alloc, dealloc, realloc, line_map):
@@ -106,7 +107,13 @@ def _base_facts(node, alloc, dealloc, realloc, line_map):
     callees = tuple(sorted({call.callee for call in guarded + effects}
                            | {name for name, _ in allocations}))
     targets = frozenset({target}) if target is not None else frozenset()
-    return _BaseFacts(_freeze(payload), guarded, effects, allocations, targets, callees)
+    # Legacy call effects gate even syntactic allocators on a nonempty map.
+    # Only targeted allocator calls can observe that gate without a summary.
+    presence_sensitive = any(call.target and call.callee in alloc for call in effects)
+    return _BaseFacts(
+        _freeze(payload), guarded, effects, allocations, targets, callees,
+        presence_sensitive,
+    )
 
 
 def _summary_key(summary):
@@ -187,7 +194,10 @@ class EventFactsCache:
         if not base.callees:
             return base.payload
         summaries = summaries or {}
-        signature = (bool(summaries), tuple(_summary_key(summaries.get(name)) for name in base.callees))
+        signature = (
+            base.summary_presence_sensitive and bool(summaries),
+            tuple(_summary_key(summaries.get(name)) for name in base.callees),
+        )
         previous = self._overlays.get(key)
         if previous is None or previous[0] != signature:
             previous = (signature, _overlay(base, summaries, alloc, realloc))
