@@ -162,18 +162,43 @@ _WORKER_RESTORATIONS: list[tuple[Any, str, Any]] = []
 _WORKER_FINALIZER: Any = None
 
 
-def _flush_worker_metrics() -> None:
+def _flush_worker_metrics() -> bool:
+    """Persist a worker snapshot without changing scan success/failure behavior."""
+
     if _WORKER_RECORDER is None or _WORKER_METRICS_DIR is None:
-        return
-    directory = Path(_WORKER_METRICS_DIR)
-    directory.mkdir(parents=True, exist_ok=True)
-    destination = directory / f"{os.getpid()}.json"
-    temporary = destination.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(_WORKER_RECORDER.snapshot(), sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, destination)
+        return False
+
+    temporary: Path | None = None
+    try:
+        directory = Path(_WORKER_METRICS_DIR)
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / f"{os.getpid()}.json"
+        temporary = destination.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(_WORKER_RECORDER.snapshot(), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, destination)
+        return True
+    except Exception as exc:
+        # Benchmark instrumentation must remain observational: snapshot I/O must
+        # never replace a successful scan result or mask the original worker
+        # exception. The coordinator independently knows which PIDs the executor
+        # created, so a missing snapshot still makes completeness false.
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            print(
+                f"warning: benchmark worker {os.getpid()} pass-metric snapshot "
+                f"write failed: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
+        return False
 
 
 def _ensure_worker_instrumentation(metrics_dir: str | None = None) -> None:
