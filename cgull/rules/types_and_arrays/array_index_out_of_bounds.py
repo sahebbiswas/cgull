@@ -534,6 +534,29 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
                 obligations = BoundsObligations(cfg, funcdef)
                 groups = {}
 
+                # sizeof(local_array) byte sizes for evaluating sizeof-bounded loops.
+                sizeof_env = {}
+                for var in list(ast_ctx.global_variables.values()) + list(fn.variables.values()):
+                    name = getattr(var, "name", None)
+                    expr = getattr(var, "array_size_expr", None)
+                    if not name or not expr:
+                        continue
+                    try:
+                        count = int(re.sub(r"[uUlL]+$", "", str(expr).strip()), 0)
+                    except ValueError:
+                        continue
+                    element = self._element_size(var.type_name, ast_ctx)
+                    if element is None:
+                        # Char-family arrays often report element size 1 via the
+                        # declared type string; fall back to 1 only when the
+                        # type clearly denotes a single-byte element.
+                        type_name = (var.type_name or "").lower()
+                        if any(tok in type_name for tok in ("char", "uint8", "int8", "byte")):
+                            element = 1
+                        else:
+                            continue
+                    sizeof_env[name] = count * element
+
                 class ArrayCheckVisitor(c_ast.NodeVisitor):
                     def visit_ArrayRef(v_self, node):
                         line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else fn.start_line
@@ -575,6 +598,7 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
 
                             guarded = guarded_access(
                                 cfg, target_node_id, node, idx_var, arr_size, is_signed,
+                                sizeof_env=sizeof_env,
                             )
 
                             if not guarded:

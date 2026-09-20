@@ -92,3 +92,54 @@ void test_tn_short_circuit_signed(int idx) {
         data[idx] = 0;
     }
 }
+/* False-Positive Regression (#553): sizeof-bounded loop + post-loop NUL write */
+void test_fp_sizeof_bounded_loop(void) {
+    unsigned char number_c_string[64];
+    size_t i = 0;
+    for (i = 0; i < (sizeof(number_c_string) - 1); i++) {
+        number_c_string[i] = '0';
+    }
+    number_c_string[i] = '\0';
+}
+
+/* False-Positive Regression (#553): can_access_at_index-style cursor guard */
+typedef struct {
+    const unsigned char *content;
+    size_t length;
+    size_t offset;
+} cgull007_parse_buffer;
+
+#define cgull007_can_access_at_index(buffer, index) \
+    ((buffer != 0) && (((buffer)->offset + (index)) < (buffer)->length))
+#define cgull007_buffer_at_offset(buffer) ((buffer)->content + (buffer)->offset)
+
+void test_fp_can_access_cursor(cgull007_parse_buffer *buffer, size_t i) {
+    if (cgull007_can_access_at_index(buffer, i)) {
+        unsigned char c = cgull007_buffer_at_offset(buffer)[i];
+        (void)c;
+    }
+}
+
+/* False-Positive Regression (#553): ensure()-sized buffer writes */
+unsigned char *ensure(void *p, size_t needed);
+void test_fp_ensure_then_write(void *pb, size_t output_length) {
+    unsigned char *output = ensure(pb, output_length + sizeof("\"\""));
+    if (output == 0) {
+        return;
+    }
+    output[0] = '\"';
+    output[output_length + 1] = '\"';
+    output[output_length + 2] = '\0';
+}
+
+/* False-Positive Regression (#553): length validated against sizeof then looped */
+void test_fp_length_validated_sizeof_loop(int length) {
+    unsigned char number_buffer[26];
+    size_t i;
+    if ((length < 0) || (length > (int)(sizeof(number_buffer) - 1))) {
+        return;
+    }
+    for (i = 0; i < ((size_t)length); i++) {
+        number_buffer[i] = 0;
+    }
+}
