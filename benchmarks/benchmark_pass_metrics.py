@@ -9,7 +9,7 @@ name and report their local counters back to the benchmark coordinator.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import wraps
 import json
 import multiprocessing.util
@@ -33,6 +33,7 @@ PASS_NAMES = (
     "parse_conditional_directives",
 )
 WORKER_METRICS_ENV = "CGULL_BENCHMARK_PASS_METRICS_DIR"
+WORKER_METRICS_OVERRIDE = "_cgull_benchmark_pass_metrics_dir"
 
 _TARGETS = {
     "build_cfg": cfg_construction.build_cfg,
@@ -122,6 +123,38 @@ def restore_pass_wrappers(restorations: list[tuple[Any, str, Any]]) -> None:
         setattr(module, attribute, value)
 
 
+def attach_worker_metrics_dir(item: Any, directory: Path | str) -> Any:
+    """Carry benchmark metadata explicitly across spawn/forkserver boundaries."""
+
+    overrides = tuple(
+        (name, value)
+        for name, value in getattr(item, "config_overrides", ())
+        if name != WORKER_METRICS_OVERRIDE
+    )
+    return replace(
+        item,
+        config_overrides=overrides + ((WORKER_METRICS_OVERRIDE, str(directory)),),
+    )
+
+
+def _worker_metrics_dir_from_item(item: Any) -> str | None:
+    for name, value in getattr(item, "config_overrides", ()):
+        if name == WORKER_METRICS_OVERRIDE:
+            return str(value)
+    return None
+
+
+def _without_worker_metrics_override(item: Any) -> Any:
+    overrides = tuple(
+        (name, value)
+        for name, value in getattr(item, "config_overrides", ())
+        if name != WORKER_METRICS_OVERRIDE
+    )
+    if overrides == getattr(item, "config_overrides", ()):
+        return item
+    return replace(item, config_overrides=overrides)
+
+
 _WORKER_RECORDER: PassRecorder | None = None
 _WORKER_PID: int | None = None
 _WORKER_METRICS_DIR: str | None = None
@@ -143,14 +176,15 @@ def _flush_worker_metrics() -> None:
     os.replace(temporary, destination)
 
 
-def _ensure_worker_instrumentation() -> None:
+def _ensure_worker_instrumentation(metrics_dir: str | None = None) -> None:
     global _WORKER_FINALIZER
     global _WORKER_METRICS_DIR
     global _WORKER_PID
     global _WORKER_RECORDER
     global _WORKER_RESTORATIONS
 
-    metrics_dir = os.environ.get(WORKER_METRICS_ENV)
+    if metrics_dir is None:
+        metrics_dir = os.environ.get(WORKER_METRICS_ENV)
     if not metrics_dir:
         return
 
@@ -189,7 +223,12 @@ def _ensure_worker_instrumentation() -> None:
 def benchmark_scan_worker_item(item: Any):
     """Process-pool entry point that adds pass metrics without changing its result."""
 
-    _ensure_worker_instrumentation()
+    # Environment mutation after a POSIX forkserver has started is not inherited
+    # by later workers. Prefer metadata carried in the pickled work item so the
+    # benchmark is reliable regardless of multiprocessing start method.
+    metrics_dir = _worker_metrics_dir_from_item(item)
+    _ensure_worker_instrumentation(metrics_dir)
+    item = _without_worker_metrics_override(item)
     try:
         return _ORIGINAL_SCAN_WORKER_ITEM(item)
     finally:
