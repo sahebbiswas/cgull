@@ -278,3 +278,64 @@ def test_parallel_sample_reports_complete_worker_snapshots(tmp_path):
     )
     assert sample.pass_metric_worker_snapshots_complete is True
     assert sample.semantics.files_failed == 0
+
+
+def test_timed_prepare_source_keeps_metrics_when_units_empty(monkeypatch):
+    def install_and_seed(recorder):
+        recorder.add_pass("build_cfg", 0.25)
+        return []
+
+    monkeypatch.setattr(
+        benchmark,
+        "_ORIGINAL_PREPARE_SOURCE",
+        lambda *_args: ({}, ["PROJECT_PREPARATION_FAILED: example.c: boom"]),
+    )
+    monkeypatch.setattr(benchmark.pass_metrics, "install_pass_wrappers", install_and_seed)
+    monkeypatch.setattr(benchmark.pass_metrics, "restore_pass_wrappers", lambda _rest: None)
+
+    units, errors = benchmark._timed_prepare_source("ignored")
+
+    assert errors == ["PROJECT_PREPARATION_FAILED: example.c: boom"]
+    assert list(units) == [benchmark._BENCHMARK_PREP_ARTIFACT_KEY]
+    artifact = units[benchmark._BENCHMARK_PREP_ARTIFACT_KEY]
+    assert isinstance(artifact, benchmark._BenchmarkPrepArtifact)
+    assert artifact.pass_metrics["build_cfg"]["invocation_count"] == 1
+    assert artifact.pass_metrics["build_cfg"]["inclusive_wall_seconds"] == pytest.approx(0.25)
+
+
+def test_timed_units_merges_prep_artifact_without_leaking_it(monkeypatch):
+    recorder = benchmark.PhaseRecorder()
+    artifact = benchmark._BenchmarkPrepArtifact(
+        {"project_parser_seconds": 0.5},
+        {
+            name: {
+                "invocation_count": 3 if name == "build_cfg" else 0,
+                "inclusive_wall_seconds": 0.75 if name == "build_cfg" else 0.0,
+            }
+            for name in benchmark.pass_metrics.PASS_NAMES
+        },
+    )
+
+    def fake_prepare_units(*_args, **_kwargs):
+        return (
+            {
+                "example.c": {
+                    benchmark._BENCHMARK_PREP_ARTIFACT_KEY: artifact,
+                }
+            },
+            ("PROJECT_PREPARATION_FAILED: example.c: boom",),
+        )
+
+    monkeypatch.setattr(benchmark.project_analysis, "prepare_units", fake_prepare_units)
+    monkeypatch.setattr(benchmark.pass_metrics, "install_pass_wrappers", lambda _r: [])
+    monkeypatch.setattr(benchmark.pass_metrics, "restore_pass_wrappers", lambda _r: None)
+    monkeypatch.delenv(benchmark.pass_metrics.WORKER_METRICS_ENV, raising=False)
+
+    with benchmark.phase_instrumentation(recorder):
+        units, errors = benchmark.project_analysis.prepare_units([], lambda _path: None)
+
+    assert units == {"example.c": {}}
+    assert errors == ("PROJECT_PREPARATION_FAILED: example.c: boom",)
+    assert recorder.value("project_parser_seconds") == pytest.approx(0.5)
+    assert recorder.pass_counts["build_cfg"] == 3
+    assert recorder.pass_seconds["build_cfg"] == pytest.approx(0.75)

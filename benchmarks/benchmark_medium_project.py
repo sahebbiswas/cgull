@@ -105,6 +105,18 @@ class PhaseRecorder:
             )
 
 
+
+
+_BENCHMARK_PREP_ARTIFACT_KEY = "__cgull_benchmark_prep_artifact__"
+
+
+@dataclass
+class _BenchmarkPrepArtifact:
+    """Carry prep-worker benchmark metrics across IPC when no units exist."""
+
+    seconds: dict[str, float]
+    pass_metrics: dict[str, dict[str, int | float]]
+
 @dataclass(frozen=True)
 class SemanticSnapshot:
     findings: tuple[tuple[Any, ...], ...]
@@ -446,20 +458,29 @@ def phase_instrumentation(
         recorder.project_depth += 1
         try:
             units, errors = original_units(*args, **kwargs)
-            for values in units.values():
-                for unit in values.values():
-                    for name, elapsed in getattr(unit, '_benchmark_seconds', {}).items():
+            cleaned: dict[str, dict[str, Any]] = {}
+            for path, values in units.items():
+                kept: dict[str, Any] = {}
+                for key, unit in values.items():
+                    if isinstance(unit, _BenchmarkPrepArtifact) or key == _BENCHMARK_PREP_ARTIFACT_KEY:
+                        for name, elapsed in unit.seconds.items():
+                            recorder.add(name, elapsed)
+                        recorder.merge_pass_metrics(unit.pass_metrics)
+                        continue
+                    for name, elapsed in getattr(unit, "_benchmark_seconds", {}).items():
                         recorder.add(name, elapsed)
-                    if hasattr(unit, '_benchmark_seconds'):
+                    if hasattr(unit, "_benchmark_seconds"):
                         del unit._benchmark_seconds
-                    benchmark_passes = getattr(unit, '_benchmark_pass_metrics', None)
+                    benchmark_passes = getattr(unit, "_benchmark_pass_metrics", None)
                     if benchmark_passes:
                         recorder.merge_pass_metrics(benchmark_passes)
-                    if hasattr(unit, '_benchmark_pass_metrics'):
+                    if hasattr(unit, "_benchmark_pass_metrics"):
                         del unit._benchmark_pass_metrics
-            return units, errors
+                    kept[key] = unit
+                cleaned[path] = kept
+            return cleaned, errors
         finally:
-            recorder.add('independent_preparation_seconds', time.perf_counter() - started)
+            recorder.add("independent_preparation_seconds", time.perf_counter() - started)
             recorder.project_depth -= 1
             if recorder.project_depth == 0:
                 recorder.add("preparation_wall_seconds", time.perf_counter() - started)
@@ -531,6 +552,19 @@ def phase_instrumentation(
         pass_metrics.restore_pass_wrappers(pass_restorations)
 
 
+def _prep_metrics_worth_keeping(
+    seconds: dict[str, float],
+    snapshot: dict[str, dict[str, int | float]],
+) -> bool:
+    if any(float(value) > 0.0 for value in seconds.values()):
+        return True
+    return any(
+        int(metric.get("invocation_count", 0)) > 0
+        or float(metric.get("inclusive_wall_seconds", 0.0)) > 0.0
+        for metric in snapshot.values()
+    )
+
+
 def _timed_prepare_source(*args):
     """Benchmark-only process entry point, including spawn on Windows/macOS."""
     seconds = defaultdict(float)
@@ -544,22 +578,32 @@ def _timed_prepare_source(*args):
         try:
             return original_parse(*a, **kw)
         finally:
-            seconds['project_parser_seconds'] += time.perf_counter() - started
+            seconds["project_parser_seconds"] += time.perf_counter() - started
 
     def expand(*a, **kw):
         started = time.perf_counter()
         try:
             return original_expand(*a, **kw)
         finally:
-            seconds['project_tu_include_expansion_seconds'] += time.perf_counter() - started
+            seconds["project_tu_include_expansion_seconds"] += time.perf_counter() - started
 
     CASTParser.parse, TUIncludeExpander.expand = parse, expand
     try:
         units, errors = _ORIGINAL_PREPARE_SOURCE(*args)
+        seconds_dict = dict(seconds)
+        pass_snapshot = worker_passes.snapshot()
         if units:
             unit = next(iter(units.values()))
-            unit._benchmark_seconds = dict(seconds)
-            unit._benchmark_pass_metrics = worker_passes.snapshot()
+            unit._benchmark_seconds = seconds_dict
+            unit._benchmark_pass_metrics = pass_snapshot
+        elif _prep_metrics_worth_keeping(seconds_dict, pass_snapshot):
+            # Keep observational metrics even when preparation produced no units.
+            units = {
+                _BENCHMARK_PREP_ARTIFACT_KEY: _BenchmarkPrepArtifact(
+                    seconds_dict,
+                    pass_snapshot,
+                )
+            }
         return units, errors
     finally:
         CASTParser.parse, TUIncludeExpander.expand = original_parse, original_expand
