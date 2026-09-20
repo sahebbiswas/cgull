@@ -374,6 +374,67 @@ class StrippingVolatileQualifiersRule(BaseRule):
         return issues
 
 
+
+_EXPORT_MACRO_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_FUNC_PTR_CAST_TYPE_RE = (
+    r"void\s*\*|int|long|short|uint32_t|uint64_t|intptr_t|uintptr_t|size_t|unsigned\s+int"
+)
+_FUNC_PTR_CAST_RE = re.compile(
+    rf"\(\s*(?:{_FUNC_PTR_CAST_TYPE_RE})\s*\)\s*([a-zA-Z_]\w*)\b"
+)
+_FUNC_PTR_CAST_SCAN_LINE_RE = re.compile(
+    r"\(\s*(?:void\s*\*|int|long|uint32_t|unsigned\s+int)\s*\)\s*"
+    r"([a-zA-Z_]\w*(?:_handler|_fn|_callback|_hook|func))\b"
+)
+
+
+def _macro_name_before_paren(line: str, paren_index: int) -> Optional[str]:
+    """Return the identifier immediately preceding ``line[paren_index]`` if any."""
+    i = paren_index - 1
+    while i >= 0 and line[i].isspace():
+        i -= 1
+    end = i + 1
+    while i >= 0 and (line[i].isalnum() or line[i] == "_"):
+        i -= 1
+    name = line[i + 1 : end]
+    return name or None
+
+
+def _is_macro_type_declarator_cast(line: str, match: re.Match) -> bool:
+    """True for ``MACRO(type) declarator(...)`` export wrappers, not real casts.
+
+    Fallback regex otherwise treats ``CJSON_PUBLIC(int) foo(...)`` as casting
+    ``foo`` to ``int``. Require an ALL_CAPS macro name before the opening paren
+    and a function-declarator ``(`` after the matched identifier.
+    """
+    macro = _macro_name_before_paren(line, match.start())
+    if not macro or not _EXPORT_MACRO_NAME_RE.fullmatch(macro):
+        return False
+    return bool(re.match(r"\s*\(", line[match.end() :]))
+
+
+def _macro_declarator_overlaps_cast(
+    source_line: str, target: str, cast_column: Optional[int]
+) -> bool:
+    """True when a MACRO(type) declarator match overlaps the AST cast column.
+
+    The AST guard must not suppress a real cast merely because an export-macro
+    prototype (or the same shape in a comment) appears elsewhere on the line.
+    ``cast_column`` is pycparser's 1-based column for the cast node.
+    """
+    if not source_line or cast_column is None or cast_column < 1:
+        return False
+    cast_col0 = cast_column - 1
+    for match in _FUNC_PTR_CAST_RE.finditer(source_line):
+        if match.group(1) != target:
+            continue
+        if not _is_macro_type_declarator_cast(source_line, match):
+            continue
+        if match.start() <= cast_col0 < match.end():
+            return True
+    return False
+
+
 class IllegalFunctionPointerConversionsRule(BaseRule):
     rule_id = "CGULL-011"
     name = "Illegal Function Pointer Conversions"
@@ -426,7 +487,18 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
                         if fn_ids:
                             line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else 1
                             target = sorted(list(fn_ids))[0]
-                            snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else _format_pycparser_expr(node)
+                            raw_line = (
+                                ast_ctx.source_lines[line_no - 1]
+                                if line_no <= len(ast_ctx.source_lines)
+                                else ""
+                            )
+                            snippet = raw_line.strip() if raw_line else _format_pycparser_expr(node)
+                            # Only suppress when a MACRO(type) declarator overlaps
+                            # this cast's source span — not merely elsewhere on the line.
+                            cast_col = node.coord.column if node.coord else None
+                            if _macro_declarator_overlaps_cast(raw_line, target, cast_col):
+                                self.generic_visit(node)
+                                return
                             issues.append(self.outer_rule.create_issue(
                                 file_path=file_path,
                                 line_number=line_no,
@@ -441,9 +513,10 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
 
             FuncPtrCastVisitor(self).visit(ast_ctx.pycparser_ast)
         else:
-            cast_regex = re.compile(r'\(\s*(?:void\s*\*|int|long|short|uint32_t|uint64_t|intptr_t|uintptr_t|size_t|unsigned\s+int)\s*\)\s*([a-zA-Z_]\w*)\b')
             for line_no, line in enumerate(ast_ctx.source_lines, 1):
-                for m in cast_regex.finditer(line):
+                for m in _FUNC_PTR_CAST_RE.finditer(line):
+                    if _is_macro_type_declarator_cast(line, m):
+                        continue
                     target = m.group(1)
                     if target in all_func_symbols or any(k in target.lower() for k in ['_handler', '_fn', '_callback', '_hook', 'func', 'proc']):
                         issues.append(self.create_issue(
@@ -460,8 +533,8 @@ class IllegalFunctionPointerConversionsRule(BaseRule):
 
     def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
         issues = []
-        m = re.search(r'\(\s*(?:void\s*\*|int|long|uint32_t|unsigned\s+int)\s*\)\s*([a-zA-Z_]\w*(?:_handler|_fn|_callback|_hook|func))\b', line_content)
-        if m:
+        m = _FUNC_PTR_CAST_SCAN_LINE_RE.search(line_content)
+        if m and not _is_macro_type_declarator_cast(line_content, m):
             target = m.group(1)
             issues.append(self.create_issue(
                 file_path=file_path,

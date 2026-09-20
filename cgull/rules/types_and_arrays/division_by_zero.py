@@ -39,6 +39,52 @@ def _literal_write_nonzero(expr_str: str, var_name: str) -> Optional[bool]:
         return None
 
 
+
+_FLOAT_ZERO_LITERAL_RE = re.compile(
+    r"""^
+    [+-]?
+    (?:
+        (?:0+\.(?:0+)?|\.0+)(?:[eE][+-]?[0-9]+)?  # 0.0 / .0 / 0. / 0.0eN
+        | 0+[eE][+-]?[0-9]+                          # 0eN
+    )
+    [fFlL]?
+    $""",
+    re.VERBOSE,
+)
+
+
+def _is_float_zero_constant(node) -> bool:
+    """True when *node* is a floating constant that evaluates to 0.0.
+
+    Casts are unwrapped so ``(double)0.0 / 0.0`` (from ``(double)NAN`` when
+    ``NAN`` is the unparenthesized ``0.0/0.0``) still counts as a NaN literal.
+    """
+    while node is not None and type(node).__name__ == "Cast":
+        node = getattr(node, "expr", None)
+    if type(node).__name__ == "UnaryOp" and getattr(node, "op", None) in ("+", "-"):
+        # +0.0 / -0.0 are still IEEE zero; keep sign-agnostic via the regex.
+        node = getattr(node, "expr", None)
+        while node is not None and type(node).__name__ == "Cast":
+            node = getattr(node, "expr", None)
+    if type(node).__name__ != "Constant":
+        return False
+    value = str(getattr(node, "value", "")).strip()
+    return bool(_FLOAT_ZERO_LITERAL_RE.match(value))
+
+
+def _is_nan_literal_division(node) -> bool:
+    """Recognize ``0.0/0.0``-style NaN literals (incl. ``f``/``L`` suffixes).
+
+    These are constant expressions used to materialize NaN (often via ``NAN``),
+    not runtime division-by-zero defects at the use site.
+    """
+    return (
+        getattr(node, "op", None) == "/"
+        and _is_float_zero_constant(getattr(node, "left", None))
+        and _is_float_zero_constant(getattr(node, "right", None))
+    )
+
+
 class DivisionByZeroRule(BaseRule):
     rule_id = "CGULL-034"
     name = "Division or Modulo by Zero"
@@ -142,6 +188,11 @@ class DivisionByZeroRule(BaseRule):
                 class DivVisitor(c_ast.NodeVisitor):
                     def visit_BinaryOp(v_self, node):
                         if node.op in ('/', '%'):
+                            # NaN materialization via 0.0/0.0 (from NAN macros, etc.)
+                            if _is_nan_literal_division(node):
+                                v_self.generic_visit(node)
+                                return
+
                             line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else fn.start_line
                             divisor_str = _format_pycparser_expr(node.right)
 
