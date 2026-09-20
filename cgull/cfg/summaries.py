@@ -462,7 +462,7 @@ def _analyze_one_function(
                 for use_kind, payload, guarded_nonnull in _guarded_expression_uses(
                     getattr(node, "_ast_node", None), summaries=summaries
                 ):
-                    if use_kind == "deref":
+                    if use_kind in {"deref", "arith"}:
                         deref_var = payload
                         if (
                             param_location in loc_map.get(deref_var, set())

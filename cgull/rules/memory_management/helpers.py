@@ -373,7 +373,7 @@ def _unchecked_deref_vars(node: CFGEvent, summaries=None):
         return node.derefs
     result = set()
     for kind, payload, guarded in _guarded_expression_uses(ast_node, summaries=summaries):
-        if kind == "deref":
+        if kind in {"deref", "arith"}:
             if payload not in guarded:
                 result.add(payload)
             continue
@@ -387,6 +387,20 @@ def _unchecked_deref_vars(node: CFGEvent, summaries=None):
                 if type(arg).__name__ == "ID" and arg.name not in guarded:
                     result.add(arg.name)
     return result
+
+
+def _null_unsafe_use_kind(node: CFGEvent, var: str, summaries=None) -> str:
+    """Return ``arith`` when *var* is only used in additive pointer arithmetic."""
+    ast_node = getattr(node, "_ast_node", None)
+    if ast_node is None:
+        return "deref"
+    kinds = set()
+    for kind, payload, guarded in _guarded_expression_uses(ast_node, summaries=summaries):
+        if kind in {"deref", "arith"} and payload == var and payload not in guarded:
+            kinds.add(kind)
+    if kinds == {"arith"}:
+        return "arith"
+    return "deref"
 
 
 def _find_unsafe_param_deref(cfg: StructuredCFG, param: str, summaries=None):

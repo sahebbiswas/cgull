@@ -75,3 +75,24 @@ int test_tp_or_true_path_unchecked_deref(CJSON551TP *a, CJSON551TP *b) {
     }
     return 0;
 }
+
+/* True Positive (#559): additive pointer arithmetic on maybe-NULL param */
+const char *test_tp_pointer_plus_offset(const char *p, int off) {
+    return p + off; // expect: CGULL-004
+}
+
+/* True Positive (#559): offset + pointer form */
+const char *test_tp_offset_plus_pointer(const char *p, int off) {
+    return off + p; // expect: CGULL-004
+}
+
+/* True Positive (#559): known-NULL local used in pointer arithmetic */
+const char *test_tp_null_local_plus_offset(int off) {
+    char *p = 0;
+    return p + off; // expect: CGULL-004
+}
+
+/* True Positive (#559): nested *(p + i) without NULL check */
+int test_tp_star_pointer_plus_index(int *p, int i) {
+    return *(p + i); // expect: CGULL-004
+}

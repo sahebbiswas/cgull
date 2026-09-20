@@ -244,10 +244,13 @@ fully modeled. Behavioral corpus coverage is provided; Juliet coverage is
 
 Local pointers include results of calls with known nullable return contracts,
 including same-TU helper summaries. CGULL-004 reports definite or possible NULL
-values at `*p`, `p[i]`, `p->field`, and modeled non-NULL argument uses such as
+values at `*p`, `p[i]`, `p->field`, additive pointer arithmetic (`p + off`,
+`off + p`, `p - off`), and modeled non-NULL argument uses such as
 `strcmp(p, other)`. Dominating guards and expression-local short-circuit or
-conditional guards suppress these findings. Unknown call results alone do not
-establish nullable evidence. This requires AST/CFG analysis; lexical fallback
-retains its direct-NULL and parameter checks. CGULL-003 remains allocation-specific.
+conditional guards suppress these findings, including guarded returns such as
+`if (p) return p + off;`. Unknown call results alone do not establish nullable
+evidence. This requires AST/CFG analysis; lexical fallback retains its
+direct-NULL and parameter checks (including additive forms). CGULL-003 remains
+allocation-specific.
 
 See [nullable call contracts](trust-boundary-semantic-models.md#nullable-call-contracts).
