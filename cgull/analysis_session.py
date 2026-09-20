@@ -107,6 +107,9 @@ class AnalysisSession:
         )
         self._cfg_lock = RLock()
         self._cfg_cache: Dict[str, object] = {}
+        self._annotated_cfg_cache = {}
+        self._cfg_callees = {}
+        self._cfg_effect_names = {}
         self._event_facts_cache = None
         self._cfg_construction_count = 0
         self._cfg_construction_seconds = 0.0
@@ -199,13 +202,57 @@ class AnalysisSession:
             return None
         from .cfg.construction import apply_cfg_event_semantics, clone_structural_cfg
 
-        clone = clone_structural_cfg(cfg)
-        if any(
+        if not any(
             value is not None
             for value in (alloc_funcs, dealloc_funcs, realloc_funcs, summaries)
         ):
-            with self._cfg_lock:
-                event_cache = self._event_cache()
+            return clone_structural_cfg(cfg)
+        with self._cfg_lock:
+            from .cfg.ast_events import _call_names
+            from .cfg.event_cache import _summary_key
+
+            event_cache = self._event_cache()
+            if function_name not in self._cfg_callees:
+                self._cfg_callees[function_name] = tuple(sorted(
+                    _call_names(self.function_def(function_name))
+                ))
+                names = set(self._cfg_callees[function_name])
+                pending = [self.function_def(function_name)]
+                while pending:
+                    node = pending.pop()
+                    if type(node).__name__ == "ID":
+                        names.add(node.name)
+                    pending.extend(child for _, child in node.children())
+                self._cfg_effect_names[function_name] = frozenset(names)
+            effective_summaries = summaries or {}
+            # Snapshot only callees this function can observe, including guards.
+            # Never key mutable summary objects by identity or serialize the TU
+            # summary map once per function (quadratic in the number of functions).
+            signature = (
+                # Omitted sets mean built-ins; unrelated names cannot change
+                # this function's events. Include ID uses as well as calls:
+                # allocator names can also affect alias-write classification.
+                tuple(
+                    self._cfg_effect_names[function_name].intersection(
+                        default if value is None else value
+                    )
+                    for value, default in (
+                        (alloc_funcs, ("malloc", "calloc", "realloc", "aligned_alloc")),
+                        (dealloc_funcs, ("free", "cfree", "vfree")),
+                        (realloc_funcs, ("realloc",)),
+                    )
+                ),
+                bool(effective_summaries),
+                tuple(
+                    (_summary_key(summary),
+                     frozenset(summary.truthy_implies_nonnull_params))
+                    if (summary := effective_summaries.get(name)) is not None else None
+                    for name in self._cfg_callees[function_name]
+                ),
+            )
+            cached = self._annotated_cfg_cache.get(function_name)
+            if cached is None or cached[0] is not event_cache or cached[1] != signature:
+                clone = clone_structural_cfg(cfg)
                 apply_cfg_event_semantics(
                     clone,
                     event_cache=event_cache,
@@ -215,7 +262,11 @@ class AnalysisSession:
                     summaries=summaries,
                     line_map=event_cache.line_map,
                 )
-        return clone
+                # Retain only the latest template per function so fixed-point
+                # iterations and alternate effect sets cannot accumulate views.
+                cached = (event_cache, signature, clone)
+                self._annotated_cfg_cache[function_name] = cached
+            return clone_structural_cfg(cached[2])
 
     def _event_cache(self):
         from .cfg.event_cache import EventFactsCache
