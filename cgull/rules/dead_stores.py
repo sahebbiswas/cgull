@@ -16,7 +16,8 @@ from ..utils import mask_string_and_char_literals
 LoopInfo = Tuple[int, int, int, Set[str]]
 VariableKey = Tuple[str, int, int]
 ProtectedWrite = Tuple[VariableKey, int]
-# (header_line, end_line, arms) where each arm is an inclusive (start_line, end_line) span.
+# (header_line, end_line, arms) where each arm is an inclusive body (start_line, end_line) span
+# (braced arms use the interior only, so if-header condition writes are not arm-local).
 IfChain = Tuple[int, int, Tuple[Tuple[int, int], ...]]
 
 
@@ -135,6 +136,31 @@ def _preceded_by_else(masked: str, if_start: int) -> bool:
     return masked[max(0, pos - 3):pos + 1] == "else"
 
 
+def _braced_arm_line_span(masked: str, body_start: int, body_end: int) -> Tuple[int, int]:
+    """Inclusive line span of statements inside `{...}`, excluding the braces.
+
+    Condition-side effects on the `if (...) {` header line must not look like
+    arm stores; otherwise a must-execute overwrite in the condition is treated
+    as a may-overwrite and suppresses a true dead store (#530 vs #554).
+    """
+    inner = _skip_space(masked, body_start + 1)
+    if inner >= body_end:
+        line = _line_number(masked, body_start)
+        return line, line
+    start_line = _line_number(masked, inner)
+    end_pos = body_end - 1
+    while end_pos > inner and masked[end_pos].isspace():
+        end_pos -= 1
+    return start_line, _line_number(masked, end_pos)
+
+
+def _arm_line_span(masked: str, body_start: int, body_end: int) -> Tuple[int, int]:
+    """Line span for one if/else arm body (braced interior or unbraced stmt)."""
+    if masked[body_start] == "{":
+        return _braced_arm_line_span(masked, body_start, body_end)
+    return _line_number(masked, body_start), _line_number(masked, body_end)
+
+
 def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
     """Parse one if / else-if / else chain into exclusive arm line spans."""
     arms: List[Tuple[int, int]] = []
@@ -155,7 +181,7 @@ def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
         if body is None:
             return None
         body_start, body_end, pos = body
-        arms.append((_line_number(masked, body_start), _line_number(masked, body_end)))
+        arms.append(_arm_line_span(masked, body_start, body_end))
 
         pos = _skip_space(masked, pos)
         if not masked.startswith("else", pos):
@@ -168,7 +194,7 @@ def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
         if body is None:
             return None
         body_start, body_end, pos = body
-        arms.append((_line_number(masked, body_start), _line_number(masked, body_end)))
+        arms.append(_arm_line_span(masked, body_start, body_end))
         break
 
     if not arms:
