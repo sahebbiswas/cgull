@@ -49,6 +49,7 @@ def test_pass_instrumentation_restores_all_wrappers_after_failure(tmp_path, monk
     original_build_cfg = cfg_construction.build_cfg
     original_worker_item = parallel_workers._scan_worker_item
     original_work_item_builder = parallel_workers.build_parallel_work_item
+    original_executor = parallel_workers.ProcessPoolExecutor
 
     with pytest.raises(RuntimeError, match="boom"):
         with benchmark.phase_instrumentation(
@@ -57,11 +58,13 @@ def test_pass_instrumentation_restores_all_wrappers_after_failure(tmp_path, monk
             assert cfg_construction.build_cfg is not original_build_cfg
             assert parallel_workers._scan_worker_item is not original_worker_item
             assert parallel_workers.build_parallel_work_item is not original_work_item_builder
+            assert parallel_workers.ProcessPoolExecutor is not original_executor
             raise RuntimeError("boom")
 
     assert cfg_construction.build_cfg is original_build_cfg
     assert parallel_workers._scan_worker_item is original_worker_item
     assert parallel_workers.build_parallel_work_item is original_work_item_builder
+    assert parallel_workers.ProcessPoolExecutor is original_executor
     assert benchmark.pass_metrics.WORKER_METRICS_ENV not in benchmark.os.environ
 
 
@@ -125,6 +128,25 @@ def test_summary_reports_pass_medians_and_redundancy_ratios():
     assert metric["median_inclusive_wall_seconds"] == 2.0
     assert metric["median_calls_per_analyzed_file"] == 10.0
     assert metric["median_calls_per_generated_function"] == 4.0
+
+
+def test_executor_tracker_counts_only_workers_actually_created(tmp_path, monkeypatch):
+    class FakeExecutor:
+        def __init__(self, *args, **kwargs):
+            self._processes = {101: object()}
+
+        def shutdown(self, *args, **kwargs):
+            return "shutdown"
+
+    monkeypatch.setattr(parallel_workers, "ProcessPoolExecutor", FakeExecutor)
+    recorder = benchmark.PhaseRecorder()
+
+    with benchmark.phase_instrumentation(recorder, worker_metrics_dir=tmp_path):
+        executor = parallel_workers.ProcessPoolExecutor(max_workers=8)
+        assert executor.shutdown(wait=True) == "shutdown"
+
+    assert recorder.worker_pids == {101}
+    assert parallel_workers.ProcessPoolExecutor is FakeExecutor
 
 
 def test_worker_metric_directory_switch_flushes_previous_snapshot(tmp_path, monkeypatch):
@@ -196,6 +218,47 @@ def test_worker_item_uses_explicit_metrics_dir_and_flushes_on_failure(
     )
     assert snapshot["build_cfg"]["invocation_count"] == 1
     assert snapshot["build_cfg"]["inclusive_wall_seconds"] == pytest.approx(0.5)
+
+
+def test_snapshot_io_failure_never_changes_worker_result_or_exception(
+    tmp_path, monkeypatch, capsys
+):
+    metrics = benchmark.pass_metrics
+    monkeypatch.delenv(metrics.WORKER_METRICS_ENV, raising=False)
+    monkeypatch.setattr(metrics, "_WORKER_RECORDER", None)
+    monkeypatch.setattr(metrics, "_WORKER_PID", None)
+    monkeypatch.setattr(metrics, "_WORKER_METRICS_DIR", None)
+    monkeypatch.setattr(metrics, "_WORKER_RESTORATIONS", [])
+    monkeypatch.setattr(metrics, "_WORKER_FINALIZER", None)
+    monkeypatch.setattr(metrics, "install_pass_wrappers", lambda _recorder: [])
+    monkeypatch.setattr(
+        metrics.multiprocessing.util,
+        "Finalize",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        metrics.os,
+        "replace",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    item = metrics.attach_worker_metrics_dir(
+        parallel_workers.ParallelScanWorkItem(file_path="example.c"),
+        tmp_path,
+    )
+
+    sentinel = ("worker-result",)
+    monkeypatch.setattr(metrics, "_ORIGINAL_SCAN_WORKER_ITEM", lambda _item: sentinel)
+    assert metrics.benchmark_scan_worker_item(item) is sentinel
+
+    def fail(_item):
+        raise RuntimeError("original worker failure")
+
+    monkeypatch.setattr(metrics, "_ORIGINAL_SCAN_WORKER_ITEM", fail)
+    with pytest.raises(RuntimeError, match="original worker failure"):
+        metrics.benchmark_scan_worker_item(item)
+
+    assert "pass-metric snapshot write failed" in capsys.readouterr().err
+    assert not list(tmp_path.glob("*.json"))
 
 
 def test_parallel_sample_reports_complete_worker_snapshots(tmp_path):
