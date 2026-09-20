@@ -3,7 +3,7 @@
 import ast
 import re
 from collections import deque
-from typing import List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from pycparser import c_ast
 
@@ -322,18 +322,58 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             return True
         return bool(re.search(rf'\b{re.escape(dest_name)}\b', arg_expr))
 
+    def _arg_mentions_any(self, arg_expr: str, names: Set[str]) -> bool:
+        return any(self._arg_mentions_dest(arg_expr, name) for name in names if name)
+
+    def _dest_alias_names(self, dest_name: str, aliases: Optional[Set[str]] = None) -> Set[str]:
+        names = {dest_name} if dest_name else set()
+        if aliases:
+            names.update(aliases)
+        return names
+
+    def _aliases_after_event(
+        self, event, dest_name: str, aliases: Set[str]
+    ) -> Set[str]:
+        """Track simple pointer aliases of ``dest`` across a CFG event.
+
+        Alias *creation* (``char *p = buf`` / ``p = &buf[0]``) is not an escape;
+        later external uses of ``p`` are. Overwriting an alias to a non-dest
+        RHS drops it from the set. ``q = p`` where ``p`` already aliases dest
+        also records ``q``.
+        """
+        result = set(aliases)
+        alias_writes: Dict[str, str] = getattr(event, "alias_writes", None) or {}
+        writes = set(getattr(event, "writes", None) or ())
+
+        for lhs, rhs in alias_writes.items():
+            rhs_base = self._dest_base_name(rhs) or rhs
+            if rhs_base == dest_name or rhs_base in result or rhs in result:
+                result.add(lhs)
+            else:
+                result.discard(lhs)
+
+        # Non-alias writes to a tracked pointer kill the alias (e.g. p++).
+        for w in writes:
+            if w in result and w not in alias_writes:
+                result.discard(w)
+        return result
+
     def _scanner_string_outputs_stay_local(
-        self, format_expr: str, output_args, dest_name: str
+        self, format_expr: str, output_args, dest_name: str,
+        aliases: Optional[Set[str]] = None,
     ) -> bool:
         """True when every %s/%[ output of a scan stays in ``dest`` (or none exist)."""
+        names = self._dest_alias_names(dest_name, aliases)
         for out, _width, _conversion in self._scanf_string_destinations(
             format_expr, list(output_args)
         ):
-            if not self._arg_mentions_dest(out, dest_name):
+            if not self._arg_mentions_any(out, names):
                 return False
         return True
 
-    def _call_is_local_buffer_inspect(self, call, dest_name: str) -> bool:
+    def _call_is_local_buffer_inspect(
+        self, call, dest_name: str, aliases: Optional[Set[str]] = None
+    ) -> bool:
         """True when call only inspects or rewrites dest in place (no escape).
 
         Formatters in ``_BUFFER_LOCAL_INSPECT`` are local only when ``dest`` is the
@@ -346,82 +386,105 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         out)`` escapes when the defended buffer is the input and a string
         conversion writes to an external destination; numeric parses into locals
         (cJSON ``sscanf(..., "%lg", &test)``) remain local.
+
+        ``aliases`` are additional names that currently point at ``dest`` (from
+        ``char *p = buf`` / ``p = &buf[0]``); uses through those names count
+        the same as uses of ``dest``.
         """
         callee = call.direct_callee or ''
         if callee not in self._BUFFER_LOCAL_INSPECT:
             return False
         args = call.actual_arguments or ()
+        names = self._dest_alias_names(dest_name, aliases)
         if callee in self._FORMATTER_WRITE_DEST:
-            if args and self._dest_base_name(args[0]) == dest_name:
-                # Dest is write target; any later mention is a self-copy escape.
+            if args and self._arg_mentions_any(args[0], names):
+                # Dest (or alias) is write target; any later mention is a self-copy escape.
                 return not any(
-                    self._arg_mentions_dest(arg, dest_name) for arg in args[1:]
+                    self._arg_mentions_any(arg, names) for arg in args[1:]
                 )
             # Source use feeding a different write target is not local.
-            return not any(self._arg_mentions_dest(arg, dest_name) for arg in args)
+            return not any(self._arg_mentions_any(arg, names) for arg in args)
         if callee in self._SCANNER_INPUT_FIRST:
             if not args:
                 return True
             # Buffer used as the scan input string.
-            if self._arg_mentions_dest(args[0], dest_name):
+            if self._arg_mentions_any(args[0], names):
                 if len(args) < 2:
                     return True
                 return self._scanner_string_outputs_stay_local(
-                    args[1], args[2:], dest_name
+                    args[1], args[2:], dest_name, aliases
                 )
             # Buffer only as an output destination: in-place rewrite.
             return True
         return True
 
-    def _event_escapes_buffer(self, event, dest_name: str) -> bool:
-        """True when event sends dest contents to a non-local sink."""
+    def _event_escapes_buffer(
+        self, event, dest_name: str, aliases: Optional[Set[str]] = None
+    ) -> bool:
+        """True when event sends dest contents to a non-local sink.
+
+        Alias creation alone is not an escape; callers must track aliases and
+        pass them so later sinks such as ``puts(p)`` / ``sprintf(out, "%s", p)``
+        are still detected. ``&buf[0]`` aliases are included when present in
+        the caller's alias set (populated from CFG ``alias_writes``).
+        """
+        names = self._dest_alias_names(dest_name, aliases)
         if event.kind == 'return':
             expr = (event.expr_str or '')
-            return bool(re.search(rf'\b{re.escape(dest_name)}\b', expr))
-
-        # Simple aliases (``char *p = number_buffer`` / ``p = &number_buffer[0]``)
-        # let later uses omit ``dest_name``; treat the aliasing itself as escape.
-        # Normalize RHS with the same canonicalization as destinations so
-        # address-of / array-ref forms recorded in event facts still match.
-        alias_writes = getattr(event, 'alias_writes', None) or {}
-        if any((self._dest_base_name(rhs) or rhs) == dest_name for rhs in alias_writes.values()):
-            return True
+            return any(
+                re.search(rf'\b{re.escape(name)}\b', expr) for name in names if name
+            )
 
         for call in getattr(event, 'calls', ()) or ():
             callee = call.direct_callee or ''
             if callee in self._BAIL_CALLEES:
                 continue
-            if self._call_is_local_buffer_inspect(call, dest_name):
+            if self._call_is_local_buffer_inspect(call, dest_name, aliases):
                 continue
             for arg in call.actual_arguments:
-                if self._arg_mentions_dest(arg, dest_name):
+                if self._arg_mentions_any(arg, names):
                     return True
         return False
 
-    def _branch_only_bails(self, cfg, start_id: int, dest_name: str) -> bool:
+    def _branch_only_bails(
+        self,
+        cfg,
+        start_id: int,
+        dest_name: str,
+        aliases: Optional[Set[str]] = None,
+    ) -> bool:
         """Overflow branch must exit without escaping the buffer.
 
         Only unconditional ``return`` and process-terminating calls count as
         bails. Resolved ``goto`` targets are followed; unresolved/unknown
         control flow and ``longjmp`` are treated conservatively (not bails).
+
+        ``aliases`` are pointer names already known to refer to ``dest`` at
+        the branch entry; new aliases created on the bail path are tracked
+        the same way so ``puts(p)`` on an overflow path is not missed.
         """
         if start_id not in cfg.nodes:
             return False
-        seen: Set[int] = set()
-        stack = [start_id]
+        seen: Set[Tuple[int, FrozenSet[str]]] = set()
+        stack: List[Tuple[int, FrozenSet[str]]] = [
+            (start_id, frozenset(aliases or ()))
+        ]
         reached_exit = False
         while stack:
-            nid = stack.pop()
-            if nid in seen:
+            nid, alias_fs = stack.pop()
+            state = (nid, alias_fs)
+            if state in seen:
                 continue
-            seen.add(nid)
+            seen.add(state)
             node = cfg.nodes[nid]
+            cur_aliases = set(alias_fs)
+            cur_aliases = self._aliases_after_event(node, dest_name, cur_aliases)
             if (
                 node.kind == 'unknown_control_flow'
                 or getattr(node, 'is_unknown_control_flow', False)
             ):
                 return False
-            if self._event_escapes_buffer(node, dest_name):
+            if self._event_escapes_buffer(node, dest_name, cur_aliases):
                 return False
             if node.kind == 'return':
                 reached_exit = True
@@ -437,10 +500,10 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             # Follow resolved goto / ordinary successors; do not treat goto as bail.
             if not node.successors:
                 return False
+            next_fs = frozenset(cur_aliases)
             for succ in node.successors:
-                stack.append(succ)
+                stack.append((succ, next_fs))
         return reached_exit
-
 
     def _event_writes_var(self, event, var_name: str) -> bool:
         """True when the CFG event writes ``var_name`` (assignment, decl, etc.)."""
@@ -465,8 +528,21 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                 return True
         return False
 
-    def _reject_safe_successor(self, cfg, cond_id: int, dest_name: str, length_var: str) -> Optional[int]:
-        """Return the safe (non-overflow) successor id for a length-vs-capacity reject."""
+    def _reject_safe_successor(
+        self,
+        cfg,
+        cond_id: int,
+        dest_name: str,
+        length_var: str,
+        aliases: Optional[Set[str]] = None,
+    ) -> Optional[int]:
+        """Return the safe (non-overflow) successor id for a length-vs-capacity reject.
+
+        When ``aliases`` is None, only the condition shape is checked (used to
+        discover candidate reject nodes). Pass the path-sensitive alias set to
+        also require a fail-closed overflow bail that accounts for uses through
+        aliases such as ``puts(p)``.
+        """
         node = cfg.nodes.get(cond_id)
         if node is None or node.kind != 'if_cond' or len(node.successors) < 1:
             return None
@@ -475,8 +551,9 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         if not self._is_length_capacity_reject_cond(cond, length_var, dest_name):
             return None
         true_succ = node.successors[0]
-        if not self._branch_only_bails(cfg, true_succ, dest_name):
-            return None
+        if aliases is not None:
+            if not self._branch_only_bails(cfg, true_succ, dest_name, aliases):
+                return None
         if len(node.successors) > 1:
             return node.successors[1]
         # No else: safe path is whatever follows; treat as no explicit safe edge id
@@ -537,19 +614,22 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             if not reject_safe:
                 return False
 
-            # BFS: state is (node_id, passed_safe_reject, length_is_sprintf_result).
+            # BFS: state is (node_id, passed_safe_reject, length_ok, aliases).
             # Track writes to length_var so overwriting the sprintf result before
-            # the capacity compare cannot credit a fake defense.
-            visited: Set[Tuple[int, bool, bool]] = set()
-            queue = deque([(write_id, False, True)])
+            # the capacity compare cannot credit a fake defense. Track pointer
+            # aliases of dest so later puts(p) / sprintf(out,"%s",p) escape, but
+            # mere ``char *p = buf`` does not.
+            visited: Set[Tuple[int, bool, bool, FrozenSet[str]]] = set()
+            queue = deque([(write_id, False, True, frozenset())])
             saw_reject = False
             while queue:
-                nid, passed, length_ok = queue.popleft()
-                state = (nid, passed, length_ok)
+                nid, passed, length_ok, alias_fs = queue.popleft()
+                state = (nid, passed, length_ok, alias_fs)
                 if state in visited:
                     continue
                 visited.add(state)
                 node = cfg.nodes[nid]
+                aliases = set(alias_fs)
 
                 # Originating sprintf already established length_ok; later writes
                 # invalidate unless they reassign from sprintf into the same dest.
@@ -561,25 +641,41 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                     else:
                         length_ok = False
 
-                if nid != write_id and self._event_escapes_buffer(node, dest_name) and not passed:
+                if nid != write_id:
+                    aliases = self._aliases_after_event(node, dest_name, aliases)
+
+                if (
+                    nid != write_id
+                    and self._event_escapes_buffer(node, dest_name, aliases)
+                    and not passed
+                ):
                     return False
 
+                next_aliases = frozenset(aliases)
                 if nid in reject_safe and length_ok:
+                    # Re-check fail-closed bail with path-sensitive aliases so
+                    # overflow-path uses through p are not missed.
+                    if self._reject_safe_successor(
+                        cfg, nid, dest_name, length_var, aliases
+                    ) is None:
+                        for succ in node.successors:
+                            queue.append((succ, passed, length_ok, next_aliases))
+                        continue
                     saw_reject = True
                     true_succ = node.successors[0]
                     safe_succ = reject_safe[nid]
                     # Overflow / bail path: do not mark passed.
-                    queue.append((true_succ, passed, length_ok))
+                    queue.append((true_succ, passed, length_ok, next_aliases))
                     if safe_succ == -1:
                         # No else branch encoded; remaining successors after true are safe.
                         for succ in node.successors[1:]:
-                            queue.append((succ, True, length_ok))
+                            queue.append((succ, True, length_ok, next_aliases))
                     else:
-                        queue.append((safe_succ, True, length_ok))
+                        queue.append((safe_succ, True, length_ok, next_aliases))
                     continue
 
                 for succ in node.successors:
-                    queue.append((succ, passed, length_ok))
+                    queue.append((succ, passed, length_ok, next_aliases))
 
             if not saw_reject:
                 return False

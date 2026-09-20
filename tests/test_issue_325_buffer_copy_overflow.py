@@ -351,9 +351,43 @@ int bad(double d) {
 
 
 def test_sprintf_alias_escape_before_reject_remains_reported():
-    """char *p = number_buffer before the reject lets puts(p) escape (#571)."""
+    """Alias then external use before the capacity reject must still report (#571)."""
     source = """
 int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = number_buffer;
+    puts(p);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return length;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_address_alias_escape_before_reject_remains_reported():
+    """&buf[0] alias then puts(alias) before reject must still report (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = &number_buffer[0];
+    puts(p);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return length;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_alias_then_reject_then_use_is_credited():
+    """Mere alias creation is not escape; use after reject may suppress (#571)."""
+    source = """
+int print_number(double d) {
     char number_buffer[26];
     int length = sprintf(number_buffer, "%1.15g", d);
     char *p = number_buffer;
@@ -364,13 +398,13 @@ int bad(double d) {
     return length;
 }
 """
-    assert any("'sprintf'" in message for message in _messages(source))
+    assert _scan(source) == []
 
 
-def test_sprintf_address_alias_escape_before_reject_remains_reported():
-    """char *p = &number_buffer[0] before the reject lets puts(p) escape (#571)."""
+def test_sprintf_address_alias_then_reject_then_use_is_credited():
+    """&buf[0] alias alone is not escape; post-reject use may suppress (#571)."""
     source = """
-int bad(double d) {
+int print_number(double d) {
     char number_buffer[26];
     int length = sprintf(number_buffer, "%1.15g", d);
     char *p = &number_buffer[0];
@@ -381,7 +415,7 @@ int bad(double d) {
     return length;
 }
 """
-    assert any("'sprintf'" in message for message in _messages(source))
+    assert _scan(source) == []
 
 
 def test_sprintf_length_overwrite_before_reject_remains_reported():

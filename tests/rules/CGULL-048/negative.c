@@ -65,3 +65,26 @@ int test_tn_sprintf_reject_via_fatal(double d) {
     puts(number_buffer);
     return length;
 }
+
+int test_tn_sprintf_alias_then_reject_then_use(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = number_buffer;
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(p);
+    return length;
+}
+
+int test_tn_sprintf_address_alias_then_reject_then_use(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = &number_buffer[0];
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(p);
+    return length;
+}
+

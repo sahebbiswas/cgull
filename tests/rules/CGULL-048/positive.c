@@ -101,10 +101,10 @@ int test_tp_sprintf_alias_escape_before_reject(double d) {
     char number_buffer[26];
     int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
     char *p = number_buffer;
+    puts(p);
     if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
         return -1;
     }
-    puts(p);
     return length;
 }
 
@@ -112,10 +112,10 @@ int test_tp_sprintf_address_alias_escape_before_reject(double d) {
     char number_buffer[26];
     int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
     char *p = &number_buffer[0];
+    puts(p);
     if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
         return -1;
     }
-    puts(p);
     return length;
 }
 
