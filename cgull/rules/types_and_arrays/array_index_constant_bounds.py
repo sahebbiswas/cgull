@@ -91,6 +91,30 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
             return None
         return value if value >= 0 else None
 
+    def _sizeof_env_for(self, ast_ctx, fn):
+        """Map local/global array names to sizeof byte sizes."""
+        import re
+
+        sizeof_env = {}
+        for var in list(ast_ctx.global_variables.values()) + list(fn.variables.values()):
+            name = getattr(var, "name", None)
+            expr = getattr(var, "array_size_expr", None)
+            if not name or not expr:
+                continue
+            try:
+                count = int(re.sub(r"[uUlL]+$", "", str(expr).strip()), 0)
+            except ValueError:
+                continue
+            element = self._element_size(var.type_name, ast_ctx)
+            if element is None:
+                type_name = (var.type_name or "").lower()
+                if any(tok in type_name for tok in ("char", "uint8", "int8", "byte")):
+                    element = 1
+                else:
+                    continue
+            sizeof_env[name] = count * element
+        return sizeof_env
+
     def _contract_safe_accesses(self, ast_ctx):
         """Return structured access keys proven safe by explicit capacities."""
         if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
@@ -118,6 +142,7 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
             if not initial:
                 continue
             capacities = capacity_in_states(cfg, initial)
+            sizeof_env = self._sizeof_env_for(ast_ctx, fn)
 
             def signed(name: str) -> bool:
                 var = fn.variables.get(name) or ast_ctx.global_variables.get(name)
@@ -137,7 +162,10 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
                     bound = capacities.get(target, {}).get(arr_name) if target is not None else None
                     if bound is not None:
                         for index in _extract_identifiers_from_ast(node.subscript, ignore_callees=True):
-                            if guarded_access(cfg, target, node, index, bound, signed(index)):
+                            if guarded_access(
+                                cfg, target, node, index, bound, signed(index),
+                                sizeof_env=sizeof_env,
+                            ):
                                 line = (
                                     node.coord.line - _PRELUDE_LINE_COUNT
                                     if node.coord
@@ -158,7 +186,28 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
         # Remove only findings for accesses proven by an explicit capacity
         # contract. This keeps the no-contract case conservative.
         contract_safe = self._contract_safe_accesses(ast_ctx)
-        if contract_safe:
+        sizeof_envs = {
+            fn.name: self._sizeof_env_for(ast_ctx, fn)
+            for fn in ast_ctx.functions
+        }
+        from .ensure_capacity import ensure_safe_access_keys, sizeof_for_loop_safe_keys
+        ensure_safe = ensure_safe_access_keys(ast_ctx, sizeof_envs)
+        capacities_by_fn = {}
+        for fn in ast_ctx.functions:
+            caps = {}
+            for var in list(ast_ctx.global_variables.values()) + list(fn.variables.values()):
+                name = getattr(var, "name", None)
+                expr = getattr(var, "array_size_expr", None)
+                if not name or not expr:
+                    continue
+                try:
+                    caps[name] = int(re.sub(r"[uUlL]+$", "", str(expr).strip()), 0)
+                except ValueError:
+                    continue
+            capacities_by_fn[fn.name] = caps
+        for_loop_safe = sizeof_for_loop_safe_keys(ast_ctx, sizeof_envs, capacities_by_fn)
+        proven_safe = contract_safe | ensure_safe | for_loop_safe
+        if proven_safe:
             unchecked = re.compile(
                 r"^Unchecked Array Indexing: variable '([^']+)' is used as an index for '([^']+)'"
             )
@@ -170,7 +219,7 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
                     locations = [RelatedLocation(issue.file_path, issue.line_number, issue.column_number),
                                  *issue.related_locations]
                     locations = [loc for loc in locations
-                                 if (loc.line_number, loc.column_number, match.group(2), match.group(1)) not in contract_safe]
+                                 if (loc.line_number, loc.column_number, match.group(2), match.group(1)) not in proven_safe]
                     if not locations:
                         continue
                     primary, *issue.related_locations = locations

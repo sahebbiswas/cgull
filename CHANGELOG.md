@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Honor sizeof-bounded loops, can_access_at_index-style cursor guards, and ensure()/realloc-sized buffer returns in CGULL-007 so cJSON-class false positives drop while genuine OOB and needs-context cases like parse_hex4 remain (#553).
 - Honor short-circuit OR/AND and negated null checks, callee Is*-style truthy-implies-nonnull predicates, and cannot_access-style macros in CGULL-004 so cJSON-class false positives drop while unchecked public setters still report (#551).
 
 ### Changed
