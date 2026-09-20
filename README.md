@@ -42,7 +42,7 @@ From the root of a C project, initialize one editable project configuration:
 cgull init
 ```
 
-Interactive terminals offer focused, comprehensive, and custom finding profiles. In scripts/CI, initialization is deterministic and defaults to the focused profile; use `--profile comprehensive` when every registered rule should remain enabled. The focused profile keeps security/correctness coverage while explicitly skipping only the opinionated low-severity `CGULL-018`, `CGULL-019`, and `CGULL-025` policy checks.
+Interactive terminals offer focused (security), comprehensive (MISRA/policy), and custom finding profiles. In scripts/CI, initialization is deterministic and defaults to the focused profile; use `--profile comprehensive` when every registered rule should remain enabled. The focused profile keeps security/correctness coverage while explicitly skipping the low-severity policy checks `CGULL-018` (goto), `CGULL-019` (void style), and `CGULL-025` (assertions). For a one-off zero-config security scan without writing TOML, use `cgull scan PATH --profile focused`. See [Finding profiles and noise reduction](docs/finding-profiles.md).
 
 Then scan the project:
 
@@ -139,6 +139,7 @@ The [documentation knowledgebase](https://github.com/sahebbiswas/cgull/blob/main
 - [Development integration](https://github.com/sahebbiswas/cgull/blob/main/docs/development-integration.md) — pre-commit, GitHub Actions, SARIF, and build-aware integration.
 - [Rule reference](https://github.com/sahebbiswas/cgull/blob/main/docs/rules.md) — rule catalog conventions and configuration by stable rule ID.
 - [Repository extension](https://github.com/sahebbiswas/cgull/blob/main/docs/repository-extension.md) — architecture and guidance for contributors extending C-GULL.
+- [Finding profiles and noise reduction](https://github.com/sahebbiswas/cgull/blob/main/docs/finding-profiles.md) — focused vs comprehensive defaults, report labeling, baselines, cJSON corpus checklist.
 - [Embedded security profile](https://github.com/sahebbiswas/cgull/blob/main/docs/embedded-security-profile.md) — embedded-focused security defaults and guidance.
 
 For changes between releases, see the [changelog](https://github.com/sahebbiswas/cgull/blob/main/CHANGELOG.md). [GitHub Releases](https://github.com/sahebbiswas/cgull/releases) contain release-specific summaries and generated pull-request lists. Maintainers should follow the [release guide](https://github.com/sahebbiswas/cgull/blob/main/docs/releasing.md); contributors should also read [CONTRIBUTING.md](https://github.com/sahebbiswas/cgull/blob/main/CONTRIBUTING.md).

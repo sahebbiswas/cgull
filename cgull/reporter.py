@@ -13,7 +13,11 @@ from . import __version__
 import logging
 from .utils import sanitize_terminal_text
 from .telemetry import telemetry_for
-from .finding_profiles import finding_group_counts
+from .finding_profiles import (
+    classify_issue_bucket,
+    count_security_vs_policy,
+    finding_group_counts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +102,7 @@ def _sarif_fix_for_issue(issue: Any) -> Dict[str, Any] | None:
 
 def _append_terminal_scan_summary(lines: List[str], result: ScanResult) -> None:
     telemetry = telemetry_for(result)
+    security_count, policy_count = count_security_vs_policy(result.issues)
     lines.extend([
         "",
         "Scan complete",
@@ -110,6 +115,8 @@ def _append_terminal_scan_summary(lines: List[str], result: ScanResult) -> None:
         f"  Analysis time:       {telemetry.elapsed_seconds:.2f} s",
         f"  Throughput:          {telemetry.throughput_kloc_per_sec:.2f} KLOC/s",
         f"  Findings:            {telemetry.findings_count}",
+        f"  Security actionable: {security_count}",
+        f"  Policy / quality:    {policy_count}",
         f"  Parse fallbacks:     {telemetry.parse_fallback_count}",
         f"  Scan errors:         {telemetry.scan_error_count}",
     ])
@@ -315,6 +322,8 @@ class ReportGenerator:
             f"| 🔴 High Severity | {result.high_severity_count} | {'CRITICAL' if result.high_severity_count > 0 else 'None'} |",
             f"| 🟡 Medium Severity | {result.medium_severity_count} | Warning |",
             f"| 🔵 Low Severity | {result.low_severity_count} | Notice |",
+            f"| Security actionable | {groups['security_correctness']} | Memory/bounds/correctness |",
+            f"| Policy / quality | {groups['policy_quality']} | MISRA/style (not vulns by default) |",
             "",
             "---",
             "",
@@ -347,8 +356,10 @@ class ReportGenerator:
                 if cond_tag:
                     cond_tag = _escape_markdown_cell(cond_tag)
                 cond_prefix = f"{cond_tag} " if cond_tag else ""
+                bucket = classify_issue_bucket(issue)
+                bucket_label = "policy/quality" if bucket == "policy" else "security actionable"
                 lines.extend([
-                    f"### #{idx} [{badge}] {cond_prefix}{issue.rule_name} (`{issue.rule_id}`)",
+                    f"### #{idx} [{badge}] [{bucket_label}] {cond_prefix}{issue.rule_name} (`{issue.rule_id}`)",
                     f"- **Location**: `{issue.file_path}:{issue.line_number}`",
                     f"- **CWE**: `{issue.cwe_id}`",
                     f"- **Engine**: `{issue.engine}`",
@@ -414,6 +425,11 @@ class ReportGenerator:
             f" Security/correctness: {groups['security_correctness']}",
             f" Policy/quality      : {groups['policy_quality']}",
         ]
+        if result.total_issues_count:
+            lines.append(
+                f" Finding classes  : security actionable {groups['security_correctness']}, "
+                f"policy/quality {groups['policy_quality']}"
+            )
         if result.is_baseline_filtered:
             lines.append(
                 f" Baseline Diff    : {result.baseline_total_before_filter} total, "
@@ -447,7 +463,12 @@ class ReportGenerator:
                 if cond_tag:
                     cond_tag = _sanitize_terminal_text(cond_tag)
                 cond_prefix = f"{cond_tag} " if cond_tag else ""
-                lines.append(f" {sev_tag:<8} {issue.file_path}:{issue.line_number} -> {cond_prefix}{issue.rule_name} ({issue.rule_id})")
+                bucket = classify_issue_bucket(issue)
+                bucket_tag = "[policy]" if bucket == "policy" else "[security]"
+                lines.append(
+                    f" {sev_tag:<8} {bucket_tag:<10} {issue.file_path}:{issue.line_number} -> "
+                    f"{cond_prefix}{issue.rule_name} ({issue.rule_id})"
+                )
                 lines.append(f"          Detail: {issue.message}")
                 if issue.related_locations:
                     lines.append("          " + _sanitize_terminal_text(_related_accesses(issue)))

@@ -36,8 +36,8 @@ cgull init
 
 On an interactive terminal, C-GULL offers three finding profiles:
 
-- **Focused (recommended/default):** enables all security/correctness checks while explicitly skipping only `CGULL-018`, `CGULL-019`, and `CGULL-025`, the three opinionated low-severity policy checks;
-- **Comprehensive:** enables every registered rule;
+- **Focused / security (recommended/default):** enables all security/correctness checks while explicitly skipping low-severity policy checks `CGULL-018` (goto), `CGULL-019` (void style), and `CGULL-025` (assertions);
+- **Comprehensive / MISRA:** enables every registered rule, including style and coding-standard checks;
 - **Custom:** shows each rule's ID, name, category, and severity and lets you select exclusions explicitly.
 
 When stdin/stdout are not terminals, initialization never prompts and defaults to focused. Automation can choose explicitly:
@@ -47,7 +47,15 @@ cgull init --profile focused
 cgull init --profile comprehensive
 ```
 
-The generated file contains the actual `[rules].skip` entries and reasons; profiles are only an initialization convenience, not hidden persistent state. Existing include directories such as `include/`, `inc/`, and `src/include/` are detected, and an existing `compile_commands.json` is reported without copying all build-derived paths into TOML.
+For a one-off security scan without writing configuration (useful for external corpora):
+
+```bash
+cgull scan path/to/sources --profile focused
+```
+
+The generated file contains the actual `[rules].skip` entries and reasons; profiles are only an initialization / scan convenience, not hidden persistent state. Existing include directories such as `include/`, `inc/`, and `src/include/` are detected, and an existing `compile_commands.json` is reported without copying all build-derived paths into TOML.
+
+See [Finding profiles and noise reduction](finding-profiles.md) for the default-profile decision, report labeling (security actionable vs policy/quality), baseline adoption, and the cJSON corpus budget checklist.
 
 Existing `.cgullignore` and `.cgullincludes` users can migrate their settings without deleting the legacy files:
 
@@ -150,6 +158,7 @@ See [Reporting and CI](reporting-and-ci.md) and [Development integration](develo
 
 - [Configuration reference](configuration.md)
 - [Project files and suppressions](project-files.md)
+- [Finding profiles and noise reduction](finding-profiles.md)
 - [Analysis model](analysis-model.md)
 - [Reporting and CI](reporting-and-ci.md)
 - [Rule reference](rules.md)

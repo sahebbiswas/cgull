@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Add `scan/rules --profile focused|comprehensive`, include CGULL-018 in focused policy exclusions, and separate security/correctness from policy/quality report counts without changing severity or CI thresholds (#557).
+- Document focused security defaults, baselines, and the cJSON corpus budget checklist; human reports also label **security actionable** vs **policy/quality** per finding (#561).
 
 ### Fixed
 - CGULL-006: treat allocation-size accumulations that feed malloc/realloc/calloc as overflow-sensitive even after partial INT_MAX-style gates (cJSON ensure()-style `needed += offset + 1`); require SIZE_MAX-relative guards to match operands/operation; ignore MIN_* / wrong-direction numeric bounds as overflow proofs; join multiline alloc calls; detect `sizeof(T) * count` size args and implicit `calloc` argument products (#560).

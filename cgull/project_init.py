@@ -10,11 +10,9 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, TextIO, Tuple
 
 from .config import find_config_file
-from .finding_profiles import FOCUSED_SKIPS
-from .models import Severity
+from .finding_profiles import FOCUSED_SKIPS, validate_focused_profile
 from .project_state import DEFAULT_LOG_RETENTION_RUNS
 from .rules import get_all_rules
-
 
 DEFAULT_EXCLUDES: Tuple[str, ...] = (
     "build/",
@@ -131,26 +129,16 @@ def _detect_compile_commands(project_root: Path) -> Optional[Path]:
 
 
 def _validate_focused_profile() -> None:
-    rules = {rule.rule_id: rule for rule in get_all_rules()}
-    missing = [rule_id for rule_id in FOCUSED_SKIPS if rule_id not in rules]
-    if missing:
-        raise InitError(f"Focused profile references unknown rule(s): {', '.join(missing)}")
-    unsafe = [
-        rule_id
-        for rule_id in FOCUSED_SKIPS
-        if rules[rule_id].impact in (Severity.HIGH, Severity.MEDIUM)
-    ]
-    if unsafe:
-        raise InitError(
-            "Focused profile safety check failed; refusing to disable high/medium-severity rule(s): "
-            + ", ".join(unsafe)
-        )
+    try:
+        validate_focused_profile()
+    except ValueError as exc:
+        raise InitError(str(exc)) from exc
 
 
 def _prompt_profile(stdin: TextIO, stdout: TextIO) -> Tuple[str, Dict[str, str]]:
     _write(stdout, "Finding profile:")
-    _write(stdout, "  1. Focused (recommended): skip CGULL-018, CGULL-019, and CGULL-025 only")
-    _write(stdout, "  2. Comprehensive: enable every registered rule")
+    _write(stdout, "  1. Focused / security (recommended): skip CGULL-018, CGULL-019, and CGULL-025 policy checks")
+    _write(stdout, "  2. Comprehensive / MISRA: enable every registered rule (includes style/policy)")
     _write(stdout, "  3. Custom: choose rule exclusions explicitly")
     stdout.write("Select profile [1/2/3, default 1]: ")
     stdout.flush()
@@ -243,7 +231,7 @@ def _render_config(
     )
     if skipped_rules:
         if profile == "focused":
-            lines.append("# Focused profile: opinionated low-severity policy checks disabled explicitly.")
+            lines.append("# Focused (security) profile: low-severity MISRA/policy checks disabled explicitly.")
         else:
             lines.append("# Custom profile: rule exclusions selected explicitly during initialization.")
         lines.append("[rules.skip]")
