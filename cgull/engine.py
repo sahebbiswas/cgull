@@ -1290,26 +1290,37 @@ def _scan_file_content_uncached(
     cache_key = None
     if config is not None and getattr(config, "cache_dir", None):
         from . import __version__ as cgull_version
-        from .result_cache import ResultCache, compute_cache_key, has_project_summaries
+        from .result_cache import (
+            ResultCache,
+            compute_cache_key,
+            has_project_summaries,
+            rebind_cached_result,
+        )
 
         if not has_project_summaries(prepared):
-            cache = ResultCache(config.cache_dir)
             cache_key = compute_cache_key(
                 source_text=source_text_for_cache,
                 expanded_text=content,
                 config=config,
                 cgull_version=cgull_version,
+                file_path=file_path,
             )
-            cached = cache.get(cache_key)
-            if cached is not None:
-                duration_ms = (time.time() - t0) * 1000.0
-                logger.info(
-                    "Cache hit for %s (key=%s…, duration=%.2fms)",
-                    file_path,
-                    cache_key[:12],
-                    duration_ms,
-                )
-                return cached.as_scan_tuple(duration_ms=duration_ms)
+            if cache_key is None:
+                # Fingerprint failure (e.g. unexpected config) → bypass cache.
+                cache = None
+            else:
+                cache = ResultCache(config.cache_dir)
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    cached = rebind_cached_result(cached, file_path)
+                    duration_ms = (time.time() - t0) * 1000.0
+                    logger.info(
+                        "Cache hit for %s (key=%s…, duration=%.2fms)",
+                        file_path,
+                        cache_key[:12],
+                        duration_ms,
+                    )
+                    return cached.as_scan_tuple(duration_ms=duration_ms)
 
     ast_parser = ast_parser or CASTParser()
     raw_lines = content.splitlines()

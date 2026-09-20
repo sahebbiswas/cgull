@@ -104,20 +104,26 @@ Suppressing findings inline:
                              help='Do not collapse duplicate header findings across translation units (disable header deduplication)')
     scan_parser.add_argument(
         "--cache-dir",
-        nargs="?",
-        const="",
-        default=None,
+        action="store_true",
+        help=(
+            "Enable the opt-in persistent result cache at the default location "
+            "(<project>/.cgull/cache, or $XDG_CACHE_HOME/cgull). "
+            "Also enabled by CGULL_CACHE_DIR. Use --cache-path PATH for an explicit directory."
+        ),
+    )
+    scan_parser.add_argument(
+        "--cache-path",
         metavar="PATH",
+        default=None,
         help=(
             "Enable the opt-in persistent result cache at PATH "
-            "(default: <project>/.cgull/cache, or $XDG_CACHE_HOME/cgull). "
-            "Also enabled by CGULL_CACHE_DIR."
+            "(does not consume the scan target positional)."
         ),
     )
     scan_parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Disable the persistent result cache (overrides --cache-dir / CGULL_CACHE_DIR; also CGULL_NO_CACHE=1)",
+        help="Disable the persistent result cache (overrides --cache-dir / --cache-path / CGULL_CACHE_DIR; also CGULL_NO_CACHE=1)",
     )
 
     # FLAGS subcommand
@@ -395,8 +401,15 @@ def handle_scan(args) -> int:
     from .project_state import resolve_project_state_root
     from .result_cache import resolve_cache_dir
 
+    cache_path = getattr(args, "cache_path", None)
+    if cache_path is not None:
+        cache_explicit = cache_path
+    elif getattr(args, "cache_dir", False):
+        cache_explicit = ""
+    else:
+        cache_explicit = None
     cache_dir = resolve_cache_dir(
-        getattr(args, "cache_dir", None),
+        cache_explicit,
         project_state_root=resolve_project_state_root(
             targets,
             getattr(args, "config", None),
