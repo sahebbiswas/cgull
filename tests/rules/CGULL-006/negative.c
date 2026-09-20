@@ -1,6 +1,7 @@
 /* CGULL-006 Negative Test Suite */
 #include <stdlib.h>
 #include <stdint.h>
+#include <limits.h>
 
 /* True Negative: Checked multiplication before malloc */
 void test_tn_checked_mult(size_t count) {
@@ -50,3 +51,38 @@ void test_tn_taint_overwritten(int argc, char **argv) {
     int result = data + 1;
     (void)result;
 }
+
+/* True Negative: SIZE_MAX-relative guard before size accumulation feeding realloc (#560) */
+void *test_tn_size_max_guard_before_accum(void *buf, size_t needed, size_t offset) {
+    if (needed > SIZE_MAX - (offset + 1)) {
+        return 0;
+    }
+    needed += offset + 1;
+    return realloc(buf, needed);
+}
+
+/* True Negative: SIZE_MAX-relative guard before add in realloc argument (#560) */
+void *test_tn_size_max_guard_realloc_add(void *buf, size_t needed, size_t offset) {
+    if (needed > SIZE_MAX - offset) {
+        return 0;
+    }
+    return realloc(buf, needed + offset);
+}
+
+/* True Negative: SIZE_MAX product guard before calloc (#560 re-review) */
+void *test_tn_calloc_size_max_product(size_t count, size_t elem_size) {
+    if (count > SIZE_MAX / elem_size) {
+        return 0;
+    }
+    return calloc(count, elem_size);
+}
+
+/* True Negative: SIZE_MAX / sizeof guard before sizeof*count malloc (#560 re-review) */
+struct item_tn { int x; };
+void *test_tn_malloc_sizeof_times_count_guarded(size_t count) {
+    if (count > SIZE_MAX / sizeof(struct item_tn)) {
+        return 0;
+    }
+    return malloc(sizeof(struct item_tn) * count);
+}
+
