@@ -158,3 +158,120 @@ def test_insufficient_constant_bound_still_reported():
     }
     """
     assert _scan(code)
+
+
+def test_ensure_access_before_ensure_still_reported():
+    """Accesses before ensure() must not use a later capacity proof."""
+    code = """
+    unsigned char *ensure(void *p, size_t needed);
+    void f(void *pb, size_t n) {
+        unsigned char *output;
+        output[n + 1] = 0;
+        output = ensure(pb, n + 3);
+        if (output == 0) return;
+        output[n + 1] = 1;
+    }
+    """
+    issues = _scan(code)
+    assert any("output" in issue.message and "n" in issue.message for issue in issues)
+
+
+def test_ensure_access_before_null_check_still_reported():
+    """ensure() alone does not suppress; null check must dominate the access."""
+    code = """
+    unsigned char *ensure(void *p, size_t needed);
+    void f(void *pb, size_t n) {
+        unsigned char *output = ensure(pb, n + 3);
+        output[n + 1] = 0;
+        if (output == 0) return;
+    }
+    """
+    issues = _scan(code)
+    assert any("output" in issue.message and "n" in issue.message for issue in issues)
+
+
+def test_ensure_other_branch_still_reported():
+    """ensure() on one branch must not suppress accesses on the other."""
+    code = """
+    unsigned char *ensure(void *p, size_t needed);
+    void f(void *pb, size_t n, int flag) {
+        unsigned char *output;
+        if (flag) {
+            output = ensure(pb, n + 3);
+            if (output == 0) return;
+            output[n + 1] = 1;
+        } else {
+            output[n + 1] = 2;
+        }
+    }
+    """
+    issues = _scan(code)
+    assert any("output" in issue.message and "n" in issue.message for issue in issues)
+
+
+def test_ensure_after_reassignment_still_reported():
+    """Reassigning the pointer kills the ensure capacity proof."""
+    code = """
+    unsigned char *ensure(void *p, size_t needed);
+    void f(void *pb, size_t n, unsigned char *other) {
+        unsigned char *output = ensure(pb, n + 3);
+        if (output == 0) return;
+        output = other;
+        output[n + 1] = 0;
+    }
+    """
+    issues = _scan(code)
+    assert any("output" in issue.message and "n" in issue.message for issue in issues)
+
+
+def test_post_loop_body_mutates_counter_still_reported():
+    """Loop body writes to the counter → post-loop arr[i] is not proven."""
+    code = """
+    void f(void) {
+        unsigned char buf[8];
+        size_t i;
+        for (i = 0; i < 4; i++) {
+            i = 100;
+            buf[i] = 0;
+        }
+        buf[i] = 0;
+    }
+    """
+    issues = _scan(code)
+    assert issues
+
+
+def test_post_loop_compound_write_before_access_still_reported():
+    """Ordered invalidation: { i = 100; arr[i] = 0; } after a sizeof loop."""
+    code = """
+    void f(void) {
+        unsigned char buf[8];
+        size_t i;
+        for (i = 0; i < 4; i++) {
+            buf[i] = 1;
+        }
+        {
+            i = 100;
+            buf[i] = 0;
+        }
+    }
+    """
+    issues = _scan(code)
+    assert any("buf" in issue.message for issue in issues)
+
+
+def test_post_loop_body_break_still_reported():
+    """break in the body rejects the post-loop induction proof."""
+    code = """
+    void f(int stop) {
+        unsigned char buf[8];
+        size_t i;
+        for (i = 0; i < 4; i++) {
+            if (stop) break;
+            buf[i] = 1;
+        }
+        buf[i] = 0;
+    }
+    """
+    issues = _scan(code)
+    assert issues
