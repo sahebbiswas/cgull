@@ -53,3 +53,15 @@ int test_tn_sprintf_cjson_print_number_defense(double d) {
     }
     return length;
 }
+
+void fatal(const char *msg);
+
+int test_tn_sprintf_reject_via_fatal(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        fatal("overflow");
+    }
+    puts(number_buffer);
+    return length;
+}

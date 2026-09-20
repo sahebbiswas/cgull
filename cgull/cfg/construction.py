@@ -26,6 +26,20 @@ from .diagnostics import CFGDiagnostic
 from .expression_effects import expression_read_write_sets
 from .model import FunctionSummary
 
+# Process-terminating callees: CFG edges stop here (no fall-through).
+# Shared with post-sprintf bail recognition in CGULL-048.
+TERMINATING_CALL_NAMES = frozenset({
+    "exit",
+    "_exit",
+    "_Exit",
+    "abort",
+    "quick_exit",
+    "fatal",
+    "panic",
+    "err",
+    "errx",
+})
+
 
 def build_cfg(
     funcdef,
@@ -189,17 +203,7 @@ def build_cfg(
             is_exit_call = False
             if kind == "FuncCall":
                 callee_name = _format_pycparser_expr(getattr(stmt, "name", None))
-                if callee_name in {
-                    "exit",
-                    "_exit",
-                    "_Exit",
-                    "abort",
-                    "quick_exit",
-                    "fatal",
-                    "panic",
-                    "err",
-                    "errx",
-                }:
+                if callee_name in TERMINATING_CALL_NAMES:
                     is_exit_call = True
             if kind != "Return" and not is_exit_call:
                 cfg.connect(node, next_entry)
@@ -715,6 +719,7 @@ def build_cfg(
 
 
 __all__ = [
+    "TERMINATING_CALL_NAMES",
     "apply_cfg_event_semantics",
     "build_cfg",
     "build_cfg_uncached",

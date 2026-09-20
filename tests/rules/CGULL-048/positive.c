@@ -66,3 +66,44 @@ use_buf:
     puts(number_buffer);
     return -1;
 }
+
+int test_tp_sprintf_length_gt_sizeof_alone(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    if ((length < 0) || ((size_t)length > sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(number_buffer);
+    return length;
+}
+
+int test_tp_sprintf_sscanf_string_copy_escape(double d, char *out) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    sscanf(number_buffer, "%s", out);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+
+int test_tp_sprintf_formatter_self_copy(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    sprintf(number_buffer, "%s", number_buffer); // expect: CGULL-048
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+
+int test_tp_sprintf_alias_escape_before_reject(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    char *p = number_buffer;
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(p);
+    return length;
+}

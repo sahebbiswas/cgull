@@ -8,7 +8,7 @@ from typing import List, Optional, Set, Tuple
 from pycparser import c_ast
 
 from ...ast_analyzer import CASTContext, _format_pycparser_expr
-from ...cfg import build_cfg, find_function_def
+from ...cfg import TERMINATING_CALL_NAMES, build_cfg, find_function_def
 from ...models import AnalysisEngine, FixType, Issue, RuleCategory, Severity
 from .helpers import _source_snippet
 from .memcpy_struct_member_overflow import MemcpyStructMemberOverflowRule
@@ -183,21 +183,19 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         "strtoul",
         "strtoull",
     })
-    # Process-terminating calls only. longjmp/siglongjmp are not bails: they
-    # can resume a handler that still uses the buffer.
-    _BAIL_CALLEES = frozenset({
-        "exit",
-        "_exit",
-        "_Exit",
-        "abort",
-        "quick_exit",
-        "pthread_exit",
-    })
+    # Process-terminating calls only (aligned with CFG TERMINATING_CALL_NAMES).
+    # longjmp/siglongjmp are not bails: they can resume a handler that still
+    # uses the buffer. pthread_exit is extra beyond the CFG terminator set.
+    _BAIL_CALLEES = frozenset(TERMINATING_CALL_NAMES) | frozenset({"pthread_exit"})
     _FORMATTER_WRITE_DEST = frozenset({
         "sprintf",
         "snprintf",
         "vsprintf",
         "vsnprintf",
+    })
+    _SCANNER_INPUT_FIRST = frozenset({
+        "sscanf",
+        "vsscanf",
     })
 
     @staticmethod
@@ -285,17 +283,19 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             # length > sizeof(dest) - 1
             return cls._is_sizeof_dest_minus_one(side, dest_name)
 
-        # length >= sizeof(dest)  /  length > sizeof(dest) - 1  /  length > sizeof(dest)
+        # length >= sizeof(dest)  /  length > sizeof(dest) - 1
+        # Note: length > sizeof(dest) is NOT sufficient — length == sizeof(dest)
+        # still overflows by the terminating NUL.
         if length_side(left):
             if op == '>=' and capacity_ge(right):
                 return True
-            if op == '>' and (capacity_gt_minus_one(right) or capacity_ge(right)):
+            if op == '>' and capacity_gt_minus_one(right):
                 return True
         # sizeof(dest) <= length  /  sizeof(dest) - 1 < length
         if length_side(right):
             if op == '<=' and capacity_ge(left):
                 return True
-            if op == '<' and (capacity_gt_minus_one(left) or capacity_ge(left)):
+            if op == '<' and capacity_gt_minus_one(left):
                 return True
         return False
 
@@ -322,12 +322,30 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             return True
         return bool(re.search(rf'\b{re.escape(dest_name)}\b', arg_expr))
 
+    def _scanner_string_outputs_stay_local(
+        self, format_expr: str, output_args, dest_name: str
+    ) -> bool:
+        """True when every %s/%[ output of a scan stays in ``dest`` (or none exist)."""
+        for out, _width, _conversion in self._scanf_string_destinations(
+            format_expr, list(output_args)
+        ):
+            if not self._arg_mentions_dest(out, dest_name):
+                return False
+        return True
+
     def _call_is_local_buffer_inspect(self, call, dest_name: str) -> bool:
         """True when call only inspects or rewrites dest in place (no escape).
 
         Formatters in ``_BUFFER_LOCAL_INSPECT`` are local only when ``dest`` is the
-        write target. Passing the defended buffer as a source into another
-        destination (e.g. ``sprintf(out, "%s", number_buffer)``) is an escape.
+        write target and does not also appear as a source argument. Passing the
+        defended buffer as a source into another destination (e.g.
+        ``sprintf(out, "%s", number_buffer)``) or self-copying through a
+        formatter (``sprintf(buf, "%s", buf)``) is an escape.
+
+        Scan family calls are classified by argument role: ``sscanf(buf, "%s",
+        out)`` escapes when the defended buffer is the input and a string
+        conversion writes to an external destination; numeric parses into locals
+        (cJSON ``sscanf(..., "%lg", &test)``) remain local.
         """
         callee = call.direct_callee or ''
         if callee not in self._BUFFER_LOCAL_INSPECT:
@@ -335,9 +353,24 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         args = call.actual_arguments or ()
         if callee in self._FORMATTER_WRITE_DEST:
             if args and self._dest_base_name(args[0]) == dest_name:
-                return True
+                # Dest is write target; any later mention is a self-copy escape.
+                return not any(
+                    self._arg_mentions_dest(arg, dest_name) for arg in args[1:]
+                )
             # Source use feeding a different write target is not local.
             return not any(self._arg_mentions_dest(arg, dest_name) for arg in args)
+        if callee in self._SCANNER_INPUT_FIRST:
+            if not args:
+                return True
+            # Buffer used as the scan input string.
+            if self._arg_mentions_dest(args[0], dest_name):
+                if len(args) < 2:
+                    return True
+                return self._scanner_string_outputs_stay_local(
+                    args[1], args[2:], dest_name
+                )
+            # Buffer only as an output destination: in-place rewrite.
+            return True
         return True
 
     def _event_escapes_buffer(self, event, dest_name: str) -> bool:
@@ -345,6 +378,12 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         if event.kind == 'return':
             expr = (event.expr_str or '')
             return bool(re.search(rf'\b{re.escape(dest_name)}\b', expr))
+
+        # Simple aliases (``char *p = number_buffer`` / ``p = number_buffer``)
+        # let later uses omit ``dest_name``; treat the aliasing itself as escape.
+        alias_writes = getattr(event, 'alias_writes', None) or {}
+        if any(rhs == dest_name for rhs in alias_writes.values()):
+            return True
 
         for call in getattr(event, 'calls', ()) or ():
             callee = call.direct_callee or ''
