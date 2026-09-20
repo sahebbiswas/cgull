@@ -14,11 +14,17 @@ _INTEGER_TYPE_RE = re.compile(
 )
 
 
-# ISO C / POSIX integer typedefs that pycparser's fake_libc commonly maps to
-# ``typedef int NAME``. That placeholder erases required unsignedness (size_t,
-# uintptr_t, uintN_t) and collapses pointer-sized widths to 32-bit, which hides
-# size_t→int truncation / CWE-196 conversions such as cJSON_GetArraySize.
-_CANONICAL_STDLIB_INTEGER_TYPEDEFS = {
+# ISO unsigned typedefs that pycparser's fake_libc commonly maps to
+# ``typedef int NAME``. That placeholder erases required unsignedness and can
+# hide size_t→int / CWE-196 conversions such as cJSON_GetArraySize.
+#
+# Do NOT rewrite these inside ``_resolved_scalar_type``: treating fake_libc
+# ``size_t`` as unsigned globally also makes Juliet CWE-195 signed→size_t
+# argument bindings (e.g. ``malloc(signed_int)``) look like signed-to-unsigned
+# conversions and blows the CGULL-049 ``max_fp: 0`` budget. Restore unsigned
+# semantics only for conversion *sources* into signed destinations via
+# ``restore_fake_libc_unsigned_source_type``.
+_FAKE_LIBC_UNSIGNED_INTEGER_TYPEDEFS = {
     "size_t": "unsigned long",
     "uintptr_t": "unsigned long",
     "uintmax_t": "unsigned long long",
@@ -26,14 +32,12 @@ _CANONICAL_STDLIB_INTEGER_TYPEDEFS = {
     "uint16_t": "unsigned short",
     "uint32_t": "unsigned int",
     "uint64_t": "unsigned long",
-    "ssize_t": "long",
-    "intptr_t": "long",
-    "ptrdiff_t": "long",
-    "int8_t": "signed char",
-    "int16_t": "short",
-    "int32_t": "int",
-    "int64_t": "long",
 }
+
+
+def _strip_cv(type_name: str) -> str:
+    cleaned = re.sub(r"\b(?:const|volatile)\b", "", type_name).strip()
+    return re.sub(r"\s+", " ", cleaned)
 
 
 def _resolved_scalar_type(type_str: str, ast_ctx: Optional[CASTContext] = None) -> Optional[str]:
@@ -43,23 +47,66 @@ def _resolved_scalar_type(type_str: str, ast_ctx: Optional[CASTContext] = None) 
     if "*" in type_name or "[" in type_name or "]" in type_name:
         return None
     if ast_ctx and ast_ctx.typedef_shapes:
-        clean_name = re.sub(r"\b(?:const|volatile)\b", "", type_name).strip()
+        clean_name = _strip_cv(type_name)
         if clean_name in ast_ctx.typedef_shapes:
             shape = resolve_typedef_shape(clean_name, ast_ctx.typedef_shapes)
             if shape.is_pointer or shape.is_array:
                 return None
             type_name = shape.target
-            canonical = _CANONICAL_STDLIB_INTEGER_TYPEDEFS.get(clean_name.lower())
-            if canonical is not None:
-                target_norm = re.sub(r"\b(?:const|volatile)\b", "", type_name).strip()
-                target_norm = re.sub(r"\s+", " ", target_norm).lower()
-                # fake_libc uses plain ``int`` for nearly every typedef. Prefer
-                # canonical ISO semantics in that case; trust real platform
-                # typedefs that already carry the expected signedness.
-                if target_norm in {"int", "signed", "signed int"}:
-                    type_name = canonical
-    type_name = re.sub(r"\b(?:const|volatile)\b", "", type_name).strip()
-    return re.sub(r"\s+", " ", type_name)
+    type_name = _strip_cv(type_name)
+    return type_name or None
+
+
+def _destination_is_signed_integer(type_str: str, ast_ctx: Optional[CASTContext] = None) -> Optional[bool]:
+    """Return whether *type_str* is a signed integer after ordinary typedef resolution."""
+    resolved = _resolved_scalar_type(type_str, ast_ctx)
+    if not resolved or get_integer_type_byte_size(resolved, ast_ctx) is None:
+        return None
+    normalized = resolved.lower()
+    if normalized == "char":
+        return None
+    if normalized.startswith("unsigned") or normalized.startswith("uint"):
+        return False
+    if normalized in {"size_t", "uintptr_t", "uintmax_t"}:
+        return False
+    return True
+
+
+def restore_fake_libc_unsigned_source_type(
+    source_type: str,
+    destination_type: str,
+    ast_ctx: Optional[CASTContext] = None,
+) -> str:
+    """Restore ISO unsignedness for fake_libc typedefs used as conversion sources.
+
+    Only rewrites when:
+    - the source typedef name is a known unsigned stdlib alias (``size_t``, …);
+    - the TU's typedef target is the fake_libc plain ``int`` placeholder;
+    - the destination is a signed integer type.
+
+    Leaves destinations untouched so signed→size_t sites stay out of CWE-195.
+    """
+    if not source_type or not destination_type or not ast_ctx or not ast_ctx.typedef_shapes:
+        return source_type
+    clean_name = _strip_cv(source_type)
+    canonical = _FAKE_LIBC_UNSIGNED_INTEGER_TYPEDEFS.get(clean_name.lower())
+    if canonical is None or clean_name not in ast_ctx.typedef_shapes:
+        return source_type
+    shape = resolve_typedef_shape(clean_name, ast_ctx.typedef_shapes)
+    if shape.is_pointer or shape.is_array:
+        return source_type
+    target_norm = _strip_cv(shape.target).lower()
+    if target_norm not in {"int", "signed", "signed int"}:
+        # Trust platform typedefs that already encode signedness/width.
+        return source_type
+    dest_name = _strip_cv(destination_type)
+    # Even under fake_libc, a destination *named* size_t/uintN_t is not a
+    # signed sink for CWE-196 restoration (avoids size_t→size_t false hits).
+    if dest_name.lower() in _FAKE_LIBC_UNSIGNED_INTEGER_TYPEDEFS:
+        return source_type
+    if _destination_is_signed_integer(destination_type, ast_ctx) is not True:
+        return source_type
+    return canonical
 
 
 def get_integer_type_byte_size(type_str: str, ast_ctx: Optional[CASTContext] = None) -> Optional[int]:

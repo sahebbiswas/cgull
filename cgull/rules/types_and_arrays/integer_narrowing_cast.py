@@ -11,7 +11,11 @@ from ...ast_analyzer import (
     get_integer_type_byte_size,
     is_integer_narrowing_conversion,
 )
-from ...ast_analyzer.integer_types import _resolved_scalar_type, infer_integer_expression_type
+from ...ast_analyzer.integer_types import (
+    _resolved_scalar_type,
+    infer_integer_expression_type,
+    restore_fake_libc_unsigned_source_type,
+)
 from ...cfg import _PRELUDE_LINE_COUNT, analyze_integer_ranges, find_function_def, integer_type_range
 from ...models import AnalysisEngine, Confidence, FixType, Issue, RuleCategory, Severity
 
@@ -225,6 +229,13 @@ class IntegerNarrowingCastRule(BaseRule):
                     source_type = source_type_override or rule._source_type(ast_ctx, source_node, fn)
                     if not source_type:
                         return False
+                    # fake_libc maps size_t→int; restore unsigned source semantics
+                    # only when converting into a signed destination (CWE-196).
+                    restored_source = restore_fake_libc_unsigned_source_type(
+                        source_type, destination_type, ast_ctx
+                    )
+                    restored_fake_libc_unsigned = restored_source != source_type
+                    source_type = restored_source
                     source_width = get_integer_type_byte_size(source_type, ast_ctx)
                     destination_width = get_integer_type_byte_size(destination_type, ast_ctx)
                     int_width = get_integer_type_byte_size("int", ast_ctx)
@@ -257,10 +268,27 @@ class IntegerNarrowingCastRule(BaseRule):
                     else:
                         if source_range is not None and destination_range is not None and source_range.fits_within(destination_range):
                             return False
-                        if range_analysis is not None and range_analysis.proves_expression_fits(
-                            proof_expression, destination_type, node
-                        ):
-                            return False
+                        if range_analysis is not None:
+                            if restored_fake_libc_unsigned:
+                                # Ranges were computed under the fake signed
+                                # typedef; only honor proofs that are already
+                                # nonnegative and fit the signed destination
+                                # (e.g. dominating size <= INT_MAX guards).
+                                value_range = range_analysis.range_for_expression(
+                                    proof_expression, node
+                                )
+                                if (
+                                    value_range is not None
+                                    and destination_range is not None
+                                    and value_range.lower is not None
+                                    and value_range.lower >= 0
+                                    and value_range.fits_within(destination_range)
+                                ):
+                                    return False
+                            elif range_analysis.proves_expression_fits(
+                                proof_expression, destination_type, node
+                            ):
+                                return False
 
                     line_no = rule._line_for_node(ast_ctx, node, fn)
                     if 0 < line_no <= len(ast_ctx.source_lines):
