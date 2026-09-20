@@ -267,3 +267,37 @@ int bad(double d) {
 }
 """
     assert any("'sprintf'" in message for message in _messages(source))
+
+def test_sprintf_source_escape_via_formatter_before_reject_remains_reported():
+    """sprintf(out, "%s", number_buffer) is an escape, not local inspection (#571)."""
+    source = """
+int bad(double d, char *out) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    sprintf(out, "%s", number_buffer);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_reject_goto_into_buffer_use_remains_reported():
+    """goto on the overflow path that later uses the buffer is not a bail (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        goto use_buf;
+    }
+    return 0;
+use_buf:
+    puts(number_buffer);
+    return -1;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+

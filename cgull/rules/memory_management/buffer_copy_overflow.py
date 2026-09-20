@@ -183,6 +183,8 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         "strtoul",
         "strtoull",
     })
+    # Process-terminating calls only. longjmp/siglongjmp are not bails: they
+    # can resume a handler that still uses the buffer.
     _BAIL_CALLEES = frozenset({
         "exit",
         "_exit",
@@ -190,8 +192,12 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         "abort",
         "quick_exit",
         "pthread_exit",
-        "longjmp",
-        "siglongjmp",
+    })
+    _FORMATTER_WRITE_DEST = frozenset({
+        "sprintf",
+        "snprintf",
+        "vsprintf",
+        "vsnprintf",
     })
 
     @staticmethod
@@ -316,6 +322,24 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             return True
         return bool(re.search(rf'\b{re.escape(dest_name)}\b', arg_expr))
 
+    def _call_is_local_buffer_inspect(self, call, dest_name: str) -> bool:
+        """True when call only inspects or rewrites dest in place (no escape).
+
+        Formatters in ``_BUFFER_LOCAL_INSPECT`` are local only when ``dest`` is the
+        write target. Passing the defended buffer as a source into another
+        destination (e.g. ``sprintf(out, "%s", number_buffer)``) is an escape.
+        """
+        callee = call.direct_callee or ''
+        if callee not in self._BUFFER_LOCAL_INSPECT:
+            return False
+        args = call.actual_arguments or ()
+        if callee in self._FORMATTER_WRITE_DEST:
+            if args and self._dest_base_name(args[0]) == dest_name:
+                return True
+            # Source use feeding a different write target is not local.
+            return not any(self._arg_mentions_dest(arg, dest_name) for arg in args)
+        return True
+
     def _event_escapes_buffer(self, event, dest_name: str) -> bool:
         """True when event sends dest contents to a non-local sink."""
         if event.kind == 'return':
@@ -324,9 +348,9 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
 
         for call in getattr(event, 'calls', ()) or ():
             callee = call.direct_callee or ''
-            if callee in self._BUFFER_LOCAL_INSPECT:
-                continue
             if callee in self._BAIL_CALLEES:
+                continue
+            if self._call_is_local_buffer_inspect(call, dest_name):
                 continue
             for arg in call.actual_arguments:
                 if self._arg_mentions_dest(arg, dest_name):
@@ -334,7 +358,12 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         return False
 
     def _branch_only_bails(self, cfg, start_id: int, dest_name: str) -> bool:
-        """Overflow branch must exit without escaping the buffer."""
+        """Overflow branch must exit without escaping the buffer.
+
+        Only unconditional ``return`` and process-terminating calls count as
+        bails. Resolved ``goto`` targets are followed; unresolved/unknown
+        control flow and ``longjmp`` are treated conservatively (not bails).
+        """
         if start_id not in cfg.nodes:
             return False
         seen: Set[int] = set()
@@ -346,31 +375,27 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                 continue
             seen.add(nid)
             node = cfg.nodes[nid]
+            if (
+                node.kind == 'unknown_control_flow'
+                or getattr(node, 'is_unknown_control_flow', False)
+            ):
+                return False
             if self._event_escapes_buffer(node, dest_name):
                 return False
-            if node.kind in {'return', 'goto'} or not node.successors:
-                # Terminal or unresolved edge: treat no-successor non-return as non-bail.
-                if node.kind == 'return':
-                    reached_exit = True
-                    continue
-                for call in getattr(node, 'calls', ()) or ():
-                    if (call.direct_callee or '') in self._BAIL_CALLEES:
-                        reached_exit = True
-                        break
-                else:
-                    if node.kind == 'goto':
-                        reached_exit = True
-                        continue
-                    if not node.successors and node.kind in {'break', 'continue'}:
-                        reached_exit = True
-                        continue
-                    if not node.successors:
-                        return False
+            if node.kind == 'return':
+                reached_exit = True
                 continue
+            terminated = False
             for call in getattr(node, 'calls', ()) or ():
                 if (call.direct_callee or '') in self._BAIL_CALLEES:
                     reached_exit = True
+                    terminated = True
                     break
+            if terminated:
+                continue
+            # Follow resolved goto / ordinary successors; do not treat goto as bail.
+            if not node.successors:
+                return False
             for succ in node.successors:
                 stack.append(succ)
         return reached_exit

@@ -44,3 +44,25 @@ void test_tp_sprintf_use_before_length_check(double d) {
         return;
     }
 }
+
+int test_tp_sprintf_source_escape_via_formatter_before_reject(double d, char *out) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    sprintf(out, "%s", number_buffer);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+
+int test_tp_sprintf_reject_goto_into_buffer_use(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        goto use_buf;
+    }
+    return 0;
+use_buf:
+    puts(number_buffer);
+    return -1;
+}
