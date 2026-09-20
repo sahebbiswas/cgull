@@ -9,6 +9,23 @@ from typing import Dict, FrozenSet, Mapping, Optional, Set, Tuple
 
 from ..ast_analyzer import _format_pycparser_expr
 from ..call_effects import BUILTIN_CALL_EFFECTS, CallEffectRegistry, ReturnEffect
+
+# Library callees that overwrite their destination buffer without requiring a
+# prior initialized value. Used so CGULL-023 can treat sprintf/memset/memcpy
+# destinations as definite initialization (may-only would preserve FPs).
+_DEFINITE_BUFFER_OUTPUT_WRITERS = frozenset({
+    "memset",
+    "bzero",
+    "explicit_bzero",
+    "memcpy",
+    "memmove",
+    "strcpy",
+    "strncpy",
+    "sprintf",
+    "snprintf",
+    "vsprintf",
+    "vsnprintf",
+})
 from .call_graph import build_translation_unit_call_graph
 from .construction import _guarded_expression_uses, _is_nullish, build_cfg, find_function_def
 from .dataflow import meet_nullness
@@ -77,6 +94,8 @@ def _get_builtin_summaries(
             summary.freed_params.update(effect.deallocates)
         if effect.output_parameters:
             summary.may_initialize_params.update(effect.output_parameters)
+            if function in _DEFINITE_BUFFER_OUTPUT_WRITERS:
+                summary.must_initialize_params.update(effect.output_parameters)
         summary.unsafe_deref_params.update(effect.nonnull)
         if effect.return_effect in {ReturnEffect.ALLOCATION, ReturnEffect.NULLABLE}:
             summary.returns_allocation = effect.return_effect is ReturnEffect.ALLOCATION

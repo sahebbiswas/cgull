@@ -2,7 +2,6 @@
 Memory Management Rule Submodule.
 """
 
-import re
 import logging
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -23,6 +22,8 @@ from .helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
 class UninitializedMemoryUseRule(BaseRule):
     rule_id = "CGULL-023"
     name = "Uninitialized Memory Use"
@@ -43,46 +44,64 @@ class UninitializedMemoryUseRule(BaseRule):
         summaries = self.get_analysis_session(ast_ctx).function_summaries
         for fn in ast_ctx.functions:
             cfg = _ast_cfg_for_function(ast_ctx, fn, summaries=summaries)
-            if cfg is not None:
-                uninit_vars = [v_name for v_name, var in fn.variables.items() if not var.has_initializer and not var.is_volatile]
-                if not uninit_vars:
-                    continue
-                reported = set()
-                for node in cfg.nodes.values():
-                    for v_name in uninit_vars:
-                        if v_name in reported:
-                            continue
-                        if v_name in node.writes:
-                            continue
-                        if v_name in node.reads:
-                            if cfg.query_initialization(v_name, node.node_id) in (Initialization.UNINITIALIZED, Initialization.MAYBE_INITIALIZED):
-                                decl_line = fn.variables[v_name].declaration_line
-                                snippet = _source_snippet(ast_ctx, decl_line, f"int {v_name};")
-                                issues.append(self.create_issue(
-                                    file_path=file_path,
-                                    line_number=decl_line,
-                                    code_snippet=snippet,
-                                    message=f"Local variable '{v_name}' is declared without initialization. Initialize at declaration to prevent reading stack garbage.",
-                                    column_number=1,
-                                    engine="AST",
-                                    fix_type=FixType.SAFE_FIX,
-                                    auto_fix_replacement=snippet.replace(f"{v_name};", f"{v_name} = 0;")
-                                ))
-                                reported.add(v_name)
+            if cfg is None:
+                # Without a CFG we cannot prove a use-before-init; do not
+                # fall back to declaration-without-initializer heuristics.
                 continue
 
-            for v_name, var in fn.variables.items():
-                if not var.has_initializer and not var.is_pointer and not var.is_volatile:
-                    decl_line_content = ast_ctx.source_lines[var.declaration_line - 1] if var.declaration_line <= len(ast_ctx.source_lines) else ""
-                    if "=" not in decl_line_content and "{" not in decl_line_content:
-                        issues.append(self.create_issue(
+            uninit_vars = [
+                v_name
+                for v_name, var in fn.variables.items()
+                if isinstance(v_name, str)
+                and not var.has_initializer
+                and not var.is_volatile
+            ]
+            if not uninit_vars:
+                continue
+
+            reported = set()
+            for node in cfg.nodes.values():
+                for v_name in uninit_vars:
+                    if v_name in reported:
+                        continue
+                    # A definition on this node is not a use-before-init, even
+                    # when array-to-pointer decay also appears in reads
+                    # (sprintf/memset destinations, &var out-params).
+                    if v_name in node.writes:
+                        continue
+                    if v_name not in node.reads:
+                        continue
+                    init_state = cfg.query_initialization(v_name, node.node_id)
+                    if init_state not in (
+                        Initialization.UNINITIALIZED,
+                        Initialization.MAYBE_INITIALIZED,
+                    ):
+                        continue
+
+                    use_line = node.line_number or fn.variables[v_name].declaration_line
+                    snippet = _source_snippet(ast_ctx, use_line, f"{v_name}")
+                    decl_line = fn.variables[v_name].declaration_line
+                    if init_state == Initialization.MAYBE_INITIALIZED:
+                        message = (
+                            f"Local variable '{v_name}' may be read before it is "
+                            f"definitely assigned (declared at line {decl_line})."
+                        )
+                    else:
+                        message = (
+                            f"Local variable '{v_name}' is read before it is "
+                            f"assigned (declared at line {decl_line})."
+                        )
+                    issues.append(
+                        self.create_issue(
                             file_path=file_path,
-                            line_number=var.declaration_line,
-                            code_snippet=decl_line_content,
-                            message=f"Local variable '{v_name}' is declared without initialization. Initialize at declaration to prevent reading stack garbage.",
+                            line_number=use_line,
+                            code_snippet=snippet,
+                            message=message,
                             column_number=1,
                             engine="AST",
                             fix_type=FixType.SAFE_FIX,
-                            auto_fix_replacement=decl_line_content.replace(f"{v_name};", f"{v_name} = 0;")
-                        ))
+                            auto_fix_replacement=None,
+                        )
+                    )
+                    reported.add(v_name)
         return issues

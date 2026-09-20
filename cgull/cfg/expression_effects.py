@@ -190,6 +190,10 @@ def _expression_effects(node) -> Tuple[ExpressionEffect, ...]:
                 ("write", target) if target is not None else ("indirect_write", None)
             )
             return tuple(effects)
+        # sizeof does not evaluate its operand's stored value (VLA size
+        # expressions are still ignored here for object init purposes).
+        if op == "sizeof":
+            return ()
         return _expression_effects(node.expr)
 
     if kind == "StructRef":
@@ -322,6 +326,8 @@ def _storage_effects(node) -> Tuple[StorageEffect, ...]:
             effects.extend(_storage_value_effect(node.expr))
             effects.extend(_storage_write_effect(node.expr, "mutation"))
             return tuple(effects)
+        if op == "sizeof":
+            return ()
         return _storage_effects(node.expr)
 
     if kind == "StructRef":
