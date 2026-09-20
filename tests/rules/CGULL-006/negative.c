@@ -1,6 +1,7 @@
 /* CGULL-006 Negative Test Suite */
 #include <stdlib.h>
 #include <stdint.h>
+#include <limits.h>
 
 /* True Negative: Checked multiplication before malloc */
 void test_tn_checked_mult(size_t count) {
@@ -49,4 +50,21 @@ void test_tn_taint_overwritten(int argc, char **argv) {
     data = 2;
     int result = data + 1;
     (void)result;
+}
+
+/* True Negative: SIZE_MAX-relative guard before size accumulation feeding realloc (#560) */
+void *test_tn_size_max_guard_before_accum(void *buf, size_t needed, size_t offset) {
+    if (needed > SIZE_MAX - (offset + 1)) {
+        return 0;
+    }
+    needed += offset + 1;
+    return realloc(buf, needed);
+}
+
+/* True Negative: SIZE_MAX-relative guard before add in realloc argument (#560) */
+void *test_tn_size_max_guard_realloc_add(void *buf, size_t needed, size_t offset) {
+    if (needed > SIZE_MAX - offset) {
+        return 0;
+    }
+    return realloc(buf, needed + offset);
 }

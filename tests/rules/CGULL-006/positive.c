@@ -1,6 +1,7 @@
 /* CGULL-006 Positive Test Suite */
 #include <stdlib.h>
 #include <unistd.h>
+#include <limits.h>
 
 /* True Positive: Unchecked multiplication in malloc argument */
 void test_tp_malloc_mult(int count) {
@@ -59,4 +60,33 @@ void test_tp_read_taint(int fd) {
     (void)read(fd, input, sizeof(input));
     int data = atoi(input);
     data++; // expect: CGULL-006
+}
+
+/* True Positive: ensure()-style INT_MAX gate then size accumulation feeding realloc (#560) */
+typedef struct {
+    unsigned char *buffer;
+    size_t length;
+    size_t offset;
+} printbuffer;
+void *test_tp_ensure_style_accum(printbuffer *p, size_t needed) {
+    unsigned char *newbuffer;
+    size_t newsize;
+    if (needed > INT_MAX) {
+        return 0;
+    }
+    needed += p->offset + 1; // expect: CGULL-006
+    if (needed <= p->length) {
+        return p->buffer + p->offset;
+    }
+    newsize = needed * 2; // expect: CGULL-006
+    newbuffer = realloc(p->buffer, newsize);
+    return newbuffer;
+}
+
+/* True Positive: partial INT_MAX gate does not prove add-in-alloc-arg safety (#560) */
+void *test_tp_intmax_then_realloc_add(void *buf, size_t needed, size_t offset) {
+    if (needed > INT_MAX) {
+        return 0;
+    }
+    return realloc(buf, needed + offset); // expect: CGULL-006
 }
