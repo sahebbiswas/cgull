@@ -107,6 +107,7 @@ class AnalysisSession:
         )
         self._cfg_lock = RLock()
         self._cfg_cache: Dict[str, object] = {}
+        self._event_facts_cache = None
         self._cfg_construction_count = 0
         self._cfg_construction_seconds = 0.0
         self._call_graph = None
@@ -203,15 +204,27 @@ class AnalysisSession:
             value is not None
             for value in (alloc_funcs, dealloc_funcs, realloc_funcs, summaries)
         ):
-            apply_cfg_event_semantics(
-                clone,
-                alloc_funcs=alloc_funcs,
-                dealloc_funcs=dealloc_funcs,
-                realloc_funcs=realloc_funcs,
-                summaries=summaries,
-                line_map=getattr(self.ast_context, "line_map", None),
-            )
+            with self._cfg_lock:
+                event_cache = self._event_cache()
+                apply_cfg_event_semantics(
+                    clone,
+                    event_cache=event_cache,
+                    alloc_funcs=alloc_funcs,
+                    dealloc_funcs=dealloc_funcs,
+                    realloc_funcs=realloc_funcs,
+                    summaries=summaries,
+                    line_map=event_cache.line_map,
+                )
         return clone
+
+    def _event_cache(self):
+        from .cfg.event_cache import EventFactsCache
+
+        with self._cfg_lock:
+            line_map = getattr(self.ast_context, "line_map", None)
+            if self._event_facts_cache is None or self._event_facts_cache.line_map is not line_map:
+                self._event_facts_cache = EventFactsCache(line_map)
+            return self._event_facts_cache
 
     def _analysis_cfg_for_funcdef(
         self,
@@ -260,6 +273,7 @@ class AnalysisSession:
                 realloc_funcs=realloc_funcs,
                 call_graph=self.call_graph,
                 call_effects=self.semantic_models.call_effects,
+                event_cache=self._event_cache(),
             )
         return self._function_summary_result
 
@@ -271,6 +285,7 @@ class AnalysisSession:
                 self.ast_context,
                 call_graph=self.call_graph,
                 call_effects=self.semantic_models.call_effects,
+                event_cache=self._event_cache(),
             )
         return self._ownership_summary_result
 

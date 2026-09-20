@@ -377,13 +377,17 @@ def _analyze_one_function(
     ownership_summaries: Mapping[str, OwnershipSummary],
     function_summaries,
     call_effects: CallEffectRegistry,
+    event_cache=None,
 ) -> _OwnershipFact:
     param_names = tuple(p.name for p in fn.parameters if p.name)
     funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
     if funcdef is None:
         return _OwnershipFact(initialized=True)
 
-    cfg = build_cfg(funcdef, summaries=function_summaries, line_map=getattr(ast_ctx, "line_map", None))
+    cfg = build_cfg(
+        funcdef, summaries=function_summaries,
+        line_map=getattr(ast_ctx, "line_map", None), event_cache=event_cache,
+    )
     initial_initialized = (
         set(param_names)
         | set(getattr(ast_ctx, "global_variables", {}).keys())
@@ -469,6 +473,7 @@ def analyze_ownership_summaries_detailed(
     call_effects: Optional[CallEffectRegistry] = None,
     fixed_point_config: Optional[FixedPointConfig] = None,
     call_graph=None,
+    event_cache=None,
 ) -> OwnershipSummaryAnalysisResult:
     """Compute ownership summaries using the shared SCC fixed-point engine."""
     functions = [fn for fn in getattr(ast_ctx, "functions", ()) if getattr(fn, "name", None)]
@@ -480,7 +485,9 @@ def analyze_ownership_summaries_detailed(
 
     external = imported_summaries(ast_ctx, "ownership")
     registry = call_effects or BUILTIN_CALL_EFFECTS
-    function_summaries = analyze_function_summaries(ast_ctx, call_effects=registry)
+    function_summaries = analyze_function_summaries(
+        ast_ctx, call_effects=registry, event_cache=event_cache,
+    )
     graph = call_graph or build_translation_unit_call_graph(ast_ctx)
     parameter_counts = {
         name: len([p for p in fn.parameters if p.name])
@@ -496,6 +503,7 @@ def analyze_ownership_summaries_detailed(
             {**external, **_current_summaries(facts)},
             function_summaries,
             registry,
+            event_cache=event_cache,
         )
 
     result = engine.run(transfer)
