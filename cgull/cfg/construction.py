@@ -19,7 +19,7 @@ from .ast_events import (
     _guarded_expression_uses,
     _is_nullish,
     _replace_ast_node,
-    _simple_null_facts,
+    _null_edge_facts,
 )
 from .dataflow import StructuredCFG
 from .diagnostics import CFGDiagnostic
@@ -216,16 +216,17 @@ def build_cfg(
                 writes=cond_writes,
                 calls=_call_events(stmt.cond, line_map, function_pointers),
             )
-            true_add, true_remove = _simple_null_facts(stmt.cond)
-            false_add, false_remove = true_remove, true_add
+            true_nn, true_null, false_nn, false_null = _null_edge_facts(
+                stmt.cond, summaries
+            )
             cfg.connect(
                 cond,
                 build_stmt(
                     stmt.iftrue, next_entry, break_target, continue_target
                 ),
                 truth=True,
-                add=true_add,
-                remove={*true_remove},
+                add=true_nn,
+                remove={*true_null},
             )
             if stmt.iffalse is not None:
                 cfg.connect(
@@ -237,16 +238,16 @@ def build_cfg(
                         continue_target,
                     ),
                     truth=False,
-                    add=false_add,
-                    remove={*false_remove},
+                    add=false_nn,
+                    remove={*false_null},
                 )
             else:
                 cfg.connect(
                     cond,
                     next_entry,
                     truth=False,
-                    add=false_add,
-                    remove={*false_remove},
+                    add=false_nn,
+                    remove={*false_null},
                 )
             return cond
 
@@ -263,11 +264,12 @@ def build_cfg(
                     calls=_call_events(stmt.cond, line_map, function_pointers),
                 )
                 body = build_stmt(stmt.stmt, cond, next_entry, cond)
-                true_add, true_remove = _simple_null_facts(stmt.cond)
-                false_add, false_remove = true_remove, true_add
-                cfg.connect(cond, body, add=true_add, remove=true_remove, truth=True)
+                true_nn, true_null, false_nn, false_null = _null_edge_facts(
+                    stmt.cond, summaries
+                )
+                cfg.connect(cond, body, add=true_nn, remove=true_null, truth=True)
                 cfg.connect(
-                    cond, next_entry, add=false_add, remove=false_remove, truth=False
+                    cond, next_entry, add=false_nn, remove=false_null, truth=False
                 )
                 return cond
             cond = cfg.new_node(
@@ -280,10 +282,11 @@ def build_cfg(
                 calls=_call_events(stmt.cond, line_map, function_pointers),
             )
             body = build_stmt(stmt.stmt, cond, next_entry, cond)
-            true_add, true_remove = _simple_null_facts(stmt.cond)
-            false_add, false_remove = true_remove, true_add
-            cfg.connect(cond, body, add=true_add, remove=true_remove, truth=True)
-            cfg.connect(cond, next_entry, add=false_add, remove=false_remove, truth=False)
+            true_nn, true_null, false_nn, false_null = _null_edge_facts(
+                stmt.cond, summaries
+            )
+            cfg.connect(cond, body, add=true_nn, remove=true_null, truth=True)
+            cfg.connect(cond, next_entry, add=false_nn, remove=false_null, truth=False)
             return body
 
         if kind == "For":
@@ -307,10 +310,11 @@ def build_cfg(
             body = build_stmt(
                 stmt.stmt, iter_node or cond, next_entry, iter_node or cond
             )
-            true_add, true_remove = _simple_null_facts(cond_expr)
-            false_add, false_remove = true_remove, true_add
-            cfg.connect(cond, body, add=true_add, remove=true_remove, truth=True)
-            cfg.connect(cond, next_entry, add=false_add, remove=false_remove, truth=False)
+            true_nn, true_null, false_nn, false_null = _null_edge_facts(
+                cond_expr, summaries
+            )
+            cfg.connect(cond, body, add=true_nn, remove=true_null, truth=True)
+            cfg.connect(cond, next_entry, add=false_nn, remove=false_null, truth=False)
             if stmt.init is not None:
                 init_node = make_event(stmt.init)
                 cfg.connect(init_node, cond)
@@ -555,6 +559,53 @@ _CONDITION_OR_STRUCTURAL_KINDS = {
 }
 
 
+def _refresh_condition_null_edge_facts(
+    cfg: StructuredCFG,
+    summaries: Optional[Dict[str, FunctionSummary]],
+) -> None:
+    """Recompute condition-edge null facts once callee summaries are known.
+
+    Structural CFG caching builds topology without summaries, so Is*-style
+    ``truthy_implies_nonnull`` proofs are applied here rather than at first
+    construction. Compound ``&&`` / ``||`` / ``!`` facts are refreshed too so a
+    later summary-aware pass cannot leave stale empty edges.
+    """
+    if not summaries:
+        return
+    for event in cfg.nodes.values():
+        if event.kind not in {"if_cond", "while_cond", "do_cond", "for_cond"}:
+            continue
+        ast_node = getattr(event, "_ast_node", None)
+        if ast_node is None:
+            continue
+        cond = getattr(ast_node, "cond", None)
+        true_nn, true_null, false_nn, false_null = _null_edge_facts(cond, summaries)
+        for succ in event.successors:
+            edge = (event.node_id, succ)
+            truth = cfg.edge_truth.get(edge)
+            if truth is True:
+                cfg.edge_facts[edge] = (set(true_nn), set(true_null))
+            elif truth is False:
+                cfg.edge_facts[edge] = (set(false_nn), set(false_null))
+            else:
+                # Coalesced true/false edges do not establish either predicate.
+                cfg.edge_facts[edge] = (set(), set())
+
+    for block in cfg.blocks.values():
+        if not block.nodes:
+            continue
+        last = block.nodes[-1]
+        refreshed: Dict[int, Tuple[Set[str], Set[str]]] = {}
+        for succ_block_id in block.successors:
+            succ_block = cfg.blocks.get(succ_block_id)
+            if succ_block is None or not succ_block.nodes:
+                continue
+            edge_fact = cfg.edge_facts.get((last.node_id, succ_block.nodes[0].node_id))
+            if edge_fact:
+                refreshed[succ_block_id] = (set(edge_fact[0]), set(edge_fact[1]))
+        block.edge_facts = refreshed
+
+
 def apply_cfg_event_semantics(
     cfg: StructuredCFG,
     *,
@@ -565,6 +616,7 @@ def apply_cfg_event_semantics(
     line_map: Optional[Dict[int, Any]] = None,
 ) -> StructuredCFG:
     """Recompute analysis-specific event facts without rebuilding graph topology."""
+    _refresh_condition_null_edge_facts(cfg, summaries)
     for event in cfg.nodes.values():
         if event.kind in _CONDITION_OR_STRUCTURAL_KINDS:
             continue

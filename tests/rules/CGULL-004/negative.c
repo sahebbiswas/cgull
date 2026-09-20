@@ -50,3 +50,52 @@ void test_tn_correct_not_null_check(void) {
         *intPointer = 42;
     }
 }
+
+/* False-Positive Regression (#551): short-circuit OR null checks before field access */
+typedef struct CJSON551 { int type; char *valuestring; double valuedouble; unsigned offset; unsigned length; char *content; } CJSON551;
+int test_fp_short_circuit_or_null_checks(const CJSON551 *a, const CJSON551 *b) {
+    if ((a == 0) || (b == 0) || ((a->type & 0xFF) != (b->type & 0xFF))) {
+        return 0;
+    }
+    return a->type;
+}
+
+/* False-Positive Regression (#551): short-circuit AND null checks before field access */
+int test_fp_short_circuit_and_null_checks(const CJSON551 *a, const CJSON551 *b) {
+    if (a != 0 && b != 0 && (a->type == b->type)) {
+        return 1;
+    }
+    return 0;
+}
+
+/* False-Positive Regression (#551): negated comparison must guard later deref in the condition */
+int test_fp_finding_not_on_negated_null_check(CJSON551 *p) {
+    if (!(p == 0) && p->type == 1) {
+        return 1;
+    }
+    return 0;
+}
+
+/* False-Positive Regression (#551): callee Is*-style predicate guards later deref */
+int test_fp_callee_is_style_null_check_pred(const CJSON551 *item) {
+    if (item == 0) {
+        return 0;
+    }
+    return (item->type & 0xFF) == 4;
+}
+char *test_fp_callee_is_style_getter(const CJSON551 *item) {
+    if (!test_fp_callee_is_style_null_check_pred(item)) {
+        return 0;
+    }
+    return item->valuestring;
+}
+
+/* False-Positive Regression (#551): cannot_access-style macro must not leave buffer unchecked */
+#define test_fp_can_access_at_index(buffer, index) ((buffer != 0) && ((buffer)->offset + (index) < (buffer)->length))
+#define test_fp_cannot_access_at_index(buffer, index) (!test_fp_can_access_at_index(buffer, index))
+char test_fp_cannot_access_macro_then_use(CJSON551 *buffer, unsigned index) {
+    if (test_fp_cannot_access_at_index(buffer, index)) {
+        return 0;
+    }
+    return buffer->content[buffer->offset + index];
+}

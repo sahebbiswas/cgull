@@ -83,6 +83,9 @@ class FunctionSummary:
     # preserve the positional constructor contract of the older fields.
     must_initialize_params: Set[int] = field(default_factory=set)
     may_initialize_params: Set[int] = field(default_factory=set)
+    # Pointer parameters proven non-NULL whenever the callee returns a truthy
+    # value (Is*-style null-check predicates). Falsy returns prove nothing.
+    truthy_implies_nonnull_params: Set[int] = field(default_factory=set)
 
 
 @dataclass
