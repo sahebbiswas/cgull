@@ -326,6 +326,16 @@ class RuleDefinition:
         }
 
 
+@dataclass(frozen=True, order=True)
+class RelatedLocation:
+    file_path: str
+    line_number: int
+    column_number: int = 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class Issue:
     rule_id: str
@@ -349,6 +359,7 @@ class Issue:
     related_tus: List[str] = field(default_factory=list)
     # Internal input coordinate, consumed before TU serialization/fingerprinting.
     expanded_end_line: Optional[int] = field(default=None, repr=False, compare=False)
+    related_locations: List[RelatedLocation] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         conf_val = self.confidence.value if isinstance(self.confidence, Confidence) else (str(self.confidence) if self.confidence else None)
@@ -370,6 +381,7 @@ class Issue:
             "fingerprint": self.fingerprint,
             "reachable_under": list(self.reachable_under),
             "related_tus": list(self.related_tus),
+            "related_locations": [location.to_dict() for location in self.related_locations],
         }
         if conf_val:
             d["confidence"] = conf_val

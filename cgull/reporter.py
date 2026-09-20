@@ -28,6 +28,14 @@ def _escape_markdown_cell(text: str) -> str:
 _sanitize_terminal_text = sanitize_terminal_text
 
 
+def _related_accesses(issue: Any) -> str:
+    locations = issue.related_locations
+    if not locations:
+        return ""
+    sites = ", ".join(f"{loc.file_path}:{loc.line_number}:{loc.column_number}" for loc in locations)
+    return f"Also affects {len(locations)} accesses: {sites}"
+
+
 def _get_condition_tag(issue: Any) -> str:
     r_under = getattr(issue, "reachable_under", None)
     if not r_under or r_under == ["unconditional"]:
@@ -182,6 +190,14 @@ class ReportGenerator:
                     "cgullFingerprint/v1": issue.fingerprint
                 } if issue.fingerprint else {}
             }
+            if issue.related_locations:
+                sarif_result["relatedLocations"] = [
+                    {"id": index, "physicalLocation": {
+                        "artifactLocation": {"uri": loc.file_path.replace("\\", "/")},
+                        "region": {"startLine": max(1, loc.line_number),
+                                   "startColumn": max(1, loc.column_number)}
+                    }} for index, loc in enumerate(issue.related_locations, 1)
+                ]
             sarif_fix = _sarif_fix_for_issue(issue)
             if sarif_fix is not None:
                 sarif_result["fixes"] = [sarif_fix]
@@ -344,6 +360,8 @@ class ReportGenerator:
                     f"> {issue.remediation}",
                     "",
                 ])
+                if issue.related_locations:
+                    lines.append(_escape_markdown_cell(_related_accesses(issue)))
                 if issue.auto_fix_replacement:
                     lines.extend([
                         "**Automatic Fix (Mechanically Safe)**:",
@@ -422,6 +440,8 @@ class ReportGenerator:
                 cond_prefix = f"{cond_tag} " if cond_tag else ""
                 lines.append(f" {sev_tag:<8} {issue.file_path}:{issue.line_number} -> {cond_prefix}{issue.rule_name} ({issue.rule_id})")
                 lines.append(f"          Detail: {issue.message}")
+                if issue.related_locations:
+                    lines.append("          " + _sanitize_terminal_text(_related_accesses(issue)))
                 if issue.code_snippet:
                     lines.append(f"          Code  : {issue.code_snippet}")
                 lines.append(f"          CWE   : {issue.cwe_id}")
