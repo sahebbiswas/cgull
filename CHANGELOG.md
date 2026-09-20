@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cache parsed conditional-directive IR per unique source string for the duration of a scan so reachability, simplification, and concrete resolution reuse one parse (#546).
 
 ### Fixed
+- Fix `_freed_vars` to skip `None` AST children and avoid copying set-typed deallocator configs on every call (follow-up to #547).
 - CGULL-011: do not treat `MACRO(type) declarator` export wrappers (e.g. `CJSON_PUBLIC(int) foo(...)`) as illegal function-pointer casts in fallback/regex analysis; AST suppression only applies when the macro match overlaps the cast's source span (#552).
 - CGULL-034: do not flag NaN materialization (`NAN`, `0.0/0.0`, float zeros with exponents such as `0.0e1/0.0e1`, and casted forms such as `(double)0.0/0.0`) as runtime division-by-zero (#556).
 - Group repeated CGULL-007 accesses with the same conservative CFG bounds obligation, retain related source locations in all reports, and preserve them through TU mapping and deduplication (#533).
