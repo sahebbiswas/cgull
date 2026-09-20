@@ -9,7 +9,6 @@ stores stay conservative.
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
-from ..cfg import build_cfg, find_function_def
 from ..cfg.expression_effects import StorageEffect, ordered_storage_effects
 from ..models import FixType
 from .dead_store_initializers import file_scope_enum_constants
@@ -225,15 +224,12 @@ def _member_dead_store_issues(rule, file_path, ast_ctx):
         if not eligible_roots and not track_parameters:
             continue
 
-        funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+        session = rule.get_analysis_session(ast_ctx)
+        funcdef = session.function_def(fn.name)
         if funcdef is None:
             continue
-        cfg = build_cfg(
-            funcdef,
-            summaries=summaries,
-            line_map=getattr(ast_ctx, "line_map", None),
-        )
-        if not cfg.nodes:
+        cfg = session.analysis_cfg(fn.name, summaries=summaries)
+        if cfg is None or not cfg.nodes:
             continue
 
         if track_parameters:

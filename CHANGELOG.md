@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opt-in persistent content-addressed per-file result cache for repeat scans (`--cache-dir` / `--cache-path` / `CGULL_CACHE_DIR`, disable with `--no-cache` / `CGULL_NO_CACHE`); keys cover canonical path + source + expanded TU text, config/rule fingerprint, semantic-model digest, and C-GULL version, with atomic best-effort writes, path rebinding on hit, and corrupt-entry misses (#545).
 
 ### Changed
+- Reuse session-owned structural (pre-annotation) CFGs across rules, summaries, ownership, and integer-range consumers so residual public ``build_cfg`` fanout drops while keeping the #582 annotated memory-rule template cache (#583).
 - Share post-dataflow memory-rule CFGs per AST inputs, copy CFG basic-block topology on analysis clones, and reuse project-summary sessions across domains/rounds to cut residual rule CFG fanout and cross-TU summary rebuild work (#581).
 - Reduce residual large-function/TU scan cost by copying CFG basic-block topology on analysis clones, reusing session function summaries for ownership and CGULL-042 consumers, and using a worklist for summary output-initialization (#548).
 - Reuse whole-TU function summaries per session and effective semantic-input key across ownership, dead-store, MISRA/style, and custom memory-rule consumers; isolate returned results and invalidate on imported-summary or registry changes (#544).
