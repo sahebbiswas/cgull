@@ -32,6 +32,7 @@ default_format = "text"
 warn_on_fallback = false
 
 [rules.skip]
+"CGULL-018" = "Focused profile: goto style is MISRA/policy, not a security vuln class"
 "CGULL-019" = "Focused profile: explicit void style is project policy"
 "CGULL-025" = "Focused profile: assertion placement is project policy"
 ```

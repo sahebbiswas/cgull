@@ -17,6 +17,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | Automatic diagnostic capture, verbosity, retention, privacy, and `--log-file` | [Diagnostic logging](logging.md) |
 | pre-commit and GitHub Actions adoption | [Development integration](development-integration.md) |
 | Rule inventory and identifiers | [Rule reference](rules.md) |
+| Focused vs comprehensive finding profiles, security-vs-policy report labels, baselines, corpus checklist | [Finding profiles and noise reduction](finding-profiles.md) |
 | Embedded-focused defaults and semantic trust boundaries | [Embedded security profile](embedded-security-profile.md) |
 
 ## Maintainer and extension guide

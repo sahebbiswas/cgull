@@ -266,7 +266,11 @@ def handle_scan(args) -> int:
     for warning in config.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
-    config = with_finding_profile(config, getattr(args, "profile", None))
+    try:
+        config = with_finding_profile(config, getattr(args, "profile", None))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
 
     # Determine rules to run
     all_rules = get_all_rules()
@@ -522,7 +526,11 @@ def handle_rules(args=None) -> int:
     for warning in config.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
-    config = with_finding_profile(config, getattr(args, "profile", None))
+    try:
+        config = with_finding_profile(config, getattr(args, "profile", None))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     all_rules = get_all_rules()
     active_rules = config.apply_to_rules([r() for r in [type(ru) for ru in all_rules]])
     active_ids = {r.rule_id for r in active_rules}

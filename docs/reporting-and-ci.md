@@ -11,7 +11,7 @@ cgull scan . --format markdown -o cgull.md
 cgull scan . --format sarif -o cgull.sarif
 ```
 
-- `text` is the normal terminal experience;
+- `text` is the normal terminal experience; human summaries label findings as **security actionable** vs **policy/quality** so MISRA/style hits are not mistaken for vulns (see [Finding profiles](finding-profiles.md));
 - `json` is the stable machine-oriented report and baseline source;
 - `markdown` is useful for human review and CI artifacts;
 - `sarif` integrates with SARIF consumers such as code-scanning platforms.
