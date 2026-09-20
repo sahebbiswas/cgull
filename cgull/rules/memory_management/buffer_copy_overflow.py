@@ -379,10 +379,12 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             expr = (event.expr_str or '')
             return bool(re.search(rf'\b{re.escape(dest_name)}\b', expr))
 
-        # Simple aliases (``char *p = number_buffer`` / ``p = number_buffer``)
+        # Simple aliases (``char *p = number_buffer`` / ``p = &number_buffer[0]``)
         # let later uses omit ``dest_name``; treat the aliasing itself as escape.
+        # Normalize RHS with the same canonicalization as destinations so
+        # address-of / array-ref forms recorded in event facts still match.
         alias_writes = getattr(event, 'alias_writes', None) or {}
-        if any(rhs == dest_name for rhs in alias_writes.values()):
+        if any((self._dest_base_name(rhs) or rhs) == dest_name for rhs in alias_writes.values()):
             return True
 
         for call in getattr(event, 'calls', ()) or ():

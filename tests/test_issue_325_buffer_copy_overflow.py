@@ -367,6 +367,23 @@ int bad(double d) {
     assert any("'sprintf'" in message for message in _messages(source))
 
 
+def test_sprintf_address_alias_escape_before_reject_remains_reported():
+    """char *p = &number_buffer[0] before the reject lets puts(p) escape (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = &number_buffer[0];
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(p);
+    return length;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
 def test_sprintf_reject_via_fatal_is_credited():
     """fatal/panic/err/errx align with CFG terminators as overflow bails (#571)."""
     source = """

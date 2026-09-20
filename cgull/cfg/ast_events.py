@@ -99,6 +99,40 @@ def _unwrap_cast(node):
     return node
 
 
+def _alias_source_var(node, alloc_set: Set[str]) -> Optional[str]:
+    """Return the identifier a pointer RHS aliases, if recognizable.
+
+    Covers plain IDs (array decay / pointer copy) and address-of forms
+    ``&id`` / ``&id[index]`` so ``char *p = &buf[0]`` records as an alias of
+    ``buf``.
+    """
+    node = _unwrap_cast(node)
+    if node is None:
+        return None
+    kind = type(node).__name__
+    if kind == "ID":
+        name = str(node.name)
+    elif kind == "UnaryOp" and getattr(node, "op", None) == "&":
+        inner = _unwrap_cast(node.expr)
+        if inner is None:
+            return None
+        inner_kind = type(inner).__name__
+        if inner_kind == "ID":
+            name = str(inner.name)
+        elif inner_kind == "ArrayRef":
+            base = _unwrap_cast(inner.name)
+            if base is None or type(base).__name__ != "ID":
+                return None
+            name = str(base.name)
+        else:
+            return None
+    else:
+        return None
+    if name in alloc_set or name in {"NULL", "nullptr"}:
+        return None
+    return name
+
+
 def _pointer_arith_operand_ids(node) -> List[Any]:
     """Return ID nodes used as pointer operands in additive arithmetic.
 
@@ -694,11 +728,9 @@ def _event_payload(
                                     realloc_inputs.add(str(arg1.name))
                     break
             if not allocated and ast_node.name and not _is_nullish(ast_node.init):
-                rhs_unwrapped = _unwrap_cast(ast_node.init)
-                if type(rhs_unwrapped).__name__ == "ID":
-                    rhs_var = str(rhs_unwrapped.name)
-                    if rhs_var not in alloc_set and rhs_var not in {"NULL", "nullptr"}:
-                        alias_writes[str(ast_node.name)] = rhs_var
+                rhs_var = _alias_source_var(ast_node.init, alloc_set)
+                if rhs_var is not None:
+                    alias_writes[str(ast_node.name)] = rhs_var
     elif kind == "Assignment":
         reads = _ids(ast_node.rvalue)
         writes = _assignment_target(ast_node.lvalue)
@@ -737,17 +769,13 @@ def _event_payload(
             and not _is_nullish(ast_node.rvalue)
         ):
             lhs_unwrapped = _unwrap_cast(ast_node.lvalue)
-            rhs_unwrapped = _unwrap_cast(ast_node.rvalue)
+            rhs_var = _alias_source_var(ast_node.rvalue, alloc_set)
             if (
                 lhs_unwrapped is not None
                 and type(lhs_unwrapped).__name__ == "ID"
-                and rhs_unwrapped is not None
-                and type(rhs_unwrapped).__name__ == "ID"
+                and rhs_var is not None
             ):
-                lhs_var = str(lhs_unwrapped.name)
-                rhs_var = str(rhs_unwrapped.name)
-                if rhs_var not in alloc_set and rhs_var not in {"NULL", "nullptr"}:
-                    alias_writes[lhs_var] = rhs_var
+                alias_writes[str(lhs_unwrapped.name)] = rhs_var
     elif kind == "FuncCall":
         reads = _ids(ast_node.args) if ast_node.args is not None else set()
     elif kind == "Return":
