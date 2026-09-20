@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Collect deallocation calls in `_freed_vars` with a single AST walk instead of one recursive search per configured deallocator (#547).
 - Cache parsed conditional-directive IR per unique source string for the duration of a scan so reachability, simplification, and concrete resolution reuse one parse (#546).
 
 ### Fixed

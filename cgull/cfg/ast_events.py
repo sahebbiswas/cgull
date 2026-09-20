@@ -57,25 +57,29 @@ def _all_calls_args(node, callee: str) -> List[list]:
 
 
 def _freed_vars(node, dealloc_funcs: Optional[Set[str]] = None) -> Set[str]:
+    """Collect variables freed by deallocation calls under ``node``.
+
+    Walks the AST subtree once and matches ``FuncCall`` callees against the
+    effective deallocator set, preserving cast/ExprList unwrapping to direct
+    IDs only (including nested calls).
+    """
     freed: Set[str] = set()
-    funcs = dealloc_funcs if dealloc_funcs is not None else {"free", "cfree", "vfree"}
-    for callee in funcs:
-        for arg in _call_args_all(node, callee):
-            arg_unwrapped = _unwrap_cast(arg)
-            if arg_unwrapped is not None and type(arg_unwrapped).__name__ == "ID":
-                freed.add(str(arg_unwrapped.name))
-    return freed
-
-
-def _call_args_all(node, callee: str):
-    result = []
     if node is None:
-        return result
-    if type(node).__name__ == "FuncCall" and _format_pycparser_expr(node.name) == callee:
-        result.extend(getattr(node.args, "exprs", []) or [])
-    for _, child in node.children():
-        result.extend(_call_args_all(child, callee))
-    return result
+        return freed
+    funcs = set(dealloc_funcs) if dealloc_funcs is not None else {"free", "cfree", "vfree"}
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if type(current).__name__ == "FuncCall":
+            callee = _format_pycparser_expr(current.name)
+            if callee in funcs:
+                for arg in getattr(current.args, "exprs", []) or []:
+                    arg_unwrapped = _unwrap_cast(arg)
+                    if arg_unwrapped is not None and type(arg_unwrapped).__name__ == "ID":
+                        freed.add(str(arg_unwrapped.name))
+        for _, child in current.children():
+            stack.append(child)
+    return freed
 
 
 def _unwrap_cast(node):
