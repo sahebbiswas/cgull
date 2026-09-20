@@ -118,3 +118,14 @@ int test_tp_sprintf_address_alias_escape_before_reject(double d) {
     puts(p);
     return length;
 }
+
+int test_tp_sprintf_length_overwrite_before_reject(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    length = 0;
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(number_buffer);
+    return length;
+}

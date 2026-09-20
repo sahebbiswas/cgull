@@ -441,6 +441,30 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                 stack.append(succ)
         return reached_exit
 
+
+    def _event_writes_var(self, event, var_name: str) -> bool:
+        """True when the CFG event writes ``var_name`` (assignment, decl, etc.)."""
+        writes = getattr(event, 'writes', None) or ()
+        return var_name in writes
+
+    def _event_assigns_length_from_sprintf(
+        self, event, length_var: str, dest_name: str
+    ) -> bool:
+        """True when event sets ``length_var`` from ``sprintf`` into ``dest``.
+
+        Conservatively treat only a fresh ``sprintf`` return into the defended
+        buffer as equivalent to the original captured length.
+        """
+        for call in getattr(event, 'calls', ()) or ():
+            if (call.direct_callee or '') != 'sprintf':
+                continue
+            if call.result_target != length_var:
+                continue
+            args = call.actual_arguments or ()
+            if args and self._dest_base_name(args[0]) == dest_name:
+                return True
+        return False
+
     def _reject_safe_successor(self, cfg, cond_id: int, dest_name: str, length_var: str) -> Optional[int]:
         """Return the safe (non-overflow) successor id for a length-vs-capacity reject."""
         node = cfg.nodes.get(cond_id)
@@ -471,6 +495,9 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         Suppress CGULL-048 when the sprintf return value is captured and every
         path from that write to an external use of the destination passes through
         a length-vs-``sizeof(dest)`` reject that bails out (cJSON ``print_number``).
+        The compared length must still be the original sprintf result (or a
+        later sprintf into the same buffer); overwrites like ``length = 0``
+        invalidate the defense.
         """
         dest_name = self._dest_base_name(dest_expr)
         if not dest_name or funcdef is None:
@@ -510,37 +537,49 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             if not reject_safe:
                 return False
 
-            # BFS: state is (node_id, passed_safe_reject).
-            visited: Set[Tuple[int, bool]] = set()
-            queue = deque([(write_id, False)])
+            # BFS: state is (node_id, passed_safe_reject, length_is_sprintf_result).
+            # Track writes to length_var so overwriting the sprintf result before
+            # the capacity compare cannot credit a fake defense.
+            visited: Set[Tuple[int, bool, bool]] = set()
+            queue = deque([(write_id, False, True)])
             saw_reject = False
             while queue:
-                nid, passed = queue.popleft()
-                state = (nid, passed)
+                nid, passed, length_ok = queue.popleft()
+                state = (nid, passed, length_ok)
                 if state in visited:
                     continue
                 visited.add(state)
                 node = cfg.nodes[nid]
 
+                # Originating sprintf already established length_ok; later writes
+                # invalidate unless they reassign from sprintf into the same dest.
+                if nid != write_id and self._event_writes_var(node, length_var):
+                    if self._event_assigns_length_from_sprintf(
+                        node, length_var, dest_name
+                    ):
+                        length_ok = True
+                    else:
+                        length_ok = False
+
                 if nid != write_id and self._event_escapes_buffer(node, dest_name) and not passed:
                     return False
 
-                if nid in reject_safe:
+                if nid in reject_safe and length_ok:
                     saw_reject = True
                     true_succ = node.successors[0]
                     safe_succ = reject_safe[nid]
                     # Overflow / bail path: do not mark passed.
-                    queue.append((true_succ, passed))
+                    queue.append((true_succ, passed, length_ok))
                     if safe_succ == -1:
                         # No else branch encoded; remaining successors after true are safe.
                         for succ in node.successors[1:]:
-                            queue.append((succ, True))
+                            queue.append((succ, True, length_ok))
                     else:
-                        queue.append((safe_succ, True))
+                        queue.append((safe_succ, True, length_ok))
                     continue
 
                 for succ in node.successors:
-                    queue.append((succ, passed))
+                    queue.append((succ, passed, length_ok))
 
             if not saw_reject:
                 return False

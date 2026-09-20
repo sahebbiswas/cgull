@@ -384,6 +384,23 @@ int bad(double d) {
     assert any("'sprintf'" in message for message in _messages(source))
 
 
+def test_sprintf_length_overwrite_before_reject_remains_reported():
+    """Overwriting sprintf result before capacity compare must not suppress (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    length = 0;
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(number_buffer);
+    return length;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
 def test_sprintf_reject_via_fatal_is_credited():
     """fatal/panic/err/errx align with CFG terminators as overflow bails (#571)."""
     source = """
