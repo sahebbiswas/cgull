@@ -417,13 +417,28 @@ class ProjectSummaryIndex:
             imports[domain] = imported
         return imports
 
+    def _invalidate_session_summary_caches(self, session):
+        """Drop derived summary state while retaining call graph / structural CFGs."""
+        with session._cfg_lock:
+            session._function_summary_results.clear()
+            session._ownership_summary_result = None
+            session._ownership_effects_cache.clear()
+            session._value_analysis_result = None
+            session._size_analysis_result = None
+            session._pointer_range_analysis_result = None
+            session._summary_construction_count = 0
+            session._event_facts_cache = None
+
     def _evaluate(self, path, imports):
         ctx = self.contexts[path]
+        previous_imports = getattr(ctx, "project_summaries", None)
         ctx.project_summaries = imports
-        # Reset summary caches between rounds, retaining the original call graph.
-        session = AnalysisSession(ctx, semantic_models=self.semantic_models)
-        session._call_graph = self.sessions[path].call_graph
-        self.sessions[path] = session
+        # Reuse the TU session across domains and convergence rounds. Recreating
+        # sessions forced redundant owner registration and dropped warm CFG
+        # topology; only derived summary caches need to reset when imports change.
+        session = self.sessions[path]
+        if previous_imports != imports:
+            self._invalidate_session_summary_caches(session)
         ctx.analysis_session = session
 
         outputs = {}
