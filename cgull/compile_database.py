@@ -21,7 +21,11 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Seque
 from .include_diagnostics import collect_include_warnings, invalid_root_warning
 from .models import ConfigProfile, ScanConfig
 from .parallel_workers import ParallelWorkerMixin
-from .preprocessor import ConfigReductionStats, reduce_generated_profiles
+from .preprocessor import (
+    ConfigReductionStats,
+    conditional_directive_cache,
+    reduce_generated_profiles,
+)
 from .telemetry import CGullScanner as _TelemetryCGullScanner
 
 
@@ -300,19 +304,22 @@ class CompileDatabaseCGullScanner(ParallelWorkerMixin, _TelemetryCGullScanner):
         return args[6] if len(args) >= 7 else None
 
     def _scan_with_include_warnings(self, method, *args, **kwargs):
-        with collect_include_warnings(self.config.include_root_warnings) as warnings:
-            database_warnings = list(self.compile_database.warnings) if self.compile_database else []
-            if self.compile_database:
-                for key, warning in self.compile_database.include_root_warnings.items():
-                    if key in warnings:
-                        database_warnings.remove(warning)
-                    else:
-                        warnings[key] = warning
-            for warning in database_warnings:
-                logging.getLogger(__name__).warning("%s", warning)
-            result = method(*args, **kwargs)
-            result.configuration_warnings = list(dict.fromkeys([*warnings.values(), *database_warnings]))
-            return result
+        # One scan-local directive cache covers profile reduction and sequential
+        # file analysis. Nested _scan_file_content contexts reuse this cache.
+        with conditional_directive_cache():
+            with collect_include_warnings(self.config.include_root_warnings) as warnings:
+                database_warnings = list(self.compile_database.warnings) if self.compile_database else []
+                if self.compile_database:
+                    for key, warning in self.compile_database.include_root_warnings.items():
+                        if key in warnings:
+                            database_warnings.remove(warning)
+                        else:
+                            warnings[key] = warning
+                for warning in database_warnings:
+                    logging.getLogger(__name__).warning("%s", warning)
+                result = method(*args, **kwargs)
+                result.configuration_warnings = list(dict.fromkeys([*warnings.values(), *database_warnings]))
+                return result
 
     def scan_path(self, *args, **kwargs):
         return self._scan_with_include_warnings(self._scan_path, *args, **kwargs)

@@ -6,6 +6,10 @@ are one-based. Parsing recovers after errors and never chooses active branches.
 from __future__ import annotations
 
 from bisect import bisect_right
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, field
 import re
 
@@ -223,6 +227,31 @@ def _condition(text: str) -> Expression:
     return _atom(text)
 
 
+_ACTIVE_CONDITIONAL_DIRECTIVE_CACHE: ContextVar[
+    dict[str, ConditionalTree] | None
+] = ContextVar("cgull_conditional_directive_cache", default=None)
+
+
+@contextmanager
+def conditional_directive_cache() -> Iterator[dict[str, ConditionalTree]]:
+    """Install a scan-local cache for :func:`parse_conditional_directives`.
+
+    Nested entry reuses the active cache. Leaving the outermost context clears
+    entries so source strings are not retained for the process lifetime.
+    """
+    existing = _ACTIVE_CONDITIONAL_DIRECTIVE_CACHE.get()
+    if existing is not None:
+        yield existing
+        return
+    cache: dict[str, ConditionalTree] = {}
+    token = _ACTIVE_CONDITIONAL_DIRECTIVE_CACHE.set(cache)
+    try:
+        yield cache
+    finally:
+        _ACTIVE_CONDITIONAL_DIRECTIVE_CACHE.reset(token)
+        cache.clear()
+
+
 def parse_conditional_directives(source: str) -> ConditionalTree:
     """Build ordered blocks and branches, preserving malformed directives too.
 
@@ -230,7 +259,25 @@ def parse_conditional_directives(source: str) -> ConditionalTree:
     symbolic expression; complex C expressions are opaque Predicate nodes, not
     validated or evaluated. An unclosed block extends to EOF. A branch after
     #else is retained with a diagnostic so no source structure is discarded.
+
+    When a :func:`conditional_directive_cache` is active, identical source
+    strings reuse one parsed tree for the cache lifetime. Returned trees are
+    defensive copies so consumer mutation cannot corrupt the cache.
     """
+    cache = _ACTIVE_CONDITIONAL_DIRECTIVE_CACHE.get()
+    if cache is None:
+        return _parse_conditional_directives_uncached(source)
+    cached = cache.get(source)
+    if cached is None:
+        cached = _parse_conditional_directives_uncached(source)
+        cache[source] = cached
+    # ConditionalBlock/Branch remain mutable for parser compatibility; return a
+    # deep copy so consumers cannot corrupt the scan-local cache entry.
+    return deepcopy(cached)
+
+
+def _parse_conditional_directives_uncached(source: str) -> ConditionalTree:
+    """Parse without consulting the scan-local cache."""
     starts = [0] + [m.end() for m in re.finditer('\n', source)]
 
     def location(offset: int) -> SourceLocation:
