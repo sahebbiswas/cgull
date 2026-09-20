@@ -341,6 +341,7 @@ def _analyze_one_function(
     alloc_funcs: Optional[Set[str]],
     dealloc_funcs: Optional[Set[str]],
     realloc_funcs: Optional[Set[str]],
+    event_cache=None,
 ) -> _SummaryFact:
     name = fn.name
     param_names = [p.name for p in fn.parameters if p.name]
@@ -355,6 +356,7 @@ def _analyze_one_function(
                 realloc_funcs=realloc_funcs,
                 summaries=summaries,
                 line_map=getattr(ast_ctx, "line_map", None),
+                event_cache=event_cache,
             )
 
     freed_params: Set[int] = set()
@@ -522,6 +524,7 @@ def analyze_function_summaries_detailed(
     fixed_point_config: Optional[FixedPointConfig] = None,
     call_graph=None,
     call_effects: Optional[CallEffectRegistry] = None,
+    event_cache=None,
 ) -> FunctionSummaryAnalysisResult:
     builtins = _get_builtin_summaries(
         alloc_funcs=alloc_funcs,
@@ -560,6 +563,7 @@ def analyze_function_summaries_detailed(
             alloc_funcs,
             dealloc_funcs,
             realloc_funcs,
+            event_cache=event_cache,
         )
 
     result = engine.run(transfer)
@@ -581,6 +585,7 @@ def analyze_function_summaries(
     realloc_funcs: Optional[Set[str]] = None,
     *,
     call_effects: Optional[CallEffectRegistry] = None,
+    event_cache=None,
 ) -> Dict[str, FunctionSummary]:
     return dict(
         analyze_function_summaries_detailed(
@@ -589,6 +594,7 @@ def analyze_function_summaries(
             dealloc_funcs=dealloc_funcs,
             realloc_funcs=realloc_funcs,
             call_effects=call_effects,
+            event_cache=event_cache,
         ).summaries
     )
 

@@ -614,8 +614,13 @@ def apply_cfg_event_semantics(
     realloc_funcs: Optional[Set[str]] = None,
     summaries: Optional[Dict[str, FunctionSummary]] = None,
     line_map: Optional[Dict[int, Any]] = None,
+    event_cache=None,
 ) -> StructuredCFG:
-    """Recompute analysis-specific event facts without rebuilding graph topology."""
+    """Apply event facts to an isolated graph, optionally reusing session facts."""
+    if event_cache is not None and event_cache.line_map is not line_map:
+        raise ValueError("Event facts cache belongs to a different source map")
+    payload_for = event_cache.payload if event_cache is not None else _event_payload
+    source_options = {} if event_cache is not None else {"line_map": line_map}
     _refresh_condition_null_edge_facts(cfg, summaries)
     for event in cfg.nodes.values():
         if event.kind in _CONDITION_OR_STRUCTURAL_KINDS:
@@ -637,15 +642,15 @@ def apply_cfg_event_semantics(
             alias_writes,
             realloc_inputs,
             realloc_bindings,
-        ) = _event_payload(
+        ) = payload_for(
             ast_node,
             alloc_funcs=alloc_funcs,
             dealloc_funcs=dealloc_funcs,
             realloc_funcs=realloc_funcs,
             summaries=summaries,
-            line_map=line_map,
+            **source_options,
         )
-        if kind != "FuncCall":
+        if event_cache is None and kind != "FuncCall":
             reads, writes = expression_read_write_sets(ast_node)
         event.kind = "allocation" if allocated else "free" if freed else kind.lower()
         event.reads = set(reads)
@@ -670,6 +675,8 @@ def build_cfg(
     realloc_funcs: Optional[Set[str]] = None,
     summaries: Optional[Dict[str, FunctionSummary]] = None,
     line_map: Optional[Dict[int, Any]] = None,
+    *,
+    event_cache=None,
 ) -> StructuredCFG:
     """Return an isolated CFG view backed by cached structural topology."""
     try:
@@ -702,6 +709,7 @@ def build_cfg(
             realloc_funcs=realloc_funcs,
             summaries=summaries,
             line_map=line_map,
+            event_cache=event_cache,
         )
     return cfg
 

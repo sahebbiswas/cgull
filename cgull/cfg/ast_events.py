@@ -551,7 +551,9 @@ def _event_payload(
         default_line = 1
     deref_lines = _deref_vars_with_lines(ast_node, default_line=default_line, line_map=line_map)
     # Known callees consume pointer arguments just like explicit dereferences.
-    for use_kind, payload, guarded in _guarded_expression_uses(ast_node, summaries=summaries):
+    for use_kind, payload, guarded in (
+        _guarded_expression_uses(ast_node, summaries=summaries) if summaries else ()
+    ):
         if use_kind == "deref":
             continue
         summary = (summaries or {}).get(_format_pycparser_expr(payload.name))
@@ -636,7 +638,7 @@ def _event_payload(
                         if ast_node.name:
                             realloc_bindings[str(ast_node.name)] = input_ptr
 
-            for call_name in _call_names(ast_node.init):
+            for call_name in (_call_names(ast_node.init) if alloc_set or summaries else ()):
                 if call_name in alloc_set or (
                     summaries
                     and summaries.get(call_name)
@@ -674,7 +676,7 @@ def _event_payload(
                     for w in writes:
                         realloc_bindings[w] = input_ptr
 
-        for call_name in _call_names(ast_node.rvalue):
+        for call_name in (_call_names(ast_node.rvalue) if alloc_set or summaries else ()):
             if call_name in alloc_set or (
                 summaries
                 and summaries.get(call_name)
