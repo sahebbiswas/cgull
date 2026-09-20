@@ -1,0 +1,541 @@
+{
+  "captured_at": "2026-09-20T17:45:56.532348+00:00",
+  "configuration": {
+    "jobs": [
+      1
+    ],
+    "modes": [
+      "tu"
+    ],
+    "preset": "standard",
+    "repetitions": 1,
+    "rules": "default"
+  },
+  "environment": {
+    "cgull_revision": "8bc0957409ea8e3422b7194dbfe602c9ef5d4ccc",
+    "cgull_version": "0.12.16",
+    "cpu_count": 8,
+    "machine": "x86_64",
+    "platform": "Linux-6.12.94+-x86_64-with-glibc2.41",
+    "processor": "",
+    "python": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+    "python_executable": "/workspace/.venv/bin/python"
+  },
+  "parity": {
+    "cross_mode_findings_match": true,
+    "differences": [],
+    "passes": true,
+    "within_mode_jobs_and_repetitions_match": true
+  },
+  "samples": [
+    {
+      "analyzed_lines": 2671,
+      "expanded_analysis_lines": 2723,
+      "finding_count": 43,
+      "jobs": 1,
+      "mode": "tu",
+      "parse_fallback_count": 0,
+      "pass_metric_expected_worker_snapshots": 0,
+      "pass_metric_worker_snapshots": 0,
+      "pass_metric_worker_snapshots_complete": true,
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "inclusive_wall_seconds": 0.5035341170005267,
+          "invocation_count": 16
+        },
+        "apply_cfg_event_semantics": {
+          "inclusive_wall_seconds": 0.45098684895492624,
+          "invocation_count": 681
+        },
+        "build_cfg": {
+          "inclusive_wall_seconds": 0.6762661690008827,
+          "invocation_count": 877
+        },
+        "clone_structural_cfg": {
+          "inclusive_wall_seconds": 0.247674315898621,
+          "invocation_count": 926
+        },
+        "parse_conditional_directives": {
+          "inclusive_wall_seconds": 0.04574626700923545,
+          "invocation_count": 12
+        }
+      },
+      "peak_rss_bytes": 118169600,
+      "phases": {
+        "aggregate_file_analysis_seconds": 4.8039,
+        "file_discovery_seconds": 0.0014996640020399354,
+        "independent_preparation_seconds": 0.02348056499613449,
+        "parser_seconds": 0.5547442190072616,
+        "preparation_wall_seconds": 1.2629834169929381,
+        "project_indexing_seconds": 0.023270163001143374,
+        "project_preparation_seconds": 1.2396871320015634,
+        "project_summary_construction_seconds": 0.6600491399949533,
+        "rule_execution_aggregate_seconds": 4.8039,
+        "total_wall_seconds": 6.07552180300263,
+        "tu_include_expansion_seconds": 0.0227753780054627,
+        "worker_execution_wall_seconds": 4.8060882030040375,
+        "worker_startup_ipc_collection_residual_seconds": 0.002188203004037881
+      },
+      "repetition": 0,
+      "sampled_peak_tree_rss_bytes": null,
+      "semantic_digest": "ffeee51cb4b19fa020d2fd72843f101f011756c22b01e30819d60c1f9901c86c",
+      "semantics": {
+        "files_analyzed": 4,
+        "files_discovered": 4,
+        "files_failed": 0,
+        "files_ignored": 0,
+        "findings": [
+          [
+            "114385b71375b424",
+            "CGULL-025",
+            "src/module_03.c",
+            68,
+            1,
+            "Function 'module_03_fn_01' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "1559d5ccf434417f",
+            "CGULL-025",
+            "src/module_00.c",
+            68,
+            1,
+            "Function 'module_00_fn_01' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "18ad45d1e18875f3",
+            "CGULL-025",
+            "src/module_02.c",
+            458,
+            1,
+            "Function 'module_02_fn_07' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "1a9d6583e4eedab8",
+            "CGULL-025",
+            "src/module_01.c",
+            3,
+            1,
+            "Function 'module_01_fn_00' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "248af5311c60811d",
+            "CGULL-025",
+            "src/module_02.c",
+            133,
+            1,
+            "Function 'module_02_fn_02' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "2736c0d0fa7da060",
+            "CGULL-025",
+            "src/module_02.c",
+            68,
+            1,
+            "Function 'module_02_fn_01' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "416cc57dd2b07c7b",
+            "CGULL-025",
+            "src/module_00.c",
+            523,
+            1,
+            "Function 'module_00_fn_08' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "486dfa4dedf04ca7",
+            "CGULL-025",
+            "src/module_01.c",
+            458,
+            1,
+            "Function 'module_01_fn_07' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "49bced0d748cb97c",
+            "CGULL-025",
+            "src/module_03.c",
+            328,
+            1,
+            "Function 'module_03_fn_05' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "4efa7abf568a6a2d",
+            "CGULL-025",
+            "src/module_01.c",
+            198,
+            1,
+            "Function 'module_01_fn_03' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "5821cd72d424cef3",
+            "CGULL-025",
+            "src/module_02.c",
+            198,
+            1,
+            "Function 'module_02_fn_03' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "5904535e6751aa6c",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'value' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "5b139105127ee7c2",
+            "CGULL-025",
+            "src/module_03.c",
+            458,
+            1,
+            "Function 'module_03_fn_07' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "5c58d4f5dfd3748e",
+            "CGULL-025",
+            "src/module_01.c",
+            133,
+            1,
+            "Function 'module_01_fn_02' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "5f0f30de0953ce6e",
+            "CGULL-025",
+            "src/module_00.c",
+            198,
+            1,
+            "Function 'module_00_fn_03' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "67fec0674e30c993",
+            "CGULL-025",
+            "src/module_01.c",
+            263,
+            1,
+            "Function 'module_01_fn_04' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "6d12e50966491dfb",
+            "CGULL-025",
+            "src/module_03.c",
+            523,
+            1,
+            "Function 'module_03_fn_08' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "6d7605d33b768f48",
+            "CGULL-025",
+            "src/module_01.c",
+            68,
+            1,
+            "Function 'module_01_fn_01' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "72a919d386b68378",
+            "CGULL-025",
+            "src/module_01.c",
+            328,
+            1,
+            "Function 'module_01_fn_05' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "7610933e8f1fcc54",
+            "CGULL-025",
+            "src/module_02.c",
+            263,
+            1,
+            "Function 'module_02_fn_04' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "796d2bda50325737",
+            "CGULL-025",
+            "src/module_03.c",
+            133,
+            1,
+            "Function 'module_03_fn_02' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "7b87b2c411d3f131",
+            "CGULL-025",
+            "src/module_00.c",
+            3,
+            1,
+            "Function 'module_00_fn_00' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "81c3954dcbafd7f1",
+            "CGULL-025",
+            "src/module_03.c",
+            198,
+            1,
+            "Function 'module_03_fn_03' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "92f2a95c16aad1ee",
+            "CGULL-025",
+            "src/module_03.c",
+            588,
+            1,
+            "Function 'module_03_fn_09' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "93c766aecc4c3e1a",
+            "CGULL-025",
+            "src/module_03.c",
+            393,
+            1,
+            "Function 'module_03_fn_06' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "997addc3de8085bc",
+            "CGULL-025",
+            "src/module_00.c",
+            328,
+            1,
+            "Function 'module_00_fn_05' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "a40e837217a7c03c",
+            "CGULL-001",
+            "src/module_03.c",
+            670,
+            12,
+            "Banned insecure function call 'gets': gets() allows arbitrary buffer overflow into the stack without bounds checking. [policy=unconditional; policy_reason=No call form provides a destination bound.; evidence=semantic facts are descriptive only for an unconditional policy ban]"
+          ],
+          [
+            "a674515e84f4a618",
+            "CGULL-025",
+            "src/module_00.c",
+            588,
+            1,
+            "Function 'module_00_fn_09' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "a83046e3267610ca",
+            "CGULL-025",
+            "src/module_00.c",
+            458,
+            1,
+            "Function 'module_00_fn_07' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'salt' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "aa2d1e998c52b9a7",
+            "CGULL-025",
+            "src/module_00.c",
+            393,
+            1,
+            "Function 'module_00_fn_06' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "ac759af1b4cfbef2",
+            "CGULL-025",
+            "src/module_02.c",
+            393,
+            1,
+            "Function 'module_02_fn_06' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "b3781c3f37b2bd80",
+            "CGULL-025",
+            "src/module_00.c",
+            263,
+            1,
+            "Function 'module_00_fn_04' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "bc9433049e90048e",
+            "CGULL-025",
+            "src/module_01.c",
+            393,
+            1,
+            "Function 'module_01_fn_06' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "bd2a3898cb72bb0e",
+            "CGULL-025",
+            "src/module_01.c",
+            588,
+            1,
+            "Function 'module_01_fn_09' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "c1fd9b7d43f460c6",
+            "CGULL-025",
+            "src/module_00.c",
+            133,
+            1,
+            "Function 'module_00_fn_02' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "cdbd6093010c73f3",
+            "CGULL-025",
+            "src/module_02.c",
+            588,
+            1,
+            "Function 'module_02_fn_09' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "ce3152fcd440c2a4",
+            "CGULL-025",
+            "src/module_03.c",
+            3,
+            1,
+            "Function 'module_03_fn_00' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "e3ed4af1f4d59877",
+            "CGULL-025",
+            "src/module_02.c",
+            328,
+            1,
+            "Function 'module_02_fn_05' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "e74fa67f71d69779",
+            "CGULL-025",
+            "src/module_02.c",
+            3,
+            1,
+            "Function 'module_02_fn_00' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "ea091bf57dccbd30",
+            "CGULL-025",
+            "src/module_02.c",
+            523,
+            1,
+            "Function 'module_02_fn_08' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "f004c8b29ad4c31b",
+            "CGULL-025",
+            "src/module_01.c",
+            523,
+            1,
+            "Function 'module_01_fn_08' contains complex logic (62 lines) without any assert() invariant validations."
+          ],
+          [
+            "fee4e0a7ff2ee06b",
+            "CGULL-025",
+            "src/module_03.c",
+            263,
+            1,
+            "Function 'module_03_fn_04' contains complex logic (62 lines) without any assert() invariant validations."
+          ]
+        ],
+        "parser_status_counts": [
+          [
+            "fallback-parser",
+            0
+          ],
+          [
+            "parse-failed",
+            0
+          ],
+          [
+            "pycparser-success",
+            4
+          ],
+          [
+            "regex",
+            0
+          ]
+        ],
+        "scan_errors": []
+      },
+      "throughput_kloc_per_sec": 0.4396330202748914,
+      "unique_source_lines": 2671,
+      "wall_seconds": 6.07552180300263
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "arms": {
+      "tu/jobs=1": {
+        "expanded_analysis_lines": 2723,
+        "jobs": 1,
+        "median_pass_metrics": {
+          "analyze_function_summaries_detailed": {
+            "median_calls_per_analyzed_file": 4.0,
+            "median_calls_per_generated_function": 0.34782608695652173,
+            "median_inclusive_wall_seconds": 0.5035341170005267,
+            "median_invocation_count": 16
+          },
+          "apply_cfg_event_semantics": {
+            "median_calls_per_analyzed_file": 170.25,
+            "median_calls_per_generated_function": 14.804347826086957,
+            "median_inclusive_wall_seconds": 0.45098684895492624,
+            "median_invocation_count": 681
+          },
+          "build_cfg": {
+            "median_calls_per_analyzed_file": 219.25,
+            "median_calls_per_generated_function": 19.065217391304348,
+            "median_inclusive_wall_seconds": 0.6762661690008827,
+            "median_invocation_count": 877
+          },
+          "clone_structural_cfg": {
+            "median_calls_per_analyzed_file": 231.5,
+            "median_calls_per_generated_function": 20.130434782608695,
+            "median_inclusive_wall_seconds": 0.247674315898621,
+            "median_invocation_count": 926
+          },
+          "parse_conditional_directives": {
+            "median_calls_per_analyzed_file": 3.0,
+            "median_calls_per_generated_function": 0.2608695652173913,
+            "median_inclusive_wall_seconds": 0.04574626700923545,
+            "median_invocation_count": 12
+          }
+        },
+        "median_phases_seconds": {
+          "aggregate_file_analysis_seconds": 4.8039,
+          "file_discovery_seconds": 0.0014996640020399354,
+          "independent_preparation_seconds": 0.02348056499613449,
+          "parser_seconds": 0.5547442190072616,
+          "preparation_wall_seconds": 1.2629834169929381,
+          "project_indexing_seconds": 0.023270163001143374,
+          "project_preparation_seconds": 1.2396871320015634,
+          "project_summary_construction_seconds": 0.6600491399949533,
+          "rule_execution_aggregate_seconds": 4.8039,
+          "total_wall_seconds": 6.07552180300263,
+          "tu_include_expansion_seconds": 0.0227753780054627,
+          "worker_execution_wall_seconds": 4.8060882030040375,
+          "worker_startup_ipc_collection_residual_seconds": 0.002188203004037881
+        },
+        "median_throughput_kloc_per_sec": 0.4396330202748914,
+        "median_wall_seconds": 6.07552180300263,
+        "mode": "tu",
+        "samples": 1,
+        "worker_pass_metric_snapshots": {
+          "all_complete": true,
+          "expected": 0,
+          "minimum_merged": 0
+        }
+      }
+    }
+  },
+  "timing_notes": {
+    "activity_timings_overlap": true,
+    "expanded_analysis_lines": "include-expanded line volume recomputed after the timed scan for exactly the analyzed roots; excluded from scan timing and peak-RSS measurement",
+    "pass_metric_worker_snapshots": "parallel workers flush cumulative snapshots before each Future resolves; merged/expected/completeness fields expose hard-process losses that could otherwise undercount a benchmark arm",
+    "pass_metrics": "benchmark-only invocation counts and inclusive wall activity for repeated CFG/event/summary/preprocessor passes; parallel-worker activity is merged into the coordinator artifact, timings overlap, and must not be summed",
+    "peak_rss_bytes": "process-lifetime ru_maxrss sampled immediately after scan_path; null where the platform does not expose it",
+    "rule_execution_aggregate_seconds": "sum of per-file analysis durations minus scan-local parser/include work; it is CPU-like aggregate work and may exceed wall time in parallel mode",
+    "worker_startup_ipc_collection_residual_seconds": "worker-dispatch wall time minus a conservative ideal-compute lower bound; use for relative before/after comparisons on the same machine"
+  },
+  "workload": {
+    "file_count": 6,
+    "functions_per_module": 10,
+    "generated_function_count": 46,
+    "modules": 4,
+    "physical_lines": 2686,
+    "sha256": "a5ce6eda2bc1aa6d4268744c20cf103e5cd21f9f43b84b16bb1e32d079f067ed",
+    "statements_per_function": 60
+  }
+}

@@ -9,7 +9,7 @@ stores stay conservative.
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
-from ..cfg import analyze_function_summaries, build_cfg, find_function_def
+from ..cfg import build_cfg, find_function_def
 from ..cfg.expression_effects import StorageEffect, ordered_storage_effects
 from ..models import FixType
 from .dead_store_initializers import file_scope_enum_constants
@@ -212,7 +212,7 @@ def _write_is_live(cfg, node_id: int, effect_index: int, target: MemberTarget, m
 def _member_dead_store_issues(rule, file_path, ast_ctx):
     issues = []
     summaries = (
-        analyze_function_summaries(ast_ctx)
+        rule.get_analysis_session(ast_ctx).function_summaries
         if getattr(ast_ctx, "functions", None)
         else None
     )

@@ -1,0 +1,875 @@
+{
+  "schema_version": 1,
+  "issue": 548,
+  "baseline_revision_note": "before: origin/main at measurement time (post #542/#543); after: this branch",
+  "host_notes": "Linux box, Python 3.13, jobs=1, modes=tu, repetitions=1, sequential runs",
+  "before": [
+    {
+      "arm": "size_12",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 12,
+      "analyzed_lines": 751,
+      "wall_seconds": 1.2517859680010588,
+      "ms_per_loc": 1.6668255233036735,
+      "semantic_digest": "c4683ca983d300d2a3eef6583ca8dc299c80844c61c8f3df0c95c7f8a0dd35b8",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 0.17137173499213532
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 681,
+          "inclusive_wall_seconds": 0.1796235130605055
+        },
+        "build_cfg": {
+          "invocation_count": 877,
+          "inclusive_wall_seconds": 0.2516552778761252
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 926,
+          "inclusive_wall_seconds": 0.06163110997295007
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.015025790009531192
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 0.89159,
+        "file_discovery_seconds": 0.0015069830042193644,
+        "independent_preparation_seconds": 0.008500981995894108,
+        "parser_seconds": 0.15628332000778755,
+        "preparation_wall_seconds": 0.3536402419922524,
+        "project_indexing_seconds": 0.006751407003321219,
+        "project_preparation_seconds": 0.34527956799865933,
+        "project_summary_construction_seconds": 0.1809743490011897,
+        "rule_execution_aggregate_seconds": 0.89159,
+        "total_wall_seconds": 1.2517859680010588,
+        "tu_include_expansion_seconds": 0.00789002900273772,
+        "worker_execution_wall_seconds": 0.8930492310028058,
+        "worker_startup_ipc_collection_residual_seconds": 0.001459231002805761
+      }
+    },
+    {
+      "arm": "size_30",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 30,
+      "analyzed_lines": 1471,
+      "wall_seconds": 2.682113244001812,
+      "ms_per_loc": 1.8233264745083697,
+      "semantic_digest": "5a32bfdc666c8684602db2e6fea499adf8a9d86e3c0e7be94cf07f780a9214ee",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 0.2864477049879497
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 681,
+          "inclusive_wall_seconds": 0.31043852800212335
+        },
+        "build_cfg": {
+          "invocation_count": 877,
+          "inclusive_wall_seconds": 0.4271878309227759
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 926,
+          "inclusive_wall_seconds": 0.14326911612442927
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.025351703006890602
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 2.01967,
+        "file_discovery_seconds": 0.001621811999939382,
+        "independent_preparation_seconds": 0.014435983997827861,
+        "parser_seconds": 0.2945951990041067,
+        "preparation_wall_seconds": 0.6537372209932073,
+        "project_indexing_seconds": 0.011222638000617735,
+        "project_preparation_seconds": 0.6394580699998187,
+        "project_summary_construction_seconds": 0.3323095069936244,
+        "rule_execution_aggregate_seconds": 2.01967,
+        "total_wall_seconds": 2.682113244001812,
+        "tu_include_expansion_seconds": 0.013656204006110784,
+        "worker_execution_wall_seconds": 2.0216051310053444,
+        "worker_startup_ipc_collection_residual_seconds": 0.0019351310053443704
+      }
+    },
+    {
+      "arm": "size_60",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 60,
+      "analyzed_lines": 2671,
+      "wall_seconds": 6.07552180300263,
+      "ms_per_loc": 2.274624411457368,
+      "semantic_digest": "ffeee51cb4b19fa020d2fd72843f101f011756c22b01e30819d60c1f9901c86c",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 0.5035341170005267
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 681,
+          "inclusive_wall_seconds": 0.45098684895492624
+        },
+        "build_cfg": {
+          "invocation_count": 877,
+          "inclusive_wall_seconds": 0.6762661690008827
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 926,
+          "inclusive_wall_seconds": 0.247674315898621
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.04574626700923545
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 4.8039,
+        "file_discovery_seconds": 0.0014996640020399354,
+        "independent_preparation_seconds": 0.02348056499613449,
+        "parser_seconds": 0.5547442190072616,
+        "preparation_wall_seconds": 1.2629834169929381,
+        "project_indexing_seconds": 0.023270163001143374,
+        "project_preparation_seconds": 1.2396871320015634,
+        "project_summary_construction_seconds": 0.6600491399949533,
+        "rule_execution_aggregate_seconds": 4.8039,
+        "total_wall_seconds": 6.07552180300263,
+        "tu_include_expansion_seconds": 0.0227753780054627,
+        "worker_execution_wall_seconds": 4.8060882030040375,
+        "worker_startup_ipc_collection_residual_seconds": 0.002188203004037881
+      }
+    },
+    {
+      "arm": "size_120",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 120,
+      "analyzed_lines": 5071,
+      "wall_seconds": 13.547356194001622,
+      "ms_per_loc": 2.6715354356145973,
+      "semantic_digest": "1474cd933e4d1d185c508aa019358d48ddff931f3ef3d04287fbd993e41f5911",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 1.070856737998838
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 681,
+          "inclusive_wall_seconds": 1.195565306050412
+        },
+        "build_cfg": {
+          "invocation_count": 877,
+          "inclusive_wall_seconds": 2.2452503668682766
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 926,
+          "inclusive_wall_seconds": 1.060299608085188
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.08431591499538627
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 10.93709,
+        "file_discovery_seconds": 0.001530572000774555,
+        "independent_preparation_seconds": 0.04051448100653943,
+        "parser_seconds": 1.0364393560084864,
+        "preparation_wall_seconds": 2.6008760100085055,
+        "project_indexing_seconds": 0.035148417999153025,
+        "project_preparation_seconds": 2.5605295639979886,
+        "project_summary_construction_seconds": 1.487358050995681,
+        "rule_execution_aggregate_seconds": 10.93709,
+        "total_wall_seconds": 13.547356194001622,
+        "tu_include_expansion_seconds": 0.03968338399135973,
+        "worker_execution_wall_seconds": 10.939501512002607,
+        "worker_startup_ipc_collection_residual_seconds": 0.0024115120026078074
+      }
+    },
+    {
+      "arm": "count_10",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 12,
+      "analyzed_lines": 751,
+      "wall_seconds": 1.2215947680015233,
+      "ms_per_loc": 1.6266241917463693,
+      "semantic_digest": "c4683ca983d300d2a3eef6583ca8dc299c80844c61c8f3df0c95c7f8a0dd35b8",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 0.16195581998181297
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 681,
+          "inclusive_wall_seconds": 0.17260427396104205
+        },
+        "build_cfg": {
+          "invocation_count": 877,
+          "inclusive_wall_seconds": 0.2406971950258594
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 926,
+          "inclusive_wall_seconds": 0.05858543897193158
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.016107313000247814
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 0.8691,
+        "file_discovery_seconds": 0.0016817400028230622,
+        "independent_preparation_seconds": 0.010286001001077238,
+        "parser_seconds": 0.15631615799065912,
+        "preparation_wall_seconds": 0.34521820199734066,
+        "project_indexing_seconds": 0.007044787002087105,
+        "project_preparation_seconds": 0.335081787998206,
+        "project_summary_construction_seconds": 0.17044013800477842,
+        "rule_execution_aggregate_seconds": 0.8691,
+        "total_wall_seconds": 1.2215947680015233,
+        "tu_include_expansion_seconds": 0.009525865003524814,
+        "worker_execution_wall_seconds": 0.87049088900676,
+        "worker_startup_ipc_collection_residual_seconds": 0.0013908890067599877
+      }
+    },
+    {
+      "arm": "count_20",
+      "modules": 4,
+      "functions_per_module": 20,
+      "statements_per_function": 12,
+      "analyzed_lines": 1471,
+      "wall_seconds": 2.3697889750037575,
+      "ms_per_loc": 1.6110054214845395,
+      "semantic_digest": "7eb0db906f34be7d17669d9effcfde23563b3762c21073a4326c6b03ab779d7d",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 0.4321846319944598
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 1241,
+          "inclusive_wall_seconds": 0.3133937389648054
+        },
+        "build_cfg": {
+          "invocation_count": 1597,
+          "inclusive_wall_seconds": 0.4368618924127077
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 1686,
+          "inclusive_wall_seconds": 0.1121386787854135
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.02886807598406449
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 1.63645,
+        "file_discovery_seconds": 0.0020933279956807382,
+        "independent_preparation_seconds": 0.0201099090045318,
+        "parser_seconds": 0.30570828100462677,
+        "preparation_wall_seconds": 0.725124553006026,
+        "project_indexing_seconds": 0.012182670005131513,
+        "project_preparation_seconds": 0.7052215229996364,
+        "project_summary_construction_seconds": 0.38573402999463724,
+        "rule_execution_aggregate_seconds": 1.63645,
+        "total_wall_seconds": 2.3697889750037575,
+        "tu_include_expansion_seconds": 0.01914298200426856,
+        "worker_execution_wall_seconds": 1.6379718109965324,
+        "worker_startup_ipc_collection_residual_seconds": 0.00152181099653248
+      }
+    },
+    {
+      "arm": "count_40",
+      "modules": 4,
+      "functions_per_module": 40,
+      "statements_per_function": 12,
+      "analyzed_lines": 2911,
+      "wall_seconds": 4.826003819995094,
+      "ms_per_loc": 1.657850848503983,
+      "semantic_digest": "f8ef576df72033d7c92287fa31a71bc4a9cb90e72f817686103c2279e4a0ccc7",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 0.6624928670062218
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 2361,
+          "inclusive_wall_seconds": 0.42037648699624697
+        },
+        "build_cfg": {
+          "invocation_count": 3037,
+          "inclusive_wall_seconds": 0.6728295120046823
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 3206,
+          "inclusive_wall_seconds": 0.22254997496202122
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.05080006699427031
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 3.47824,
+        "file_discovery_seconds": 0.0015614700023434125,
+        "independent_preparation_seconds": 0.022268972999881953,
+        "parser_seconds": 0.554254883005342,
+        "preparation_wall_seconds": 1.340803480001341,
+        "project_indexing_seconds": 0.05379415200150106,
+        "project_preparation_seconds": 1.3187027980020503,
+        "project_summary_construction_seconds": 0.7089074440009426,
+        "rule_execution_aggregate_seconds": 3.47824,
+        "total_wall_seconds": 4.826003819995094,
+        "tu_include_expansion_seconds": 0.021536055995966308,
+        "worker_execution_wall_seconds": 3.4799108970037196,
+        "worker_startup_ipc_collection_residual_seconds": 0.0016708970037195847
+      }
+    },
+    {
+      "arm": "count_80",
+      "modules": 4,
+      "functions_per_module": 80,
+      "statements_per_function": 12,
+      "analyzed_lines": 5791,
+      "wall_seconds": 11.347668456000974,
+      "ms_per_loc": 1.9595352194786695,
+      "semantic_digest": "c83f1c767f3742f9362a8cbe9b6a2caacbb49b294ca22cb9694e17f63e167734",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 1.5950010340093286
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 4601,
+          "inclusive_wall_seconds": 1.208970150197274
+        },
+        "build_cfg": {
+          "invocation_count": 5917,
+          "inclusive_wall_seconds": 2.0970553042934625
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 6246,
+          "inclusive_wall_seconds": 0.8387593820516486
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.08527548299025511
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 8.226600000000001,
+        "file_discovery_seconds": 0.0017286430011154152,
+        "independent_preparation_seconds": 0.042689624991908204,
+        "parser_seconds": 1.0575532330040005,
+        "preparation_wall_seconds": 3.1126836159965023,
+        "project_indexing_seconds": 0.04924856499565067,
+        "project_preparation_seconds": 3.0701598090017796,
+        "project_summary_construction_seconds": 1.9613978089982993,
+        "rule_execution_aggregate_seconds": 8.226600000000001,
+        "total_wall_seconds": 11.347668456000974,
+        "tu_include_expansion_seconds": 0.04180696500407066,
+        "worker_execution_wall_seconds": 8.228876570996363,
+        "worker_startup_ipc_collection_residual_seconds": 0.002276570996361471
+      }
+    },
+    {
+      "arm": "count_160",
+      "modules": 4,
+      "functions_per_module": 160,
+      "statements_per_function": 12,
+      "analyzed_lines": 11551,
+      "wall_seconds": 30.61985514799744,
+      "ms_per_loc": 2.650840199809319,
+      "semantic_digest": "909ffeb07a21ca33162bb049b18f99f63ac942e6af49483dd5d2bbf6918ce91f",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 16,
+          "inclusive_wall_seconds": 5.847473424997588
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 9081,
+          "inclusive_wall_seconds": 1.8407154543019715
+        },
+        "build_cfg": {
+          "invocation_count": 11677,
+          "inclusive_wall_seconds": 4.246887188244727
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 12326,
+          "inclusive_wall_seconds": 2.4887306039599935
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.16657392499473644
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 22.45918,
+        "file_discovery_seconds": 0.0015555979989585467,
+        "independent_preparation_seconds": 0.0823196179990191,
+        "parser_seconds": 2.195708602986997,
+        "preparation_wall_seconds": 8.151089979997778,
+        "project_indexing_seconds": 0.08944465099921217,
+        "project_preparation_seconds": 8.06892687099753,
+        "project_summary_construction_seconds": 5.781227327999659,
+        "rule_execution_aggregate_seconds": 22.45918,
+        "total_wall_seconds": 30.61985514799744,
+        "tu_include_expansion_seconds": 0.08126762900064932,
+        "worker_execution_wall_seconds": 22.46230823800579,
+        "worker_startup_ipc_collection_residual_seconds": 0.003128238005789541
+      }
+    }
+  ],
+  "after": [
+    {
+      "arm": "size_12",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 12,
+      "analyzed_lines": 751,
+      "wall_seconds": 1.178610478003975,
+      "ms_per_loc": 1.569388119845506,
+      "semantic_digest": "c4683ca983d300d2a3eef6583ca8dc299c80844c61c8f3df0c95c7f8a0dd35b8",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 0.05110552899714094
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 534,
+          "inclusive_wall_seconds": 0.21277706483670045
+        },
+        "build_cfg": {
+          "invocation_count": 730,
+          "inclusive_wall_seconds": 0.26567336496373173
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 779,
+          "inclusive_wall_seconds": 0.04550564107921673
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.015157061003264971
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 0.85839,
+        "file_discovery_seconds": 0.0015647539985366166,
+        "independent_preparation_seconds": 0.008860832997015677,
+        "parser_seconds": 0.15388620799785713,
+        "preparation_wall_seconds": 0.31336782799917273,
+        "project_indexing_seconds": 0.006348021001031157,
+        "project_preparation_seconds": 0.304716014994483,
+        "project_summary_construction_seconds": 0.14292522799951257,
+        "rule_execution_aggregate_seconds": 0.85839,
+        "total_wall_seconds": 1.178610478003975,
+        "tu_include_expansion_seconds": 0.008163293998222798,
+        "worker_execution_wall_seconds": 0.8599127660054364,
+        "worker_startup_ipc_collection_residual_seconds": 0.0015227660054364378
+      }
+    },
+    {
+      "arm": "size_30",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 30,
+      "analyzed_lines": 1471,
+      "wall_seconds": 2.6772574659989914,
+      "ms_per_loc": 1.8200254697477847,
+      "semantic_digest": "5a32bfdc666c8684602db2e6fea499adf8a9d86e3c0e7be94cf07f780a9214ee",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 0.10648564399161842
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 534,
+          "inclusive_wall_seconds": 0.3800244330341229
+        },
+        "build_cfg": {
+          "invocation_count": 730,
+          "inclusive_wall_seconds": 0.4789964809024241
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 779,
+          "inclusive_wall_seconds": 0.09509839896782069
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.02665509399230359
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 2.0022699999999998,
+        "file_discovery_seconds": 0.0015252499943017028,
+        "independent_preparation_seconds": 0.013814283003739547,
+        "parser_seconds": 0.3251373829989461,
+        "preparation_wall_seconds": 0.666559890996723,
+        "project_indexing_seconds": 0.011558245998458005,
+        "project_preparation_seconds": 0.6529018349974649,
+        "project_summary_construction_seconds": 0.3146268849959597,
+        "rule_execution_aggregate_seconds": 2.0022699999999998,
+        "total_wall_seconds": 2.6772574659989914,
+        "tu_include_expansion_seconds": 0.013161179995222483,
+        "worker_execution_wall_seconds": 2.0042110180002055,
+        "worker_startup_ipc_collection_residual_seconds": 0.0019410180002057409
+      }
+    },
+    {
+      "arm": "size_60",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 60,
+      "analyzed_lines": 2671,
+      "wall_seconds": 5.814715858999989,
+      "ms_per_loc": 2.1769808532384833,
+      "semantic_digest": "ffeee51cb4b19fa020d2fd72843f101f011756c22b01e30819d60c1f9901c86c",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 0.18275411800277652
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 534,
+          "inclusive_wall_seconds": 0.42205338696658146
+        },
+        "build_cfg": {
+          "invocation_count": 730,
+          "inclusive_wall_seconds": 0.5918532749492442
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 779,
+          "inclusive_wall_seconds": 0.19715127715608105
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.045706061988312285
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 4.561319999999999,
+        "file_discovery_seconds": 0.0014147600013529882,
+        "independent_preparation_seconds": 0.022999552005785517,
+        "parser_seconds": 0.565324226001394,
+        "preparation_wall_seconds": 1.2442096499944455,
+        "project_indexing_seconds": 0.029019643996434752,
+        "project_preparation_seconds": 1.2213652529972023,
+        "project_summary_construction_seconds": 0.6252483170028427,
+        "rule_execution_aggregate_seconds": 4.561319999999999,
+        "total_wall_seconds": 5.814715858999989,
+        "tu_include_expansion_seconds": 0.02220935899822507,
+        "worker_execution_wall_seconds": 4.563728367997101,
+        "worker_startup_ipc_collection_residual_seconds": 0.0024083679971012018
+      }
+    },
+    {
+      "arm": "size_120",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 120,
+      "analyzed_lines": 5071,
+      "wall_seconds": 13.448749560993747,
+      "ms_per_loc": 2.65209023091969,
+      "semantic_digest": "1474cd933e4d1d185c508aa019358d48ddff931f3ef3d04287fbd993e41f5911",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 0.38656549000006635
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 534,
+          "inclusive_wall_seconds": 0.7986116439351463
+        },
+        "build_cfg": {
+          "invocation_count": 730,
+          "inclusive_wall_seconds": 2.2681662629693164
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 779,
+          "inclusive_wall_seconds": 1.6658219430537429
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.08296568699734053
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 11.05583,
+        "file_discovery_seconds": 0.002411475004919339,
+        "independent_preparation_seconds": 0.047270731993194204,
+        "parser_seconds": 1.0297372630084283,
+        "preparation_wall_seconds": 2.380723984002543,
+        "project_indexing_seconds": 0.03503372300474439,
+        "project_preparation_seconds": 2.333612623006047,
+        "project_summary_construction_seconds": 1.2670595349991345,
+        "rule_execution_aggregate_seconds": 11.05583,
+        "total_wall_seconds": 13.448749560993747,
+        "tu_include_expansion_seconds": 0.04628124499868136,
+        "worker_execution_wall_seconds": 11.058469221003179,
+        "worker_startup_ipc_collection_residual_seconds": 0.0026392210031787044
+      }
+    },
+    {
+      "arm": "count_10",
+      "modules": 4,
+      "functions_per_module": 10,
+      "statements_per_function": 12,
+      "analyzed_lines": 751,
+      "wall_seconds": 1.1707278179965215,
+      "ms_per_loc": 1.558891901460082,
+      "semantic_digest": "c4683ca983d300d2a3eef6583ca8dc299c80844c61c8f3df0c95c7f8a0dd35b8",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 0.055317123005806934
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 534,
+          "inclusive_wall_seconds": 0.19738907195278443
+        },
+        "build_cfg": {
+          "invocation_count": 730,
+          "inclusive_wall_seconds": 0.25029014897882007
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 779,
+          "inclusive_wall_seconds": 0.04559388497000327
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.014981359003286343
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 0.8389500000000001,
+        "file_discovery_seconds": 0.0015451450017280877,
+        "independent_preparation_seconds": 0.009319265001977328,
+        "parser_seconds": 0.15599719100282528,
+        "preparation_wall_seconds": 0.3247509069988155,
+        "project_indexing_seconds": 0.006790988998545799,
+        "project_preparation_seconds": 0.31558221100567607,
+        "project_summary_construction_seconds": 0.1514519560005283,
+        "rule_execution_aggregate_seconds": 0.8389500000000001,
+        "total_wall_seconds": 1.1707278179965215,
+        "tu_include_expansion_seconds": 0.008647331997053698,
+        "worker_execution_wall_seconds": 0.8404442989995005,
+        "worker_startup_ipc_collection_residual_seconds": 0.0014942989995003764
+      }
+    },
+    {
+      "arm": "count_20",
+      "modules": 4,
+      "functions_per_module": 20,
+      "statements_per_function": 12,
+      "analyzed_lines": 1471,
+      "wall_seconds": 2.3062138879977283,
+      "ms_per_loc": 1.5677864636286392,
+      "semantic_digest": "7eb0db906f34be7d17669d9effcfde23563b3762c21073a4326c6b03ab779d7d",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 0.14556425200862577
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 974,
+          "inclusive_wall_seconds": 0.31575197284837486
+        },
+        "build_cfg": {
+          "invocation_count": 1330,
+          "inclusive_wall_seconds": 0.41867087586433627
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 1419,
+          "inclusive_wall_seconds": 0.0944123387671425
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.02551853498152923
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 1.64467,
+        "file_discovery_seconds": 0.0016540849974262528,
+        "independent_preparation_seconds": 0.014077575004193932,
+        "parser_seconds": 0.2825075890068547,
+        "preparation_wall_seconds": 0.6537133840029128,
+        "project_indexing_seconds": 0.013871723996999208,
+        "project_preparation_seconds": 0.6397950870014029,
+        "project_summary_construction_seconds": 0.3417772899992997,
+        "rule_execution_aggregate_seconds": 1.64467,
+        "total_wall_seconds": 2.3062138879977283,
+        "tu_include_expansion_seconds": 0.013359550001041498,
+        "worker_execution_wall_seconds": 1.646383256003901,
+        "worker_startup_ipc_collection_residual_seconds": 0.0017132560039008204
+      }
+    },
+    {
+      "arm": "count_40",
+      "modules": 4,
+      "functions_per_module": 40,
+      "statements_per_function": 12,
+      "analyzed_lines": 2911,
+      "wall_seconds": 4.83183024799655,
+      "ms_per_loc": 1.6598523696312435,
+      "semantic_digest": "f8ef576df72033d7c92287fa31a71bc4a9cb90e72f817686103c2279e4a0ccc7",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 0.20561686999280937
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 1854,
+          "inclusive_wall_seconds": 0.41985399397526635
+        },
+        "build_cfg": {
+          "invocation_count": 2530,
+          "inclusive_wall_seconds": 0.6391332829298335
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 2699,
+          "inclusive_wall_seconds": 0.19426064397703158
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.047412392996193375
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 3.4989899999999996,
+        "file_discovery_seconds": 0.0015399729963974096,
+        "independent_preparation_seconds": 0.02305850599805126,
+        "parser_seconds": 0.5541478859886411,
+        "preparation_wall_seconds": 1.3252226769982371,
+        "project_indexing_seconds": 0.05270966500393115,
+        "project_preparation_seconds": 1.3023050480042002,
+        "project_summary_construction_seconds": 0.6935677500005113,
+        "rule_execution_aggregate_seconds": 3.4989899999999996,
+        "total_wall_seconds": 4.83183024799655,
+        "tu_include_expansion_seconds": 0.02229474800697062,
+        "worker_execution_wall_seconds": 3.501001254997391,
+        "worker_startup_ipc_collection_residual_seconds": 0.0020112549973911875
+      }
+    },
+    {
+      "arm": "count_80",
+      "modules": 4,
+      "functions_per_module": 80,
+      "statements_per_function": 12,
+      "analyzed_lines": 5791,
+      "wall_seconds": 10.985039320999931,
+      "ms_per_loc": 1.89691578673803,
+      "semantic_digest": "c83f1c767f3742f9362a8cbe9b6a2caacbb49b294ca22cb9694e17f63e167734",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 0.6730534880043706
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 3614,
+          "inclusive_wall_seconds": 0.9270208373345667
+        },
+        "build_cfg": {
+          "invocation_count": 4930,
+          "inclusive_wall_seconds": 1.6396822939932463
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 5259,
+          "inclusive_wall_seconds": 0.6734746489237295
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.08785720400919672
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 7.978530000000001,
+        "file_discovery_seconds": 0.0015328789959312417,
+        "independent_preparation_seconds": 0.04105916299886303,
+        "parser_seconds": 1.083871120994445,
+        "preparation_wall_seconds": 2.998374521994265,
+        "project_indexing_seconds": 0.05388948600011645,
+        "project_preparation_seconds": 2.957484760998341,
+        "project_summary_construction_seconds": 1.8174082349942182,
+        "rule_execution_aggregate_seconds": 7.978530000000001,
+        "total_wall_seconds": 10.985039320999931,
+        "tu_include_expansion_seconds": 0.040247202006867155,
+        "worker_execution_wall_seconds": 7.980864438999561,
+        "worker_startup_ipc_collection_residual_seconds": 0.0023344389995596515
+      }
+    },
+    {
+      "arm": "count_160",
+      "modules": 4,
+      "functions_per_module": 160,
+      "statements_per_function": 12,
+      "analyzed_lines": 11551,
+      "wall_seconds": 30.58029656400322,
+      "ms_per_loc": 2.6474155106919937,
+      "semantic_digest": "909ffeb07a21ca33162bb049b18f99f63ac942e6af49483dd5d2bbf6918ce91f",
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "invocation_count": 4,
+          "inclusive_wall_seconds": 2.2202086960023735
+        },
+        "apply_cfg_event_semantics": {
+          "invocation_count": 7134,
+          "inclusive_wall_seconds": 1.7720201186457416
+        },
+        "build_cfg": {
+          "invocation_count": 9730,
+          "inclusive_wall_seconds": 3.1222166006773477
+        },
+        "clone_structural_cfg": {
+          "invocation_count": 10379,
+          "inclusive_wall_seconds": 1.2623570651558111
+        },
+        "parse_conditional_directives": {
+          "invocation_count": 12,
+          "inclusive_wall_seconds": 0.17227783498674398
+        }
+      },
+      "phases": {
+        "aggregate_file_analysis_seconds": 22.01791,
+        "file_discovery_seconds": 0.0016245799997705035,
+        "independent_preparation_seconds": 0.09733712700108299,
+        "parser_seconds": 2.4255571649991907,
+        "preparation_wall_seconds": 8.552421000997128,
+        "project_indexing_seconds": 0.11127687199768843,
+        "project_preparation_seconds": 8.455235159999575,
+        "project_summary_construction_seconds": 5.915243906994874,
+        "rule_execution_aggregate_seconds": 22.01791,
+        "total_wall_seconds": 30.58029656400322,
+        "tu_include_expansion_seconds": 0.09609744199406123,
+        "worker_execution_wall_seconds": 22.02157966300001,
+        "worker_startup_ipc_collection_residual_seconds": 0.0036696630000108144
+      }
+    }
+  ],
+  "highlights": {
+    "summary_calls_per_4_module_matrix": {
+      "before": 16,
+      "after": 4
+    },
+    "count_160_summary_inclusive_seconds": {
+      "before": 5.847473424997588,
+      "after": 2.2202086960023735
+    },
+    "count_160_clone_inclusive_seconds": {
+      "before": 2.4887306039599935,
+      "after": 1.2623570651558111
+    },
+    "count_160_wall_seconds": {
+      "before": 30.61985514799744,
+      "after": 30.58029656400322
+    },
+    "semantic_digests_match_per_arm": true
+  }
+}

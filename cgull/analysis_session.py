@@ -314,6 +314,7 @@ class AnalysisSession:
                 call_graph=self.call_graph,
                 call_effects=self.semantic_models.call_effects,
                 event_cache=self._event_cache(),
+                function_summaries=self.function_summaries,
             )
         return self._ownership_summary_result
 
