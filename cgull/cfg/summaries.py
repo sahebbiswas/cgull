@@ -455,6 +455,9 @@ def _analyze_one_function(
                     freed_params.add(i)
                     break
 
+        pointer_param_names = {
+            p.name for p in fn.parameters if getattr(p, "name", None) and getattr(p, "is_pointer", False)
+        }
         for i, p_name in enumerate(param_names):
             param_location = f"var_{p_name}"
             for node in cfg.nodes.values():
@@ -462,7 +465,9 @@ def _analyze_one_function(
                 for use_kind, payload, guarded_nonnull in _guarded_expression_uses(
                     getattr(node, "_ast_node", None), summaries=summaries
                 ):
-                    if use_kind == "deref":
+                    if use_kind in {"deref", "arith"}:
+                        if use_kind == "arith" and p_name not in pointer_param_names:
+                            continue
                         deref_var = payload
                         if (
                             param_location in loc_map.get(deref_var, set())

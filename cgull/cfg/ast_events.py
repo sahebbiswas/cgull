@@ -99,6 +99,45 @@ def _unwrap_cast(node):
     return node
 
 
+def _pointer_arith_operand_ids(node) -> List[Any]:
+    """Return ID nodes used as pointer operands in additive arithmetic.
+
+    Covers ``p + off``, ``off + p``, ``p - off``, and ``p - q``. Integer-only
+    forms may appear here; CGULL-004 filters them via nullness / pointer-param
+    reporting so they do not become findings.
+    """
+    if node is None or type(node).__name__ != "BinaryOp":
+        return []
+    op = getattr(node, "op", None)
+    if op not in {"+", "-"}:
+        return []
+    left = _unwrap_cast(node.left)
+    right = _unwrap_cast(node.right)
+    ids: List[Any] = []
+    if op == "+":
+        for side in (left, right):
+            if side is not None and type(side).__name__ == "ID":
+                ids.append(side)
+        return ids
+    # Pointer subtraction / pointer-minus-integer: left is the pointer minuend;
+    # a right-hand ID may be another pointer (ptr - ptr) or an integer offset.
+    if left is not None and type(left).__name__ == "ID":
+        ids.append(left)
+    if right is not None and type(right).__name__ == "ID":
+        ids.append(right)
+    return ids
+
+
+def _node_use_line(node, default_line: Optional[int], line_map: Optional[Dict[int, Any]]) -> int:
+    coord = getattr(node, "coord", None)
+    if coord is not None:
+        exp_line = max(1, coord.line - _PRELUDE_LINE_COUNT)
+        return _map_line(exp_line, line_map)
+    if default_line is not None:
+        return default_line
+    return 1
+
+
 def _deref_vars_with_lines(
     node,
     default_line: Optional[int] = None,
@@ -108,6 +147,10 @@ def _deref_vars_with_lines(
     if node is None:
         return result
     kind = type(node).__name__
+    # Additive pointer arithmetic is intentionally NOT recorded in ``derefs``.
+    # Legacy CFG dataflow treats every deref as establishing NON_NULL on exit;
+    # ``p + off`` must not prove ``p`` non-null for later statements. Arithmetic
+    # uses are reported via ``_guarded_expression_uses`` ("arith") instead.
     matched_var = None
     if kind == "UnaryOp" and getattr(node, "op", None) == "*":
         inner = _unwrap_cast(node.expr)
@@ -123,14 +166,7 @@ def _deref_vars_with_lines(
             matched_var = str(inner.name)
 
     if matched_var:
-        coord = getattr(node, "coord", None)
-        if coord is not None:
-            exp_line = max(1, coord.line - _PRELUDE_LINE_COUNT)
-            line = _map_line(exp_line, line_map)
-        elif default_line is not None:
-            line = default_line
-        else:
-            line = 1
+        line = _node_use_line(node, default_line, line_map)
         result[matched_var] = line
 
     for _, child in node.children():
@@ -331,6 +367,10 @@ def _guarded_expression_uses(
     deref_var = _direct_deref_var(node)
     if deref_var:
         yield "deref", deref_var, known
+    for id_node in _pointer_arith_operand_ids(node):
+        # Additive pointer uses are null-unsafe like * / -> / []; yield a
+        # distinct kind so CGULL-004 can word findings accurately.
+        yield "arith", str(id_node.name), known
     for _, child in node.children():
         yield from _guarded_expression_uses(child, known, summaries)
 
@@ -554,7 +594,7 @@ def _event_payload(
     for use_kind, payload, guarded in (
         _guarded_expression_uses(ast_node, summaries=summaries) if summaries else ()
     ):
-        if use_kind == "deref":
+        if use_kind in {"deref", "arith"}:
             continue
         summary = (summaries or {}).get(_format_pycparser_expr(payload.name))
         if summary is None:

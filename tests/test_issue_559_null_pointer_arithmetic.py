@@ -1,0 +1,232 @@
+"""CGULL-004 must flag additive pointer arithmetic on maybe-NULL pointers (#559)."""
+
+import pytest
+
+from cgull.engine import CGullScanner
+from cgull.models import AnalysisEngine
+from cgull.rules import get_rule_by_id
+
+
+def scan(code):
+    scanner = CGullScanner(
+        rules=[get_rule_by_id("CGULL-004")],
+        engine_mode=AnalysisEngine.AST,
+    )
+    return scanner.scan_text(code, "issue_559.c").issues
+
+
+def test_param_plus_offset_reports():
+    code = """
+    const char *f(const char *p, int off) {
+        return p + off;
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 1
+    assert "pointer arithmetic" in issues[0].message
+    assert "p" in issues[0].message
+
+
+def test_offset_plus_param_reports():
+    code = """
+    const char *f(const char *p, int off) {
+        return off + p;
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 1
+    assert "pointer arithmetic" in issues[0].message
+
+
+def test_array_index_still_reports():
+    code = """
+    char f(char *p, int off) {
+        return p[off];
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 1
+    assert "dereferenced" in issues[0].message
+
+
+def test_known_null_local_plus_offset_reports():
+    code = """
+    const char *f(int off) {
+        char *p = 0;
+        return p + off;
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 1
+    assert "known to be NULL" in issues[0].message
+    assert "pointer arithmetic" in issues[0].message
+
+
+def test_star_plus_index_reports():
+    code = """
+    int f(int *p, int i) {
+        return *(p + i);
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 1
+    assert "p" in issues[0].message
+
+
+def test_guarded_pointer_plus_is_silent():
+    code = """
+    const char *f(const char *p, int off) {
+        if (p) return p + off;
+        return 0;
+    }
+    """
+    assert scan(code) == []
+
+
+def test_early_return_guard_before_arith_is_silent():
+    code = """
+    const char *f(const char *p, int off) {
+        if (p == 0) return 0;
+        return p + off;
+    }
+    """
+    assert scan(code) == []
+
+
+def test_integer_addition_is_silent():
+    code = """
+    int f(int a, int b) {
+        return a + b;
+    }
+    """
+    assert scan(code) == []
+
+
+def test_short_circuit_guards_arith_in_condition():
+    code = """
+    int f(const char *p, int n, const char *end) {
+        if (p == 0 || p + n > end) {
+            return 0;
+        }
+        return 1;
+    }
+    """
+    assert scan(code) == []
+
+
+def test_integer_zero_addition_is_not_pointer_arithmetic():
+    """Sourcery: int a = 0; return a + b must not fire CGULL-004."""
+    code = """
+    int f(int b) {
+        int a = 0;
+        return a + b;
+    }
+    """
+    assert scan(code) == []
+
+
+def test_pointer_minus_integer_on_maybe_null_reports():
+    code = """
+    const char *f(const char *p, int off) {
+        return p - off;
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 1
+    assert "pointer arithmetic" in issues[0].message.lower() or "arithmetic" in issues[0].message.lower()
+
+
+def test_arith_does_not_prove_nonnull_for_later_deref():
+    """Additive use must not mark the pointer NON_NULL for later *p (#559 Sourcery)."""
+    code = """
+    int f(int off) {
+        char *p = 0;
+        (void)(p + off);
+        return *p;
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 2
+    messages = " | ".join(i.message for i in issues)
+    assert "arithmetic" in messages.lower()
+    assert "dereferenced" in messages.lower() or "dereference" in messages.lower()
+
+
+def test_postfix_increment_is_not_reported_as_additive_arith():
+    code = """
+    char *f(char *p) {
+        p++;
+        return p;
+    }
+    """
+    # May still report missing check on later use depending on modeling, but
+    # must not classify the increment line as additive arithmetic.
+    issues = [i for i in scan(code) if "arithmetic" in i.message.lower()]
+    assert issues == []
+
+
+def scan_lexical(code):
+    """Force CGULL-004's parser-unavailable lexical fallback."""
+    from cgull.ast_analyzer import CASTParser
+
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    ctx.has_pycparser = False
+    ctx.pycparser_ast = None
+    return get_rule_by_id("CGULL-004").scan_ast("issue_559_lex.c", ctx)
+
+
+def test_lexical_same_line_truthy_guard_suppresses_only_inside_then():
+    """Sourcery: if (p) return p+off silent; if (p) foo(); return p+off reports."""
+    guarded = """
+    const char *f(const char *p, int off) {
+        if (p) return p + off;
+        return 0;
+    }
+    """
+    assert scan_lexical(guarded) == []
+
+    multi = """
+    const char *f(const char *p, int off) {
+        if (p) foo(); return p + off;
+    }
+    """
+    issues = scan_lexical(multi)
+    assert len(issues) == 1
+    assert "pointer arithmetic" in issues[0].message
+
+
+def test_lexical_known_null_declarator_plus_offset_reports():
+    """Sourcery: char *p = 0; return p + off must fire on lexical path."""
+    code = """
+    const char *f(int off) {
+        char *p = 0;
+        return p + off;
+    }
+    """
+    issues = scan_lexical(code)
+    assert len(issues) == 1
+    assert "known to be NULL" in issues[0].message
+    assert "pointer arithmetic" in issues[0].message
+
+
+def test_lexical_integer_zero_addition_is_silent():
+    code = """
+    int f(int b) {
+        int a = 0;
+        return a + b;
+    }
+    """
+    assert scan_lexical(code) == []
+
+
+def test_lexical_postfix_inc_dec_not_additive_arith():
+    for stmt in ("p++;", "p--;", "++p;", "--p;"):
+        code = f"""
+        char *f(char *p) {{
+            {stmt}
+            return p;
+        }}
+        """
+        issues = [i for i in scan_lexical(code) if "arithmetic" in i.message.lower()]
+        assert issues == [], stmt

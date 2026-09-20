@@ -99,3 +99,20 @@ char test_fp_cannot_access_macro_then_use(CJSON551 *buffer, unsigned index) {
     }
     return buffer->content[buffer->offset + index];
 }
+
+/* True Negative (#559): dominating NULL guard before pointer arithmetic */
+const char *test_tn_guarded_pointer_plus_offset(const char *p, int off) {
+    if (p) return p + off;
+    return 0;
+}
+
+/* True Negative (#559): early return guard before offset + pointer */
+const char *test_tn_guarded_offset_plus_pointer(const char *p, int off) {
+    if (p == 0) return 0;
+    return off + p;
+}
+
+/* False-Positive Regression (#559): integer addition must stay silent */
+int test_fp_integer_addition(int a, int b) {
+    return a + b;
+}
