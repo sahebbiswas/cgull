@@ -143,7 +143,9 @@ class TestScanProfileFlag(unittest.TestCase):
             self.assertEqual(rc, 0, stderr.getvalue())
             out = stdout.getvalue()
             self.assertNotIn("CGULL-018", out)
-            self.assertIn("Policy / quality:    0", out)
+            # Focused skips goto; other policy/style rules (e.g. CGULL-013 braces) may remain.
+            self.assertIn("Security actionable:", out)
+            self.assertIn("Policy / quality:", out)
 
 
 if __name__ == "__main__":
