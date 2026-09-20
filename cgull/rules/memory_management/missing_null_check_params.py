@@ -154,7 +154,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                 for i, line in enumerate(body_lines):
                     line_no = body_start + i
                     arith_match = re.search(
-                        rf'(?:{re.escape(p_name)}\s*\+|\+\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*-(?!>))',
+                        rf'(?:{re.escape(p_name)}\s*\+(?!\+)|\+(?!\+)\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*-(?![->]))',
                         line,
                     )
                     deref_match = re.search(
@@ -203,23 +203,43 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     sub_line_no = body_start + j
                     if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
-                    # Lexical local-null path: only classical derefs. Additive
-                    # forms need pointer typing that this fallback lacks, so
-                    # `int a = 0; return a + b;` must stay silent here.
+                    looks_like_pointer = any(
+                        re.search(
+                            rf'(?:\*|\bchar\b|\bvoid\b).*\b{re.escape(v_name)}\b|\b{re.escape(v_name)}\s*=\s*\([^)]*\*[^)]*\)',
+                            prev,
+                        )
+                        for prev in body_lines[: j + 1]
+                    )
+                    arith_match = (
+                        re.search(
+                            rf'(?:{re.escape(v_name)}\s*\+(?!\+)|\+(?!\+)\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?![->]))',
+                            sub_line,
+                        )
+                        if looks_like_pointer
+                        else None
+                    )
                     deref_match = re.search(
                         rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[)',
                         sub_line,
                     )
-                    if deref_match:
+                    use_match = deref_match or arith_match
+                    if use_match:
+                        if deref_match is None and arith_match is not None:
+                            message = (
+                                f"Null pointer arithmetic: pointer '{v_name}' "
+                                f"is known to be NULL when used in additive pointer arithmetic."
+                            )
+                        else:
+                            message = (
+                                f"Null pointer dereference: pointer '{v_name}' "
+                                f"is known to be NULL when dereferenced."
+                            )
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=sub_line_no,
                             code_snippet=sub_line,
-                            message=(
-                                f"Null pointer dereference: pointer '{v_name}' "
-                                f"is known to be NULL when dereferenced."
-                            ),
-                            column_number=deref_match.start() + 1,
+                            message=message,
+                            column_number=use_match.start() + 1,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"if ({v_name} == NULL) return -1;"
@@ -241,23 +261,43 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     sub_line_no = body_start + j
                     if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
-                    # Lexical local-null path: only classical derefs. Additive
-                    # forms need pointer typing that this fallback lacks, so
-                    # `int a = 0; return a + b;` must stay silent here.
+                    looks_like_pointer = any(
+                        re.search(
+                            rf'(?:\*|\bchar\b|\bvoid\b).*\b{re.escape(v_name)}\b|\b{re.escape(v_name)}\s*=\s*\([^)]*\*[^)]*\)',
+                            prev,
+                        )
+                        for prev in body_lines[: j + 1]
+                    )
+                    arith_match = (
+                        re.search(
+                            rf'(?:{re.escape(v_name)}\s*\+(?!\+)|\+(?!\+)\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?![->]))',
+                            sub_line,
+                        )
+                        if looks_like_pointer
+                        else None
+                    )
                     deref_match = re.search(
                         rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[)',
                         sub_line,
                     )
-                    if deref_match:
+                    use_match = deref_match or arith_match
+                    if use_match:
+                        if deref_match is None and arith_match is not None:
+                            message = (
+                                f"Null pointer arithmetic: pointer '{v_name}' "
+                                f"is known to be NULL when used in additive pointer arithmetic."
+                            )
+                        else:
+                            message = (
+                                f"Null pointer dereference: pointer '{v_name}' "
+                                f"is known to be NULL when dereferenced."
+                            )
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=sub_line_no,
                             code_snippet=sub_line,
-                            message=(
-                                f"Null pointer dereference: pointer '{v_name}' "
-                                f"is known to be NULL when dereferenced."
-                            ),
-                            column_number=deref_match.start() + 1,
+                            message=message,
+                            column_number=use_match.start() + 1,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"if ({v_name} == NULL) return -1;"

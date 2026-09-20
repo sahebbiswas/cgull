@@ -150,3 +150,16 @@ def test_arith_does_not_prove_nonnull_for_later_deref():
     messages = " | ".join(i.message for i in issues)
     assert "arithmetic" in messages.lower()
     assert "dereferenced" in messages.lower() or "dereference" in messages.lower()
+
+
+def test_postfix_increment_is_not_reported_as_additive_arith():
+    code = """
+    char *f(char *p) {
+        p++;
+        return p;
+    }
+    """
+    # May still report missing check on later use depending on modeling, but
+    # must not classify the increment line as additive arithmetic.
+    issues = [i for i in scan(code) if "arithmetic" in i.message.lower()]
+    assert issues == []
