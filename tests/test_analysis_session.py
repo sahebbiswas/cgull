@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
+from cgull.cfg.model import FunctionSummary
 from cgull import CGullScanner
 from cgull.analysis_session import AnalysisSession, analysis_session_for
 from cgull.models import AnalysisEngine
@@ -85,7 +86,7 @@ def test_expensive_domains_are_lazy_and_cached():
     ctx = Context()
     session = AnalysisSession(ctx)
     summary_result = SimpleNamespace(
-        summaries={"f": "summary"},
+        summaries={"f": FunctionSummary()},
         diagnostics=(),
         iterations_by_scc={},
     )
@@ -99,8 +100,8 @@ def test_expensive_domains_are_lazy_and_cached():
 
         assert session.call_graph == "graph"
         assert session.call_graph == "graph"
-        assert session.function_summaries == {"f": "summary"}
-        assert session.function_summaries == {"f": "summary"}
+        assert session.function_summaries == {"f": FunctionSummary()}
+        assert session.function_summaries == {"f": FunctionSummary()}
         assert session.summary_diagnostics == ()
 
         assert graph_builder.call_count == 1

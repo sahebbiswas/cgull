@@ -111,7 +111,7 @@ class AnalysisSession:
         self._cfg_construction_count = 0
         self._cfg_construction_seconds = 0.0
         self._call_graph = None
-        self._function_summary_result = None
+        self._function_summary_results = {}
         self._ownership_summary_result = None
         self._ownership_effects_cache: Dict[str, object] = {}
         self._value_analysis_result = None
@@ -260,22 +260,50 @@ class AnalysisSession:
                 realloc.add(function)
         return alloc, dealloc, realloc
 
-    def _ensure_function_summaries(self):
-        if self._function_summary_result is None:
-            from .cfg.summaries import analyze_function_summaries_detailed
+    def function_summary_result(
+        self, alloc_funcs=None, dealloc_funcs=None, realloc_funcs=None, *,
+        call_effects=None, fixed_point_config=None,
+    ):
+        """Return an isolated result for the requested effective summary inputs.
 
-            alloc_funcs, dealloc_funcs, realloc_funcs = self._memory_effect_sets()
-            self._summary_construction_count += 1
-            self._function_summary_result = analyze_function_summaries_detailed(
-                self.ast_context,
-                alloc_funcs=alloc_funcs,
-                dealloc_funcs=dealloc_funcs,
-                realloc_funcs=realloc_funcs,
-                call_graph=self.call_graph,
-                call_effects=self.semantic_models.call_effects,
-                event_cache=self._event_cache(),
+        Omitted inputs retain the standalone engine's built-in semantics. The
+        default property separately supplies this session's declarative models.
+        AST/profile identity is implicit in session ownership; imported facts
+        and mutable registry contents are snapshotted into each lookup key.
+        """
+        from .cfg.summaries import (
+            analyze_function_summaries_detailed, copy_function_summary_result,
+            function_summary_input_key,
+        )
+
+        with self._cfg_lock:
+            key = function_summary_input_key(
+                self.ast_context, alloc_funcs, dealloc_funcs, realloc_funcs,
+                call_effects=call_effects, fixed_point_config=fixed_point_config,
             )
-        return self._function_summary_result
+            if key not in self._function_summary_results:
+                result = analyze_function_summaries_detailed(
+                    self.ast_context,
+                    alloc_funcs=alloc_funcs,
+                    dealloc_funcs=dealloc_funcs,
+                    realloc_funcs=realloc_funcs,
+                    call_graph=self.call_graph,
+                    call_effects=call_effects,
+                    fixed_point_config=fixed_point_config,
+                    event_cache=self._event_cache(),
+                )
+                self._function_summary_results[key] = copy_function_summary_result(result)
+                self._summary_construction_count += 1
+            # FunctionSummary contains mutable sets, so a shallow mapping copy
+            # would allow a rule to corrupt subsequent consumers' facts.
+            return copy_function_summary_result(self._function_summary_results[key])
+
+    def _ensure_function_summaries(self):
+        alloc_funcs, dealloc_funcs, realloc_funcs = self._memory_effect_sets()
+        return self.function_summary_result(
+            alloc_funcs, dealloc_funcs, realloc_funcs,
+            call_effects=self.semantic_models.call_effects,
+        )
 
     def _ensure_ownership_summaries(self):
         if self._ownership_summary_result is None:
