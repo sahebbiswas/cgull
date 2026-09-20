@@ -66,10 +66,17 @@ def _freed_vars(node, dealloc_funcs: Optional[Set[str]] = None) -> Set[str]:
     freed: Set[str] = set()
     if node is None:
         return freed
-    funcs = set(dealloc_funcs) if dealloc_funcs is not None else {"free", "cfree", "vfree"}
+    if dealloc_funcs is None:
+        funcs: Set[str] = {"free", "cfree", "vfree"}
+    elif isinstance(dealloc_funcs, (set, frozenset)):
+        funcs = dealloc_funcs  # type: ignore[assignment]
+    else:
+        funcs = set(dealloc_funcs)
     stack = [node]
     while stack:
         current = stack.pop()
+        if current is None:
+            continue
         if type(current).__name__ == "FuncCall":
             callee = _format_pycparser_expr(current.name)
             if callee in funcs:
@@ -78,7 +85,8 @@ def _freed_vars(node, dealloc_funcs: Optional[Set[str]] = None) -> Set[str]:
                     if arg_unwrapped is not None and type(arg_unwrapped).__name__ == "ID":
                         freed.add(str(arg_unwrapped.name))
         for _, child in current.children():
-            stack.append(child)
+            if child is not None:
+                stack.append(child)
     return freed
 
 
