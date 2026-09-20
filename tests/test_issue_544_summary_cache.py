@@ -134,3 +134,32 @@ def test_default_property_tracks_late_session_model_installation():
     assert analysis_session_for(ctx, semantic_models=registry) is session
     assert session.function_summaries['make'].returns_allocation
     assert session.summary_construction_count == 2
+
+
+def test_empty_registry_is_not_collapsed_to_builtins():
+    """Omitted vs empty registries must remain distinct even though both are truthy."""
+    ctx = context()
+    empty = CallEffectRegistry({})
+    detailed = analyze_function_summaries_detailed(ctx, call_effects=empty)
+    cached = analyze_function_summaries(ctx, call_effects=empty)
+    with_builtins = analyze_function_summaries_detailed(ctx, call_effects=None)
+    assert cached == detailed.summaries
+    # Empty registries still receive hard-coded alloc/dealloc defaults, but must
+    # not inherit BUILTIN_CALL_EFFECTS extras such as fopen/bzero.
+    assert 'malloc' in detailed.summaries and 'malloc' in with_builtins.summaries
+    builtin_only = set(with_builtins.summaries) - set(detailed.summaries)
+    assert builtin_only, 'empty registry must omit BUILTIN-only effects'
+    assert 'fopen' in builtin_only or 'bzero' in builtin_only
+
+
+def test_explicit_event_cache_is_forwarded_not_discarded():
+    from cgull.cfg.event_cache import EventFactsCache
+
+    ctx = context()
+    cache = EventFactsCache(getattr(ctx, 'line_map', None))
+    with patch('cgull.cfg.summaries.analyze_function_summaries_detailed',
+               wraps=analyze_function_summaries_detailed) as engine:
+        result = analyze_function_summaries(ctx, event_cache=cache)
+    assert result
+    assert engine.call_count == 1
+    assert engine.call_args.kwargs.get('event_cache') is cache
