@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- CGULL-049: restore ISO unsigned/`size_t` semantics for fake_libc `typedef int size_t` only when that typedef is the *source* of a conversion into a signed destination, so accumulate-then-cast-to-int patterns such as `cJSON_GetArraySize` report CWE-196 without treating signed→`size_t` (Juliet CWE-195) as conversions; still suppress when a dominating `size <= INT_MAX` (or equivalent) guard proves the value fits (#558).
 - CGULL-042: join-aware fallback liveness for mutually exclusive if/else (and else-if) arms so sibling-arm stores read after the join are not reported as dead, while same-arm overwrites and post-join kills remain findings (#554).
 - Honor sizeof-bounded loops, can_access_at_index-style cursor guards, and ensure()/realloc-sized buffer returns in CGULL-007 so cJSON-class false positives drop while genuine OOB and needs-context cases like parse_hex4 remain (#553).
 - Honor short-circuit OR/AND and negated null checks, callee Is*-style truthy-implies-nonnull predicates, and cannot_access-style macros in CGULL-004 so cJSON-class false positives drop while unchecked public setters still report (#551).
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `_freed_vars` to skip `None` AST children and avoid copying set-typed deallocator configs on every call (follow-up to #547).
 - CGULL-011: do not treat `MACRO(type) declarator` export wrappers (e.g. `CJSON_PUBLIC(int) foo(...)`) as illegal function-pointer casts in fallback/regex analysis; AST suppression only applies when the macro match overlaps the cast's source span (#552).
 - CGULL-034: do not flag NaN materialization (`NAN`, `0.0/0.0`, float zeros with exponents such as `0.0e1/0.0e1`, and casted forms such as `(double)0.0/0.0`) as runtime division-by-zero (#556).
+- CGULL-023: require a proven use on a path where a local is not definitely assigned (member/element stores, memset/sprintf destinations, and static zero-init), instead of flagging declaration-without-initializer (#555).
 - Group repeated CGULL-007 accesses with the same conservative CFG bounds obligation, retain related source locations in all reports, and preserve them through TU mapping and deduplication (#533).
 - Model nullable non-allocation returns and non-NULL argument requirements, and report unchecked nullable locals through CGULL-004 (#538).
 - Add CGULL-056 for possible reverse reads/writes below an explicitly derived logical base, including loop conditions, postfix and separated updates, and ordered lower-bound guards (#537).
