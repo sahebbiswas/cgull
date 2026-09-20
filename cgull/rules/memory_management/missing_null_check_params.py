@@ -25,8 +25,93 @@ from .helpers import (
     _find_memory_leak_exits,
 )
 
+
 logger = logging.getLogger(__name__)
+
+
+def _lexical_additive_arith_match(var_name: str, text: str) -> Optional[re.Match]:
+    """Match additive pointer arithmetic; exclude ++/-- and require an operand.
+
+    Covers ``p + off``, ``off + p``, and ``p - off``. Postfix/prefix
+    ``++``/``--`` and arrow ``p->`` must not match.
+    """
+    n = re.escape(var_name)
+    # Operand after +/- : identifier, number, cast/paren, deref, or address-of.
+    operand = r'(?:[0-9A-Za-z_(*&])'
+    return re.search(
+        rf'(?:'
+        rf'{n}\s*\+(?!\+)\s*{operand}'
+        rf'|(?:[0-9A-Za-z_)]\s*\+\s*{n}\b)'
+        rf'|{n}\s*-(?![->])\s*{operand}'
+        rf')',
+        text,
+    )
+
+
+def _use_inside_same_line_truthy_guard(line: str, var_name: str, use_start: int) -> bool:
+    """True when *use_start* lies inside ``if (var) <then>`` on *line*.
+
+    ``if (p) return p + off;`` suppresses; ``if (p) foo(); return p + off;``
+    does not, because the arithmetic sits after the guarded statement.
+    """
+    for guard in re.finditer(rf'\bif\s*\(\s*{re.escape(var_name)}\s*\)', line):
+        after = guard.end()
+        if use_start < after:
+            continue
+        k = after
+        while k < len(line) and line[k] in ' \t':
+            k += 1
+        if k < len(line) and line[k] == '{':
+            depth = 0
+            end = len(line)
+            for idx in range(k, len(line)):
+                ch = line[idx]
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = idx
+                        break
+            if k <= use_start < end:
+                return True
+            continue
+        semi = line.find(';', k)
+        end = semi if semi >= 0 else len(line)
+        if k <= use_start <= end:
+            return True
+    return False
+
+
+def _lexical_null_pointer_assign_name(
+    line: str,
+    line_no: int,
+    pointer_names: Set[str],
+    fn,
+) -> Optional[str]:
+    """Name assigned NULL/0 on *line*, including ``char *p = 0;`` declarators."""
+    m = re.search(
+        r'(?<![\*->\.\w])\b([a-zA-Z_]\w*)\s*=\s*(?:\([^)]+\)\s*)?(?:NULL|nullptr|0|0x0)\b',
+        line,
+    )
+    if m:
+        return m.group(1)
+    # ``char *p = 0;`` — classical assign regex rejects ``*p`` via lookbehind;
+    # only accept on the pointer variable's declaration line (not ``*p = 0`` stores).
+    for pname in pointer_names:
+        var = fn.variables.get(pname) if hasattr(fn, 'variables') else None
+        if var is None or getattr(var, 'declaration_line', None) != line_no:
+            continue
+        if re.search(
+            rf'\*\s*{re.escape(pname)}\s*=\s*(?:\([^)]+\)\s*)?(?:NULL|nullptr|0|0x0)\b',
+            line,
+        ):
+            return pname
+    return None
+
+
 class MissingNullCheckOnFunctionParametersRule(BaseRule):
+
     rule_id = "CGULL-004"
     name = "Missing Null Check on Function Parameters"
     impact = Severity.HIGH
@@ -139,6 +224,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
             body_lines = fn.body.splitlines()
             body_start = getattr(fn, "body_start_line", fn.start_line + 1)
             depths = _brace_depths(body_lines)
+            pointer_names = _pointer_var_names(fn)
 
             # 1. Parameter missing check fallback
             for param in ptr_params:
@@ -153,17 +239,20 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     continue
                 for i, line in enumerate(body_lines):
                     line_no = body_start + i
-                    arith_match = re.search(
-                        rf'(?:{re.escape(p_name)}\s*\+(?!\+)|\+(?!\+)\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*-(?![->]))',
-                        line,
-                    )
+                    arith_match = _lexical_additive_arith_match(p_name, line)
                     deref_match = re.search(
                         rf'(?:\*\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*->|{re.escape(p_name)}\s*\[)',
                         line,
                     )
-                    # Expression-local truthy guard on the same line, e.g.
-                    # `if (p) return p + off;` — avoid lexical FNs without
-                    # claiming a function-wide check from a non-dominating if.
+                    # Expression-local truthy guard: suppress only when the use
+                    # is inside the guarded then-statement, not merely on the
+                    # same line (``if (p) foo(); return p + off;`` must report).
+                    if (
+                        arith_match is not None
+                        and deref_match is None
+                        and _use_inside_same_line_truthy_guard(line, p_name, arith_match.start())
+                    ):
+                        continue
                     use_match = deref_match or arith_match
                     if use_match:
                         if deref_match is None and arith_match is not None:
@@ -188,13 +277,14 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                         ))
                         break
 
-            # 2. Local NULL assignment dereference fallback
-            null_assign_regex = re.compile(r'(?<![\*->\.\w])\b([a-zA-Z_]\w*)\s*=\s*(?:\([^)]+\)\s*)?(?:NULL|nullptr|0|0x0)\b')
+            # 2. Local NULL assignment / declarator-init fallback
             for i, line in enumerate(body_lines):
-                m = null_assign_regex.search(line)
-                if not m:
+                line_no = body_start + i
+                v_name = _lexical_null_pointer_assign_name(
+                    line, line_no, pointer_names, fn
+                )
+                if not v_name:
                     continue
-                v_name = m.group(1)
                 base_depth = depths[i]
                 for j in range(i + 1, len(body_lines)):
                     if depths[j] < base_depth:
@@ -203,7 +293,8 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     sub_line_no = body_start + j
                     if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
-                    looks_like_pointer = any(
+                    # Prefer typed locals; keep a light declaration heuristic as backup.
+                    looks_like_pointer = v_name in pointer_names or any(
                         re.search(
                             rf'(?:\*|\bchar\b|\bvoid\b).*\b{re.escape(v_name)}\b|\b{re.escape(v_name)}\s*=\s*\([^)]*\*[^)]*\)',
                             prev,
@@ -211,10 +302,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                         for prev in body_lines[: j + 1]
                     )
                     arith_match = (
-                        re.search(
-                            rf'(?:{re.escape(v_name)}\s*\+(?!\+)|\+(?!\+)\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?![->]))',
-                            sub_line,
-                        )
+                        _lexical_additive_arith_match(v_name, sub_line)
                         if looks_like_pointer
                         else None
                     )
@@ -261,7 +349,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     sub_line_no = body_start + j
                     if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
-                    looks_like_pointer = any(
+                    looks_like_pointer = v_name in pointer_names or any(
                         re.search(
                             rf'(?:\*|\bchar\b|\bvoid\b).*\b{re.escape(v_name)}\b|\b{re.escape(v_name)}\s*=\s*\([^)]*\*[^)]*\)',
                             prev,
@@ -269,10 +357,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                         for prev in body_lines[: j + 1]
                     )
                     arith_match = (
-                        re.search(
-                            rf'(?:{re.escape(v_name)}\s*\+(?!\+)|\+(?!\+)\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?![->]))',
-                            sub_line,
-                        )
+                        _lexical_additive_arith_match(v_name, sub_line)
                         if looks_like_pointer
                         else None
                     )

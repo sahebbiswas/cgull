@@ -163,3 +163,70 @@ def test_postfix_increment_is_not_reported_as_additive_arith():
     # must not classify the increment line as additive arithmetic.
     issues = [i for i in scan(code) if "arithmetic" in i.message.lower()]
     assert issues == []
+
+
+def scan_lexical(code):
+    """Force CGULL-004's parser-unavailable lexical fallback."""
+    from cgull.ast_analyzer import CASTParser
+
+    parser = CASTParser()
+    ctx = parser.parse(code)
+    ctx.has_pycparser = False
+    ctx.pycparser_ast = None
+    return get_rule_by_id("CGULL-004").scan_ast("issue_559_lex.c", ctx)
+
+
+def test_lexical_same_line_truthy_guard_suppresses_only_inside_then():
+    """Sourcery: if (p) return p+off silent; if (p) foo(); return p+off reports."""
+    guarded = """
+    const char *f(const char *p, int off) {
+        if (p) return p + off;
+        return 0;
+    }
+    """
+    assert scan_lexical(guarded) == []
+
+    multi = """
+    const char *f(const char *p, int off) {
+        if (p) foo(); return p + off;
+    }
+    """
+    issues = scan_lexical(multi)
+    assert len(issues) == 1
+    assert "pointer arithmetic" in issues[0].message
+
+
+def test_lexical_known_null_declarator_plus_offset_reports():
+    """Sourcery: char *p = 0; return p + off must fire on lexical path."""
+    code = """
+    const char *f(int off) {
+        char *p = 0;
+        return p + off;
+    }
+    """
+    issues = scan_lexical(code)
+    assert len(issues) == 1
+    assert "known to be NULL" in issues[0].message
+    assert "pointer arithmetic" in issues[0].message
+
+
+def test_lexical_integer_zero_addition_is_silent():
+    code = """
+    int f(int b) {
+        int a = 0;
+        return a + b;
+    }
+    """
+    assert scan_lexical(code) == []
+
+
+def test_lexical_postfix_inc_dec_not_additive_arith():
+    for stmt in ("p++;", "p--;", "++p;", "--p;"):
+        code = f"""
+        char *f(char *p) {{
+            {stmt}
+            return p;
+        }}
+        """
+        issues = [i for i in scan_lexical(code) if "arithmetic" in i.message.lower()]
+        assert issues == [], stmt
