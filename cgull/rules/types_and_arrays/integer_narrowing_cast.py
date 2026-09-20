@@ -396,6 +396,25 @@ class IntegerNarrowingCastRule(BaseRule):
                         range_expression=operation,
                     )
 
+                def visit_Return(self, node):
+                    if node.expr is None:
+                        return
+                    # Let explicit casts inside the returned expression own the
+                    # diagnostic (e.g. ``return (int)size``) before considering
+                    # an implicit return conversion.
+                    self.generic_visit(node)
+                    if self._contains_reported_cast(node.expr):
+                        return
+                    destination = getattr(fn, "return_type", None)
+                    if not destination:
+                        return
+                    self._append_conversion(
+                        node.expr,
+                        destination,
+                        node,
+                        "Implicit return conversion",
+                    )
+
                 def visit_FuncCall(self, node):
                     if isinstance(node.name, c_ast.ID) and node.args is not None:
                         signature = signature_index.resolve(node)

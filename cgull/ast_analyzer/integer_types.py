@@ -14,6 +14,28 @@ _INTEGER_TYPE_RE = re.compile(
 )
 
 
+# ISO C / POSIX integer typedefs that pycparser's fake_libc commonly maps to
+# ``typedef int NAME``. That placeholder erases required unsignedness (size_t,
+# uintptr_t, uintN_t) and collapses pointer-sized widths to 32-bit, which hides
+# size_t→int truncation / CWE-196 conversions such as cJSON_GetArraySize.
+_CANONICAL_STDLIB_INTEGER_TYPEDEFS = {
+    "size_t": "unsigned long",
+    "uintptr_t": "unsigned long",
+    "uintmax_t": "unsigned long long",
+    "uint8_t": "unsigned char",
+    "uint16_t": "unsigned short",
+    "uint32_t": "unsigned int",
+    "uint64_t": "unsigned long",
+    "ssize_t": "long",
+    "intptr_t": "long",
+    "ptrdiff_t": "long",
+    "int8_t": "signed char",
+    "int16_t": "short",
+    "int32_t": "int",
+    "int64_t": "long",
+}
+
+
 def _resolved_scalar_type(type_str: str, ast_ctx: Optional[CASTContext] = None) -> Optional[str]:
     if not type_str:
         return None
@@ -27,6 +49,15 @@ def _resolved_scalar_type(type_str: str, ast_ctx: Optional[CASTContext] = None) 
             if shape.is_pointer or shape.is_array:
                 return None
             type_name = shape.target
+            canonical = _CANONICAL_STDLIB_INTEGER_TYPEDEFS.get(clean_name.lower())
+            if canonical is not None:
+                target_norm = re.sub(r"\b(?:const|volatile)\b", "", type_name).strip()
+                target_norm = re.sub(r"\s+", " ", target_norm).lower()
+                # fake_libc uses plain ``int`` for nearly every typedef. Prefer
+                # canonical ISO semantics in that case; trust real platform
+                # typedefs that already carry the expected signedness.
+                if target_norm in {"int", "signed", "signed int"}:
+                    type_name = canonical
     type_name = re.sub(r"\b(?:const|volatile)\b", "", type_name).strip()
     return re.sub(r"\s+", " ", type_name)
 

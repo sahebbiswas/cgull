@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- CGULL-049: preserve ISO unsigned/`size_t` semantics when pycparser fake_libc maps `size_t` (and related stdint typedefs) to `typedef int …`, so accumulate-then-cast-to-int patterns such as `cJSON_GetArraySize` are reported; still suppress when a dominating `size <= INT_MAX` (or equivalent) guard proves the value fits (#558).
 - Honor short-circuit OR/AND and negated null checks, callee Is*-style truthy-implies-nonnull predicates, and cannot_access-style macros in CGULL-004 so cJSON-class false positives drop while unchecked public setters still report (#551).
 
 ### Changed
