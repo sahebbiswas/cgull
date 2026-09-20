@@ -389,6 +389,15 @@ def _unchecked_deref_vars(node: CFGEvent, summaries=None):
     return result
 
 
+def _pointer_var_names(fn) -> Set[str]:
+    """Names of pointer parameters and locals in *fn* (best-effort AST flags)."""
+    names = {p.name for p in fn.parameters if getattr(p, "name", None) and getattr(p, "is_pointer", False)}
+    for var in getattr(fn, "variables", {}).values():
+        if getattr(var, "name", None) and getattr(var, "is_pointer", False):
+            names.add(var.name)
+    return names
+
+
 def _null_unsafe_use_kind(node: CFGEvent, var: str, summaries=None) -> str:
     """Return ``arith`` when *var* is only used in additive pointer arithmetic."""
     ast_node = getattr(node, "_ast_node", None)

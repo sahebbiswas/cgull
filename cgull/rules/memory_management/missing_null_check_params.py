@@ -19,6 +19,7 @@ from .helpers import (
     _find_unsafe_allocation_use,
     _find_unsafe_param_deref,
     _null_unsafe_use_kind,
+    _pointer_var_names,
     _unchecked_deref_vars,
     _find_uaf_uses,
     _find_memory_leak_exits,
@@ -52,6 +53,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
 
             if cfg is not None:
                 reported_nodes = set()
+                pointer_names = _pointer_var_names(fn)
                 # 1. Definite or possible NULL dereferences with known contracts.
                 sorted_nodes = sorted(cfg.nodes.values(), key=lambda n: n.node_id)
                 for node in sorted_nodes:
@@ -60,12 +62,16 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     for deref_var in sorted(_unchecked_deref_vars(node, summaries)):
                         null_status = cfg.query_nullness(deref_var, node.node_id)
                         if null_status in {Nullness.NULL, Nullness.MAYBE_NULL}:
+                            use_kind = _null_unsafe_use_kind(node, deref_var, summaries)
+                            # Additive forms only for pointer-typed names; integer
+                            # zeros must not become null-pointer-arithmetic FPs.
+                            if use_kind == "arith" and deref_var not in pointer_names:
+                                continue
                             deref_line = node.get_deref_line(deref_var)
                             key = (deref_line, deref_var, "null_deref")
                             if key not in reported_nodes:
                                 reported_nodes.add(key)
                                 snippet = _source_snippet(ast_ctx, deref_line, node.expr_str)
-                                use_kind = _null_unsafe_use_kind(node, deref_var, summaries)
                                 null_phrase = (
                                     "is known to be NULL"
                                     if null_status == Nullness.NULL
@@ -139,6 +145,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                 checked = any(
                     re.search(rf'\bif\s*\([^)]*?\b{re.escape(p_name)}\s*(?:==\s*NULL|!=\s*NULL|==\s*0|!=\s*0)\b', line) or
                     re.search(rf'\bif\s*\(\s*!{re.escape(p_name)}\b', line) or
+                    re.search(rf'\bif\s*\(\s*{re.escape(p_name)}\s*\)', line) or
                     re.search(rf'\bassert\s*\([^)]*?\b{re.escape(p_name)}\b', line)
                     for line in body_lines[:min(6, len(body_lines))]
                 )
@@ -146,14 +153,32 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     continue
                 for i, line in enumerate(body_lines):
                     line_no = body_start + i
-                    deref_match = re.search(rf'(?:\*\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*->|{re.escape(p_name)}\s*\[|{re.escape(p_name)}\s*\+|\+\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*-(?!>))', line)
-                    if deref_match:
+                    arith_match = re.search(
+                        rf'(?:{re.escape(p_name)}\s*\+|\+\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*-(?!>))',
+                        line,
+                    )
+                    deref_match = re.search(
+                        rf'(?:\*\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*->|{re.escape(p_name)}\s*\[)',
+                        line,
+                    )
+                    use_match = deref_match or arith_match
+                    if use_match:
+                        if deref_match is None and arith_match is not None:
+                            message = (
+                                f"Pointer parameter '{p_name}' in function '{fn.name}' "
+                                f"is used in additive pointer arithmetic without a preceding NULL check."
+                            )
+                        else:
+                            message = (
+                                f"Pointer parameter '{p_name}' in function '{fn.name}' "
+                                f"is dereferenced without a preceding NULL check."
+                            )
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=line_no,
                             code_snippet=line,
-                            message=f"Pointer parameter '{p_name}' in function '{fn.name}' is dereferenced without a preceding NULL check.",
-                            column_number=deref_match.start() + 1,
+                            message=message,
+                            column_number=use_match.start() + 1,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"if ({p_name} == NULL) return -EINVAL;"
@@ -175,14 +200,32 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     sub_line_no = body_start + j
                     if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
-                    deref_match = re.search(rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[|{re.escape(v_name)}\s*\+|\+\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?!>))', sub_line)
-                    if deref_match:
+                    arith_match = re.search(
+                        rf'(?:{re.escape(v_name)}\s*\+|\+\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?!>))',
+                        sub_line,
+                    )
+                    deref_match = re.search(
+                        rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[)',
+                        sub_line,
+                    )
+                    use_match = deref_match or arith_match
+                    if use_match:
+                        if deref_match is None and arith_match is not None:
+                            message = (
+                                f"Null pointer arithmetic: pointer '{v_name}' "
+                                f"is known to be NULL when used in additive pointer arithmetic."
+                            )
+                        else:
+                            message = (
+                                f"Null pointer dereference: pointer '{v_name}' "
+                                f"is known to be NULL when dereferenced."
+                            )
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=sub_line_no,
                             code_snippet=sub_line,
-                            message=f"Null pointer dereference: pointer '{v_name}' is known to be NULL when dereferenced.",
-                            column_number=deref_match.start() + 1,
+                            message=message,
+                            column_number=use_match.start() + 1,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"if ({v_name} == NULL) return -1;"
@@ -204,14 +247,32 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     sub_line_no = body_start + j
                     if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
-                    deref_match = re.search(rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[|{re.escape(v_name)}\s*\+|\+\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?!>))', sub_line)
-                    if deref_match:
+                    arith_match = re.search(
+                        rf'(?:{re.escape(v_name)}\s*\+|\+\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?!>))',
+                        sub_line,
+                    )
+                    deref_match = re.search(
+                        rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[)',
+                        sub_line,
+                    )
+                    use_match = deref_match or arith_match
+                    if use_match:
+                        if deref_match is None and arith_match is not None:
+                            message = (
+                                f"Null pointer arithmetic: pointer '{v_name}' "
+                                f"is known to be NULL when used in additive pointer arithmetic."
+                            )
+                        else:
+                            message = (
+                                f"Null pointer dereference: pointer '{v_name}' "
+                                f"is known to be NULL when dereferenced."
+                            )
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=sub_line_no,
                             code_snippet=sub_line,
-                            message=f"Null pointer dereference: pointer '{v_name}' is known to be NULL when dereferenced.",
-                            column_number=deref_match.start() + 1,
+                            message=message,
+                            column_number=use_match.start() + 1,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"if ({v_name} == NULL) return -1;"

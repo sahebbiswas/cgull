@@ -112,3 +112,25 @@ def test_short_circuit_guards_arith_in_condition():
     }
     """
     assert scan(code) == []
+
+
+def test_integer_zero_addition_is_not_pointer_arithmetic():
+    """Sourcery: int a = 0; return a + b must not fire CGULL-004."""
+    code = """
+    int f(int b) {
+        int a = 0;
+        return a + b;
+    }
+    """
+    assert scan(code) == []
+
+
+def test_pointer_minus_integer_on_maybe_null_reports():
+    code = """
+    const char *f(const char *p, int off) {
+        return p - off;
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 1
+    assert "pointer arithmetic" in issues[0].message.lower() or "arithmetic" in issues[0].message.lower()
