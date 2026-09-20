@@ -2,7 +2,7 @@
 
 /* Uninitialized variable in switch statement without default initialization */
 int test_edge_switch_uninit(int mode) {
-    int value; // expect: CGULL-023
+    int value;
     switch (mode) {
     case 1:
         value = 10;
@@ -11,5 +11,5 @@ int test_edge_switch_uninit(int mode) {
         value = 20;
         break;
     }
-    return value;
+    return value; // expect: CGULL-023
 }

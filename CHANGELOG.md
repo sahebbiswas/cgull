@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `_freed_vars` to skip `None` AST children and avoid copying set-typed deallocator configs on every call (follow-up to #547).
 - CGULL-011: do not treat `MACRO(type) declarator` export wrappers (e.g. `CJSON_PUBLIC(int) foo(...)`) as illegal function-pointer casts in fallback/regex analysis; AST suppression only applies when the macro match overlaps the cast's source span (#552).
 - CGULL-034: do not flag NaN materialization (`NAN`, `0.0/0.0`, float zeros with exponents such as `0.0e1/0.0e1`, and casted forms such as `(double)0.0/0.0`) as runtime division-by-zero (#556).
+- CGULL-023: require a proven use on a path where a local is not definitely assigned (member/element stores, memset/sprintf destinations, and static zero-init), instead of flagging declaration-without-initializer (#555).
 - Group repeated CGULL-007 accesses with the same conservative CFG bounds obligation, retain related source locations in all reports, and preserve them through TU mapping and deduplication (#533).
 - Model nullable non-allocation returns and non-NULL argument requirements, and report unchecked nullable locals through CGULL-004 (#538).
 - Add CGULL-056 for possible reverse reads/writes below an explicitly derived logical base, including loop conditions, postfix and separated updates, and ordered lower-bound guards (#537).

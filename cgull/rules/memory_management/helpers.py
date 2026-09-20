@@ -14,8 +14,12 @@ from ...ast_analyzer import CASTContext, CFunction, _format_pycparser_expr, get_
 from ...utils import extract_call_args, split_call_args, extract_balanced_parens
 from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
 from ...cfg.construction import _guarded_expression_uses
+from ...cfg.expression_effects import ordered_storage_effects
+from ...cfg.summaries import is_zero_length_definite_buffer_write
 
 logger = logging.getLogger(__name__)
+
+
 def _brace_depths(body_lines: List[str]) -> List[int]:
     """
     Returns, for each line in `body_lines`, the net brace depth *after*
@@ -45,9 +49,160 @@ def _addressed_variable(argument: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def _output_destination_variable(
+    argument: str,
+    array_locals: Optional[Set[str]] = None,
+) -> Optional[str]:
+    """Return a caller local initialized through a callee output parameter.
+
+    ``&var`` always names the initialized object. A bare identifier is accepted
+    only when it is an array local (array-to-pointer decay into memset/sprintf
+    destinations). Bare pointer values are not destinations: the callee writes
+    the pointee, not the pointer object itself.
+    """
+    text = argument.strip()
+    addressed = _addressed_variable(text)
+    if addressed:
+        return addressed
+    match = re.fullmatch(r"([A-Za-z_]\w*)", text)
+    if not match:
+        return None
+    name = match.group(1)
+    if array_locals and name in array_locals:
+        return name
+    return None
+
+
+def _unwrap_ast_casts(node):
+    while node is not None and type(node).__name__ in {"Cast", "ExprList"}:
+        if type(node).__name__ == "Cast":
+            node = node.expr
+        else:
+            node = node.exprs[-1] if getattr(node, "exprs", None) else None
+    return node
+
+
+def _array_lvalue_root(node) -> Optional[str]:
+    """Return the root object for an array-element lvalue, if any."""
+    node = _unwrap_ast_casts(node)
+    if node is None or type(node).__name__ != "ArrayRef":
+        return None
+    base = node.name
+    while base is not None and type(base).__name__ == "ArrayRef":
+        base = base.name
+    base = _unwrap_ast_casts(base)
+    if base is not None and type(base).__name__ == "ID":
+        return str(base.name)
+    if base is not None and type(base).__name__ == "StructRef":
+        current = base
+        while type(current).__name__ == "StructRef" and getattr(current, "type", None) == ".":
+            current = current.name
+        current = _unwrap_ast_casts(current)
+        if current is not None and type(current).__name__ == "ID":
+            return str(current.name)
+    return None
+
+
+_AGGREGATE_EFFECT_SKIP_KINDS = {
+    "if_cond",
+    "while_cond",
+    "do_cond",
+    "for_cond",
+    "switch_cond",
+    "label",
+    "goto",
+    "unknown_control_flow",
+}
+
+
+def _apply_aggregate_definition_effects(
+    cfg: StructuredCFG,
+    pointer_locals: Optional[Set[str]] = None,
+) -> None:
+    """Treat member/element stores as definitions of the aggregate root.
+
+    Scalar CFG writes intentionally omit ``s.field`` / ``a[i]`` targets so
+    dead-store analysis stays field-aware. CGULL-023 needs object-level
+    definite assignment, so project those stores onto the root before
+    initialization dataflow.
+
+    Only *direct* plain aggregate stores count:
+    - ``s.field = …`` / ``s.a.b = …`` (``.`` member path)
+    - ``buf[i] = …`` / ``s.arr[i] = …`` when the root is not a pointer local
+
+    Indirect stores such as ``p[i] = …`` or ``p->field = …`` *use* the pointer
+    value; they must not be treated as initializing ``p`` (that FN broke
+    CGULL-021 conditional-assignment coverage).
+
+    Compound assignments and ``++``/``--`` read before write, so they are not
+    projected as initializing the aggregate root.
+
+    Condition nodes store the full ``If``/``While`` AST, so walking their
+    storage effects would incorrectly attribute branch-body writes to the
+    condition. Skip structural/condition kinds.
+    """
+    pointer_locals = pointer_locals or set()
+
+    def _projects_as_object_init(root: Optional[str]) -> bool:
+        return bool(root) and root not in pointer_locals
+
+    for node in cfg.nodes.values():
+        if node.kind in _AGGREGATE_EFFECT_SKIP_KINDS:
+            continue
+        ast_node = getattr(node, "_ast_node", None)
+        if ast_node is None:
+            continue
+        for effect in ordered_storage_effects(ast_node):
+            # Direct ``.`` member stores only — not ``->`` through a pointer.
+            # Compound / mutating writes read the prior value first, so they
+            # must not be projected as sole initializations that suppress UBI.
+            if (
+                effect.action == "write"
+                and effect.root
+                and effect.is_direct_subobject
+                and effect.write_kind == "plain"
+                and _projects_as_object_init(effect.root)
+            ):
+                node.writes.add(effect.root)
+        kind = type(ast_node).__name__
+        # Pure ``=`` element stores initialize the aggregate object. Compound
+        # assignments and ``++``/``--`` read before write — do not project them
+        # as initializing writes (that hid CGULL-023 on uninit arrays).
+        if kind == "Assignment" and getattr(ast_node, "op", "=") == "=":
+            root = _array_lvalue_root(getattr(ast_node, "lvalue", None))
+            if _projects_as_object_init(root):
+                node.writes.add(root)
+
+
+def _static_local_names(funcdef) -> Set[str]:
+    """Names of block-scope objects with static storage duration (C zero-init)."""
+    names: Set[str] = set()
+    if funcdef is None or getattr(funcdef, "body", None) is None:
+        return names
+
+    def visit(node):
+        if node is None:
+            return
+        if type(node).__name__ == "Decl":
+            storage = getattr(node, "storage", None) or []
+            if "static" in storage and getattr(node, "name", None):
+                names.add(str(node.name))
+            return
+        if type(node).__name__ == "FuncDef":
+            # Nested function definitions are separate scopes; do not register
+            # their static locals on the enclosing function.
+            return
+        for _child_name, child in node.children():
+            visit(child)
+
+    visit(funcdef.body)
+    return names
+
+
 def _apply_output_summary_effects(
     cfg: StructuredCFG,
     summaries: Optional[Dict[str, FunctionSummary]],
+    array_locals: Optional[Set[str]] = None,
 ) -> None:
     """Project definite callee output effects onto caller CFG writes."""
     if not summaries:
@@ -59,10 +214,19 @@ def _apply_output_summary_effects(
             summary = summaries.get(call.direct_callee)
             if summary is None:
                 continue
+            callee = call.direct_callee
+            if callee and is_zero_length_definite_buffer_write(
+                callee, call.actual_arguments
+            ):
+                # Zero-length memset/memcpy/snprintf/… must not must-init.
+                continue
             for index in summary.must_initialize_params:
                 if index >= len(call.actual_arguments):
                     continue
-                target = _addressed_variable(call.actual_arguments[index])
+                target = _output_destination_variable(
+                    call.actual_arguments[index],
+                    array_locals=array_locals,
+                )
                 if target:
                     node.writes.add(target)
 
@@ -83,8 +247,32 @@ def _ast_cfg_for_function(
     if summaries is None:
         summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs)
     cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
-    _apply_output_summary_effects(cfg, summaries)
-    initial_initialized = set(p.name for p in fn.parameters if p.name) | set(ast_ctx.global_variables.keys()) | {var.name for var in fn.variables.values() if getattr(var, "has_initializer", False) and var.name}
+    array_locals = {
+        var.name
+        for var in fn.variables.values()
+        if getattr(var, "is_array", False) and var.name
+    }
+    # Pointer objects (not arrays-of-pointers) are never initialized by
+    # ``p[i]`` / ``p->field`` stores — those use the pointer value.
+    pointer_locals = {
+        var.name
+        for var in fn.variables.values()
+        if getattr(var, "is_pointer", False)
+        and not getattr(var, "is_array", False)
+        and var.name
+    }
+    _apply_aggregate_definition_effects(cfg, pointer_locals=pointer_locals)
+    _apply_output_summary_effects(cfg, summaries, array_locals=array_locals)
+    initial_initialized = (
+        set(p.name for p in fn.parameters if p.name)
+        | set(ast_ctx.global_variables.keys())
+        | {
+            var.name
+            for var in fn.variables.values()
+            if getattr(var, "has_initializer", False) and var.name
+        }
+        | _static_local_names(funcdef)
+    )
     cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
     return cfg
 
