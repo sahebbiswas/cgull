@@ -102,6 +102,29 @@ Suppressing findings inline:
     scan_parser.add_argument("--list-flags", action="store_true", help="Discover and print tested preprocessor flags for the target instead of scanning")
     scan_parser.add_argument('--no-dedup-headers', dest='dedup_headers', action='store_false', default=True,
                              help='Do not collapse duplicate header findings across translation units (disable header deduplication)')
+    scan_parser.add_argument(
+        "--cache-dir",
+        action="store_true",
+        help=(
+            "Enable the opt-in persistent result cache at the default location "
+            "(<project>/.cgull/cache, or $XDG_CACHE_HOME/cgull). "
+            "Also enabled by CGULL_CACHE_DIR. Use --cache-path PATH for an explicit directory."
+        ),
+    )
+    scan_parser.add_argument(
+        "--cache-path",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Enable the opt-in persistent result cache at PATH "
+            "(does not consume the scan target positional)."
+        ),
+    )
+    scan_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable the persistent result cache (overrides --cache-dir / --cache-path / CGULL_CACHE_DIR; also CGULL_NO_CACHE=1)",
+    )
 
     # FLAGS subcommand
     flags_parser = subparsers.add_parser("flags", help="Discover and enumerate tested preprocessor flags in target C source files")
@@ -375,6 +398,25 @@ def handle_scan(args) -> int:
     else:
         scan_mode = ScanMode.FILE
 
+    from .project_state import resolve_project_state_root
+    from .result_cache import resolve_cache_dir
+
+    cache_path = getattr(args, "cache_path", None)
+    if cache_path is not None:
+        cache_explicit = cache_path
+    elif getattr(args, "cache_dir", False):
+        cache_explicit = ""
+    else:
+        cache_explicit = None
+    cache_dir = resolve_cache_dir(
+        cache_explicit,
+        project_state_root=resolve_project_state_root(
+            targets,
+            getattr(args, "config", None),
+        ),
+        no_cache_flag=bool(getattr(args, "no_cache", False)),
+    )
+
     scan_config = ScanConfig.create(
         rules=active_rules,
         severity_filter=sev_filter,
@@ -386,6 +428,7 @@ def handle_scan(args) -> int:
         include_root_warnings=config.include_root_warnings,
         dedup_headers=args.dedup_headers,
         mode=scan_mode,
+        cache_dir=cache_dir,
     )
 
     scanner = CGullScanner(

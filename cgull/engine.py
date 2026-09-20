@@ -480,6 +480,7 @@ class CGullScanner:
                     include_root_warnings=self.config.include_root_warnings,
                     dedup_headers=getattr(self.config, "dedup_headers", True),
                     mode=getattr(self.config, "mode", ScanMode.FILE),
+                    cache_dir=getattr(self.config, "cache_dir", None),
                 )
         else:
             self.config = ScanConfig.create(
@@ -506,8 +507,10 @@ class CGullScanner:
             config_strategy=self.config.config_strategy,
             exhaustive_threshold=self.config.exhaustive_threshold,
             include_roots=self.config.include_roots,
+            include_root_warnings=getattr(self.config, "include_root_warnings", {}),
             dedup_headers=getattr(self.config, "dedup_headers", True),
             mode=getattr(self.config, "mode", ScanMode.FILE),
+            cache_dir=getattr(self.config, "cache_dir", None),
         )
 
     def scan_path(
@@ -1278,9 +1281,46 @@ def _scan_file_content_uncached(
     prepared = config.prepared_units.get(profile_key(config.defined_syms)) if config else None
     if prepared is not None and prepared.source != content:
         prepared = None
+    source_text_for_cache = content
     tu = prepared.expanded if prepared else expander.expand(content, source_path=file_path)
     content = tu.expanded_text
     line_map = tu.line_map
+
+    cache = None
+    cache_key = None
+    if config is not None and getattr(config, "cache_dir", None):
+        from . import __version__ as cgull_version
+        from .result_cache import (
+            ResultCache,
+            compute_cache_key,
+            has_project_summaries,
+            rebind_cached_result,
+        )
+
+        if not has_project_summaries(prepared):
+            cache_key = compute_cache_key(
+                source_text=source_text_for_cache,
+                expanded_text=content,
+                config=config,
+                cgull_version=cgull_version,
+                file_path=file_path,
+            )
+            if cache_key is None:
+                # Fingerprint failure (e.g. unexpected config) → bypass cache.
+                cache = None
+            else:
+                cache = ResultCache(config.cache_dir)
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    cached = rebind_cached_result(cached, file_path)
+                    duration_ms = (time.time() - t0) * 1000.0
+                    logger.info(
+                        "Cache hit for %s (key=%s…, duration=%.2fms)",
+                        file_path,
+                        cache_key[:12],
+                        duration_ms,
+                    )
+                    return cached.as_scan_tuple(duration_ms=duration_ms)
 
     ast_parser = ast_parser or CASTParser()
     raw_lines = content.splitlines()
@@ -1471,6 +1511,21 @@ def _scan_file_content_uncached(
     # Sort issues by line number
     issues.sort(key=lambda x: (x.line_number, x.column_number))
     duration_ms = (time.time() - t0) * 1000.0
+    if cache is not None and cache_key is not None and file_status == "success":
+        from . import __version__ as cgull_version
+
+        cache.put(
+            cache_key,
+            issues=issues,
+            lines_of_code=loc,
+            parser_status=parser_status,
+            parse_tier=parse_tier,
+            status=file_status,
+            confidence=confidence_val,
+            parse_attempts=parse_attempts,
+            scan_error=scan_error,
+            cgull_version=cgull_version,
+        )
     logger.info("Leaving file scan: %s (status=%s, parse_tier=%s, issues=%d, duration=%.2fms)", file_path, file_status, parse_tier, len(issues), duration_ms)
     return issues, loc, duration_ms, parser_status, parse_tier, file_status, confidence_val, scan_error, parse_attempts
 
@@ -1549,6 +1604,7 @@ def _scan_file_content_profiles(
             include_roots=base_include_roots,
             dedup_headers=base_dedup_headers,
             mode=base_mode,
+            cache_dir=getattr(config, "cache_dir", None) if config else None,
         )
 
         variant_config.prepared_units = config.prepared_units if config else {}

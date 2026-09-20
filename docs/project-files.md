@@ -132,3 +132,11 @@ A bare `cgull-ignore` suppresses all C-GULL findings on that line. Prefer rule-s
 | Temporarily exclude a path for one invocation | `--ignore-pattern` / `--ignore-file` |
 
 Legacy `.cgullignore` and `.cgullincludes` files continue to load for backward compatibility, but they are no longer presented as equal first-time setup choices.
+
+## `.cgull/cache` (optional)
+
+When `--cache-dir` / `--cache-path` (or `CGULL_CACHE_DIR`) is set, C-GULL stores finalized per-file
+analysis results under the cache directory. The default location is
+`<project>/.cgull/cache`, which is already covered by the repository `.gitignore`
+entry for `.cgull/`. See [Persistent result cache](result-cache.md).
+

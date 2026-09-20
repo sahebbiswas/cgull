@@ -15,6 +15,7 @@ This directory is the C-GULL knowledgebase. The repository root `README.md` is i
 | Symbolic conditional analysis, `cgull preprocessor`, witnesses, configuration reduction, and limits | [Symbolic preprocessor analysis](analysis/symbolic-preprocessor.md) |
 | Text, JSON, Markdown, SARIF, baselines, exit policy, and safe fixes | [Reporting and CI](reporting-and-ci.md) |
 | Automatic diagnostic capture, verbosity, retention, privacy, and `--log-file` | [Diagnostic logging](logging.md) |
+| Opt-in persistent content-addressed result cache for repeat scans | [Persistent result cache](result-cache.md) |
 | pre-commit and GitHub Actions adoption | [Development integration](development-integration.md) |
 | Rule inventory and identifiers | [Rule reference](rules.md) |
 | Focused vs comprehensive finding profiles, security-vs-policy report labels, baselines, corpus checklist | [Finding profiles and noise reduction](finding-profiles.md) |
