@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Opt-in persistent content-addressed per-file result cache for repeat scans (`--cache-dir` / `CGULL_CACHE_DIR`, disable with `--no-cache` / `CGULL_NO_CACHE`); keys cover source + expanded TU text, config/rule fingerprint, semantic-model digest, and C-GULL version, with atomic writes and corrupt-entry misses (#545).
+
 ### Changed
 - Add `scan/rules --profile focused|comprehensive`, include CGULL-018 in focused policy exclusions, and separate security/correctness from policy/quality report counts without changing severity or CI thresholds (#557).
 - Document focused security defaults, baselines, and the cJSON corpus budget checklist; human reports also label **security actionable** vs **policy/quality** per finding (#561).

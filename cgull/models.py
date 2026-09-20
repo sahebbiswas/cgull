@@ -179,6 +179,8 @@ class ScanConfig:
     include_roots: List[str] = field(default_factory=list)
     dedup_headers: bool = True
     mode: ScanMode = ScanMode.FILE
+    # Opt-in persistent result cache directory (issue #545); None disables.
+    cache_dir: Optional[str] = None
     # Internal, per-file parsed inputs passed to workers; not a user option.
     prepared_units: Dict[Any, Any] = field(default_factory=dict, repr=False, compare=False)
     include_root_warnings: Dict[str, str] = field(default_factory=dict)
@@ -198,6 +200,7 @@ class ScanConfig:
         dedup_headers: bool = True,
         mode: Union[ScanMode, str] = ScanMode.FILE,
         include_root_warnings: Optional[Dict[str, str]] = None,
+        cache_dir: Optional[str] = None,
     ) -> "ScanConfig":
         if isinstance(mode, str):
             mode = ScanMode(mode.lower())
@@ -224,6 +227,7 @@ class ScanConfig:
             include_root_warnings=dict(include_root_warnings or {}),
             dedup_headers=dedup_headers,
             mode=mode,
+            cache_dir=cache_dir,
         )
 
     def get_rules(self) -> List[Any]:
@@ -257,6 +261,7 @@ class ScanConfig:
             "include_root_warnings": dict(self.include_root_warnings),
             "dedup_headers": self.dedup_headers,
             "mode": self.mode.value if isinstance(self.mode, ScanMode) else str(self.mode),
+            "cache_dir": self.cache_dir,
         }
 
     @classmethod
@@ -280,6 +285,7 @@ class ScanConfig:
             include_root_warnings=dict(data.get("include_root_warnings", {})),
             dedup_headers=data.get("dedup_headers", True),
             mode=ScanMode(data.get("mode", ScanMode.FILE.value)),
+            cache_dir=data.get("cache_dir"),
         )
 
 
