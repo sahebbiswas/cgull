@@ -36,8 +36,9 @@ def _lexical_additive_arith_match(var_name: str, text: str) -> Optional[re.Match
     ``++``/``--`` and arrow ``p->`` must not match.
     """
     n = re.escape(var_name)
-    # Operand after +/- : identifier, number, cast/paren, deref, or address-of.
-    operand = r'(?:[0-9A-Za-z_(*&])'
+    # Operand after +/- : identifier, number, cast/paren, deref, address-of,
+    # or a unary prefix on the offset (p + -1, p + ~off, p - -off).
+    operand = r'(?:[0-9A-Za-z_(*&~+-])'
     return re.search(
         rf'(?:'
         rf'{n}\s*\+(?!\+)\s*{operand}'
