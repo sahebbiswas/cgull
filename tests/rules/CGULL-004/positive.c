@@ -60,3 +60,18 @@ void test_tp_inverted_null_check(void) {
         *intPointer = 42; // expect: CGULL-004
     }
 }
+
+/* True Positive (#551): public setter without local NULL guard must still fire */
+typedef struct CJSON551TP { double valuedouble; } CJSON551TP;
+double test_tp_public_setter_without_null_guard(CJSON551TP *object, double number) {
+    object->valuedouble = number; // expect: CGULL-004
+    return number;
+}
+
+/* True Positive (#551): OR-true path must not claim known-NULL, but still report unchecked deref */
+int test_tp_or_true_path_unchecked_deref(CJSON551TP *a, CJSON551TP *b) {
+    if ((a == 0) || (b == 0)) {
+        return (int)a->valuedouble; // expect: CGULL-004
+    }
+    return 0;
+}

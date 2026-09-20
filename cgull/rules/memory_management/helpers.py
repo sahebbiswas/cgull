@@ -112,7 +112,7 @@ def _passes_to_unchecked_callee_param(
         return False
 
     loc_map = cfg.get_loc_map_at_node(node.node_id)
-    for use_kind, call, guarded_nonnull in _guarded_expression_uses(ast_node):
+    for use_kind, call, guarded_nonnull in _guarded_expression_uses(ast_node, summaries=summaries):
         if use_kind != "call":
             continue
         summary = summaries.get(_format_pycparser_expr(call.name))
@@ -184,7 +184,7 @@ def _unchecked_deref_vars(node: CFGEvent, summaries=None):
     if ast_node is None:
         return node.derefs
     result = set()
-    for kind, payload, guarded in _guarded_expression_uses(ast_node):
+    for kind, payload, guarded in _guarded_expression_uses(ast_node, summaries=summaries):
         if kind == "deref":
             if payload not in guarded:
                 result.add(payload)

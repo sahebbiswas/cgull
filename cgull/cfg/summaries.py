@@ -32,6 +32,20 @@ def _unwrap_cast(node):
     return node
 
 
+def _is_falsy_return_expr(expr_ast) -> bool:
+    """Whether a return expression is a definite falsy/nullish constant."""
+    if expr_ast is None:
+        return True
+    inner = _unwrap_cast(expr_ast)
+    if inner is None:
+        return True
+    if _is_nullish(inner):
+        return True
+    if type(inner).__name__ == "ID" and str(inner.name) in {"false", "FALSE"}:
+        return True
+    return False
+
+
 def _get_builtin_summaries(
     alloc_funcs: Optional[Set[str]] = None,
     dealloc_funcs: Optional[Set[str]] = None,
@@ -82,13 +96,15 @@ class _SummaryFact:
     return_nullness: Optional[Nullness] = None
     returns_allocation: bool = False
     is_unknown: bool = False
+    # None is lattice bottom; concrete frozensets join by intersection.
+    truthy_implies_nonnull_params: Optional[FrozenSet[int]] = None
 
 
 class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
     def __init__(self, parameter_counts: Mapping[str, int]) -> None:
         self._parameter_counts = dict(parameter_counts)
         max_params = max(self._parameter_counts.values(), default=0)
-        self.max_height = max(4, (4 * max_params) + 5)
+        self.max_height = max(4, (5 * max_params) + 5)
 
     def bottom(self, symbol: str) -> _SummaryFact:
         return _SummaryFact()
@@ -102,6 +118,9 @@ class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
             return_nullness=_join_summary_nullness(left.return_nullness, right.return_nullness),
             returns_allocation=left.returns_allocation or right.returns_allocation,
             is_unknown=left.is_unknown or right.is_unknown,
+            truthy_implies_nonnull_params=_join_truthy_nonnull(
+                left.truthy_implies_nonnull_params, right.truthy_implies_nonnull_params
+            ),
         )
 
     def unknown(self, symbol: str, current: _SummaryFact) -> _SummaryFact:
@@ -114,6 +133,7 @@ class _FunctionSummaryLattice(FiniteLattice[_SummaryFact]):
             return_nullness=Nullness.UNKNOWN,
             returns_allocation=True,
             is_unknown=True,
+            truthy_implies_nonnull_params=frozenset(),
         )
 
 
@@ -125,6 +145,16 @@ def _join_summary_nullness(left: Optional[Nullness], right: Optional[Nullness]) 
     return meet_nullness(left, right)
 
 
+def _join_truthy_nonnull(
+    left: Optional[FrozenSet[int]], right: Optional[FrozenSet[int]]
+) -> Optional[FrozenSet[int]]:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left & right
+
+
 def _fact_to_summary(fact: _SummaryFact) -> FunctionSummary:
     return FunctionSummary(
         freed_params=set(fact.freed_params),
@@ -134,6 +164,7 @@ def _fact_to_summary(fact: _SummaryFact) -> FunctionSummary:
         return_nullness=fact.return_nullness if fact.return_nullness is not None else Nullness.UNKNOWN,
         returns_allocation=fact.returns_allocation,
         is_unknown=fact.is_unknown,
+        truthy_implies_nonnull_params=set(fact.truthy_implies_nonnull_params or ()),
     )
 
 
@@ -360,7 +391,7 @@ def _analyze_one_function(
             for node in cfg.nodes.values():
                 loc_map = cfg.get_loc_map_at_node(node.node_id)
                 for use_kind, payload, guarded_nonnull in _guarded_expression_uses(
-                    getattr(node, "_ast_node", None)
+                    getattr(node, "_ast_node", None), summaries=summaries
                 ):
                     if use_kind == "deref":
                         deref_var = payload
@@ -440,6 +471,25 @@ def _analyze_one_function(
         for rn in sorted(return_nullness_set, key=lambda item: item.value):
             final_ret_nullness = rn if final_ret_nullness is None else meet_nullness(final_ret_nullness, rn)
 
+    truthy_implies_nonnull_params: Set[int] = set()
+    if cfg is not None and param_names:
+        candidates = set(range(len(param_names)))
+        saw_truthy = {i: False for i in candidates}
+        for node in cfg.nodes.values():
+            if node.kind != "return":
+                continue
+            ret_ast = getattr(node, "_ast_node", None)
+            expr_ast = getattr(ret_ast, "expr", None) if ret_ast is not None else None
+            if _is_falsy_return_expr(expr_ast):
+                continue
+            for i, p_name in enumerate(param_names):
+                if i not in candidates:
+                    continue
+                saw_truthy[i] = True
+                if cfg.query_nullness(p_name, node.node_id) != Nullness.NON_NULL:
+                    candidates.discard(i)
+        truthy_implies_nonnull_params = {i for i in candidates if saw_truthy[i]}
+
     return _SummaryFact(
         freed_params=frozenset(freed_params),
         unsafe_deref_params=frozenset(unsafe_deref_params),
@@ -448,6 +498,7 @@ def _analyze_one_function(
         return_nullness=final_ret_nullness or Nullness.UNKNOWN,
         returns_allocation=returns_alloc,
         is_unknown=False,
+        truthy_implies_nonnull_params=frozenset(truthy_implies_nonnull_params),
     )
 
 
@@ -552,6 +603,7 @@ def serialize_function_summaries(summaries: Mapping[str, FunctionSummary]) -> by
             "return_nullness": summary.return_nullness.value,
             "returns_allocation": bool(summary.returns_allocation),
             "is_unknown": bool(summary.is_unknown),
+            "truthy_implies_nonnull_params": sorted(summary.truthy_implies_nonnull_params),
         }
         for name, summary in sorted(summaries.items())
     }

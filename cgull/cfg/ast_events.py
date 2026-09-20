@@ -172,20 +172,49 @@ def _is_nullish(node) -> bool:
     }
 
 
-def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
-    """Return (true-edge nonnull facts, false-edge nonnull facts)."""
+def _null_edge_facts(
+    cond,
+    summaries: Optional[Dict[str, FunctionSummary]] = None,
+) -> Tuple[Set[str], Set[str], Set[str], Set[str]]:
+    """Return (true_nonnull, true_null, false_nonnull, false_null) for a condition.
+
+    Unlike a naive true/false swap of nonnull sets, compound ``&&`` / ``||`` /
+    ``!`` forms compute null and nonnull proofs separately.  That keeps
+    ``(a == NULL) || (b == NULL)`` from proving ``a`` NULL on the true edge, and
+    keeps ``!(p != NULL && bound_ok)`` (cannot_access-style macros) from proving
+    ``p`` NULL when the bound check alone can fail.
+    """
+    empty = (set(), set(), set(), set())
     if cond is None:
-        return set(), set()
+        return empty
     cond_unwrapped = _unwrap_cast(cond)
     if cond_unwrapped is None:
-        return set(), set()
+        return empty
     kind = type(cond_unwrapped).__name__
+
     if kind == "ID":
-        return {str(cond_unwrapped.name)}, set()
+        var = str(cond_unwrapped.name)
+        return {var}, set(), set(), {var}
+
     if kind == "UnaryOp" and getattr(cond_unwrapped, "op", None) == "!":
-        inner = _unwrap_cast(cond_unwrapped.expr)
-        if inner is not None and type(inner).__name__ == "ID":
-            return set(), {str(inner.name)}
+        t_nn, t_null, f_nn, f_null = _null_edge_facts(cond_unwrapped.expr, summaries)
+        return f_nn, f_null, t_nn, t_null
+
+    if kind == "FuncCall" and summaries:
+        callee = _format_pycparser_expr(cond_unwrapped.name)
+        summary = summaries.get(callee)
+        if summary is not None and summary.truthy_implies_nonnull_params:
+            args = list(getattr(cond_unwrapped.args, "exprs", []) or []) if cond_unwrapped.args else []
+            true_nn: Set[str] = set()
+            for index in summary.truthy_implies_nonnull_params:
+                if index >= len(args):
+                    continue
+                arg = _unwrap_cast(args[index])
+                if arg is not None and type(arg).__name__ == "ID":
+                    true_nn.add(str(arg.name))
+            if true_nn:
+                return true_nn, set(), set(), set()
+
     if kind == "BinaryOp":
         op = getattr(cond_unwrapped, "op", None)
         if op in {"==", "!="}:
@@ -197,19 +226,38 @@ def _simple_null_facts(cond) -> Tuple[Set[str], Set[str]]:
                 elif type(rhs).__name__ == "ID" and _is_nullish(lhs):
                     var = str(rhs.name)
                 else:
-                    return set(), set()
+                    return empty
                 if op == "!=":
-                    return {var}, set()
-                return set(), {var}
-        elif op == "||":
-            l_t, l_f = _simple_null_facts(cond_unwrapped.left)
-            r_t, r_f = _simple_null_facts(cond_unwrapped.right)
-            return l_t.intersection(r_t), l_f.union(r_f)
-        elif op == "&&":
-            l_t, l_f = _simple_null_facts(cond_unwrapped.left)
-            r_t, r_f = _simple_null_facts(cond_unwrapped.right)
-            return l_t.union(r_t), l_f.intersection(r_f)
-    return set(), set()
+                    return {var}, set(), set(), {var}
+                return set(), {var}, {var}, set()
+        if op == "||":
+            l_nn, l_null, l_fnn, l_fnull = _null_edge_facts(cond_unwrapped.left, summaries)
+            r_nn, r_null, r_fnn, r_fnull = _null_edge_facts(cond_unwrapped.right, summaries)
+            return (
+                l_nn.intersection(r_nn),
+                l_null.intersection(r_null),
+                l_fnn.union(r_fnn),
+                l_fnull.union(r_fnull),
+            )
+        if op == "&&":
+            l_nn, l_null, l_fnn, l_fnull = _null_edge_facts(cond_unwrapped.left, summaries)
+            r_nn, r_null, r_fnn, r_fnull = _null_edge_facts(cond_unwrapped.right, summaries)
+            return (
+                l_nn.union(r_nn),
+                l_null.union(r_null),
+                l_fnn.intersection(r_fnn),
+                l_fnull.intersection(r_fnull),
+            )
+    return empty
+
+
+def _simple_null_facts(
+    cond,
+    summaries: Optional[Dict[str, FunctionSummary]] = None,
+) -> Tuple[Set[str], Set[str]]:
+    """Return (true-edge nonnull facts, false-edge nonnull facts)."""
+    true_nn, _true_null, false_nn, _false_null = _null_edge_facts(cond, summaries)
+    return true_nn, false_nn
 
 
 def _direct_deref_var(node) -> Optional[str]:
@@ -225,7 +273,11 @@ def _direct_deref_var(node) -> Optional[str]:
     return str(inner.name) if inner is not None and type(inner).__name__ == "ID" else None
 
 
-def _guarded_expression_uses(node, known_nonnull: Optional[Set[str]] = None):
+def _guarded_expression_uses(
+    node,
+    known_nonnull: Optional[Set[str]] = None,
+    summaries: Optional[Dict[str, FunctionSummary]] = None,
+):
     """Yield ``(kind, payload, known_nonnull)`` for expression uses."""
     if node is None:
         return
@@ -233,37 +285,46 @@ def _guarded_expression_uses(node, known_nonnull: Optional[Set[str]] = None):
     kind = type(node).__name__
 
     if kind in {"If", "While", "DoWhile", "Switch"}:
-        yield from _guarded_expression_uses(getattr(node, "cond", None), known)
+        yield from _guarded_expression_uses(getattr(node, "cond", None), known, summaries)
         return
     if kind == "For":
-        yield from _guarded_expression_uses(getattr(node, "cond", None), known)
+        yield from _guarded_expression_uses(getattr(node, "cond", None), known, summaries)
         return
 
     if kind == "FuncCall":
         yield "call", node, known
+        # A truthy Is*-style predicate proves its checked pointer args nonnull for
+        # any later use in the same expression (e.g. ``IsString(p) && p->x``).
+        call_nn, _ = _simple_null_facts(node, summaries)
+        arg_known = known | call_nn
         for arg in list(getattr(node.args, "exprs", []) or []) if node.args else []:
-            yield from _guarded_expression_uses(arg, known)
+            yield from _guarded_expression_uses(arg, arg_known, summaries)
         return
 
     if kind == "BinaryOp" and getattr(node, "op", None) in {"&&", "||"}:
-        yield from _guarded_expression_uses(node.left, known)
-        true_nonnull, false_nonnull = _simple_null_facts(node.left)
+        yield from _guarded_expression_uses(node.left, known, summaries)
+        true_nonnull, false_nonnull = _simple_null_facts(node.left, summaries)
         right_known = known | (true_nonnull if node.op == "&&" else false_nonnull)
-        yield from _guarded_expression_uses(node.right, right_known)
+        yield from _guarded_expression_uses(node.right, right_known, summaries)
         return
 
     if kind == "TernaryOp":
-        yield from _guarded_expression_uses(node.cond, known)
-        true_nonnull, false_nonnull = _simple_null_facts(node.cond)
-        yield from _guarded_expression_uses(node.iftrue, known | true_nonnull)
-        yield from _guarded_expression_uses(node.iffalse, known | false_nonnull)
+        yield from _guarded_expression_uses(node.cond, known, summaries)
+        true_nonnull, false_nonnull = _simple_null_facts(node.cond, summaries)
+        yield from _guarded_expression_uses(node.iftrue, known | true_nonnull, summaries)
+        yield from _guarded_expression_uses(node.iffalse, known | false_nonnull, summaries)
+        return
+
+    if kind == "UnaryOp" and getattr(node, "op", None) == "!":
+        # Negation does not itself dereference; keep walking with unchanged known.
+        yield from _guarded_expression_uses(node.expr, known, summaries)
         return
 
     deref_var = _direct_deref_var(node)
     if deref_var:
         yield "deref", deref_var, known
     for _, child in node.children():
-        yield from _guarded_expression_uses(child, known)
+        yield from _guarded_expression_uses(child, known, summaries)
 
 
 def _process_call_effects(
@@ -482,7 +543,7 @@ def _event_payload(
         default_line = 1
     deref_lines = _deref_vars_with_lines(ast_node, default_line=default_line, line_map=line_map)
     # Known callees consume pointer arguments just like explicit dereferences.
-    for use_kind, payload, guarded in _guarded_expression_uses(ast_node):
+    for use_kind, payload, guarded in _guarded_expression_uses(ast_node, summaries=summaries):
         if use_kind == "deref":
             continue
         summary = (summaries or {}).get(_format_pycparser_expr(payload.name))

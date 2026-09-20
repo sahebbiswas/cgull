@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Honor short-circuit OR/AND and negated null checks, callee Is*-style truthy-implies-nonnull predicates, and cannot_access-style macros in CGULL-004 so cJSON-class false positives drop while unchecked public setters still report (#551).
+
 ### Changed
 - Collect deallocation calls in `_freed_vars` with a single AST walk instead of one recursive search per configured deallocator (#547).
 - Cache parsed conditional-directive IR per unique source string for the duration of a scan so reachability, simplification, and concrete resolution reuse one parse (#546).
