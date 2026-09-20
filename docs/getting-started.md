@@ -36,7 +36,7 @@ cgull init
 
 On an interactive terminal, C-GULL offers three finding profiles:
 
-- **Focused (recommended/default):** enables all security/correctness checks while explicitly skipping only `CGULL-019` and `CGULL-025`, the two opinionated low-severity policy checks;
+- **Focused (recommended/default):** enables all security/correctness checks while explicitly skipping only `CGULL-018`, `CGULL-019`, and `CGULL-025`, the three opinionated low-severity policy checks;
 - **Comprehensive:** enables every registered rule;
 - **Custom:** shows each rule's ID, name, category, and severity and lets you select exclusions explicitly.
 

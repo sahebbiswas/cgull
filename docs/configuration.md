@@ -299,3 +299,43 @@ API exposes `CGullConfig.warnings`, `IncludeResolver.warnings` (keyed by canonic
 path), and `ScanResult.configuration_warnings`. Explicit API roots keep their
 existing source-directory resolution semantics; absolute paths avoid ambiguity
 when scanning multiple source directories.
+
+## Finding profiles for security scans
+
+`cgull scan TARGET --profile focused` and `cgull rules --profile focused` use the
+same focused exclusions as newly generated `cgull init --profile focused` configs:
+
+| Rule | Policy check excluded by focused |
+| --- | --- |
+| CGULL-018 | Use of goto statements |
+| CGULL-019 | Explicit void parameter style |
+| CGULL-025 | Assertion placement |
+
+All other rules remain eligible, including all built-in High/Medium checks.
+An unconfigured scan with no `--profile` enables all registered rules.
+`--profile comprehensive` adds no exclusions. Both profiles retain explicit
+`[rules.skip]` entries and severity overrides from the loaded configuration;
+comprehensive does not undo project policy. To re-enable a rule excluded in an
+existing focused config, remove its `[rules.skip]` entry and scan without focused.
+Existing configs are never rewritten automatically.
+
+Profiles select rules, not preprocessor variants: `--config-strategy` is independent.
+For example:
+
+```bash
+cgull scan cJSON.c cJSON.h --profile focused --format json -o cjson.json
+cgull rules --profile focused
+```
+
+Reports separate **Security/correctness** from **Policy/quality**. The latter
+contains CGULL-013, 014, 016, 017, 018, 019, 020, 025, 041, 042, 043, 045, 054,
+and 055 (each with the `CGULL-` prefix). Other rules, including banned APIs
+(CGULL-001), remain in security/correctness. These are triage groups, not claims
+of exploitability or confidence. Grouping never suppresses a finding, changes its
+severity, or changes `--fail-on` behavior; even High policy findings remain High.
+Counts reflect only reported findings after severity/baseline filtering.
+
+JSON exposes `summary.finding_groups.security_correctness` and
+`summary.finding_groups.policy_quality`; SARIF exposes the same counts under
+`runs[].invocations[].properties.findingGroups`. Terminal and Markdown summaries
+show both groups alongside the existing totals and severity counts.
