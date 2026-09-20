@@ -134,3 +134,19 @@ def test_pointer_minus_integer_on_maybe_null_reports():
     issues = scan(code)
     assert len(issues) == 1
     assert "pointer arithmetic" in issues[0].message.lower() or "arithmetic" in issues[0].message.lower()
+
+
+def test_arith_does_not_prove_nonnull_for_later_deref():
+    """Additive use must not mark the pointer NON_NULL for later *p (#559 Sourcery)."""
+    code = """
+    int f(int off) {
+        char *p = 0;
+        (void)(p + off);
+        return *p;
+    }
+    """
+    issues = scan(code)
+    assert len(issues) == 2
+    messages = " | ".join(i.message for i in issues)
+    assert "arithmetic" in messages.lower()
+    assert "dereferenced" in messages.lower() or "dereference" in messages.lower()

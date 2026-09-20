@@ -147,28 +147,27 @@ def _deref_vars_with_lines(
     if node is None:
         return result
     kind = type(node).__name__
-    matched_vars: List[str] = []
+    # Additive pointer arithmetic is intentionally NOT recorded in ``derefs``.
+    # Legacy CFG dataflow treats every deref as establishing NON_NULL on exit;
+    # ``p + off`` must not prove ``p`` non-null for later statements. Arithmetic
+    # uses are reported via ``_guarded_expression_uses`` ("arith") instead.
+    matched_var = None
     if kind == "UnaryOp" and getattr(node, "op", None) == "*":
         inner = _unwrap_cast(node.expr)
         if inner is not None and type(inner).__name__ == "ID":
-            matched_vars.append(str(inner.name))
+            matched_var = str(inner.name)
     elif kind == "ArrayRef":
         inner = _unwrap_cast(node.name)
         if inner is not None and type(inner).__name__ == "ID":
-            matched_vars.append(str(inner.name))
+            matched_var = str(inner.name)
     elif kind == "StructRef":
         inner = _unwrap_cast(node.name)
         if inner is not None and type(inner).__name__ == "ID":
-            matched_vars.append(str(inner.name))
-    else:
-        for id_node in _pointer_arith_operand_ids(node):
-            matched_vars.append(str(id_node.name))
+            matched_var = str(inner.name)
 
-    if matched_vars:
+    if matched_var:
         line = _node_use_line(node, default_line, line_map)
-        for matched_var in matched_vars:
-            if matched_var not in result:
-                result[matched_var] = line
+        result[matched_var] = line
 
     for _, child in node.children():
         child_res = _deref_vars_with_lines(

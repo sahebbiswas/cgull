@@ -57,9 +57,10 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                 # 1. Definite or possible NULL dereferences with known contracts.
                 sorted_nodes = sorted(cfg.nodes.values(), key=lambda n: n.node_id)
                 for node in sorted_nodes:
-                    if not node.derefs:
+                    unchecked = _unchecked_deref_vars(node, summaries)
+                    if not unchecked:
                         continue
-                    for deref_var in sorted(_unchecked_deref_vars(node, summaries)):
+                    for deref_var in sorted(unchecked):
                         null_status = cfg.query_nullness(deref_var, node.node_id)
                         if null_status in {Nullness.NULL, Nullness.MAYBE_NULL}:
                             use_kind = _null_unsafe_use_kind(node, deref_var, summaries)
@@ -163,11 +164,6 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     # Expression-local truthy guard on the same line, e.g.
                     # `if (p) return p + off;` — avoid lexical FNs without
                     # claiming a function-wide check from a non-dominating if.
-                    same_line_truthy = bool(
-                        re.search(rf'\bif\s*\(\s*{re.escape(p_name)}\s*\)', line)
-                    )
-                    if same_line_truthy and arith_match and deref_match is None:
-                        continue
                     use_match = deref_match or arith_match
                     if use_match:
                         if deref_match is None and arith_match is not None:
