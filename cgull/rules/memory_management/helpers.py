@@ -112,7 +112,10 @@ _AGGREGATE_EFFECT_SKIP_KINDS = {
 }
 
 
-def _apply_aggregate_definition_effects(cfg: StructuredCFG) -> None:
+def _apply_aggregate_definition_effects(
+    cfg: StructuredCFG,
+    pointer_locals: Optional[Set[str]] = None,
+) -> None:
     """Treat member/element stores as definitions of the aggregate root.
 
     Scalar CFG writes intentionally omit ``s.field`` / ``a[i]`` targets so
@@ -120,10 +123,23 @@ def _apply_aggregate_definition_effects(cfg: StructuredCFG) -> None:
     definite assignment, so project those stores onto the root before
     initialization dataflow.
 
+    Only *direct* aggregate stores count:
+    - ``s.field = …`` / ``s.a.b = …`` (``.`` member path)
+    - ``buf[i] = …`` / ``s.arr[i] = …`` when the root is not a pointer local
+
+    Indirect stores such as ``p[i] = …`` or ``p->field = …`` *use* the pointer
+    value; they must not be treated as initializing ``p`` (that FN broke
+    CGULL-021 conditional-assignment coverage).
+
     Condition nodes store the full ``If``/``While`` AST, so walking their
     storage effects would incorrectly attribute branch-body writes to the
     condition. Skip structural/condition kinds.
     """
+    pointer_locals = pointer_locals or set()
+
+    def _projects_as_object_init(root: Optional[str]) -> bool:
+        return bool(root) and root not in pointer_locals
+
     for node in cfg.nodes.values():
         if node.kind in _AGGREGATE_EFFECT_SKIP_KINDS:
             continue
@@ -131,18 +147,24 @@ def _apply_aggregate_definition_effects(cfg: StructuredCFG) -> None:
         if ast_node is None:
             continue
         for effect in ordered_storage_effects(ast_node):
-            if effect.action == "write" and effect.root:
+            # Direct ``.`` member stores only — not ``->`` through a pointer.
+            if (
+                effect.action == "write"
+                and effect.root
+                and effect.is_direct_subobject
+                and _projects_as_object_init(effect.root)
+            ):
                 node.writes.add(effect.root)
         kind = type(ast_node).__name__
         if kind == "Assignment":
             root = _array_lvalue_root(getattr(ast_node, "lvalue", None))
-            if root:
+            if _projects_as_object_init(root):
                 node.writes.add(root)
         elif kind == "UnaryOp" and getattr(ast_node, "op", None) in {
             "++", "--", "p++", "p--"
         }:
             root = _array_lvalue_root(getattr(ast_node, "expr", None))
-            if root:
+            if _projects_as_object_init(root):
                 node.writes.add(root)
 
 
@@ -213,12 +235,21 @@ def _ast_cfg_for_function(
     if summaries is None:
         summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs)
     cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
-    _apply_aggregate_definition_effects(cfg)
     array_locals = {
         var.name
         for var in fn.variables.values()
         if getattr(var, "is_array", False) and var.name
     }
+    # Pointer objects (not arrays-of-pointers) are never initialized by
+    # ``p[i]`` / ``p->field`` stores — those use the pointer value.
+    pointer_locals = {
+        var.name
+        for var in fn.variables.values()
+        if getattr(var, "is_pointer", False)
+        and not getattr(var, "is_array", False)
+        and var.name
+    }
+    _apply_aggregate_definition_effects(cfg, pointer_locals=pointer_locals)
     _apply_output_summary_effects(cfg, summaries, array_locals=array_locals)
     initial_initialized = (
         set(p.name for p in fn.parameters if p.name)
