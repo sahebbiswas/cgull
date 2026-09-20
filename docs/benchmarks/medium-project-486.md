@@ -20,6 +20,21 @@ The default generated workload uses 16 source modules, 10 helper functions per m
 
 `--jobs 0` means C-GULL's normal automatic worker selection. Absolute timings depend on the host, so optimization PRs should compare before/after runs on the same machine, Python version, workload hash, scan mode, and job count rather than adding ordinary-CI wall-clock thresholds.
 
+### Larger repeated-work stress preset
+
+Issue #542 adds a deterministic `large` preset with 4 modules and 160 helper functions per module. It is intentionally an additional stress arm rather than a replacement for the standard #486 workload:
+
+```bash
+python benchmarks/benchmark_medium_project.py \
+  --preset large \
+  --modes tu \
+  --jobs 1 \
+  --repetitions 1 \
+  --output medium-project-large.json
+```
+
+Use this preset when an optimization is expected to remove repeated CFG, event-semantics, summary, or preprocessor work whose growth is hard to see on the standard workload. Explicit `--modules`, `--functions-per-module`, and `--statements-per-function` values override the selected preset, and the artifact records both the resolved dimensions and the preset name.
+
 ## JSON artifact
 
 The artifact records:
@@ -29,6 +44,7 @@ The artifact records:
 - Scan mode, requested worker count, repetition, analyzed physical LOC, unique source LOC, include-expanded analysis volume (`expanded_analysis_lines`), throughput, finding count, parser fallback count, and peak RSS where the platform exposes `ru_maxrss`.
 - Stable semantic snapshots containing findings/fingerprints, parser status counts, scan errors, and file accounting.
 - Median wall/throughput/phase values plus expanded analysis volume for each `mode/jobs` arm.
+- Raw `pass_metrics` for each sample and `median_pass_metrics` for each arm, covering invocation counts, inclusive wall activity, calls per analyzed file, and calls per unique generated source-function definition.
 - A parity result. Jobs and repetitions must produce identical semantics and expanded volume within a mode; file and TU modes must produce the same findings/fingerprints. File/TU file accounting and expanded volume are intentionally allowed to differ because TU mode does not separately scan included headers as standalone roots.
 
 Expanded volume is recomputed for exactly the roots reported in `file_summaries` immediately after the timed scan, using the same include roots and defined symbols. That second expansion is excluded from `total_wall_seconds`, all phase timers, and the peak-RSS sample so the measurement itself does not inflate the scan being measured.
@@ -60,6 +76,24 @@ The activity timings overlap by design. For example, parser and include-expansio
 For the default multi-file HYBRID workload, preparation performs parser/include work before rule execution, and rule workers receive prepared units. Multi-worker preparation returns benchmark-only parser/include activity counters to the coordinator; these are aggregate activity durations, not wall time. TU discovery can now perform most independent work before `prepare_project`, so use `preparation_wall_seconds` to compare complete preparation. A run that degrades out of that prepared path should be treated as a different semantic/degradation baseline rather than compared as an ordinary performance arm.
 
 Production scan telemetry is intentionally unchanged: these hooks exist only inside the benchmark process, avoiding measurement instrumentation overhead during normal C-GULL use.
+
+## Repeated-pass counters
+
+The #542 instrumentation wraps five hot paths only while the benchmark is active:
+
+| Counter | What it measures |
+| --- | --- |
+| `build_cfg` | Every invocation of the public CFG construction entry point, including cache hits or semantic rebuild paths routed through it. |
+| `apply_cfg_event_semantics` | Reapplication of allocation/deallocation/call-summary event semantics to a structural CFG clone. |
+| `clone_structural_cfg` | Structural CFG clone operations used to isolate mutable analysis state. |
+| `analyze_function_summaries_detailed` | Full detailed function-summary construction passes. |
+| `parse_conditional_directives` | Symbolic conditional-directive parse passes over source text. |
+
+Each sample records `invocation_count` and `inclusive_wall_seconds`. The arm summary reports medians plus `median_calls_per_analyzed_file` and `median_calls_per_generated_function`; the latter denominator is the count of unique function definitions emitted by the workload generator, so TU-expanded header functions can legitimately make the ratio exceed one even before other repeated analysis is considered.
+
+Parallel scan workers write a cumulative benchmark-only snapshot before each work item resolves and again when the process exits, and the coordinator merges the final per-worker snapshots with its own preparation/indexing activity. Each sample records how many worker snapshot files were merged, how many were expected, and whether the set was complete; a hard worker-process loss is therefore visible instead of silently undercounting the arm. The small snapshot writes are benchmark instrumentation and are included in end-to-end wall time, so before/after wall comparisons must use the same harness revision. This keeps `jobs>1` arms from reporting coordinator-only counts. The pass timings are inclusive activity timings: calls can nest, and activity from separate worker processes is aggregated. **Do not add the five pass times together or compare their sum with total wall time.** Use the counts to prove repeated work disappeared, the individual inclusive timers to locate its cost, and `total_wall_seconds` for end-to-end impact.
+
+The wrappers are installed and restored by the benchmark context even when a sample raises. No production telemetry fields or normal scan entry points are modified persistently.
 
 ## Baseline and optimization workflow
 
