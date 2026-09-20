@@ -74,6 +74,7 @@ class PhaseRecorder:
     seconds: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     pass_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     pass_seconds: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    worker_pids: set[int] = field(default_factory=set)
     project_depth: int = 0
 
     def add(self, name: str, elapsed: float) -> None:
@@ -398,6 +399,7 @@ def phase_instrumentation(
     original_index_build = project_analysis.ProjectSummaryIndex.build
     original_scan_worker_item = parallel_workers._scan_worker_item
     original_build_parallel_work_item = parallel_workers.build_parallel_work_item
+    original_process_pool_executor = parallel_workers.ProcessPoolExecutor
     pass_restorations = pass_metrics.install_pass_wrappers(recorder)
     previous_worker_metrics_dir = os.environ.get(pass_metrics.WORKER_METRICS_ENV)
 
@@ -485,6 +487,14 @@ def phase_instrumentation(
             return item
         return pass_metrics.attach_worker_metrics_dir(item, worker_metrics_dir)
 
+    class BenchmarkProcessPoolExecutor(original_process_pool_executor):
+        """Record the worker processes the production executor actually created."""
+
+        def shutdown(self, *args: Any, **kwargs: Any):
+            processes = getattr(self, "_processes", None) or {}
+            recorder.worker_pids.update(int(pid) for pid in processes)
+            return super().shutdown(*args, **kwargs)
+
     engine.os.walk = timed_walk
     TUIncludeExpander.expand = timed_expand
     CASTParser.parse = timed_parse
@@ -497,6 +507,7 @@ def phase_instrumentation(
     if worker_metrics_dir is not None:
         os.environ[pass_metrics.WORKER_METRICS_ENV] = str(worker_metrics_dir)
         parallel_workers.build_parallel_work_item = benchmark_build_parallel_work_item
+        parallel_workers.ProcessPoolExecutor = BenchmarkProcessPoolExecutor
         parallel_workers._scan_worker_item = pass_metrics.benchmark_scan_worker_item
     try:
         yield
@@ -512,6 +523,7 @@ def phase_instrumentation(
         project_analysis.ProjectSummaryIndex.build = original_index_build
         parallel_workers._scan_worker_item = original_scan_worker_item
         parallel_workers.build_parallel_work_item = original_build_parallel_work_item
+        parallel_workers.ProcessPoolExecutor = original_process_pool_executor
         if previous_worker_metrics_dir is None:
             os.environ.pop(pass_metrics.WORKER_METRICS_ENV, None)
         else:
@@ -729,12 +741,7 @@ def run_sample(project: Path, *, mode: str, jobs: int, repetition: int) -> Sampl
     expanded_lines = expanded_analysis_lines(result, config=config)
     telemetry = telemetry_for(result)
     snapshot = _semantic_snapshot(result)
-    resolved_jobs = (os.cpu_count() or 1) if jobs == 0 else max(1, jobs)
-    expected_worker_metric_snapshots = (
-        min(resolved_jobs, len(result.file_summaries))
-        if resolved_jobs > 1 and result.file_summaries
-        else 0
-    )
+    expected_worker_metric_snapshots = len(recorder.worker_pids)
     return Sample(
         mode=mode,
         jobs=jobs,
