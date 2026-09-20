@@ -397,6 +397,7 @@ def phase_instrumentation(
     original_index_init = project_analysis.ProjectSummaryIndex.__init__
     original_index_build = project_analysis.ProjectSummaryIndex.build
     original_scan_worker_item = parallel_workers._scan_worker_item
+    original_build_parallel_work_item = parallel_workers.build_parallel_work_item
     pass_restorations = pass_metrics.install_pass_wrappers(recorder)
     previous_worker_metrics_dir = os.environ.get(pass_metrics.WORKER_METRICS_ENV)
 
@@ -478,6 +479,12 @@ def phase_instrumentation(
                 time.perf_counter() - started,
             )
 
+    def benchmark_build_parallel_work_item(*args: Any, **kwargs: Any):
+        item = original_build_parallel_work_item(*args, **kwargs)
+        if worker_metrics_dir is None:
+            return item
+        return pass_metrics.attach_worker_metrics_dir(item, worker_metrics_dir)
+
     engine.os.walk = timed_walk
     TUIncludeExpander.expand = timed_expand
     CASTParser.parse = timed_parse
@@ -489,6 +496,7 @@ def phase_instrumentation(
     project_analysis.ProjectSummaryIndex.build = timed_index_build
     if worker_metrics_dir is not None:
         os.environ[pass_metrics.WORKER_METRICS_ENV] = str(worker_metrics_dir)
+        parallel_workers.build_parallel_work_item = benchmark_build_parallel_work_item
         parallel_workers._scan_worker_item = pass_metrics.benchmark_scan_worker_item
     try:
         yield
@@ -503,6 +511,7 @@ def phase_instrumentation(
         project_analysis.ProjectSummaryIndex.__init__ = original_index_init
         project_analysis.ProjectSummaryIndex.build = original_index_build
         parallel_workers._scan_worker_item = original_scan_worker_item
+        parallel_workers.build_parallel_work_item = original_build_parallel_work_item
         if previous_worker_metrics_dir is None:
             os.environ.pop(pass_metrics.WORKER_METRICS_ENV, None)
         else:
