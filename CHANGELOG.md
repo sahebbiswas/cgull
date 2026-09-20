@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- CGULL-049: restore ISO unsigned/`size_t` semantics for fake_libc `typedef int size_t` only when that typedef is the *source* of a conversion into a signed destination, so accumulate-then-cast-to-int patterns such as `cJSON_GetArraySize` report CWE-196 without treating signed→`size_t` (Juliet CWE-195) as conversions; still suppress when a dominating `size <= INT_MAX` (or equivalent) guard proves the value fits (#558).
 - Honor sizeof-bounded loops, can_access_at_index-style cursor guards, and ensure()/realloc-sized buffer returns in CGULL-007 so cJSON-class false positives drop while genuine OOB and needs-context cases like parse_hex4 remain (#553).
 - Honor short-circuit OR/AND and negated null checks, callee Is*-style truthy-implies-nonnull predicates, and cannot_access-style macros in CGULL-004 so cJSON-class false positives drop while unchecked public setters still report (#551).
 
