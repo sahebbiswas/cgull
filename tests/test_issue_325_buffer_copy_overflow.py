@@ -203,3 +203,67 @@ def test_rule_metadata_targets_stack_and_heap_buffer_overflow_cwes():
     assert "snprintf" in rule.sample_remediated_code
     assert "memcpy" not in rule.TARGET_FUNCS
     assert "memmove" not in rule.TARGET_FUNCS
+
+
+def test_sprintf_post_length_capacity_reject_is_not_reported():
+    """cJSON print_number-style fail-closed length check (#562)."""
+    source = """
+int print_number(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(number_buffer);
+    return length;
+}
+"""
+    assert _scan(source) == []
+
+
+def test_sprintf_post_length_reject_with_intermediate_sscanf_is_not_reported():
+    source = """
+int print_number(double d) {
+    unsigned char number_buffer[26];
+    int length;
+    double test;
+    length = sprintf((char*)number_buffer, "%1.15g", d);
+    if ((sscanf((char*)number_buffer, "%lg", &test) != 1)) {
+        length = sprintf((char*)number_buffer, "%1.17g", d);
+    }
+    if ((length < 0) || (length > (int)(sizeof(number_buffer) - 1))) {
+        return 0;
+    }
+    char *out = ensure(length + 1);
+    memcpy(out, number_buffer, (size_t)length + 1);
+    return 1;
+}
+char *ensure(int n);
+"""
+    assert _scan(source) == []
+
+
+def test_sprintf_without_post_length_check_remains_reported():
+    source = """
+void bad(double d) {
+    char number_buffer[26];
+    sprintf(number_buffer, "%1.15g", d);
+    puts(number_buffer);
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_use_before_length_check_remains_reported():
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    puts(number_buffer);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))

@@ -29,3 +29,18 @@ void test_tp_scanf_unbounded_scanset(void) {
     char buffer[8];
     scanf("%[a-z]", buffer); // expect: CGULL-048
 }
+
+void test_tp_sprintf_use_without_length_check(double d) {
+    char number_buffer[26];
+    sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    puts(number_buffer);
+}
+
+void test_tp_sprintf_use_before_length_check(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d); // expect: CGULL-048
+    puts(number_buffer);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return;
+    }
+}

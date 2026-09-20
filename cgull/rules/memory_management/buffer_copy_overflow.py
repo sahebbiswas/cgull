@@ -2,10 +2,13 @@
 
 import ast
 import re
-from typing import List, Optional, Tuple
+from collections import deque
+from typing import List, Optional, Set, Tuple
+
+from pycparser import c_ast
 
 from ...ast_analyzer import CASTContext, _format_pycparser_expr
-from ...cfg import find_function_def
+from ...cfg import build_cfg, find_function_def
 from ...models import AnalysisEngine, FixType, Issue, RuleCategory, Severity
 from .helpers import _source_snippet
 from .memcpy_struct_member_overflow import MemcpyStructMemberOverflowRule
@@ -150,6 +153,333 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
             arg_index += 1
         return result
 
+    # Local inspect/rewrite callees that read or rewrite the temporary buffer
+    # without escaping its contents to a caller-visible sink.
+    _BUFFER_LOCAL_INSPECT = frozenset({
+        "sprintf",
+        "snprintf",
+        "vsprintf",
+        "vsnprintf",
+        "sscanf",
+        "scanf",
+        "fscanf",
+        "vsscanf",
+        "strlen",
+        "strnlen",
+        "strcmp",
+        "strncmp",
+        "memcmp",
+        "memchr",
+        "strchr",
+        "strrchr",
+        "strstr",
+        "atoi",
+        "atol",
+        "atoll",
+        "strtod",
+        "strtof",
+        "strtol",
+        "strtoll",
+        "strtoul",
+        "strtoull",
+    })
+    _BAIL_CALLEES = frozenset({
+        "exit",
+        "_exit",
+        "_Exit",
+        "abort",
+        "quick_exit",
+        "pthread_exit",
+        "longjmp",
+        "siglongjmp",
+    })
+
+    @staticmethod
+    def _dest_base_name(dest_expr: str) -> Optional[str]:
+        """Strip casts/address-of noise and return a plain destination identifier."""
+        dest_clean = dest_expr.strip()
+        dest_clean = re.sub(
+            r'^\s*\(\s*(?:const\s+)?(?:char|int8_t|uint8_t|void|unsigned\s+char|signed\s+char|int)\s*\*+\s*\)\s*',
+            '',
+            dest_clean,
+        ).strip()
+        while dest_clean.startswith('(') and dest_clean.endswith(')'):
+            dest_clean = dest_clean[1:-1].strip()
+        if dest_clean.startswith('&'):
+            dest_clean = dest_clean[1:].strip()
+        m_idx = re.match(r'^([A-Za-z_]\w*)\s*\[\s*\d+\s*\]$', dest_clean)
+        if m_idx:
+            dest_clean = m_idx.group(1)
+        if re.fullmatch(r'[A-Za-z_]\w*', dest_clean):
+            return dest_clean
+        return None
+
+    @staticmethod
+    def _strip_ast_casts(node):
+        while isinstance(node, c_ast.Cast):
+            node = node.expr
+        return node
+
+    @classmethod
+    def _is_int_constant(cls, node, value: int) -> bool:
+        node = cls._strip_ast_casts(node)
+        if isinstance(node, c_ast.Constant) and node.type in {"int", "unsigned int", "long"}:
+            token = re.sub(r'[uUlL]+$', '', str(node.value))
+            try:
+                return int(token, 0) == value
+            except ValueError:
+                return False
+        if isinstance(node, c_ast.UnaryOp) and node.op == '+' and cls._is_int_constant(node.expr, value):
+            return True
+        if isinstance(node, c_ast.UnaryOp) and node.op == '-' and cls._is_int_constant(node.expr, -value):
+            return True
+        return False
+
+    @classmethod
+    def _is_length_ref(cls, node, length_var: str) -> bool:
+        node = cls._strip_ast_casts(node)
+        return isinstance(node, c_ast.ID) and node.name == length_var
+
+    @classmethod
+    def _is_sizeof_dest(cls, node, dest_name: str) -> bool:
+        node = cls._strip_ast_casts(node)
+        if not (isinstance(node, c_ast.UnaryOp) and node.op == 'sizeof'):
+            return False
+        inner = cls._strip_ast_casts(node.expr)
+        if isinstance(inner, c_ast.ID) and inner.name == dest_name:
+            return True
+        # sizeof(dest) may appear as a parenthesized identifier expression.
+        if isinstance(inner, c_ast.Typename):
+            return False
+        return False
+
+    @classmethod
+    def _is_sizeof_dest_minus_one(cls, node, dest_name: str) -> bool:
+        node = cls._strip_ast_casts(node)
+        if isinstance(node, c_ast.BinaryOp) and node.op == '-':
+            return cls._is_sizeof_dest(node.left, dest_name) and cls._is_int_constant(node.right, 1)
+        return False
+
+    @classmethod
+    def _is_capacity_overflow_compare(cls, node, length_var: str, dest_name: str) -> bool:
+        """True for length-vs-capacity compares that reject an overflowing sprintf result."""
+        if not isinstance(node, c_ast.BinaryOp):
+            return False
+        op = node.op
+        left, right = node.left, node.right
+
+        def length_side(side):
+            return cls._is_length_ref(side, length_var)
+
+        def capacity_ge(side):
+            # length >= sizeof(dest)
+            return cls._is_sizeof_dest(side, dest_name)
+
+        def capacity_gt_minus_one(side):
+            # length > sizeof(dest) - 1
+            return cls._is_sizeof_dest_minus_one(side, dest_name)
+
+        # length >= sizeof(dest)  /  length > sizeof(dest) - 1  /  length > sizeof(dest)
+        if length_side(left):
+            if op == '>=' and capacity_ge(right):
+                return True
+            if op == '>' and (capacity_gt_minus_one(right) or capacity_ge(right)):
+                return True
+        # sizeof(dest) <= length  /  sizeof(dest) - 1 < length
+        if length_side(right):
+            if op == '<=' and capacity_ge(left):
+                return True
+            if op == '<' and (capacity_gt_minus_one(left) or capacity_ge(left)):
+                return True
+        return False
+
+    @classmethod
+    def _or_clauses(cls, node):
+        if isinstance(node, c_ast.BinaryOp) and node.op == '||':
+            return cls._or_clauses(node.left) + cls._or_clauses(node.right)
+        return [node]
+
+    @classmethod
+    def _is_length_capacity_reject_cond(cls, cond, length_var: str, dest_name: str) -> bool:
+        if cond is None:
+            return False
+        return any(
+            cls._is_capacity_overflow_compare(part, length_var, dest_name)
+            for part in cls._or_clauses(cond)
+        )
+
+    def _arg_mentions_dest(self, arg_expr: str, dest_name: str) -> bool:
+        if not dest_name:
+            return False
+        cleaned = self._dest_base_name(arg_expr) or arg_expr.strip()
+        if cleaned == dest_name:
+            return True
+        return bool(re.search(rf'\b{re.escape(dest_name)}\b', arg_expr))
+
+    def _event_escapes_buffer(self, event, dest_name: str) -> bool:
+        """True when event sends dest contents to a non-local sink."""
+        if event.kind == 'return':
+            expr = (event.expr_str or '')
+            return bool(re.search(rf'\b{re.escape(dest_name)}\b', expr))
+
+        for call in getattr(event, 'calls', ()) or ():
+            callee = call.direct_callee or ''
+            if callee in self._BUFFER_LOCAL_INSPECT:
+                continue
+            if callee in self._BAIL_CALLEES:
+                continue
+            for arg in call.actual_arguments:
+                if self._arg_mentions_dest(arg, dest_name):
+                    return True
+        return False
+
+    def _branch_only_bails(self, cfg, start_id: int, dest_name: str) -> bool:
+        """Overflow branch must exit without escaping the buffer."""
+        if start_id not in cfg.nodes:
+            return False
+        seen: Set[int] = set()
+        stack = [start_id]
+        reached_exit = False
+        while stack:
+            nid = stack.pop()
+            if nid in seen:
+                continue
+            seen.add(nid)
+            node = cfg.nodes[nid]
+            if self._event_escapes_buffer(node, dest_name):
+                return False
+            if node.kind in {'return', 'goto'} or not node.successors:
+                # Terminal or unresolved edge: treat no-successor non-return as non-bail.
+                if node.kind == 'return':
+                    reached_exit = True
+                    continue
+                for call in getattr(node, 'calls', ()) or ():
+                    if (call.direct_callee or '') in self._BAIL_CALLEES:
+                        reached_exit = True
+                        break
+                else:
+                    if node.kind == 'goto':
+                        reached_exit = True
+                        continue
+                    if not node.successors and node.kind in {'break', 'continue'}:
+                        reached_exit = True
+                        continue
+                    if not node.successors:
+                        return False
+                continue
+            for call in getattr(node, 'calls', ()) or ():
+                if (call.direct_callee or '') in self._BAIL_CALLEES:
+                    reached_exit = True
+                    break
+            for succ in node.successors:
+                stack.append(succ)
+        return reached_exit
+
+    def _reject_safe_successor(self, cfg, cond_id: int, dest_name: str, length_var: str) -> Optional[int]:
+        """Return the safe (non-overflow) successor id for a length-vs-capacity reject."""
+        node = cfg.nodes.get(cond_id)
+        if node is None or node.kind != 'if_cond' or len(node.successors) < 1:
+            return None
+        ast_node = getattr(node, '_ast_node', None)
+        cond = getattr(ast_node, 'cond', None) if ast_node is not None else None
+        if not self._is_length_capacity_reject_cond(cond, length_var, dest_name):
+            return None
+        true_succ = node.successors[0]
+        if not self._branch_only_bails(cfg, true_succ, dest_name):
+            return None
+        if len(node.successors) > 1:
+            return node.successors[1]
+        # No else: safe path is whatever follows; treat as no explicit safe edge id
+        # by returning a sentinel that means "any non-true successor path".
+        return -1
+
+    def _has_post_sprintf_length_defense(
+        self,
+        funcdef,
+        ast_ctx: CASTContext,
+        dest_expr: str,
+        line_no: int,
+    ) -> bool:
+        """Credit fail-closed length-vs-capacity checks after sprintf into a fixed buffer.
+
+        Suppress CGULL-048 when the sprintf return value is captured and every
+        path from that write to an external use of the destination passes through
+        a length-vs-``sizeof(dest)`` reject that bails out (cJSON ``print_number``).
+        """
+        dest_name = self._dest_base_name(dest_expr)
+        if not dest_name or funcdef is None:
+            return False
+
+        cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, 'line_map', None))
+        if cfg is None or cfg.entry is None:
+            return False
+
+        write_ids: List[Tuple[int, str]] = []
+        for nid, event in cfg.nodes.items():
+            for call in getattr(event, 'calls', ()) or ():
+                if call.direct_callee != 'sprintf':
+                    continue
+                if not call.actual_arguments:
+                    continue
+                if self._dest_base_name(call.actual_arguments[0]) != dest_name:
+                    continue
+                loc = call.source_location
+                call_line = loc.line_number if loc is not None else event.line_number
+                if call_line != line_no:
+                    continue
+                length_var = call.result_target
+                if not length_var:
+                    return False
+                write_ids.append((nid, length_var))
+        if not write_ids:
+            return False
+
+        for write_id, length_var in write_ids:
+            reject_safe = {}
+            for nid in cfg.nodes:
+                safe = self._reject_safe_successor(cfg, nid, dest_name, length_var)
+                if safe is not None:
+                    reject_safe[nid] = safe
+
+            if not reject_safe:
+                return False
+
+            # BFS: state is (node_id, passed_safe_reject).
+            visited: Set[Tuple[int, bool]] = set()
+            queue = deque([(write_id, False)])
+            saw_reject = False
+            while queue:
+                nid, passed = queue.popleft()
+                state = (nid, passed)
+                if state in visited:
+                    continue
+                visited.add(state)
+                node = cfg.nodes[nid]
+
+                if nid != write_id and self._event_escapes_buffer(node, dest_name) and not passed:
+                    return False
+
+                if nid in reject_safe:
+                    saw_reject = True
+                    true_succ = node.successors[0]
+                    safe_succ = reject_safe[nid]
+                    # Overflow / bail path: do not mark passed.
+                    queue.append((true_succ, passed))
+                    if safe_succ == -1:
+                        # No else branch encoded; remaining successors after true are safe.
+                        for succ in node.successors[1:]:
+                            queue.append((succ, True))
+                    else:
+                        queue.append((safe_succ, True))
+                    continue
+
+                for succ in node.successors:
+                    queue.append((succ, passed))
+
+            if not saw_reject:
+                return False
+        return True
+
     def _report(
         self,
         file_path: str,
@@ -287,11 +617,19 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
                                 required = len(fmt.replace('%%', '%')) + 1
                                 if required <= capacity:
                                     return
+                                if outer._has_post_sprintf_length_defense(
+                                    funcdef, ast_ctx, args[0], line_no
+                                ):
+                                    return
                                 detail = f"formatted output requires {required} bytes including NUL"
                                 issues.append(outer._report(
                                     file_path, ast_ctx, line_no, column, callee, capacity, detail
                                 ))
                                 return
+                        if outer._has_post_sprintf_length_defense(
+                            funcdef, ast_ctx, args[0], line_no
+                        ):
+                            return
                         issues.append(outer._report(
                             file_path,
                             ast_ctx,

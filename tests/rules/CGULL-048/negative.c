@@ -29,3 +29,27 @@ void test_tn_memcpy_owned_by_cgull_044(const char *source, unsigned n) {
     char buffer[8];
     memcpy(buffer, source, n);
 }
+
+int test_tn_sprintf_post_length_capacity_reject(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(number_buffer);
+    return length;
+}
+
+int test_tn_sprintf_cjson_print_number_defense(double d) {
+    unsigned char number_buffer[26];
+    int length;
+    double test;
+    length = sprintf((char*)number_buffer, "%1.15g", d);
+    if ((sscanf((char*)number_buffer, "%lg", &test) != 1)) {
+        length = sprintf((char*)number_buffer, "%1.17g", d);
+    }
+    if ((length < 0) || (length > (int)(sizeof(number_buffer) - 1))) {
+        return 0;
+    }
+    return length;
+}
