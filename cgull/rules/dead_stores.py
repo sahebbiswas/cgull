@@ -10,7 +10,7 @@ import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from .misra_and_style import DeadStoresRule as _BaseDeadStoresRule
-from ..utils import mask_string_and_char_literals
+from ..utils import mask_string_and_char_literals, strip_comments_keep_lines
 
 
 LoopInfo = Tuple[int, int, int, Set[str]]
@@ -32,16 +32,56 @@ IfChain = Tuple[
 
 
 def _matching_delimiter(source: str, start: int, opener: str, closer: str) -> Optional[int]:
-    """Return the matching delimiter position for *start*, or None if unbalanced."""
+    """Return the matching delimiter position for *start*, or None if unbalanced.
+
+    Skips C comments and string/character literals so delimiters inside them do
+    not affect nesting (e.g. ``if (cond /* ) */)`` still matches the real close).
+    """
     depth = 0
-    for pos in range(start, len(source)):
+    pos = start
+    n = len(source)
+    while pos < n:
         char = source[pos]
+        nxt = source[pos + 1] if pos + 1 < n else ""
+        if char == "/" and nxt == "/":
+            newline = source.find("\n", pos + 2)
+            pos = n if newline < 0 else newline
+            continue
+        if char == "/" and nxt == "*":
+            end = source.find("*/", pos + 2)
+            if end < 0:
+                return None
+            pos = end + 2
+            continue
+        if char == '"':
+            pos += 1
+            while pos < n:
+                c = source[pos]
+                if c == "\\":
+                    pos += 2
+                    continue
+                pos += 1
+                if c == '"':
+                    break
+            continue
+        if char == "'":
+            pos += 1
+            while pos < n:
+                c = source[pos]
+                if c == "\\":
+                    pos += 2
+                    continue
+                pos += 1
+                if c == "'":
+                    break
+            continue
         if char == opener:
             depth += 1
         elif char == closer:
             depth -= 1
             if depth == 0:
                 return pos
+        pos += 1
     return None
 
 
@@ -299,7 +339,11 @@ def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
 
 
 def _mask_source_lines(source: str) -> str:
-    return "\n".join(mask_string_and_char_literals(line) for line in source.split("\n"))
+    """Mask comments then string/char literals, preserving line/byte positions."""
+    _, comment_free = strip_comments_keep_lines(source)
+    return "\n".join(
+        mask_string_and_char_literals(line) for line in comment_free.split("\n")
+    )
 
 
 def _collect_if_else_chains(source: str) -> List[IfChain]:
@@ -322,15 +366,158 @@ def _arm_index(line: int, chain: IfChain) -> Optional[int]:
     return None
 
 
-def _condition_assigns_on_line(
+def _skip_literal_or_comment(source: str, pos: int) -> Optional[int]:
+    """If *pos* starts a comment or string/char literal, return index after it."""
+    n = len(source)
+    if pos >= n:
+        return None
+    char = source[pos]
+    nxt = source[pos + 1] if pos + 1 < n else ""
+    if char == "/" and nxt == "/":
+        newline = source.find("\n", pos + 2)
+        return n if newline < 0 else newline
+    if char == "/" and nxt == "*":
+        end = source.find("*/", pos + 2)
+        return n if end < 0 else end + 2
+    if char == '"':
+        pos += 1
+        while pos < n:
+            c = source[pos]
+            if c == "\\":
+                pos += 2
+                continue
+            pos += 1
+            if c == '"':
+                return pos
+        return n
+    if char == "'":
+        pos += 1
+        while pos < n:
+            c = source[pos]
+            if c == "\\":
+                pos += 2
+                continue
+            pos += 1
+            if c == "'":
+                return pos
+        return n
+    return None
+
+
+def _split_top_level_ternary(expr: str) -> Optional[Tuple[str, str, str]]:
+    """Split *expr* into (condition, then, else) at the outermost ``?:``."""
+    n = len(expr)
+    depth = 0
+    tern_depth = 0
+    qpos = None
+    i = 0
+    while i < n:
+        skipped = _skip_literal_or_comment(expr, i)
+        if skipped is not None:
+            i = skipped
+            continue
+        char = expr[i]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if char == "?":
+                if tern_depth == 0:
+                    qpos = i
+                tern_depth += 1
+            elif char == ":" and tern_depth > 0:
+                if tern_depth == 1 and qpos is not None:
+                    return expr[:qpos], expr[qpos + 1 : i], expr[i + 1 :]
+                tern_depth -= 1
+        i += 1
+    return None
+
+
+def _split_top_level_and_or(expr: str) -> Optional[Tuple[str, str, str]]:
+    """Split on the leftmost top-level ``&&`` / ``||`` into (left, op, right)."""
+    n = len(expr)
+    depth = 0
+    i = 0
+    while i < n:
+        skipped = _skip_literal_or_comment(expr, i)
+        if skipped is not None:
+            i = skipped
+            continue
+        char = expr[i]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and i + 1 < n:
+            pair = expr[i : i + 2]
+            if pair in ("&&", "||"):
+                return expr[:i], pair, expr[i + 2 :]
+        i += 1
+    return None
+
+
+def _expr_must_assign(expr: str, name: str) -> bool:
+    """True when every evaluation of *expr* assigns *name* (must-overwrite).
+
+    Assignments under short-circuit ``&&`` / ``||`` right operands or under a
+    single ternary arm are not must-execute. Both ternary arms assigning *name*
+    counts as must-overwrite for killing a prior store.
+    """
+    expr = expr.strip()
+    if not expr:
+        return False
+
+    ternary = _split_top_level_ternary(expr)
+    if ternary is not None:
+        cond, true_expr, false_expr = ternary
+        if _expr_must_assign(cond, name):
+            return True
+        return _expr_must_assign(true_expr, name) and _expr_must_assign(false_expr, name)
+
+    and_or = _split_top_level_and_or(expr)
+    if and_or is not None:
+        left, _op, _right = and_or
+        # Only the left operand is evaluated on every path.
+        return _expr_must_assign(left, name)
+
+    if expr.startswith("("):
+        close = _matching_delimiter(expr, 0, "(", ")")
+        if close is not None and close == len(expr) - 1:
+            return _expr_must_assign(expr[1:-1], name)
+
+    return bool(re.search(rf"\b{re.escape(name)}\b\s*=(?!=)", expr))
+
+
+def _condition_has_assign_on_line(
     masked: str, cond_ranges: Tuple[Tuple[int, int], ...], name: str, line: int
 ) -> bool:
-    """True when an if-condition covering *line* assigns *name* (must-execute)."""
+    """True when an if-condition covering *line* contains an assignment to *name*."""
     pattern = re.compile(rf"\b{re.escape(name)}\b\s*=(?!=)")
     for start, end in cond_ranges:
         if _line_number(masked, start) > line or _line_number(masked, end) < line:
             continue
-        if pattern.search(masked[start : end + 1]):
+        if pattern.search(masked[start + 1 : end]):
+            return True
+    return False
+
+
+def _condition_assigns_on_line(
+    masked: str, cond_ranges: Tuple[Tuple[int, int], ...], name: str, line: int
+) -> bool:
+    """True when an if-condition covering *line* must-assign *name* on every path.
+
+    Assignments guarded by ``&&`` / ``||`` / ternary are not must-overwrites.
+    """
+    pattern = re.compile(rf"\b{re.escape(name)}\b\s*=(?!=)")
+    for start, end in cond_ranges:
+        if _line_number(masked, start) > line or _line_number(masked, end) < line:
+            continue
+        # *start* points at '('; analyze the interior expression.
+        cond_text = masked[start + 1 : end]
+        if not pattern.search(cond_text):
+            continue
+        if _expr_must_assign(cond_text, name):
             return True
     return False
 
@@ -361,20 +548,29 @@ def _is_conditional_may_overwrite(
 
     Same-line `if (x = 1) { ... }` bodies omit the header from arm spans; those
     lines are recovered via *inline_body_lines*. A condition assignment to *name*
-    always executes and is therefore a must-overwrite, not a may-overwrite.
+    that runs on every evaluation is a must-overwrite; short-circuit / ternary
+    guarded assignments remain may-overwrites.
     """
     for chain in chains:
         header_line, _end_line, _arms, inline_body_lines, cond_ranges = chain
         later_arm = _arm_index(later, chain)
         inline_later = later in inline_body_lines
-        if later_arm is None and not inline_later:
-            continue
+
+        # Condition-line writes sit outside arm spans; classify must vs may here.
         if (
             name
             and masked
-            and _condition_assigns_on_line(masked, cond_ranges, name, later)
+            and _condition_has_assign_on_line(masked, cond_ranges, name, later)
         ):
-            # Condition side effect must execute before either arm.
+            if _condition_assigns_on_line(masked, cond_ranges, name, later):
+                # Must-execute condition side effect kills on every path.
+                continue
+            # Short-circuit / ternary-guarded assignment does not always run.
+            if earlier < header_line or earlier < later:
+                return True
+            continue
+
+        if later_arm is None and not inline_later:
             continue
         earlier_arm = _arm_index(earlier, chain)
         if earlier_arm is not None:
@@ -410,7 +606,7 @@ def _next_must_overwrite(
 
 def _collect_loop_infos(source: str) -> List[LoopInfo]:
     """Parse loop headers once and retain their back-edge reads and body spans."""
-    masked = "\n".join(mask_string_and_char_literals(line) for line in source.split("\n"))
+    masked = _mask_source_lines(source)
     loops: List[LoopInfo] = []
 
     for match in re.finditer(r"\b(while|for)\b", masked):
@@ -502,9 +698,10 @@ def _protected_loop_carried_writes(ast_ctx) -> Set[ProtectedWrite]:
             if fn_end and header_line > fn_end:
                 continue
 
-            # Header reads plus in-body reads (via the back-edge) can consume a
-            # carried store. Track names from the header, then also consider any
-            # eligible binding with a read inside the loop span.
+            # Header reads plus early in-body reads (via the back-edge, before the
+            # first overwrite) can consume a carried store. Track header names,
+            # then also consider bindings with any read in the loop span; the
+            # candidate gate below requires a true loop-carried read.
             carried_names = set(read_names)
             for c_var in variables:
                 if c_var.declaration_line > header_line:
@@ -521,11 +718,17 @@ def _protected_loop_carried_writes(ast_ctx) -> Set[ProtectedWrite]:
                     loop_writes = [line for line in writes if start_line <= line <= end_line]
                     if not loop_writes:
                         continue
-                    # Require evidence this binding is read in the loop; otherwise
-                    # a write-only name from carried_names must not suppress dead stores.
+                    # Protect only when the write can reach a loop-carried read on
+                    # the next iteration (header read, or body read before the first
+                    # overwrite). An earlier in-body read after the first write does
+                    # not keep the final write live across the back-edge.
                     header_hit = name in read_names
-                    body_hit = any(header_line <= int(read) <= end_line for read in (c_var.read_lines or []))
-                    if not (header_hit or body_hit):
+                    first_write = loop_writes[0]
+                    body_carried = any(
+                        start_line <= int(read) < first_write
+                        for read in (c_var.read_lines or [])
+                    )
+                    if not (header_hit or body_carried):
                         continue
                     candidates.append((c_var, loop_writes))
 
