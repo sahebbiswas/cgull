@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Declare `cpre>=0.11.0,<0.12` as an explicit runtime dependency and introduce `cgull.preprocessor.cpre_api` as the pinned public-API boundary (expressions, lossless conditional structure, exact Boolean proofs/witnesses) with smoke tests and ownership documentation for the #436 migration (#436).
 - Opt-in persistent content-addressed per-file result cache for repeat scans (`--cache-dir` / `--cache-path` / `CGULL_CACHE_DIR`, disable with `--no-cache` / `CGULL_NO_CACHE`); keys cover canonical path + source + expanded TU text, config/rule fingerprint, semantic-model digest, and C-GULL version, with atomic best-effort writes, path rebinding on hit, and corrupt-entry misses (#545).
 
 ### Changed

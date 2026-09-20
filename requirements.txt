@@ -5,3 +5,4 @@
 pycparser>=2.21
 pcpp>=1.30
 pycparser-fake-libc>=2.21
+cpre>=0.11.0,<0.12

@@ -24,7 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Programming Language :: C",
 ]
-dependencies = ["pycparser>=2.21", "pcpp>=1.30", "pycparser-fake-libc>=2.21"]
+dependencies = ["pycparser>=2.21", "pcpp>=1.30", "pycparser-fake-libc>=2.21", "cpre>=0.11.0,<0.12"]
 
 [project.urls]
 Homepage = "https://github.com/sahebbiswas/cgull"
@@ -37,7 +37,7 @@ Changelog = "https://github.com/sahebbiswas/cgull/blob/main/CHANGELOG.md"
 # Compatibility extras retained for existing install commands; AST/preprocessing
 # dependencies are already installed by the core package.
 ast = ["pycparser>=2.21", "pcpp>=1.30"]
-preprocess = ["pcpp>=1.30"]
+preprocess = ["pcpp>=1.30", "cpre>=0.11.0,<0.12"]
 dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0", "jsonschema>=4.0.0"]
 
 [project.scripts]
