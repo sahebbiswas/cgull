@@ -203,3 +203,250 @@ def test_rule_metadata_targets_stack_and_heap_buffer_overflow_cwes():
     assert "snprintf" in rule.sample_remediated_code
     assert "memcpy" not in rule.TARGET_FUNCS
     assert "memmove" not in rule.TARGET_FUNCS
+
+
+def test_sprintf_post_length_capacity_reject_is_not_reported():
+    """cJSON print_number-style fail-closed length check (#562)."""
+    source = """
+int print_number(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(number_buffer);
+    return length;
+}
+"""
+    assert _scan(source) == []
+
+
+def test_sprintf_post_length_reject_with_intermediate_sscanf_is_not_reported():
+    source = """
+int print_number(double d) {
+    unsigned char number_buffer[26];
+    int length;
+    double test;
+    length = sprintf((char*)number_buffer, "%1.15g", d);
+    if ((sscanf((char*)number_buffer, "%lg", &test) != 1)) {
+        length = sprintf((char*)number_buffer, "%1.17g", d);
+    }
+    if ((length < 0) || (length > (int)(sizeof(number_buffer) - 1))) {
+        return 0;
+    }
+    char *out = ensure(length + 1);
+    memcpy(out, number_buffer, (size_t)length + 1);
+    return 1;
+}
+char *ensure(int n);
+"""
+    assert _scan(source) == []
+
+
+def test_sprintf_without_post_length_check_remains_reported():
+    source = """
+void bad(double d) {
+    char number_buffer[26];
+    sprintf(number_buffer, "%1.15g", d);
+    puts(number_buffer);
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_use_before_length_check_remains_reported():
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    puts(number_buffer);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+def test_sprintf_source_escape_via_formatter_before_reject_remains_reported():
+    """sprintf(out, "%s", number_buffer) is an escape, not local inspection (#571)."""
+    source = """
+int bad(double d, char *out) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    sprintf(out, "%s", number_buffer);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_reject_goto_into_buffer_use_remains_reported():
+    """goto on the overflow path that later uses the buffer is not a bail (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        goto use_buf;
+    }
+    return 0;
+use_buf:
+    puts(number_buffer);
+    return -1;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_length_gt_sizeof_alone_is_not_credited():
+    """length > sizeof(dest) accepts length == sizeof(dest), which still overflows by NUL."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    if ((length < 0) || ((size_t)length > sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(number_buffer);
+    return length;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_sscanf_string_copy_escape_before_reject_remains_reported():
+    """sscanf(buf, "%s", out) copies defended buffer to an external sink (#571)."""
+    source = """
+int bad(double d, char *out) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    sscanf(number_buffer, "%s", out);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_formatter_self_copy_before_reject_remains_reported():
+    """sprintf(buf, "%s", buf) is not local inspection (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    sprintf(number_buffer, "%s", number_buffer);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return 0;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_alias_escape_before_reject_remains_reported():
+    """Alias then external use before the capacity reject must still report (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = number_buffer;
+    puts(p);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return length;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_address_alias_escape_before_reject_remains_reported():
+    """&buf[0] alias then puts(alias) before reject must still report (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = &number_buffer[0];
+    puts(p);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    return length;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_alias_then_reject_then_use_is_credited():
+    """Mere alias creation is not escape; use after reject may suppress (#571)."""
+    source = """
+int print_number(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = number_buffer;
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(p);
+    return length;
+}
+"""
+    assert _scan(source) == []
+
+
+def test_sprintf_address_alias_then_reject_then_use_is_credited():
+    """&buf[0] alias alone is not escape; post-reject use may suppress (#571)."""
+    source = """
+int print_number(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    char *p = &number_buffer[0];
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(p);
+    return length;
+}
+"""
+    assert _scan(source) == []
+
+
+def test_sprintf_length_overwrite_before_reject_remains_reported():
+    """Overwriting sprintf result before capacity compare must not suppress (#571)."""
+    source = """
+int bad(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    length = 0;
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        return -1;
+    }
+    puts(number_buffer);
+    return length;
+}
+"""
+    assert any("'sprintf'" in message for message in _messages(source))
+
+
+def test_sprintf_reject_via_fatal_is_credited():
+    """fatal/panic/err/errx align with CFG terminators as overflow bails (#571)."""
+    source = """
+void fatal(const char *msg);
+int print_number(double d) {
+    char number_buffer[26];
+    int length = sprintf(number_buffer, "%1.15g", d);
+    if ((length < 0) || ((size_t)length >= sizeof(number_buffer))) {
+        fatal("overflow");
+    }
+    puts(number_buffer);
+    return length;
+}
+"""
+    assert _scan(source) == []
