@@ -16,9 +16,19 @@ from ..utils import mask_string_and_char_literals
 LoopInfo = Tuple[int, int, int, Set[str]]
 VariableKey = Tuple[str, int, int]
 ProtectedWrite = Tuple[VariableKey, int]
-# (header_line, end_line, arms) where each arm is an inclusive body (start_line, end_line) span
-# (braced arms use the interior only, so if-header condition writes are not arm-local).
-IfChain = Tuple[int, int, Tuple[Tuple[int, int], ...]]
+# (header_line, end_line, arms, inline_body_lines, cond_ranges)
+# arms: inclusive body (start_line, end_line); braced interiors only.
+# When body statements share the if-header line, that line is omitted from the
+# arm span so condition side effects are not arm-local; inline_body_lines records
+# those header lines for may-overwrite recovery. cond_ranges are (start, end)
+# byte offsets of each if-condition "(...)".
+IfChain = Tuple[
+    int,
+    int,
+    Tuple[Tuple[int, int], ...],
+    frozenset,
+    Tuple[Tuple[int, int], ...],
+]
 
 
 def _matching_delimiter(source: str, start: int, opener: str, closer: str) -> Optional[int]:
@@ -189,34 +199,54 @@ def _preceded_by_else(masked: str, if_start: int) -> bool:
     return True
 
 
-def _braced_arm_line_span(masked: str, body_start: int, body_end: int) -> Tuple[int, int]:
+def _braced_arm_line_span(
+    masked: str, body_start: int, body_end: int, header_line: int
+) -> Tuple[Tuple[int, int], bool]:
     """Inclusive line span of statements inside `{...}`, excluding the braces.
 
     Condition-side effects on the `if (...) {` header line must not look like
     arm stores; otherwise a must-execute overwrite in the condition is treated
     as a may-overwrite and suppresses a true dead store (#530 vs #554).
+
+    When the first interior statement shares *header_line*, that line is omitted
+    from the returned span (column/span-aware exclusion of the condition). The
+    second return value is True so callers can still treat same-line body stores
+    as conditional may-overwrites.
     """
     inner = _skip_space(masked, body_start + 1)
     if inner >= body_end:
-        line = _line_number(masked, body_start)
-        return line, line
+        # Empty `{ }` on the header line has no arm body stores.
+        return (header_line + 1, header_line), False
     start_line = _line_number(masked, inner)
     end_pos = body_end - 1
     while end_pos > inner and masked[end_pos].isspace():
         end_pos -= 1
-    return start_line, _line_number(masked, end_pos)
+    end_line = _line_number(masked, end_pos)
+    if start_line == header_line:
+        # Body shares the condition line: drop the header from the line span so
+        # condition assignments are not classified as exclusive-arm writes.
+        return (header_line + 1, end_line), True
+    return (start_line, end_line), False
 
 
-def _arm_line_span(masked: str, body_start: int, body_end: int) -> Tuple[int, int]:
+def _arm_line_span(
+    masked: str, body_start: int, body_end: int, header_line: int
+) -> Tuple[Tuple[int, int], bool]:
     """Line span for one if/else arm body (braced interior or unbraced stmt)."""
     if masked[body_start] == "{":
-        return _braced_arm_line_span(masked, body_start, body_end)
-    return _line_number(masked, body_start), _line_number(masked, body_end)
+        return _braced_arm_line_span(masked, body_start, body_end, header_line)
+    start_line = _line_number(masked, body_start)
+    end_line = _line_number(masked, body_end)
+    if start_line == header_line:
+        return (header_line + 1, end_line), True
+    return (start_line, end_line), False
 
 
 def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
     """Parse one if / else-if / else chain into exclusive arm line spans."""
     arms: List[Tuple[int, int]] = []
+    inline_body_lines: Set[int] = set()
+    cond_ranges: List[Tuple[int, int]] = []
     header_line = _line_number(masked, if_keyword_start)
     pos = if_keyword_start
 
@@ -224,17 +254,23 @@ def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
         # Consume leading `if` (first arm or `else if`).
         if not _at_keyword(masked, pos, "if"):
             return None
+        # Else-if headers use their own line for same-line body exclusion.
+        arm_header_line = _line_number(masked, pos)
         pos = _skip_space(masked, pos + 2)
         if pos >= len(masked) or masked[pos] != "(":
             return None
         close = _matching_delimiter(masked, pos, "(", ")")
         if close is None:
             return None
+        cond_ranges.append((pos, close))
         body = _body_span_positions(masked, close + 1)
         if body is None:
             return None
         body_start, body_end, pos = body
-        arms.append(_arm_line_span(masked, body_start, body_end))
+        span, inline = _arm_line_span(masked, body_start, body_end, arm_header_line)
+        arms.append(span)
+        if inline:
+            inline_body_lines.add(arm_header_line)
 
         pos = _skip_space(masked, pos)
         if not _at_keyword(masked, pos, "else"):
@@ -243,22 +279,32 @@ def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
         if _at_keyword(masked, pos, "if"):
             continue
         # Final else arm.
+        else_header_line = _line_number(masked, pos)
         body = _body_span_positions(masked, pos)
         if body is None:
             return None
         body_start, body_end, pos = body
-        arms.append(_arm_line_span(masked, body_start, body_end))
+        span, inline = _arm_line_span(masked, body_start, body_end, else_header_line)
+        arms.append(span)
+        if inline:
+            inline_body_lines.add(else_header_line)
         break
 
     if not arms:
         return None
-    end_line = max(end for _, end in arms)
-    return header_line, end_line, tuple(arms)
+    # Empty (bumped) spans use start > end; still contribute header for end_line.
+    spanned = [end for start, end in arms if start <= end]
+    end_line = max(spanned + list(inline_body_lines) + [header_line])
+    return header_line, end_line, tuple(arms), frozenset(inline_body_lines), tuple(cond_ranges)
+
+
+def _mask_source_lines(source: str) -> str:
+    return "\n".join(mask_string_and_char_literals(line) for line in source.split("\n"))
 
 
 def _collect_if_else_chains(source: str) -> List[IfChain]:
     """Parse structured if/else-if/else chains once per translation unit."""
-    masked = "\n".join(mask_string_and_char_literals(line) for line in source.split("\n"))
+    masked = _mask_source_lines(source)
     chains: List[IfChain] = []
     for match in re.finditer(r"\bif\b", masked):
         if _preceded_by_else(masked, match.start()):
@@ -271,9 +317,22 @@ def _collect_if_else_chains(source: str) -> List[IfChain]:
 
 def _arm_index(line: int, chain: IfChain) -> Optional[int]:
     for index, (start, end) in enumerate(chain[2]):
-        if start <= line <= end:
+        if start <= end and start <= line <= end:
             return index
     return None
+
+
+def _condition_assigns_on_line(
+    masked: str, cond_ranges: Tuple[Tuple[int, int], ...], name: str, line: int
+) -> bool:
+    """True when an if-condition covering *line* assigns *name* (must-execute)."""
+    pattern = re.compile(rf"\b{re.escape(name)}\b\s*=(?!=)")
+    for start, end in cond_ranges:
+        if _line_number(masked, start) > line or _line_number(masked, end) < line:
+            continue
+        if pattern.search(masked[start : end + 1]):
+            return True
+    return False
 
 
 def _are_exclusive_arm_lines(line1: int, line2: int, chains: List[IfChain]) -> bool:
@@ -286,36 +345,64 @@ def _are_exclusive_arm_lines(line1: int, line2: int, chains: List[IfChain]) -> b
     return False
 
 
-def _is_conditional_may_overwrite(earlier: int, later: int, chains: List[IfChain]) -> bool:
+def _is_conditional_may_overwrite(
+    earlier: int,
+    later: int,
+    chains: List[IfChain],
+    *,
+    name: str = "",
+    masked: str = "",
+) -> bool:
     """True when *later* is inside a branch that does not cover every path from *earlier*.
 
     A store on only some successors (if-without-else, or a nested if inside a
     shared arm) must not kill an earlier value when a join read remains reachable
     on another path.
+
+    Same-line `if (x = 1) { ... }` bodies omit the header from arm spans; those
+    lines are recovered via *inline_body_lines*. A condition assignment to *name*
+    always executes and is therefore a must-overwrite, not a may-overwrite.
     """
     for chain in chains:
-        header_line, _end_line, _arms = chain
+        header_line, _end_line, _arms, inline_body_lines, cond_ranges = chain
         later_arm = _arm_index(later, chain)
-        if later_arm is None:
+        inline_later = later in inline_body_lines
+        if later_arm is None and not inline_later:
+            continue
+        if (
+            name
+            and masked
+            and _condition_assigns_on_line(masked, cond_ranges, name, later)
+        ):
+            # Condition side effect must execute before either arm.
             continue
         earlier_arm = _arm_index(earlier, chain)
         if earlier_arm is not None:
             # Same chain: sibling exclusivity is handled separately; same-arm
             # sequential stores are must-overwrites for this chain.
             continue
-        if earlier < header_line:
+        if earlier < header_line or (inline_later and earlier < later):
             return True
     return False
 
 
-def _next_must_overwrite(write_line: int, writes: List[int], chains: List[IfChain]):
+def _next_must_overwrite(
+    write_line: int,
+    writes: List[int],
+    chains: List[IfChain],
+    *,
+    name: str = "",
+    masked: str = "",
+):
     """Earliest later write that kills *write_line* on every continuing path."""
     for later in writes:
         if later <= write_line:
             continue
         if _are_exclusive_arm_lines(write_line, later, chains):
             continue
-        if _is_conditional_may_overwrite(write_line, later, chains):
+        if _is_conditional_may_overwrite(
+            write_line, later, chains, name=name, masked=masked
+        ):
             continue
         return later
     return float("inf")
@@ -532,6 +619,7 @@ class DeadStoresRule(_BaseDeadStoresRule):
         source = WriteSource(context)
         protected = _protected_loop_carried_writes(context)
         src_text = getattr(context, "clean_source", "") or "\n".join(context.source_lines)
+        masked_src = _mask_source_lines(src_text)
         if_chains = _collect_if_else_chains(src_text)
         compact_overwrites = {
             (id(fn), _variable_key(variable))
@@ -546,7 +634,9 @@ class DeadStoresRule(_BaseDeadStoresRule):
                 if (id(fn), _variable_key(variable)) in compact_overwrites:
                     reads = [line for line in reads if line != variable.declaration_line]
                 for line in writes:
-                    next_line = _next_must_overwrite(line, writes, if_chains)
+                    next_line = _next_must_overwrite(
+                        line, writes, if_chains, name=variable.name, masked=masked_src
+                    )
                     if any(line <= read < next_line for read in reads):
                         continue
                     if (_variable_key(variable), line) in protected:

@@ -287,3 +287,58 @@ def test_parse_helpers_respect_keyword_boundaries_and_comments():
     chains = _collect_if_else_chains(code)
     assert len(chains) == 1
     assert len(chains[0][2]) == 2
+
+def test_same_line_condition_assignment_is_must_overwrite():
+    """Condition side effects on a compact `if (...) { ... }` line must kill.
+
+    If the braced body shares the header line, arm spans must not classify the
+    condition assignment as an exclusive-arm / may-overwrite store (#530 vs #554).
+    """
+    code = """void f(void) {
+    int x;
+    x = 0;
+    if (x = 1) { x = 2; } else { x = 3; }
+    consume(x);
+}
+"""
+    # Fallback is line-granular: x=0 is dead; the compacted line-4 writes are
+    # not split, so only the prior store is required here. CFG may also report
+    # the condition assignment as dead once arms overwrite it.
+    fallback_issues = scan_dead_stores_fallback(code)
+    assert 3 in issue_lines(fallback_issues)
+    cfg_issues = scan_with_rule("CGULL-042", code)
+    assert 3 in issue_lines(cfg_issues)
+
+
+def test_same_line_if_without_else_body_still_may_overwrite():
+    """Same-line braced body without a condition assign remains a may-overwrite."""
+    code = """void f(int c) {
+    int x;
+    x = 0;
+    if (c) { x = 1; }
+    consume(x);
+}
+"""
+    _assert_cfg_and_fallback_lines(code, set())
+
+
+def test_braced_arm_span_excludes_header_when_body_shares_line():
+    from cgull.rules.dead_stores import _collect_if_else_chains
+
+    code = """void f(void) {
+    int x;
+    x = 0;
+    if (x = 1) { x = 2; } else { x = 3; }
+    consume(x);
+}
+"""
+    chains = _collect_if_else_chains(code)
+    assert len(chains) == 1
+    header_line, _end, arms, inline_lines, cond_ranges = chains[0]
+    assert header_line == 4
+    assert inline_lines == frozenset({4})
+    # Header line omitted from arm spans (start > end empty spans after bump).
+    assert all(start > end or start > header_line for start, end in arms)
+    assert len(cond_ranges) == 1
+    assert cond_ranges[0][1] > cond_ranges[0][0]
+
