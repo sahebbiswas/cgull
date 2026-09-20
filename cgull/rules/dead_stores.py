@@ -1,4 +1,9 @@
-"""Fallback control-flow refinements for CGULL-042 dead-store analysis."""
+"""Fallback control-flow refinements for CGULL-042 dead-store analysis.
+
+Includes join-aware liveness for mutually exclusive if/else arms so a store
+on one arm is not treated as killed by a sibling arm when a post-join read
+consumes the value.
+"""
 
 from copy import copy
 import re
@@ -11,6 +16,8 @@ from ..utils import mask_string_and_char_literals
 LoopInfo = Tuple[int, int, int, Set[str]]
 VariableKey = Tuple[str, int, int]
 ProtectedWrite = Tuple[VariableKey, int]
+# (header_line, end_line, arms) where each arm is an inclusive (start_line, end_line) span.
+IfChain = Tuple[int, int, Tuple[Tuple[int, int], ...]]
 
 
 def _matching_delimiter(source: str, start: int, opener: str, closer: str) -> Optional[int]:
@@ -99,6 +106,142 @@ def _loop_body_span(source: str, start: int) -> Optional[Tuple[int, int]]:
     return _line_number(source, pos), _line_number(source, end)
 
 
+
+def _skip_space(source: str, pos: int) -> int:
+    while pos < len(source) and source[pos].isspace():
+        pos += 1
+    return pos
+
+
+def _body_span_positions(source: str, start: int) -> Optional[Tuple[int, int, int]]:
+    """Return (body_start, body_end, pos_after) for a braced or single statement."""
+    pos = _skip_space(source, start)
+    if pos >= len(source) or source[pos] == ";":
+        return None
+    if source[pos] == "{":
+        end = _matching_delimiter(source, pos, "{", "}")
+        if end is None:
+            return None
+        return pos, end, end + 1
+    end = _statement_end(source, pos)
+    return pos, end, end + 1
+
+
+def _preceded_by_else(masked: str, if_start: int) -> bool:
+    """True when *if_start* is the `if` in an `else if` continuation."""
+    pos = if_start - 1
+    while pos >= 0 and masked[pos].isspace():
+        pos -= 1
+    return masked[max(0, pos - 3):pos + 1] == "else"
+
+
+def _parse_if_chain(masked: str, if_keyword_start: int) -> Optional[IfChain]:
+    """Parse one if / else-if / else chain into exclusive arm line spans."""
+    arms: List[Tuple[int, int]] = []
+    header_line = _line_number(masked, if_keyword_start)
+    pos = if_keyword_start
+
+    while True:
+        # Consume leading `if` (first arm or `else if`).
+        if not masked.startswith("if", pos):
+            return None
+        pos = _skip_space(masked, pos + 2)
+        if pos >= len(masked) or masked[pos] != "(":
+            return None
+        close = _matching_delimiter(masked, pos, "(", ")")
+        if close is None:
+            return None
+        body = _body_span_positions(masked, close + 1)
+        if body is None:
+            return None
+        body_start, body_end, pos = body
+        arms.append((_line_number(masked, body_start), _line_number(masked, body_end)))
+
+        pos = _skip_space(masked, pos)
+        if not masked.startswith("else", pos):
+            break
+        pos = _skip_space(masked, pos + 4)
+        if masked.startswith("if", pos):
+            continue
+        # Final else arm.
+        body = _body_span_positions(masked, pos)
+        if body is None:
+            return None
+        body_start, body_end, pos = body
+        arms.append((_line_number(masked, body_start), _line_number(masked, body_end)))
+        break
+
+    if not arms:
+        return None
+    end_line = max(end for _, end in arms)
+    return header_line, end_line, tuple(arms)
+
+
+def _collect_if_else_chains(source: str) -> List[IfChain]:
+    """Parse structured if/else-if/else chains once per translation unit."""
+    masked = "\n".join(mask_string_and_char_literals(line) for line in source.split("\n"))
+    chains: List[IfChain] = []
+    for match in re.finditer(r"\bif\b", masked):
+        if _preceded_by_else(masked, match.start()):
+            continue
+        parsed = _parse_if_chain(masked, match.start())
+        if parsed is not None and len(parsed[2]) >= 1:
+            chains.append(parsed)
+    return chains
+
+
+def _arm_index(line: int, chain: IfChain) -> Optional[int]:
+    for index, (start, end) in enumerate(chain[2]):
+        if start <= line <= end:
+            return index
+    return None
+
+
+def _are_exclusive_arm_lines(line1: int, line2: int, chains: List[IfChain]) -> bool:
+    """True when the two lines sit on different arms of the same if/else chain."""
+    for chain in chains:
+        first = _arm_index(line1, chain)
+        second = _arm_index(line2, chain)
+        if first is not None and second is not None and first != second:
+            return True
+    return False
+
+
+def _is_conditional_may_overwrite(earlier: int, later: int, chains: List[IfChain]) -> bool:
+    """True when *later* is inside a branch that does not cover every path from *earlier*.
+
+    A store on only some successors (if-without-else, or a nested if inside a
+    shared arm) must not kill an earlier value when a join read remains reachable
+    on another path.
+    """
+    for chain in chains:
+        header_line, _end_line, _arms = chain
+        later_arm = _arm_index(later, chain)
+        if later_arm is None:
+            continue
+        earlier_arm = _arm_index(earlier, chain)
+        if earlier_arm is not None:
+            # Same chain: sibling exclusivity is handled separately; same-arm
+            # sequential stores are must-overwrites for this chain.
+            continue
+        if earlier < header_line:
+            return True
+    return False
+
+
+def _next_must_overwrite(write_line: int, writes: List[int], chains: List[IfChain]):
+    """Earliest later write that kills *write_line* on every continuing path."""
+    for later in writes:
+        if later <= write_line:
+            continue
+        if _are_exclusive_arm_lines(write_line, later, chains):
+            continue
+        if _is_conditional_may_overwrite(write_line, later, chains):
+            continue
+        return later
+    return float("inf")
+
+
 def _collect_loop_infos(source: str) -> List[LoopInfo]:
     """Parse loop headers once and retain their back-edge reads and body spans."""
     masked = "\n".join(mask_string_and_char_literals(line) for line in source.split("\n"))
@@ -127,14 +270,14 @@ def _collect_loop_infos(source: str) -> List[LoopInfo]:
             carried_expression = header
 
         read_names = set(re.findall(r"\b[A-Za-z_]\w*\b", carried_expression))
-        if not read_names:
-            continue
 
         body_span = _loop_body_span(masked, close + 1)
         if body_span is None:
             # This also excludes do/while tails: the token after ')' is ';'.
             continue
         header_line = _line_number(masked, match.start())
+        # Keep loops even when the header has no identifier reads so body-carried
+        # stores (e.g. walk-pointer updates) can still be protected.
         loops.append((header_line, body_span[0], body_span[1], read_names))
 
     return loops
@@ -193,22 +336,39 @@ def _protected_loop_carried_writes(ast_ctx) -> Set[ProtectedWrite]:
             if fn_end and header_line > fn_end:
                 continue
 
-            for name in read_names:
+            # Header reads plus in-body reads (via the back-edge) can consume a
+            # carried store. Track names from the header, then also consider any
+            # eligible binding with a read inside the loop span.
+            carried_names = set(read_names)
+            for c_var in variables:
+                if c_var.declaration_line > header_line:
+                    continue
+                if any(header_line <= int(read) <= end_line for read in (c_var.read_lines or [])):
+                    carried_names.add(c_var.name)
+
+            for name in carried_names:
                 candidates = []
                 for c_var in variables:
                     if c_var.name != name or c_var.declaration_line > header_line:
                         continue
                     writes = sorted(set(getattr(c_var, "assigned_lines", []) or []))
                     loop_writes = [line for line in writes if start_line <= line <= end_line]
-                    if loop_writes:
-                        candidates.append((c_var, loop_writes))
+                    if not loop_writes:
+                        continue
+                    # Require evidence this binding is read in the loop; otherwise
+                    # a write-only name from carried_names must not suppress dead stores.
+                    header_hit = name in read_names
+                    body_hit = any(header_line <= int(read) <= end_line for read in (c_var.read_lines or []))
+                    if not (header_hit or body_hit):
+                        continue
+                    candidates.append((c_var, loop_writes))
 
                 if not candidates:
                     continue
 
                 # If more than one same-named binding has writes in the textual
                 # body, the nearest declaration before the header is the binding
-                # visible to the loop condition.
+                # visible to the loop condition / body reads.
                 c_var, loop_writes = max(
                     candidates,
                     key=lambda item: item[0].declaration_line,
@@ -292,6 +452,8 @@ class DeadStoresRule(_BaseDeadStoresRule):
         context = _expanded_context(ast_ctx)
         source = WriteSource(context)
         protected = _protected_loop_carried_writes(context)
+        src_text = getattr(context, "clean_source", "") or "\n".join(context.source_lines)
+        if_chains = _collect_if_else_chains(src_text)
         compact_overwrites = {
             (id(fn), _variable_key(variable))
             for fn, variable in _same_line_initializer_overwrites(context)
@@ -304,8 +466,8 @@ class DeadStoresRule(_BaseDeadStoresRule):
                 reads = variable.read_lines
                 if (id(fn), _variable_key(variable)) in compact_overwrites:
                     reads = [line for line in reads if line != variable.declaration_line]
-                for index, line in enumerate(writes):
-                    next_line = writes[index + 1] if index + 1 < len(writes) else float("inf")
+                for line in writes:
+                    next_line = _next_must_overwrite(line, writes, if_chains)
                     if any(line <= read < next_line for read in reads):
                         continue
                     if (_variable_key(variable), line) in protected:

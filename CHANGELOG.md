@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- CGULL-042: join-aware fallback liveness for mutually exclusive if/else (and else-if) arms so sibling-arm stores read after the join are not reported as dead, while same-arm overwrites and post-join kills remain findings (#554).
 - Honor short-circuit OR/AND and negated null checks, callee Is*-style truthy-implies-nonnull predicates, and cannot_access-style macros in CGULL-004 so cJSON-class false positives drop while unchecked public setters still report (#551).
 
 ### Changed
