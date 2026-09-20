@@ -145,7 +145,6 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                 checked = any(
                     re.search(rf'\bif\s*\([^)]*?\b{re.escape(p_name)}\s*(?:==\s*NULL|!=\s*NULL|==\s*0|!=\s*0)\b', line) or
                     re.search(rf'\bif\s*\(\s*!{re.escape(p_name)}\b', line) or
-                    re.search(rf'\bif\s*\(\s*{re.escape(p_name)}\s*\)', line) or
                     re.search(rf'\bassert\s*\([^)]*?\b{re.escape(p_name)}\b', line)
                     for line in body_lines[:min(6, len(body_lines))]
                 )
@@ -161,6 +160,14 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                         rf'(?:\*\s*{re.escape(p_name)}\b|{re.escape(p_name)}\s*->|{re.escape(p_name)}\s*\[)',
                         line,
                     )
+                    # Expression-local truthy guard on the same line, e.g.
+                    # `if (p) return p + off;` — avoid lexical FNs without
+                    # claiming a function-wide check from a non-dominating if.
+                    same_line_truthy = bool(
+                        re.search(rf'\bif\s*\(\s*{re.escape(p_name)}\s*\)', line)
+                    )
+                    if same_line_truthy and arith_match and deref_match is None:
+                        continue
                     use_match = deref_match or arith_match
                     if use_match:
                         if deref_match is None and arith_match is not None:
@@ -200,32 +207,23 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     sub_line_no = body_start + j
                     if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
-                    arith_match = re.search(
-                        rf'(?:{re.escape(v_name)}\s*\+|\+\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?!>))',
-                        sub_line,
-                    )
+                    # Lexical local-null path: only classical derefs. Additive
+                    # forms need pointer typing that this fallback lacks, so
+                    # `int a = 0; return a + b;` must stay silent here.
                     deref_match = re.search(
                         rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[)',
                         sub_line,
                     )
-                    use_match = deref_match or arith_match
-                    if use_match:
-                        if deref_match is None and arith_match is not None:
-                            message = (
-                                f"Null pointer arithmetic: pointer '{v_name}' "
-                                f"is known to be NULL when used in additive pointer arithmetic."
-                            )
-                        else:
-                            message = (
-                                f"Null pointer dereference: pointer '{v_name}' "
-                                f"is known to be NULL when dereferenced."
-                            )
+                    if deref_match:
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=sub_line_no,
                             code_snippet=sub_line,
-                            message=message,
-                            column_number=use_match.start() + 1,
+                            message=(
+                                f"Null pointer dereference: pointer '{v_name}' "
+                                f"is known to be NULL when dereferenced."
+                            ),
+                            column_number=deref_match.start() + 1,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"if ({v_name} == NULL) return -1;"
@@ -247,32 +245,23 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     sub_line_no = body_start + j
                     if re.search(rf'(?<![\*->\.\w])\b{re.escape(v_name)}\s*=', sub_line):
                         break
-                    arith_match = re.search(
-                        rf'(?:{re.escape(v_name)}\s*\+|\+\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*-(?!>))',
-                        sub_line,
-                    )
+                    # Lexical local-null path: only classical derefs. Additive
+                    # forms need pointer typing that this fallback lacks, so
+                    # `int a = 0; return a + b;` must stay silent here.
                     deref_match = re.search(
                         rf'(?:\*\s*{re.escape(v_name)}\b|{re.escape(v_name)}\s*->|{re.escape(v_name)}\s*\[)',
                         sub_line,
                     )
-                    use_match = deref_match or arith_match
-                    if use_match:
-                        if deref_match is None and arith_match is not None:
-                            message = (
-                                f"Null pointer arithmetic: pointer '{v_name}' "
-                                f"is known to be NULL when used in additive pointer arithmetic."
-                            )
-                        else:
-                            message = (
-                                f"Null pointer dereference: pointer '{v_name}' "
-                                f"is known to be NULL when dereferenced."
-                            )
+                    if deref_match:
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=sub_line_no,
                             code_snippet=sub_line,
-                            message=message,
-                            column_number=use_match.start() + 1,
+                            message=(
+                                f"Null pointer dereference: pointer '{v_name}' "
+                                f"is known to be NULL when dereferenced."
+                            ),
+                            column_number=deref_match.start() + 1,
                             engine="AST",
                             fix_type=FixType.SUGGESTED_FIX,
                             suggested_fix_replacement=f"if ({v_name} == NULL) return -1;"
