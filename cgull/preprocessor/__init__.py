@@ -60,12 +60,14 @@ from .directives import (
     ConditionalBlock,
     ConditionalTree,
     parse_conditional_directives,
+    conditional_directive_cache,
 )
 
 __all__ += [
     "SourceLocation", "SourceRange", "DirectiveToken", "StructureDiagnostic",
     "ConditionalDirective", "ConditionalBranch", "ConditionalBlock",
     "ConditionalTree", "parse_conditional_directives",
+    "conditional_directive_cache",
 ]
 
 from .robdd import (

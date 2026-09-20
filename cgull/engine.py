@@ -19,6 +19,7 @@ from .parse_diagnostics import map_attempts, report_attempts, format_attempts
 from .models import ScanResult, Issue, Severity, FileScanSummary, AnalysisEngine, ParserStatus, ParseTier, Confidence, FixType, ScanConfig, ScanError, ConfigProfile, ScanMode
 from .ignore import CGullIgnoreFilter
 from .includes import IncludeResolver, TUIncludeExpander, HEADER_CACHE
+from .preprocessor import conditional_directive_cache
 from .analysis_headers import is_analysis_header
 from .ast_analyzer import CASTParser, CASTContext
 from .rules import get_all_rules, BaseRule
@@ -1205,6 +1206,30 @@ class CGullScanner:
 
 
 def _scan_file_content(
+    content: str,
+    file_path: str,
+    rules: Optional[List[BaseRule]] = None,
+    engine_mode: Optional[AnalysisEngine] = None,
+    ast_parser: Optional[CASTParser] = None,
+    config: Optional[ScanConfig] = None,
+    quiet: bool = False,
+    progress_active: bool = False,
+) -> Tuple[List[Issue], int, float, str, str, str, str, Optional[ScanError], List[Dict[str, Any]]]:
+    """Shared file scan entry; installs a scan-local conditional-directive cache."""
+    with conditional_directive_cache():
+        return _scan_file_content_uncached(
+            content,
+            file_path,
+            rules=rules,
+            engine_mode=engine_mode,
+            ast_parser=ast_parser,
+            config=config,
+            quiet=quiet,
+            progress_active=progress_active,
+        )
+
+
+def _scan_file_content_uncached(
     content: str,
     file_path: str,
     rules: Optional[List[BaseRule]] = None,
