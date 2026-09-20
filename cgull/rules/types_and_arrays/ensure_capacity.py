@@ -480,6 +480,36 @@ def _is_zero_init(init_node, index: str) -> bool:
     return False
 
 
+def _expr_takes_index_address(node, index: str) -> bool:
+    """True when ``node`` contains ``&index`` (address-of the induction var)."""
+    if node is None:
+        return False
+    found = False
+
+    class Finder(c_ast.NodeVisitor):
+        def visit_UnaryOp(self, n):
+            nonlocal found
+            if found:
+                return
+            if n.op == "&" and isinstance(n.expr, c_ast.ID) and n.expr.name == index:
+                found = True
+                return
+            self.generic_visit(n)
+
+    Finder().visit(node)
+    return found
+
+
+def _call_may_mutate_index(node, index: str) -> bool:
+    """True when a call may mutate ``index`` via ``&index`` in an argument."""
+    if not isinstance(node, c_ast.FuncCall) or node.args is None:
+        return False
+    for arg in node.args.exprs or []:
+        if _expr_takes_index_address(arg, index):
+            return True
+    return False
+
+
 def _index_written(node, index: str) -> bool:
     written = False
 
@@ -495,6 +525,12 @@ def _index_written(node, index: str) -> bool:
             if n.op in {"++", "--", "p++", "p--"} and isinstance(n.expr, c_ast.ID):
                 if n.expr.name == index:
                     written = True
+            self.generic_visit(n)
+
+        def visit_FuncCall(self, n):
+            nonlocal written
+            if _call_may_mutate_index(n, index):
+                written = True
             self.generic_visit(n)
 
     Finder().visit(node)
@@ -614,6 +650,17 @@ def sizeof_for_loop_safe_keys(ast_ctx, sizeof_envs, capacities_by_fn) -> Set[Tup
                     if node.op in {"++", "--", "p++", "p--"} and isinstance(node.expr, c_ast.ID):
                         if node.expr.name == index:
                             live = False
+                    return
+                if isinstance(node, c_ast.FuncCall):
+                    # Calls are not side-effect-free for the induction counter:
+                    # ``set_index(&i, ...)`` can invalidate the post-loop bound.
+                    # Kill before walking args so array refs in the same call
+                    # (evaluation order is unspecified) are not suppressed.
+                    if _call_may_mutate_index(node, index):
+                        live = False
+                    if node.args:
+                        for arg in node.args.exprs or []:
+                            walk(arg)
                     return
                 if isinstance(node, c_ast.ArrayRef):
                     mark_if_safe(node)

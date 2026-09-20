@@ -275,3 +275,60 @@ def test_post_loop_body_break_still_reported():
     """
     issues = _scan(code)
     assert issues
+
+
+def test_post_loop_call_mutates_counter_via_address_still_reported():
+    """Call taking &i after a bounded loop invalidates post-loop arr[i] proof."""
+    code = """
+    void set_index(size_t *p, size_t v);
+    void f(void) {
+        unsigned char buf[8];
+        size_t i;
+        for (i = 0; i < 4; i++) {
+            buf[i] = 1;
+        }
+        set_index(&i, 100);
+        buf[i] = 0;
+    }
+    """
+    issues = _scan(code)
+    assert any("buf" in issue.message for issue in issues)
+
+
+def test_post_loop_compound_call_mutates_counter_still_reported():
+    """Ordered invalidation inside a compound: set_index(&i) then arr[i]."""
+    code = """
+    void set_index(size_t *p, size_t v);
+    void f(void) {
+        unsigned char buf[8];
+        size_t i;
+        for (i = 0; i < 4; i++) {
+            buf[i] = 1;
+        }
+        {
+            set_index(&i, 100);
+            buf[i] = 0;
+        }
+    }
+    """
+    issues = _scan(code)
+    assert any("buf" in issue.message for issue in issues)
+
+
+def test_post_loop_harmless_call_keeps_induction_proof():
+    """A call that does not take &i must not kill the post-loop bound proof."""
+    code = """
+    void touch(void);
+    void observe(size_t v);
+    void f(void) {
+        unsigned char buf[8];
+        size_t i;
+        for (i = 0; i < 4; i++) {
+            buf[i] = 1;
+        }
+        touch();
+        observe(i);
+        buf[i] = 0;
+    }
+    """
+    assert _scan(code) == []
