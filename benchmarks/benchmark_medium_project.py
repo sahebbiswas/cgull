@@ -36,6 +36,12 @@ from cgull import CGullScanner, ScanConfig, ScanMode, __version__, telemetry_for
 from cgull.ast_analyzer import CASTParser
 from cgull.includes import IncludeResolver, TUIncludeExpander
 from cgull import project_analysis
+from cgull import parallel_workers
+
+try:
+    from benchmarks import benchmark_pass_metrics as pass_metrics
+except ImportError:  # Direct execution places benchmarks/ itself on sys.path.
+    import benchmark_pass_metrics as pass_metrics
 
 _ORIGINAL_PREPARE_SOURCE = getattr(project_analysis, "_prepare_source", None)
 
@@ -47,6 +53,18 @@ DEFAULT_STATEMENTS_PER_FUNCTION = 12
 DEFAULT_JOBS = (1, 2, 4, 0)
 DEFAULT_MODES = ("file", "tu")
 DEFAULT_REPETITIONS = 1
+WORKLOAD_PRESETS = {
+    "standard": {
+        "modules": DEFAULT_MODULES,
+        "functions_per_module": DEFAULT_FUNCTIONS_PER_MODULE,
+        "statements_per_function": DEFAULT_STATEMENTS_PER_FUNCTION,
+    },
+    "large": {
+        "modules": 4,
+        "functions_per_module": 160,
+        "statements_per_function": DEFAULT_STATEMENTS_PER_FUNCTION,
+    },
+}
 
 
 @dataclass
@@ -54,6 +72,8 @@ class PhaseRecorder:
     """Accumulate benchmark phase activity without touching production telemetry."""
 
     seconds: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    pass_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    pass_seconds: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     project_depth: int = 0
 
     def add(self, name: str, elapsed: float) -> None:
@@ -61,6 +81,27 @@ class PhaseRecorder:
 
     def value(self, name: str) -> float:
         return float(self.seconds.get(name, 0.0))
+
+    def add_pass(self, name: str, elapsed: float) -> None:
+        self.pass_counts[name] += 1
+        self.pass_seconds[name] += max(0.0, elapsed)
+
+    def pass_snapshot(self) -> dict[str, dict[str, int | float]]:
+        return {
+            name: {
+                "invocation_count": int(self.pass_counts.get(name, 0)),
+                "inclusive_wall_seconds": float(self.pass_seconds.get(name, 0.0)),
+            }
+            for name in pass_metrics.PASS_NAMES
+        }
+
+    def merge_pass_metrics(self, snapshot: dict[str, dict[str, Any]]) -> None:
+        for name in pass_metrics.PASS_NAMES:
+            metric = snapshot.get(name, {})
+            self.pass_counts[name] += int(metric.get("invocation_count", 0))
+            self.pass_seconds[name] += max(
+                0.0, float(metric.get("inclusive_wall_seconds", 0.0))
+            )
 
 
 @dataclass(frozen=True)
@@ -91,6 +132,10 @@ class Sample:
     semantic_digest: str
     semantics: SemanticSnapshot
     sampled_peak_tree_rss_bytes: int | None = None
+    pass_metrics: dict[str, dict[str, int | float]] = field(default_factory=dict)
+    pass_metric_worker_snapshots: int = 0
+    pass_metric_expected_worker_snapshots: int = 0
+    pass_metric_worker_snapshots_complete: bool = True
 
 
 class BenchmarkScanner(CGullScanner):
@@ -147,17 +192,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Benchmark representative end-to-end C-GULL medium-project scans",
     )
-    parser.add_argument("--modules", type=_positive_int, default=DEFAULT_MODULES)
     parser.add_argument(
-        "--functions-per-module",
-        type=_positive_int,
-        default=DEFAULT_FUNCTIONS_PER_MODULE,
+        "--preset",
+        choices=tuple(WORKLOAD_PRESETS),
+        default="standard",
+        help="generated workload preset; explicit dimension flags override it",
     )
-    parser.add_argument(
-        "--statements-per-function",
-        type=_positive_int,
-        default=DEFAULT_STATEMENTS_PER_FUNCTION,
-    )
+    parser.add_argument("--modules", type=_positive_int)
+    parser.add_argument("--functions-per-module", type=_positive_int)
+    parser.add_argument("--statements-per-function", type=_positive_int)
     parser.add_argument(
         "--jobs",
         type=_csv_jobs,
@@ -191,7 +234,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="record semantic differences instead of failing the benchmark",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    preset = WORKLOAD_PRESETS[args.preset]
+    for name, value in preset.items():
+        if getattr(args, name) is None:
+            setattr(args, name, value)
+    return args
 
 
 def generate_medium_project(
@@ -330,7 +378,11 @@ def expanded_analysis_lines(result: Any, *, config: ScanConfig) -> int:
 
 
 @contextmanager
-def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
+def phase_instrumentation(
+    recorder: PhaseRecorder,
+    *,
+    worker_metrics_dir: Path | None = None,
+) -> Iterator[None]:
     """Time major scan activities while leaving production code unchanged."""
 
     import cgull.engine as engine
@@ -344,6 +396,9 @@ def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
     original_prepare = project_analysis.prepare_project
     original_index_init = project_analysis.ProjectSummaryIndex.__init__
     original_index_build = project_analysis.ProjectSummaryIndex.build
+    original_scan_worker_item = parallel_workers._scan_worker_item
+    pass_restorations = pass_metrics.install_pass_wrappers(recorder)
+    previous_worker_metrics_dir = os.environ.get(pass_metrics.WORKER_METRICS_ENV)
 
     def timed_walk(*args: Any, **kwargs: Any):
         started = time.perf_counter()
@@ -394,6 +449,11 @@ def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
                         recorder.add(name, elapsed)
                     if hasattr(unit, '_benchmark_seconds'):
                         del unit._benchmark_seconds
+                    benchmark_passes = getattr(unit, '_benchmark_pass_metrics', None)
+                    if benchmark_passes:
+                        recorder.merge_pass_metrics(benchmark_passes)
+                    if hasattr(unit, '_benchmark_pass_metrics'):
+                        del unit._benchmark_pass_metrics
             return units, errors
         finally:
             recorder.add('independent_preparation_seconds', time.perf_counter() - started)
@@ -427,6 +487,9 @@ def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
     project_analysis.prepare_project = timed_prepare
     project_analysis.ProjectSummaryIndex.__init__ = timed_index_init
     project_analysis.ProjectSummaryIndex.build = timed_index_build
+    if worker_metrics_dir is not None:
+        os.environ[pass_metrics.WORKER_METRICS_ENV] = str(worker_metrics_dir)
+        parallel_workers._scan_worker_item = pass_metrics.benchmark_scan_worker_item
     try:
         yield
     finally:
@@ -439,11 +502,19 @@ def phase_instrumentation(recorder: PhaseRecorder) -> Iterator[None]:
         project_analysis.prepare_project = original_prepare
         project_analysis.ProjectSummaryIndex.__init__ = original_index_init
         project_analysis.ProjectSummaryIndex.build = original_index_build
+        parallel_workers._scan_worker_item = original_scan_worker_item
+        if previous_worker_metrics_dir is None:
+            os.environ.pop(pass_metrics.WORKER_METRICS_ENV, None)
+        else:
+            os.environ[pass_metrics.WORKER_METRICS_ENV] = previous_worker_metrics_dir
+        pass_metrics.restore_pass_wrappers(pass_restorations)
 
 
 def _timed_prepare_source(*args):
     """Benchmark-only process entry point, including spawn on Windows/macOS."""
     seconds = defaultdict(float)
+    worker_passes = pass_metrics.PassRecorder()
+    pass_restorations = pass_metrics.install_pass_wrappers(worker_passes)
     original_parse = CASTParser.parse
     original_expand = TUIncludeExpander.expand
 
@@ -465,10 +536,13 @@ def _timed_prepare_source(*args):
     try:
         units, errors = _ORIGINAL_PREPARE_SOURCE(*args)
         if units:
-            next(iter(units.values()))._benchmark_seconds = dict(seconds)
+            unit = next(iter(units.values()))
+            unit._benchmark_seconds = dict(seconds)
+            unit._benchmark_pass_metrics = worker_passes.snapshot()
         return units, errors
     finally:
         CASTParser.parse, TUIncludeExpander.expand = original_parse, original_expand
+        pass_metrics.restore_pass_wrappers(pass_restorations)
 
 
 @contextmanager
@@ -630,15 +704,28 @@ def run_sample(project: Path, *, mode: str, jobs: int, repetition: int) -> Sampl
         include_roots=[str(project / "include")],
     )
     scanner = BenchmarkScanner(recorder, config=config)
-    with sample_tree_memory() as tree_peak, phase_instrumentation(recorder):
-        started = time.perf_counter()
-        result = scanner.scan_path(str(project), jobs=jobs, quiet=True)
-        wall_seconds = max(1e-9, time.perf_counter() - started)
+    with tempfile.TemporaryDirectory(prefix="cgull-pass-metrics-") as metrics_tmp:
+        worker_metrics_dir = Path(metrics_tmp)
+        with sample_tree_memory() as tree_peak, phase_instrumentation(
+            recorder, worker_metrics_dir=worker_metrics_dir
+        ):
+            started = time.perf_counter()
+            result = scanner.scan_path(str(project), jobs=jobs, quiet=True)
+            wall_seconds = max(1e-9, time.perf_counter() - started)
+        worker_metric_snapshots = pass_metrics.merge_worker_metric_files(
+            recorder, worker_metrics_dir
+        )
 
     peak_rss = _peak_rss_bytes()
     expanded_lines = expanded_analysis_lines(result, config=config)
     telemetry = telemetry_for(result)
     snapshot = _semantic_snapshot(result)
+    resolved_jobs = (os.cpu_count() or 1) if jobs == 0 else max(1, jobs)
+    expected_worker_metric_snapshots = (
+        min(resolved_jobs, len(result.file_summaries))
+        if resolved_jobs > 1 and result.file_summaries
+        else 0
+    )
     return Sample(
         mode=mode,
         jobs=jobs,
@@ -662,6 +749,12 @@ def run_sample(project: Path, *, mode: str, jobs: int, repetition: int) -> Sampl
         parse_fallback_count=telemetry.parse_fallback_count,
         semantic_digest=_semantic_digest(snapshot),
         semantics=snapshot,
+        pass_metrics=recorder.pass_snapshot(),
+        pass_metric_worker_snapshots=worker_metric_snapshots,
+        pass_metric_expected_worker_snapshots=expected_worker_metric_snapshots,
+        pass_metric_worker_snapshots_complete=(
+            worker_metric_snapshots == expected_worker_metric_snapshots
+        ),
     )
 
 
@@ -721,7 +814,11 @@ def validate_parity(samples: Sequence[Sample]) -> dict[str, Any]:
     }
 
 
-def summarize(samples: Sequence[Sample]) -> dict[str, Any]:
+def summarize(
+    samples: Sequence[Sample],
+    *,
+    generated_function_count: int | None = None,
+) -> dict[str, Any]:
     groups: dict[tuple[str, int], list[Sample]] = defaultdict(list)
     for sample in samples:
         groups[(sample.mode, sample.jobs)].append(sample)
@@ -742,8 +839,59 @@ def summarize(samples: Sequence[Sample]) -> dict[str, Any]:
                 name: statistics.median(s.phases[name] for s in group)
                 for name in group[0].phases
             },
+            "worker_pass_metric_snapshots": {
+                "minimum_merged": min(
+                    s.pass_metric_worker_snapshots for s in group
+                ),
+                "expected": group[0].pass_metric_expected_worker_snapshots,
+                "all_complete": all(
+                    s.pass_metric_worker_snapshots_complete for s in group
+                ),
+            },
+            "median_pass_metrics": {
+                name: {
+                    "median_invocation_count": statistics.median(
+                        int(s.pass_metrics.get(name, {}).get("invocation_count", 0))
+                        for s in group
+                    ),
+                    "median_inclusive_wall_seconds": statistics.median(
+                        float(
+                            s.pass_metrics.get(name, {}).get(
+                                "inclusive_wall_seconds", 0.0
+                            )
+                        )
+                        for s in group
+                    ),
+                    "median_calls_per_analyzed_file": statistics.median(
+                        int(s.pass_metrics.get(name, {}).get("invocation_count", 0))
+                        / max(1, s.semantics.files_analyzed)
+                        for s in group
+                    ),
+                    "median_calls_per_generated_function": (
+                        statistics.median(
+                            int(
+                                s.pass_metrics.get(name, {}).get(
+                                    "invocation_count", 0
+                                )
+                            )
+                            / generated_function_count
+                            for s in group
+                        )
+                        if generated_function_count
+                        else None
+                    ),
+                }
+                for name in pass_metrics.PASS_NAMES
+            },
         }
     return {"arms": arms}
+
+
+def _generated_function_count(*, modules: int, functions_per_module: int) -> int:
+    # One entry point per module plus the generated helpers, bench_mix(), and
+    # benchmark_known_issue(). This is a unique-source-definition denominator;
+    # TU expansion may analyze header functions more than once.
+    return modules * (functions_per_module + 1) + 2
 
 
 def build_artifact(
@@ -752,6 +900,10 @@ def build_artifact(
     samples: Sequence[Sample],
     args: argparse.Namespace,
 ) -> dict[str, Any]:
+    generated_function_count = _generated_function_count(
+        modules=args.modules,
+        functions_per_module=args.functions_per_module,
+    )
     return {
         "schema_version": 1,
         "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -770,15 +922,19 @@ def build_artifact(
             "modules": args.modules,
             "functions_per_module": args.functions_per_module,
             "statements_per_function": args.statements_per_function,
+            "generated_function_count": generated_function_count,
         },
         "configuration": {
+            "preset": args.preset,
             "modes": list(args.modes),
             "jobs": list(args.jobs),
             "repetitions": args.repetitions,
             "rules": "default",
         },
         "parity": validate_parity(samples),
-        "summary": summarize(samples),
+        "summary": summarize(
+            samples, generated_function_count=generated_function_count
+        ),
         "samples": [
             {
                 **asdict(sample),
@@ -804,6 +960,16 @@ def build_artifact(
                 "include-expanded line volume recomputed after the timed scan for exactly "
                 "the analyzed roots; excluded from scan timing and peak-RSS measurement"
             ),
+            "pass_metrics": (
+                "benchmark-only invocation counts and inclusive wall activity for repeated "
+                "CFG/event/summary/preprocessor passes; parallel-worker activity is merged "
+                "into the coordinator artifact, timings overlap, and must not be summed"
+            ),
+            "pass_metric_worker_snapshots": (
+                "parallel workers flush cumulative snapshots before each Future resolves; "
+                "merged/expected/completeness fields expose hard-process losses that could "
+                "otherwise undercount a benchmark arm"
+            ),
         },
     }
 
@@ -820,6 +986,19 @@ def _print_summary(artifact: dict[str, Any]) -> None:
             f"{arm['median_throughput_kloc_per_sec']:.3f} KLOC/s  "
             f"expanded={arm['expanded_analysis_lines']} lines"
         )
+        rendered_passes = ", ".join(
+            f"{pass_name}={metric['median_invocation_count']:g}x/"
+            f"{metric['median_inclusive_wall_seconds']:.3f}s"
+            for pass_name, metric in arm["median_pass_metrics"].items()
+        )
+        print(f"  passes: {rendered_passes}")
+        snapshots = arm["worker_pass_metric_snapshots"]
+        if snapshots["expected"]:
+            print(
+                "  worker snapshots: "
+                f"{snapshots['minimum_merged']}/{snapshots['expected']} "
+                f"({'complete' if snapshots['all_complete'] else 'INCOMPLETE'})"
+            )
     parity = artifact["parity"]
     print(f"semantic parity: {'PASS' if parity['passes'] else 'FAIL'}")
     for difference in parity["differences"]:
