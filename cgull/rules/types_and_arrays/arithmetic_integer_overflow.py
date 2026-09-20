@@ -9,6 +9,7 @@ from typing import List, Set, Tuple
 from ..base import BaseRule
 from ...ast_analyzer import CASTContext
 from ...models import AnalysisEngine, FixType, Issue, RuleCategory, Severity
+from ...utils import extract_balanced_parens, split_call_args
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +72,8 @@ class ArithmeticIntegerOverflowRule(BaseRule):
         re.compile(r'\brecv\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)\s*,'),
         re.compile(r'\brecvfrom\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)\s*,'),
     )
-    ALLOC_CALL_PATTERN = re.compile(
-        r'\b(?:malloc|calloc|realloc|aligned_alloc)\s*\(\s*([^)]+)\)'
+    ALLOC_CALLEE_PATTERN = re.compile(
+        r'\b(malloc|calloc|realloc|aligned_alloc)\s*\('
     )
     COMPOUND_SIZE_ASSIGN_PATTERN = re.compile(
         r'\b([A-Za-z_]\w*)\s*(\+=|\*=)\s*([^;]+)'
@@ -164,19 +165,207 @@ class ArithmeticIntegerOverflowRule(BaseRule):
 
     @classmethod
     def _guard_is_alloc_size_saturating(cls, p_strip: str) -> bool:
-        """Return whether a guard proves allocation-size arithmetic will not wrap.
+        """Quick filter used when classifying partial INT_MAX-style gates.
 
-        ``SIZE_MAX``-relative checks and ``MAX_``* project caps count.
-        Bare ``INT_MAX``/type-max comparisons do not: a later ``needed += …``
-        can still wrap ``size_t`` before ``realloc``/``malloc``.
+        Project ``MAX_*`` caps and any ``SIZE_MAX`` mention exclude a guard from
+        being treated as a *partial* type-max gate. Actual proof that an
+        allocation-size ``+=``/``*=`` is safe requires
+        ``_size_max_guard_covers_operation`` (operand/operation match) or a
+        directionally correct numeric / ``MAX_*`` upper bound.
+        Lower-bound ``MIN_*`` checks are never saturating overflow proofs.
         """
         if "SIZE_MAX" in p_strip:
             return True
-        # Project-style caps (MAX_ELEMENTS), excluding type maxima like INT_MAX.
         if "MAX_" in p_strip and not cls._guard_has_partial_type_max(p_strip):
             return True
-        if "MIN_" in p_strip and not cls._guard_has_partial_type_max(p_strip):
+        return False
+
+    @staticmethod
+    def _guard_is_early_exit(p_strip: str) -> bool:
+        return bool(re.search(
+            r'\b(?:return|goto|break|continue|abort)\b|\bexit\s*\(',
+            p_strip,
+        ))
+
+    @staticmethod
+    def _normalize_expr(expr: str) -> str:
+        return re.sub(r'\s+', '', expr)
+
+    @classmethod
+    def _strip_outer_parens(cls, expr: str) -> str:
+        text = expr.strip()
+        while text.startswith("(") and text.endswith(")"):
+            depth = 0
+            balanced = True
+            for i, ch in enumerate(text):
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0 and i != len(text) - 1:
+                        balanced = False
+                        break
+            if not balanced or depth != 0:
+                break
+            text = text[1:-1].strip()
+        return text
+
+    @classmethod
+    def _expr_covers_addend(cls, guard_expr: str, needed_expr: str) -> bool:
+        """Whether ``guard_expr`` covers ``needed_expr`` for a SIZE_MAX-relative check."""
+        g = cls._strip_outer_parens(cls._normalize_expr(guard_expr))
+        n = cls._strip_outer_parens(cls._normalize_expr(needed_expr))
+        if not n:
+            return False
+        if g == n:
             return True
+        needed_ids = cls._identifiers_in(needed_expr)
+        guard_ids = cls._identifiers_in(guard_expr)
+        if not needed_ids.issubset(guard_ids):
+            return False
+        needed_nums = set(re.findall(r'\b\d+\b', needed_expr))
+        guard_nums = set(re.findall(r'\b\d+\b', guard_expr))
+        if not needed_nums.issubset(guard_nums):
+            return False
+        # Identifiers/literals from needed appear in guard; accept over-approx covers
+        # (e.g. guard ``offset + 1`` covers needed ``offset``).
+        if needed_ids or needed_nums:
+            return True
+        return g == n
+
+    @classmethod
+    def _iter_size_max_bound_exprs(cls, p_strip: str):
+        """Yield ``('-'|'/', bound_expr)`` for ``SIZE_MAX - expr`` / ``SIZE_MAX / expr``."""
+        token = "SIZE_MAX"
+        start_at = 0
+        while True:
+            idx = p_strip.find(token, start_at)
+            if idx < 0:
+                return
+            j = idx + len(token)
+            while j < len(p_strip) and p_strip[j].isspace():
+                j += 1
+            if j >= len(p_strip) or p_strip[j] not in "-/":
+                start_at = idx + 1
+                continue
+            op_char = p_strip[j]
+            j += 1
+            while j < len(p_strip) and p_strip[j].isspace():
+                j += 1
+            expr_start = j
+            depth = 0
+            while j < len(p_strip):
+                c = p_strip[j]
+                if c in "\"'":
+                    quote = c
+                    j += 1
+                    while j < len(p_strip) and p_strip[j] != quote:
+                        if p_strip[j] == "\\":
+                            j += 1
+                        j += 1
+                    j += 1
+                    continue
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif depth == 0:
+                    if c in ";{,?":
+                        break
+                    if p_strip.startswith("&&", j) or p_strip.startswith("||", j):
+                        break
+                    if c in "<>" or p_strip.startswith("==", j) or p_strip.startswith("!=", j):
+                        break
+                j += 1
+            bound = p_strip[expr_start:j].strip()
+            if bound:
+                yield op_char, bound
+            start_at = idx + 1
+
+    @classmethod
+    def _guard_compares_var(cls, p_strip: str, var_name: str) -> bool:
+        if not var_name or var_name.isdigit():
+            return False
+        v_esc = re.escape(var_name)
+        return bool(
+            re.search(r'\b' + v_esc + r'\b\s*(?:<|>|<=|>=)', p_strip)
+            or re.search(r'(?:<|>|<=|>=)\s*\b' + v_esc + r'\b', p_strip)
+        )
+
+    @classmethod
+    def _arith_op_to_size_max_op(cls, arith_op: str, rhs: str) -> str | None:
+        if arith_op in {"+", "+=", "-", "-="}:
+            return "-"
+        if arith_op in {"*", "*=", "/", "/="}:
+            return "/"
+        if arith_op == "=":
+            if re.search(r'(?<![<>!=])\*(?!=)', rhs):
+                return "/"
+            if re.search(r'(?<![<>!=])\+(?!=)', rhs):
+                return "-"
+        return None
+
+    @classmethod
+    def _size_max_guard_covers_operation(
+        cls,
+        p_strip: str,
+        lhs: str,
+        arith_op: str,
+        rhs: str,
+    ) -> bool:
+        """True when a SIZE_MAX-relative guard matches operands and add/mul op.
+
+        ``if (needed > SIZE_MAX - offset) return; needed += offset + 1;`` does
+        *not* cover the later accumulation (missing ``+ 1``).
+        """
+        if "SIZE_MAX" not in p_strip or not lhs:
+            return False
+        want = cls._arith_op_to_size_max_op(arith_op, rhs or "")
+        if want is None:
+            return False
+        if not cls._guard_compares_var(p_strip, lhs):
+            return False
+        for op_char, bound in cls._iter_size_max_bound_exprs(p_strip):
+            if op_char != want:
+                continue
+            if cls._expr_covers_addend(bound, rhs or ""):
+                return True
+        return False
+
+    def _numeric_upper_bound_proved(self, p_strip: str, v_name: str) -> bool:
+        """Interpret branch direction for numeric / MAX_* comparisons.
+
+        Early-exit ``if (needed < 100) return;`` only proves a *lower* bound on
+        the continue path and is not an overflow proof. Early-exit
+        ``if (needed > 100) return;`` proves an upper bound. Assert requires a
+        direct upper-bound comparison.
+
+        Bare ``if (needed < 100) {`` without an early-exit on the same line is
+        not accepted: the arithmetic may sit after the if, where the condition
+        no longer holds.
+        """
+        if not v_name or v_name.isdigit():
+            return False
+        v_esc = re.escape(v_name)
+        # SIZE_MAX must go through _size_max_guard_covers_operation (operand match).
+        bound = r'(?:\d+|MAX_[A-Za-z0-9_]+)'
+        direct_upper = bool(
+            re.search(r'\b' + v_esc + r'\b\s*(?:<|<=)\s*' + bound, p_strip)
+            or re.search(bound + r'\s*(?:>|>=)\s*\b' + v_esc + r'\b', p_strip)
+        )
+        direct_lower = bool(
+            re.search(r'\b' + v_esc + r'\b\s*(?:>|>=)\s*' + bound, p_strip)
+            or re.search(bound + r'\s*(?:<|<=)\s*\b' + v_esc + r'\b', p_strip)
+        )
+        is_assert = bool(re.search(r'\b(?:assert|ASSERT)\b', p_strip))
+        is_early = self._guard_is_early_exit(p_strip)
+        if is_assert:
+            return direct_upper
+        if is_early:
+            # Continue path sees the negation: written lower-cmp => upper bound.
+            return direct_lower
         return False
 
     def _has_alloc_size_overflow_check(
@@ -184,11 +373,17 @@ class ArithmeticIntegerOverflowRule(BaseRule):
         source_lines: List[str],
         line_no: int,
         var_names: List[str],
+        *,
+        lhs: str | None = None,
+        op: str | None = None,
+        rhs: str | None = None,
     ) -> bool:
         """Preceding guard sufficient for allocation-size arithmetic.
 
         Unlike general overflow checks, partial INT_MAX-style gates alone are
-        not accepted for sizes that feed malloc/realloc.
+        not accepted for sizes that feed malloc/realloc. ``SIZE_MAX`` guards
+        must match the operands/operation; ``MIN_*`` lower bounds never count;
+        numeric comparisons must be directionally upper bounds.
         """
         if line_no < 1 or line_no > len(source_lines):
             return False
@@ -203,6 +398,9 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             p_strip = clean_single.strip()
             if not p_strip or p_strip.startswith('#'):
                 continue
+            # Do not let guards from a previous function suppress findings.
+            if self._looks_like_function_header(p_strip):
+                break
             if not re.search(r'\b(?:if|while|assert|ASSERT)\b', p_strip):
                 continue
 
@@ -214,8 +412,9 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             if not refs_var:
                 continue
 
-            if self._guard_is_alloc_size_saturating(p_strip):
-                return True
+            if lhs and op is not None and rhs is not None:
+                if self._size_max_guard_covers_operation(p_strip, lhs, op, rhs):
+                    return True
 
             # Partial type-max gates are not sufficient; keep scanning.
             if self._guard_has_partial_type_max(p_strip):
@@ -224,22 +423,16 @@ class ArithmeticIntegerOverflowRule(BaseRule):
             for v_name in var_names:
                 if not v_name or v_name.isdigit():
                     continue
-                v_esc = re.escape(v_name)
-                # Only numeric / MAX_ / SIZE_MAX upper bounds prove alloc-size
-                # arithmetic. Comparisons like `needed <= p->length` are capacity
-                # checks, not overflow proofs.
-                # Accept both `n < 100` and early-exit `if (n > 100) return`.
-                bound = r'(?:\d+|SIZE_MAX|MAX_[A-Za-z0-9_]+)'
-                if (
-                    re.search(r'\b' + v_esc + r'\b\s*(?:<|<=)\s*' + bound, p_strip)
-                    or re.search(r'\b' + v_esc + r'\b\s*(?:>|>=)\s*' + bound, p_strip)
-                    or re.search(bound + r'\s*(?:>|>=)\s*\b' + v_esc + r'\b', p_strip)
-                    or re.search(bound + r'\s*(?:<|<=)\s*\b' + v_esc + r'\b', p_strip)
-                    or re.search(r'\bassert\s*\([^)]*?\b' + v_esc + r'\b', p_strip)
-                ):
+                if self._numeric_upper_bound_proved(p_strip, v_name):
                     return True
 
         return False
+
+    @staticmethod
+    def _looks_like_function_header(p_strip: str) -> bool:
+        if re.match(r'^(?:if|while|for|switch|return|else)\b', p_strip):
+            return False
+        return bool(re.search(r'\b\w+\s*\([^;]*\)\s*\{?\s*$', p_strip))
 
     def _has_partial_type_max_gate(
         self,
@@ -288,14 +481,36 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                 names.add(name)
         return names
 
+    def _iter_alloc_calls(self, line: str) -> List[Tuple[str, List[str], int]]:
+        """Return ``(callee, args, start_index)`` using balanced-paren parsing."""
+        found: List[Tuple[str, List[str], int]] = []
+        for match in self.ALLOC_CALLEE_PATTERN.finditer(line):
+            callee = match.group(1)
+            paren_pos = match.end() - 1
+            inner, _ = extract_balanced_parens(line, paren_pos)
+            if inner is None:
+                continue
+            found.append((callee, split_call_args(inner), match.start()))
+        return found
+
     def _alloc_size_args(self, line: str) -> List[str]:
+        """Size-related argument expressions from allocation calls on ``line``.
+
+        ``calloc`` contributes both the count and the element-size arguments.
+        ``malloc`` uses its single size argument; ``realloc`` / ``aligned_alloc``
+        use the trailing size argument.
+        """
         args: List[str] = []
-        for match in self.ALLOC_CALL_PATTERN.finditer(line):
-            raw = match.group(1).strip()
-            # realloc/calloc: size is the last comma-separated argument.
-            if "," in raw:
-                raw = raw.split(",")[-1].strip()
-            args.append(raw)
+        for callee, call_args, _ in self._iter_alloc_calls(line):
+            if not call_args:
+                continue
+            if callee == "calloc":
+                args.extend(call_args)
+            elif callee == "malloc":
+                args.append(call_args[0])
+            else:
+                # realloc(ptr, size) / aligned_alloc(alignment, size)
+                args.append(call_args[-1])
         return args
 
     def _alloc_size_related_vars(self, body_lines: List[str]) -> Set[str]:
@@ -453,7 +668,14 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                         continue
                     rhs_ids = [n for n in self._identifiers_in(rhs) if n != target]
                     check_vars = [target] + rhs_ids
-                    if self._has_alloc_size_overflow_check(ast_ctx.source_lines, line_no, check_vars):
+                    if self._has_alloc_size_overflow_check(
+                        ast_ctx.source_lines,
+                        line_no,
+                        check_vars,
+                        lhs=target,
+                        op=op,
+                        rhs=rhs,
+                    ):
                         continue
                     has_partial_gate = self._has_partial_type_max_gate(
                         ast_ctx.source_lines, line_no, [target]
@@ -503,44 +725,75 @@ class ArithmeticIntegerOverflowRule(BaseRule):
 
             for i, line in enumerate(body_lines):
                 line_no = body_start + i
-                for m_alloc in self.ALLOC_CALL_PATTERN.finditer(line):
-                    arg_str = m_alloc.group(1).strip()
-                    if "," in arg_str:
-                        arg_str = arg_str.split(",")[-1].strip()
-                    m_arith = re.search(r'\b([A-Za-z_]\w*)\s*([\*\+])\s*([^,;)]+)', arg_str)
-                    if not m_arith:
+                for callee, call_args, alloc_start in self._iter_alloc_calls(line):
+                    if callee == "calloc":
+                        size_args = list(call_args)
+                    elif not call_args:
                         continue
-                    var1 = m_arith.group(1)
-                    op = m_arith.group(2)
-                    var2 = m_arith.group(3).strip()
-                    if var1.isdigit() and var2.isdigit():
-                        continue
-                    if self._has_alloc_size_overflow_check(ast_ctx.source_lines, line_no, [var1, var2]):
-                        continue
-                    key = (line_no, var1, op, var2)
-                    if key in reported_lines:
-                        continue
-                    reported_lines.add(key)
-                    snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else line.strip()
-                    gate_note = ""
-                    if self._has_partial_type_max_gate(ast_ctx.source_lines, line_no, [var1, var2]):
-                        gate_note = (
-                            " A preceding INT_MAX-style gate does not prove this allocation size is safe."
+                    elif callee == "malloc":
+                        size_args = [call_args[0]]
+                    else:
+                        size_args = [call_args[-1]]
+                    for arg_str in size_args:
+                        m_arith = re.search(
+                            r'\b([A-Za-z_]\w*)\s*([\*\+])\s*(.+)$',
+                            arg_str.strip(),
                         )
-                    guard_expr = f"{var1} > SIZE_MAX - ({var2})" if op == "+" else f"{var1} > SIZE_MAX / ({var2})"
-                    issues.append(self.create_issue(
-                        file_path=file_path,
-                        line_number=line_no,
-                        code_snippet=snippet,
-                        message=(
-                            f"Unchecked integer arithmetic '{var1} {op} {var2}' in memory allocation "
-                            f"argument. May wrap around to small buffer causing heap corruption.{gate_note}"
-                        ),
-                        column_number=m_alloc.start() + 1,
-                        engine="AST",
-                        fix_type=FixType.SUGGESTED_FIX,
-                        suggested_fix_replacement=f"if ({guard_expr}) return -EOVERFLOW;\n{snippet}",
-                    ))
+                        if not m_arith:
+                            continue
+                        var1 = m_arith.group(1)
+                        op = m_arith.group(2)
+                        var2 = m_arith.group(3).strip()
+                        # Prefer variable * sizeof(...) form; skip leading sizeof ident noise.
+                        if var1 in {"sizeof", "struct"}:
+                            continue
+                        if var1.isdigit() and re.fullmatch(r'\d+', var2 or ""):
+                            continue
+                        if self._has_alloc_size_overflow_check(
+                            ast_ctx.source_lines,
+                            line_no,
+                            [var1, var2],
+                            lhs=var1,
+                            op=op,
+                            rhs=var2,
+                        ):
+                            continue
+                        key = (line_no, var1, op, var2)
+                        if key in reported_lines:
+                            continue
+                        reported_lines.add(key)
+                        snippet = (
+                            ast_ctx.source_lines[line_no - 1].strip()
+                            if line_no <= len(ast_ctx.source_lines)
+                            else line.strip()
+                        )
+                        gate_note = ""
+                        if self._has_partial_type_max_gate(
+                            ast_ctx.source_lines, line_no, [var1, var2]
+                        ):
+                            gate_note = (
+                                " A preceding INT_MAX-style gate does not prove this allocation size is safe."
+                            )
+                        guard_expr = (
+                            f"{var1} > SIZE_MAX - ({var2})"
+                            if op == "+"
+                            else f"{var1} > SIZE_MAX / ({var2})"
+                        )
+                        issues.append(self.create_issue(
+                            file_path=file_path,
+                            line_number=line_no,
+                            code_snippet=snippet,
+                            message=(
+                                f"Unchecked integer arithmetic '{var1} {op} {var2}' in memory allocation "
+                                f"argument. May wrap around to small buffer causing heap corruption.{gate_note}"
+                            ),
+                            column_number=alloc_start + 1,
+                            engine="AST",
+                            fix_type=FixType.SUGGESTED_FIX,
+                            suggested_fix_replacement=(
+                                f"if ({guard_expr}) return -EOVERFLOW;\n{snippet}"
+                            ),
+                        ))
 
             tainted: Set[str] = set()
             argv_names = self._argv_names(fn)
@@ -584,6 +837,12 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                             dedup_key=key,
                         )
                     elif is_max_op and not self._has_preceding_overflow_check(ast_ctx.source_lines, line_no, [lhs, rhs]):
+                        # SIZE_MAX-/type-max arithmetic inside an overflow guard is the check, not a bug.
+                        if (
+                            re.search(r'\b(?:if|while|assert|ASSERT)\b', line)
+                            and self.MAX_CONSTANTS_PATTERN.search(line)
+                        ):
+                            continue
                         if key not in reported_lines:
                             reported_lines.add(key)
                             snippet = ast_ctx.source_lines[line_no - 1].strip() if line_no <= len(ast_ctx.source_lines) else line.strip()
@@ -622,18 +881,42 @@ class ArithmeticIntegerOverflowRule(BaseRule):
         issues = []
         target_line = masked_line_content or line_content
 
-        m = re.search(r'\b(?:malloc|calloc|realloc|aligned_alloc)\s*\(\s*(\w+)\s*([\*\+])\s*([^)]+)\)', target_line)
-        if m:
-            var1 = m.group(1)
-            op = m.group(2)
-            var2 = m.group(3).strip()
-            if not self._has_alloc_size_overflow_check(source_lines, line_number, [var1, var2]):
+        for callee, call_args, alloc_start in self._iter_alloc_calls(target_line):
+            if callee == "calloc":
+                size_args = list(call_args)
+            elif not call_args:
+                continue
+            elif callee == "malloc":
+                size_args = [call_args[0]]
+            else:
+                size_args = [call_args[-1]]
+            for arg_str in size_args:
+                m = re.search(
+                    r'\b([A-Za-z_]\w*)\s*([\*\+])\s*([^,;]+)$',
+                    arg_str.strip(),
+                )
+                if not m:
+                    continue
+                var1 = m.group(1)
+                op = m.group(2)
+                var2 = m.group(3).strip()
+                if self._has_alloc_size_overflow_check(
+                    source_lines,
+                    line_number,
+                    [var1, var2],
+                    lhs=var1,
+                    op=op,
+                    rhs=var2,
+                ):
+                    continue
                 gate_note = ""
                 if self._has_partial_type_max_gate(source_lines, line_number, [var1, var2]):
                     gate_note = (
                         " A preceding INT_MAX-style gate does not prove this allocation size is safe."
                     )
-                guard_expr = f"{var1} > SIZE_MAX - ({var2})" if op == "+" else f"{var1} > SIZE_MAX / ({var2})"
+                guard_expr = (
+                    f"{var1} > SIZE_MAX - ({var2})" if op == "+" else f"{var1} > SIZE_MAX / ({var2})"
+                )
                 issues.append(self.create_issue(
                     file_path=file_path,
                     line_number=line_number,
@@ -642,10 +925,12 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                         f"Unchecked integer arithmetic '{var1} {op} {var2}' in memory allocation "
                         f"argument. May wrap around to small buffer causing heap corruption.{gate_note}"
                     ),
-                    column_number=m.start() + 1,
+                    column_number=alloc_start + 1,
                     engine="Regex",
                     fix_type=FixType.SUGGESTED_FIX,
-                    suggested_fix_replacement=f"if ({guard_expr}) return -EOVERFLOW;\n{line_content.strip()}",
+                    suggested_fix_replacement=(
+                        f"if ({guard_expr}) return -EOVERFLOW;\n{line_content.strip()}"
+                    ),
                 ))
 
         if self.MAX_CONSTANTS_PATTERN.search(target_line) and not target_line.lstrip().startswith('#'):
@@ -654,6 +939,12 @@ class ArithmeticIntegerOverflowRule(BaseRule):
                 op = m_arith.group(2)
                 rhs = m_arith.group(3)
                 if self.MAX_CONSTANTS_PATTERN.search(lhs) or self.MAX_CONSTANTS_PATTERN.search(rhs):
+                    # Overflow-check conditions themselves are not findings.
+                    if (
+                        re.search(r'\b(?:if|while|assert|ASSERT)\b', target_line)
+                        and self.MAX_CONSTANTS_PATTERN.search(target_line)
+                    ):
+                        continue
                     if not self._has_preceding_overflow_check(source_lines, line_number, [lhs, rhs]):
                         issues.append(self.create_issue(
                             file_path=file_path,

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <limits.h>
+#define MIN_REQUIRED 8
 
 /* True Positive: Unchecked multiplication in malloc argument */
 void test_tp_malloc_mult(int count) {
@@ -89,4 +90,44 @@ void *test_tp_intmax_then_realloc_add(void *buf, size_t needed, size_t offset) {
         return 0;
     }
     return realloc(buf, needed + offset); // expect: CGULL-006
+}
+
+/* True Positive: incomplete SIZE_MAX guard omits +1 from later accumulation (#560) */
+void *test_tp_incomplete_size_max_accum(void *buf, size_t needed, size_t offset) {
+    if (needed > SIZE_MAX - offset) {
+        return 0;
+    }
+    needed += offset + 1; // expect: CGULL-006
+    return realloc(buf, needed);
+}
+
+/* True Positive: MIN_* lower bound is not an overflow proof before accum (#560) */
+void *test_tp_min_lower_bound_accum(void *buf, size_t needed, size_t offset) {
+    if (needed < MIN_REQUIRED) {
+        return 0;
+    }
+    needed += offset; // expect: CGULL-006
+    return realloc(buf, needed);
+}
+
+/* True Positive: early return on lower bound does not prove add safety (#560) */
+void *test_tp_lower_bound_early_return_accum(void *buf, size_t needed, size_t offset) {
+    if (needed < 100) {
+        return 0;
+    }
+    needed += offset; // expect: CGULL-006
+    return realloc(buf, needed);
+}
+
+/* True Positive: calloc count argument is allocation-size related (#560) */
+void *test_tp_calloc_count_accum(size_t count, size_t offset) {
+    count += offset; // expect: CGULL-006
+    return calloc(count, sizeof(int));
+}
+
+/* True Positive: nested sizeof in malloc size still marks count related (#560) */
+struct item { int x; };
+void *test_tp_malloc_sizeof_nested_accum(size_t count, size_t offset) {
+    count += offset; // expect: CGULL-006
+    return malloc(sizeof(struct item) * count);
 }

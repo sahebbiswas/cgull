@@ -129,3 +129,75 @@ def test_scanner_ensure_style_fixture():
     """
     issues = _scan_rule(code)
     assert any("allocation-size accumulation" in i.message for i in issues)
+
+
+def test_incomplete_size_max_guard_still_reports_accum():
+    """SIZE_MAX - offset does not prove needed += offset + 1 is safe."""
+    issues = _scan_ast(
+        "if (needed > SIZE_MAX - offset) return NULL;\n"
+        "needed += offset + 1;\n"
+        "void *p = realloc(buf, needed);\n"
+    )
+    accum = [i for i in issues if "allocation-size accumulation" in i.message]
+    assert len(accum) >= 1
+    assert any(i.line_number == 2 for i in accum)
+
+
+def test_min_required_lower_bound_does_not_suppress_accum():
+    issues = _scan_ast(
+        "if (needed < MIN_REQUIRED) return NULL;\n"
+        "needed += offset;\n"
+        "void *p = realloc(buf, needed);\n"
+    )
+    accum = [i for i in issues if "allocation-size accumulation" in i.message]
+    assert len(accum) >= 1
+
+
+def test_early_return_on_lower_bound_does_not_suppress_accum():
+    """if (needed < 100) return only proves a lower bound on the continue path."""
+    issues = _scan_ast(
+        "if (needed < 100) return NULL;\n"
+        "needed += offset;\n"
+        "void *p = realloc(buf, needed);\n"
+    )
+    accum = [i for i in issues if "allocation-size accumulation" in i.message]
+    assert len(accum) >= 1
+
+
+def test_early_return_on_upper_bound_suppresses_accum():
+    issues = _scan_ast(
+        "if (needed > 100) return NULL;\n"
+        "needed += offset;\n"
+        "void *p = realloc(buf, needed);\n"
+    )
+    assert [i for i in issues if "allocation-size accumulation" in i.message] == []
+
+
+def test_calloc_count_accum_is_allocation_related():
+    issues = _scan_ast(
+        "count += offset;\n"
+        "void *p = calloc(count, sizeof(int));\n"
+    )
+    accum = [i for i in issues if "allocation-size accumulation" in i.message]
+    assert len(accum) == 1
+    assert accum[0].line_number == 1
+
+
+def test_malloc_sizeof_nested_parens_marks_count_related():
+    issues = _scan_ast(
+        "count += offset;\n"
+        "void *p = malloc(sizeof(struct item) * count);\n"
+    )
+    accum = [i for i in issues if "allocation-size accumulation" in i.message]
+    assert len(accum) == 1
+    assert accum[0].line_number == 1
+
+
+def test_bare_size_max_without_relative_op_still_reports():
+    issues = _scan_ast(
+        "if (needed > SIZE_MAX) return NULL;\n"
+        "needed += offset;\n"
+        "void *p = realloc(buf, needed);\n"
+    )
+    accum = [i for i in issues if "allocation-size accumulation" in i.message]
+    assert len(accum) >= 1
