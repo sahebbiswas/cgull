@@ -101,3 +101,14 @@ int vulnerable_one_branch_unknown(int flag, int input) {
     }
     return 100 / data; // expect: CGULL-034
 }
+
+double safe_nan_macro(void) {
+#ifndef NAN
+#define NAN (0.0/0.0)
+#endif
+    return (double) NAN;
+}
+
+double safe_nan_literal(void) {
+    return 0.0 / 0.0;
+}
