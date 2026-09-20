@@ -134,6 +134,52 @@ def _lvalue_value_effects(node) -> Tuple[ExpressionEffect, ...]:
     return ()
 
 
+def _type_vla_dimension_effects(type_node, walk):
+    """Collect effects from array dimension expressions in a type AST.
+
+    Fixed-size dimensions are typically Constants (no ID reads). VLA bounds
+    and nested ``sizeof`` of VLA types are evaluated when the type's size is
+    needed (declaration reach / ``sizeof`` of a VLA type).
+    """
+    effects = []
+    node = type_node
+    while node is not None:
+        kind = _kind(node)
+        if kind == "ArrayDecl":
+            dim = getattr(node, "dim", None)
+            if dim is not None:
+                effects.extend(walk(dim))
+            node = getattr(node, "type", None)
+            continue
+        if kind in {"PtrDecl", "FuncDecl", "TypeDecl"}:
+            node = getattr(node, "type", None)
+            continue
+        break
+    return tuple(effects)
+
+
+def _sizeof_operand_effects(operand, walk):
+    """Effects of a ``sizeof`` operand without stored-value reads.
+
+    Ordinary ``sizeof`` does not evaluate its operand's stored value. VLA size
+    expressions still run: walk ArrayDecl dimensions inside type operands
+    (and nested type structure) via ``walk``. Expression operands that are
+    not type names contribute no value reads here; VLA object sizes are
+    established at the declaration that introduces the VLA.
+    """
+    if operand is None:
+        return ()
+    kind = _kind(operand)
+    if kind == "Typename":
+        return _type_vla_dimension_effects(getattr(operand, "type", None), walk)
+    if kind == "Cast":
+        return _sizeof_operand_effects(operand.expr, walk)
+    if kind == "CompoundLiteral":
+        return _type_vla_dimension_effects(getattr(operand, "type", None), walk)
+    # ID / ArrayRef / StructRef / etc.: suppress stored-value reads.
+    return ()
+
+
 def _expression_effects(node) -> Tuple[ExpressionEffect, ...]:
     if node is None:
         return ()
@@ -154,6 +200,10 @@ def _expression_effects(node) -> Tuple[ExpressionEffect, ...]:
     if kind == "Decl":
         initializer = getattr(node, "init", None)
         effects = list(_expression_effects(initializer))
+        # VLA dimension expressions are evaluated when the declaration is reached.
+        effects.extend(
+            _type_vla_dimension_effects(getattr(node, "type", None), _expression_effects)
+        )
         # Preserve the established CFG contract: an uninitialized declaration
         # is not a definition/write; an initializer is.
         if initializer is not None and getattr(node, "name", None):
@@ -190,10 +240,9 @@ def _expression_effects(node) -> Tuple[ExpressionEffect, ...]:
                 ("write", target) if target is not None else ("indirect_write", None)
             )
             return tuple(effects)
-        # sizeof does not evaluate its operand's stored value (VLA size
-        # expressions are still ignored here for object init purposes).
+        # sizeof: suppress stored-value reads; still analyze VLA size exprs.
         if op == "sizeof":
-            return ()
+            return _sizeof_operand_effects(node.expr, _expression_effects)
         return _expression_effects(node.expr)
 
     if kind == "StructRef":
@@ -293,6 +342,9 @@ def _storage_effects(node) -> Tuple[StorageEffect, ...]:
     if kind == "Decl":
         initializer = getattr(node, "init", None)
         effects = list(_storage_effects(initializer))
+        effects.extend(
+            _type_vla_dimension_effects(getattr(node, "type", None), _storage_effects)
+        )
         if initializer is not None and getattr(node, "name", None):
             effects.append(
                 StorageEffect("write", str(node.name), write_kind="initializer")
@@ -327,7 +379,7 @@ def _storage_effects(node) -> Tuple[StorageEffect, ...]:
             effects.extend(_storage_write_effect(node.expr, "mutation"))
             return tuple(effects)
         if op == "sizeof":
-            return ()
+            return _sizeof_operand_effects(node.expr, _storage_effects)
         return _storage_effects(node.expr)
 
     if kind == "StructRef":

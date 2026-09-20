@@ -190,3 +190,145 @@ def test_uninitialized_pointer_passed_to_sink_still_reported():
     )
     assert len(issues) == 1
     assert "ptr" in issues[0].message
+
+
+def test_sizeof_uninit_object_is_not_a_use():
+    """Ordinary sizeof must not count as reading an uninitialized object's value."""
+    assert (
+        _scan(
+            """
+            int f(void) {
+                int x;
+                return (int)sizeof x;
+            }
+            """
+        )
+        == []
+    )
+
+
+def test_vla_bound_uninit_n_via_decl_is_reported():
+    """VLA dimension expressions evaluate at declaration; uninit n is a use."""
+    issues = _scan(
+        """
+        int f(void) {
+            int n;
+            int a[n];
+            return (int)sizeof a;
+        }
+        """
+    )
+    assert len(issues) == 1
+    assert "n" in issues[0].message
+
+
+def test_vla_bound_inside_sizeof_type_is_reported():
+    """sizeof of a VLA type still evaluates dimension expressions."""
+    issues = _scan(
+        """
+        int f(void) {
+            int n;
+            int a[sizeof(int[n])];
+            return 0;
+        }
+        """
+    )
+    assert len(issues) == 1
+    assert "n" in issues[0].message
+
+
+def test_zero_length_memset_does_not_initialize():
+    issues = _scan(
+        """
+        int f(void) {
+            char buf[8];
+            memset(buf, 0, 0);
+            return (int)buf[0];
+        }
+        """
+    )
+    assert len(issues) == 1
+    assert "buf" in issues[0].message
+
+
+def test_zero_length_memcpy_and_snprintf_do_not_initialize():
+    memcpy_issues = _scan(
+        """
+        int f(const char *src) {
+            char buf[8];
+            memcpy(buf, src, 0);
+            return (int)buf[0];
+        }
+        """
+    )
+    snprintf_issues = _scan(
+        """
+        int f(void) {
+            char buf[8];
+            snprintf(buf, 0, "x");
+            return (int)buf[0];
+        }
+        """
+    )
+    assert len(memcpy_issues) == 1 and "buf" in memcpy_issues[0].message
+    assert len(snprintf_issues) == 1 and "buf" in snprintf_issues[0].message
+
+
+def test_nonzero_memset_still_initializes():
+    assert (
+        _scan(
+            """
+            int f(void) {
+                char buf[8];
+                memset(buf, 0, 8);
+                return (int)buf[0];
+            }
+            """
+        )
+        == []
+    )
+
+
+def test_compound_assignment_on_uninit_array_is_reported():
+    issues = _scan(
+        """
+        int f(void) {
+            int arr[4];
+            int i = 0;
+            arr[i] += 1;
+            return arr[i];
+        }
+        """
+    )
+    assert len(issues) == 1
+    assert "arr" in issues[0].message
+
+
+def test_postincrement_on_uninit_array_is_reported():
+    issues = _scan(
+        """
+        int f(void) {
+            int arr[4];
+            int i = 0;
+            arr[i]++;
+            return arr[0];
+        }
+        """
+    )
+    assert len(issues) == 1
+    assert "arr" in issues[0].message
+
+
+def test_plain_element_store_still_initializes_array():
+    assert (
+        _scan(
+            """
+            int f(void) {
+                int arr[4];
+                arr[0] = 1;
+                return arr[0];
+            }
+            """
+        )
+        == []
+    )

@@ -26,6 +26,53 @@ _DEFINITE_BUFFER_OUTPUT_WRITERS = frozenset({
     "vsprintf",
     "vsnprintf",
 })
+
+# Explicit length/size argument index for writers that can be zero-length.
+# Callees without an entry (strcpy/sprintf/vsprintf) always perform a write.
+_DEFINITE_BUFFER_WRITER_SIZE_ARG = {
+    "memset": 2,
+    "bzero": 1,
+    "explicit_bzero": 1,
+    "memcpy": 2,
+    "memmove": 2,
+    "strncpy": 2,
+    "snprintf": 1,
+    "vsnprintf": 1,
+}
+
+
+def _is_constant_zero_size_arg(argument: str) -> bool:
+    """Whether a formatted call argument is a literal zero size/length."""
+    text = str(argument).strip().lower()
+    while text.endswith(("u", "l")):
+        text = text[:-1]
+    try:
+        return int(text, 0) == 0
+    except ValueError:
+        return False
+
+
+def is_zero_length_definite_buffer_write(
+    callee: str,
+    actual_arguments,
+) -> bool:
+    """Whether a definite buffer-writer call has a literal zero size/length.
+
+    Zero-length calls (``memset(buf, 0, 0)``, ``memcpy(dst, src, 0)``,
+    ``snprintf(buf, 0, ...)``) write no destination bytes and must not be
+    treated as definite initialization. Non-sized writers (strcpy/sprintf)
+    and non-buffer-writer callees return False (not a zero-length write).
+    """
+    if callee not in _DEFINITE_BUFFER_OUTPUT_WRITERS:
+        return False
+    size_index = _DEFINITE_BUFFER_WRITER_SIZE_ARG.get(callee)
+    if size_index is None:
+        return False
+    if size_index >= len(actual_arguments):
+        return False
+    return _is_constant_zero_size_arg(actual_arguments[size_index])
+
+
 from .call_graph import build_translation_unit_call_graph
 from .construction import _guarded_expression_uses, _is_nullish, build_cfg, find_function_def
 from .dataflow import meet_nullness
@@ -36,6 +83,7 @@ __all__ = [
     "FunctionSummaryAnalysisResult",
     "analyze_function_summaries",
     "analyze_function_summaries_detailed",
+    "is_zero_length_definite_buffer_write",
     "serialize_function_summaries",
 ]
 

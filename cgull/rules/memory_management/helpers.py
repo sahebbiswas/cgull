@@ -15,8 +15,11 @@ from ...utils import extract_call_args, split_call_args, extract_balanced_parens
 from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
 from ...cfg.construction import _guarded_expression_uses
 from ...cfg.expression_effects import ordered_storage_effects
+from ...cfg.summaries import is_zero_length_definite_buffer_write
 
 logger = logging.getLogger(__name__)
+
+
 def _brace_depths(body_lines: List[str]) -> List[int]:
     """
     Returns, for each line in `body_lines`, the net brace depth *after*
@@ -123,13 +126,16 @@ def _apply_aggregate_definition_effects(
     definite assignment, so project those stores onto the root before
     initialization dataflow.
 
-    Only *direct* aggregate stores count:
+    Only *direct* plain aggregate stores count:
     - ``s.field = …`` / ``s.a.b = …`` (``.`` member path)
     - ``buf[i] = …`` / ``s.arr[i] = …`` when the root is not a pointer local
 
     Indirect stores such as ``p[i] = …`` or ``p->field = …`` *use* the pointer
     value; they must not be treated as initializing ``p`` (that FN broke
     CGULL-021 conditional-assignment coverage).
+
+    Compound assignments and ``++``/``--`` read before write, so they are not
+    projected as initializing the aggregate root.
 
     Condition nodes store the full ``If``/``While`` AST, so walking their
     storage effects would incorrectly attribute branch-body writes to the
@@ -148,22 +154,22 @@ def _apply_aggregate_definition_effects(
             continue
         for effect in ordered_storage_effects(ast_node):
             # Direct ``.`` member stores only — not ``->`` through a pointer.
+            # Compound / mutating writes read the prior value first, so they
+            # must not be projected as sole initializations that suppress UBI.
             if (
                 effect.action == "write"
                 and effect.root
                 and effect.is_direct_subobject
+                and effect.write_kind == "plain"
                 and _projects_as_object_init(effect.root)
             ):
                 node.writes.add(effect.root)
         kind = type(ast_node).__name__
-        if kind == "Assignment":
+        # Pure ``=`` element stores initialize the aggregate object. Compound
+        # assignments and ``++``/``--`` read before write — do not project them
+        # as initializing writes (that hid CGULL-023 on uninit arrays).
+        if kind == "Assignment" and getattr(ast_node, "op", "=") == "=":
             root = _array_lvalue_root(getattr(ast_node, "lvalue", None))
-            if _projects_as_object_init(root):
-                node.writes.add(root)
-        elif kind == "UnaryOp" and getattr(ast_node, "op", None) in {
-            "++", "--", "p++", "p--"
-        }:
-            root = _array_lvalue_root(getattr(ast_node, "expr", None))
             if _projects_as_object_init(root):
                 node.writes.add(root)
 
@@ -183,8 +189,8 @@ def _static_local_names(funcdef) -> Set[str]:
                 names.add(str(node.name))
             return
         if type(node).__name__ == "FuncDef":
-            # Do not walk nested function definitions if present.
-            visit(getattr(node, "body", None))
+            # Nested function definitions are separate scopes; do not register
+            # their static locals on the enclosing function.
             return
         for _child_name, child in node.children():
             visit(child)
@@ -207,6 +213,12 @@ def _apply_output_summary_effects(
                 continue
             summary = summaries.get(call.direct_callee)
             if summary is None:
+                continue
+            callee = call.direct_callee
+            if callee and is_zero_length_definite_buffer_write(
+                callee, call.actual_arguments
+            ):
+                # Zero-length memset/memcpy/snprintf/… must not must-init.
                 continue
             for index in summary.must_initialize_params:
                 if index >= len(call.actual_arguments):
