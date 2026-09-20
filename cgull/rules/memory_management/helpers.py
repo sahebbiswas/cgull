@@ -231,6 +231,44 @@ def _apply_output_summary_effects(
                     node.writes.add(target)
 
 
+def _summaries_cache_token(ast_ctx: CASTContext, summaries: Optional[Dict[str, FunctionSummary]]):
+    """Memoize summary serialization per AST context and mapping identity."""
+    if summaries is None:
+        return None
+    memo = getattr(ast_ctx, "_memory_rule_summary_tokens", None)
+    if memo is None:
+        memo = {}
+        setattr(ast_ctx, "_memory_rule_summary_tokens", memo)
+    cached = memo.get(id(summaries))
+    if cached is not None and cached[0] is summaries:
+        return cached[1]
+    from ...cfg.summaries import serialize_function_summaries
+
+    token = serialize_function_summaries(summaries)
+    memo[id(summaries)] = (summaries, token)
+    if len(memo) > 16:
+        setattr(ast_ctx, "_memory_rule_summary_tokens", {id(summaries): (summaries, token)})
+    return token
+
+
+def _ast_cfg_cache_key(
+    ast_ctx: CASTContext,
+    fn: CFunction,
+    alloc_funcs: Optional[Set[str]],
+    dealloc_funcs: Optional[Set[str]],
+    realloc_funcs: Optional[Set[str]],
+    summaries: Optional[Dict[str, FunctionSummary]],
+):
+    """Stable key for sharing post-dataflow memory-rule CFGs within one AST context."""
+    return (
+        fn.name,
+        None if alloc_funcs is None else frozenset(alloc_funcs),
+        None if dealloc_funcs is None else frozenset(dealloc_funcs),
+        None if realloc_funcs is None else frozenset(realloc_funcs),
+        _summaries_cache_token(ast_ctx, summaries),
+    )
+
+
 def _ast_cfg_for_function(
     ast_ctx: CASTContext,
     fn: CFunction,
@@ -239,6 +277,12 @@ def _ast_cfg_for_function(
     realloc_funcs: Optional[Set[str]] = None,
     summaries: Optional[Dict[str, FunctionSummary]] = None,
 ):
+    """Build a dataflow-annotated CFG for memory rules, shared per AST inputs.
+
+    Multiple memory rules often request the same effect/summary inputs for each
+    function. Cache the post-dataflow CFG on the AST context so later rules
+    reuse it as a read-only view instead of rebuilding/applying/analyzing again.
+    """
     if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
         return None
     funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
@@ -246,6 +290,16 @@ def _ast_cfg_for_function(
         return None
     if summaries is None:
         summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs)
+
+    cache = getattr(ast_ctx, "_memory_rule_cfg_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(ast_ctx, "_memory_rule_cfg_cache", cache)
+    key = _ast_cfg_cache_key(ast_ctx, fn, alloc_funcs, dealloc_funcs, realloc_funcs, summaries)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
     cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
     array_locals = {
         var.name
@@ -274,6 +328,7 @@ def _ast_cfg_for_function(
         | _static_local_names(funcdef)
     )
     cfg.analyze_dataflow(initial_nonnull=set(), initial_initialized=initial_initialized)
+    cache[key] = cfg
     return cfg
 
 

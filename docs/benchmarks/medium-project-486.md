@@ -105,6 +105,13 @@ Parallel scan workers receive the metrics destination explicitly in the pickled 
 
 The wrappers are installed and restored by the benchmark context even when a sample raises. No production telemetry fields or normal scan entry points are modified persistently.
 
+## Related residual-cost work
+
+Issue #581 caches effect-annotated analysis CFG templates and reuses
+project-summary sessions to cut leftover `apply_cfg_event_semantics` fanout and
+cross-TU summary rebuilds after #543/#544/#548. See
+[`cfg-fanout-581.md`](cfg-fanout-581.md).
+
 ## Baseline and optimization workflow
 
 The pull-request benchmark workflow runs a compact one-repetition file/TU and jobs 1/2 matrix on Ubuntu for every currently supported Python release (3.12 through 3.14). Each Python job uploads its own JSON artifact. This cross-version CI run validates benchmark portability and semantic parity; it is not an absolute performance gate.
