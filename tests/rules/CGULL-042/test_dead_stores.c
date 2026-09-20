@@ -33,3 +33,22 @@ void test_conditional_read(int cond) {
         printf("%d\n", x);
     }
 }
+
+/* #554: mutually exclusive arms assign x; join read must not be dead. */
+void test_if_else_join_live(int cond) {
+    int x;
+    if (cond) {
+        x = 1;
+    } else {
+        x = 2;
+    }
+    printf("%d\n", x);      // live after join — no CGULL-042 on either arm
+}
+
+/* #554: true dead store (overwrite before any read) still reported. */
+void test_true_dead_overwrite(void) {
+    int x;
+    x = 1;                  // expect: CGULL-042
+    x = 2;
+    printf("%d\n", x);
+}
