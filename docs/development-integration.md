@@ -121,3 +121,29 @@ For a production utility workflow:
 - require justification for project-wide skipped rules and prefer narrow source suppressions;
 - treat baseline changes as reviewable security-policy changes;
 - archive JSON/SARIF reports when longitudinal metrics matter.
+
+
+## Whole-TU function summary reuse
+
+`AnalysisSession.function_summary_result(...)` caches detailed function summaries
+by effective allocation, deallocation, and reallocation sets, call-effect
+registry content, imported function-summary content, and `FixedPointConfig`.
+The AST and configuration profile belong to the session; separate sessions never
+share results. Imported facts and registry contents are checked on every lookup,
+including in-place changes. AST/source-map changes require a new session.
+
+`session.function_summaries` supplies the canonical session-model inputs.
+`analyze_function_summaries(...)` routes legacy ownership, dead-store-member,
+MISRA/style, and custom memory-rule requests through the same accessor while
+preserving their explicit inputs and standalone defaults. Omitted registries
+mean built-in effects, not implicit adoption of a custom session registry.
+The low-level `analyze_function_summaries_detailed(...)` remains the uncached
+engine for explicit graph/event-cache analysis and reference comparisons.
+
+Each accessor result is a deep copy, including mutable summary sets and SCC
+iteration maps. Mutating a returned result cannot change another consumer's
+facts. The session lock serializes cache misses. Default legacy and declarative
+session requests retain two entries where their CFG memory-effect sets differ;
+this avoids conflating distinct semantics merely because current findings agree.
+
+See [issue #544 benchmark evidence](benchmarks/function-summary-cache-544.md).

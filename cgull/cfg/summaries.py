@@ -650,6 +650,52 @@ def analyze_function_summaries_detailed(
     )
 
 
+def copy_function_summary_result(result):
+    """Copy all mutable result state without recursively copying frozen facts."""
+    return FunctionSummaryAnalysisResult(
+        summaries={
+            name: FunctionSummary(**{
+                field: value.copy() if isinstance(value, set) else value
+                for field, value in vars(summary).items()
+            })
+            for name, summary in result.summaries.items()
+        },
+        diagnostics=result.diagnostics,
+        iterations_by_scc=dict(result.iterations_by_scc),
+    )
+
+
+def function_summary_input_key(
+    ast_ctx, alloc_funcs=None, dealloc_funcs=None, realloc_funcs=None, *,
+    call_effects=None, fixed_point_config=None,
+):
+    """Content key for both built-in summaries and CFG event semantics.
+
+    The legacy summary engine and event collector have different allocation
+    defaults. Preserve both: neither None nor an empty set is a wildcard.
+    """
+    from ..summary_imports import imported_summaries
+
+    registry = call_effects or BUILTIN_CALL_EFFECTS
+    event_sets = (
+        frozenset(alloc_funcs if alloc_funcs is not None else
+                  ("malloc", "calloc", "realloc", "aligned_alloc")),
+        frozenset(dealloc_funcs if dealloc_funcs is not None else
+                  ("free", "cfree", "vfree")),
+        frozenset(realloc_funcs if realloc_funcs is not None else ("realloc",)),
+    )
+    builtins = _get_builtin_summaries(
+        alloc_funcs, dealloc_funcs, realloc_funcs, registry,
+    )
+    return (
+        event_sets,
+        tuple(sorted(registry.effects.items())),
+        serialize_function_summaries(builtins),
+        serialize_function_summaries(imported_summaries(ast_ctx, "function")),
+        fixed_point_config or FixedPointConfig(),
+    )
+
+
 def analyze_function_summaries(
     ast_ctx,
     alloc_funcs: Optional[Set[str]] = None,
@@ -659,16 +705,19 @@ def analyze_function_summaries(
     call_effects: Optional[CallEffectRegistry] = None,
     event_cache=None,
 ) -> Dict[str, FunctionSummary]:
-    return dict(
-        analyze_function_summaries_detailed(
-            ast_ctx,
-            alloc_funcs=alloc_funcs,
-            dealloc_funcs=dealloc_funcs,
-            realloc_funcs=realloc_funcs,
-            call_effects=call_effects,
-            event_cache=event_cache,
-        ).summaries
-    )
+    """Return copy-safe session summaries with standalone input defaults.
+
+    ``event_cache`` is retained for call compatibility; the session owns the
+    event cache used by its summary engine. Explicit standalone cache/graph
+    control remains available through ``analyze_function_summaries_detailed``.
+    """
+    # All legacy consumers (including ownership and rule-local extensions)
+    # share a scan-local cache without changing their requested semantics.
+    from ..analysis_session import analysis_session_for
+
+    return dict(analysis_session_for(ast_ctx).function_summary_result(
+        alloc_funcs, dealloc_funcs, realloc_funcs, call_effects=call_effects,
+    ).summaries)
 
 
 def serialize_function_summaries(summaries: Mapping[str, FunctionSummary]) -> bytes:
