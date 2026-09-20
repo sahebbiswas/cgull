@@ -14,7 +14,7 @@ from typing import Dict, FrozenSet, Mapping, Optional, Set, Tuple
 
 from ..call_effects import BUILTIN_CALL_EFFECTS, CallEffectRegistry, ReturnEffect
 from .call_graph import build_translation_unit_call_graph
-from .construction import build_cfg, find_function_def
+from .construction import find_function_def
 from .fixed_point import FiniteLattice, FixedPointConfig, FixedPointDiagnostic, SCCFixedPointEngine
 from .summaries import analyze_function_summaries
 
@@ -380,14 +380,29 @@ def _analyze_one_function(
     event_cache=None,
 ) -> _OwnershipFact:
     param_names = tuple(p.name for p in fn.parameters if p.name)
-    funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+    from ..analysis_session import analysis_session_for
+    from .construction import apply_cfg_event_semantics, clone_cached_structural_cfg
+
+    session = analysis_session_for(ast_ctx)
+    funcdef = session.function_def(fn.name) or find_function_def(ast_ctx.pycparser_ast, fn.name)
     if funcdef is None:
         return _OwnershipFact(initialized=True)
 
-    cfg = build_cfg(
-        funcdef, summaries=function_summaries,
-        line_map=getattr(ast_ctx, "line_map", None), event_cache=event_cache,
+    use_session = session.function_def(fn.name) is funcdef and (
+        event_cache is None or event_cache is session._event_cache()
     )
+    if use_session:
+        cfg = session.analysis_cfg(fn.name, summaries=function_summaries)
+    else:
+        cfg = clone_cached_structural_cfg(
+            funcdef, line_map=getattr(ast_ctx, "line_map", None)
+        )
+        apply_cfg_event_semantics(
+            cfg,
+            summaries=function_summaries,
+            line_map=getattr(ast_ctx, "line_map", None),
+            event_cache=event_cache,
+        )
     initial_initialized = (
         set(param_names)
         | set(getattr(ast_ctx, "global_variables", {}).keys())

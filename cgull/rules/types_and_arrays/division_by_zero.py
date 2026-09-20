@@ -170,19 +170,20 @@ class DivisionByZeroRule(BaseRule):
 
             return path_reached
 
-        from ...cfg import build_cfg, find_function_def, _PRELUDE_LINE_COUNT
+        from ...cfg import _PRELUDE_LINE_COUNT
         from pycparser import c_ast
         from ...ast_analyzer import _format_pycparser_expr, _extract_identifiers_from_ast
 
         reported_lines = set()
+        session = self.get_analysis_session(ast_ctx) if ast_ctx.has_pycparser and ast_ctx.pycparser_ast is not None else None
 
         for fn in ast_ctx.functions:
             funcdef = None
             cfg = None
-            if ast_ctx.has_pycparser and ast_ctx.pycparser_ast is not None:
-                funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+            if session is not None:
+                funcdef = session.function_def(fn.name)
                 if funcdef is not None:
-                    cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+                    cfg = session.analysis_cfg(fn.name)
 
             if funcdef is not None and cfg is not None:
                 class DivVisitor(c_ast.NodeVisitor):

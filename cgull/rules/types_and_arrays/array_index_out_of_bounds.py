@@ -518,11 +518,12 @@ class ArrayIndexOutOfBoundsRule(BaseRule):
             funcdef = None
             cfg = None
             if ast_ctx.has_pycparser and ast_ctx.pycparser_ast is not None:
-                from ...cfg import build_cfg, find_function_def, _PRELUDE_LINE_COUNT
+                from ...cfg import _PRELUDE_LINE_COUNT
                 from pycparser import c_ast
-                funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+                session = self.get_analysis_session(ast_ctx)
+                funcdef = session.function_def(fn.name)
                 if funcdef is not None:
-                    cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+                    cfg = session.analysis_cfg(fn.name)
 
             if funcdef is not None and cfg is not None:
                 from ...ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr

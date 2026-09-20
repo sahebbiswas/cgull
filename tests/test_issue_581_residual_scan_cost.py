@@ -116,7 +116,7 @@ def test_project_summary_import_change_invalidates_summary_caches_only():
 def test_memory_rule_ast_cfg_shared_across_equivalent_requests():
     from unittest.mock import patch
 
-    from cgull.cfg import construction
+    from cgull.analysis_session import AnalysisSession
     from cgull.rules.memory_management.helpers import _ast_cfg_for_function
 
     ctx = _parse(
@@ -130,12 +130,17 @@ def test_memory_rule_ast_cfg_shared_across_equivalent_requests():
         """
     )
     fn = next(f for f in ctx.functions if f.name == "use")
-    summaries = analysis_session_for(ctx).function_summaries
+    session = analysis_session_for(ctx)
+    summaries = session.function_summaries
 
-    with patch(
-        "cgull.rules.memory_management.helpers.build_cfg",
-        wraps=construction.build_cfg,
-    ) as build:
+    calls = {"n": 0}
+    original = AnalysisSession.analysis_cfg
+
+    def counting(self, function_name, **kwargs):
+        calls["n"] += 1
+        return original(self, function_name, **kwargs)
+
+    with patch.object(AnalysisSession, "analysis_cfg", counting):
         first = _ast_cfg_for_function(
             ctx, fn, dealloc_funcs={"free", "cfree", "vfree"}, summaries=summaries
         )
@@ -148,4 +153,5 @@ def test_memory_rule_ast_cfg_shared_across_equivalent_requests():
 
     assert first is second
     assert first is not third
-    assert build.call_count == 2
+    # Annotated template cache avoids a second analysis_cfg for equivalent inputs.
+    assert calls["n"] == 2

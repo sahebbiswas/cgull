@@ -1,0 +1,529 @@
+{
+  "captured_at": "2026-09-20T22:57:08.641007+00:00",
+  "configuration": {
+    "jobs": [
+      1
+    ],
+    "modes": [
+      "tu"
+    ],
+    "preset": "standard",
+    "repetitions": 3,
+    "rules": "default"
+  },
+  "environment": {
+    "cgull_revision": "13bddb4d657d9a0a2f324d1f54357fd35e4541fa",
+    "cgull_version": "0.12.19",
+    "cpu_count": 9,
+    "machine": "x86_64",
+    "platform": "Linux-6.18.44-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "python_executable": "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python"
+  },
+  "parity": {
+    "cross_mode_findings_match": true,
+    "differences": [],
+    "passes": true,
+    "within_mode_jobs_and_repetitions_match": true
+  },
+  "samples": [
+    {
+      "analyzed_lines": 11551,
+      "expanded_analysis_lines": 11603,
+      "finding_count": 7,
+      "jobs": 1,
+      "mode": "tu",
+      "parse_fallback_count": 0,
+      "pass_metric_expected_worker_snapshots": 0,
+      "pass_metric_worker_snapshots": 0,
+      "pass_metric_worker_snapshots_complete": true,
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "inclusive_wall_seconds": 1.843980492000128,
+          "invocation_count": 4
+        },
+        "apply_cfg_event_semantics": {
+          "inclusive_wall_seconds": 2.4181304530084162,
+          "invocation_count": 5187
+        },
+        "build_cfg": {
+          "inclusive_wall_seconds": 0.0,
+          "invocation_count": 0
+        },
+        "clone_structural_cfg": {
+          "inclusive_wall_seconds": 2.620225181998876,
+          "invocation_count": 8432
+        },
+        "parse_conditional_directives": {
+          "inclusive_wall_seconds": 0.3899727369999937,
+          "invocation_count": 12
+        }
+      },
+      "peak_rss_bytes": 734851072,
+      "phases": {
+        "aggregate_file_analysis_seconds": 23.416739999999997,
+        "file_discovery_seconds": 0.0016963989999112528,
+        "independent_preparation_seconds": 0.08799341099984304,
+        "parser_seconds": 5.048438615000009,
+        "preparation_wall_seconds": 9.903680734999966,
+        "project_indexing_seconds": 0.11219864400004553,
+        "project_preparation_seconds": 9.815873646,
+        "project_summary_construction_seconds": 4.650561153000012,
+        "rule_execution_aggregate_seconds": 23.416739999999997,
+        "total_wall_seconds": 33.329352445999916,
+        "tu_include_expansion_seconds": 0.08705062599995017,
+        "worker_execution_wall_seconds": 23.419121661999952,
+        "worker_startup_ipc_collection_residual_seconds": 0.0023816619999550426
+      },
+      "repetition": 0,
+      "sampled_peak_tree_rss_bytes": null,
+      "semantic_digest": "909ffeb07a21ca33162bb049b18f99f63ac942e6af49483dd5d2bbf6918ce91f",
+      "semantics": {
+        "files_analyzed": 4,
+        "files_discovered": 4,
+        "files_failed": 0,
+        "files_ignored": 0,
+        "findings": [
+          [
+            "4af8b43b6d983406",
+            "CGULL-025",
+            "src/module_01.c",
+            2723,
+            1,
+            "Function 'module_01_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ],
+          [
+            "5904535e6751aa6c",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'value' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "a40e837217a7c03c",
+            "CGULL-001",
+            "src/module_03.c",
+            2890,
+            12,
+            "Banned insecure function call 'gets': gets() allows arbitrary buffer overflow into the stack without bounds checking. [policy=unconditional; policy_reason=No call form provides a destination bound.; evidence=semantic facts are descriptive only for an unconditional policy ban]"
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'salt' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "b07c012832a7fee0",
+            "CGULL-025",
+            "src/module_03.c",
+            2723,
+            1,
+            "Function 'module_03_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ],
+          [
+            "d3e0efe3cf3de710",
+            "CGULL-025",
+            "src/module_00.c",
+            2723,
+            1,
+            "Function 'module_00_entry' contains complex logic (162 lines) without any assert() invariant validations."
+          ],
+          [
+            "f20d3430bfc7048a",
+            "CGULL-025",
+            "src/module_02.c",
+            2723,
+            1,
+            "Function 'module_02_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ]
+        ],
+        "parser_status_counts": [
+          [
+            "fallback-parser",
+            0
+          ],
+          [
+            "parse-failed",
+            0
+          ],
+          [
+            "pycparser-success",
+            4
+          ],
+          [
+            "regex",
+            0
+          ]
+        ],
+        "scan_errors": []
+      },
+      "throughput_kloc_per_sec": 0.34657138984967933,
+      "unique_source_lines": 11551,
+      "wall_seconds": 33.329352445999916
+    },
+    {
+      "analyzed_lines": 11551,
+      "expanded_analysis_lines": 11603,
+      "finding_count": 7,
+      "jobs": 1,
+      "mode": "tu",
+      "parse_fallback_count": 0,
+      "pass_metric_expected_worker_snapshots": 0,
+      "pass_metric_worker_snapshots": 0,
+      "pass_metric_worker_snapshots_complete": true,
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "inclusive_wall_seconds": 1.6623561450002171,
+          "invocation_count": 4
+        },
+        "apply_cfg_event_semantics": {
+          "inclusive_wall_seconds": 5.0195897890002925,
+          "invocation_count": 5187
+        },
+        "build_cfg": {
+          "inclusive_wall_seconds": 0.0,
+          "invocation_count": 0
+        },
+        "clone_structural_cfg": {
+          "inclusive_wall_seconds": 1.5063726389973908,
+          "invocation_count": 8432
+        },
+        "parse_conditional_directives": {
+          "inclusive_wall_seconds": 0.26929720599991924,
+          "invocation_count": 12
+        }
+      },
+      "peak_rss_bytes": 741720064,
+      "phases": {
+        "aggregate_file_analysis_seconds": 22.87008,
+        "file_discovery_seconds": 0.0005383320000191816,
+        "independent_preparation_seconds": 0.08243229499998961,
+        "parser_seconds": 6.407163033000074,
+        "preparation_wall_seconds": 11.54877926200004,
+        "project_indexing_seconds": 0.18905121099999178,
+        "project_preparation_seconds": 11.466517941999996,
+        "project_summary_construction_seconds": 4.863609188000055,
+        "rule_execution_aggregate_seconds": 22.87008,
+        "total_wall_seconds": 34.4243774869999,
+        "tu_include_expansion_seconds": 0.08149689399999716,
+        "worker_execution_wall_seconds": 22.873197606000076,
+        "worker_startup_ipc_collection_residual_seconds": 0.003117606000074602
+      },
+      "repetition": 1,
+      "sampled_peak_tree_rss_bytes": null,
+      "semantic_digest": "909ffeb07a21ca33162bb049b18f99f63ac942e6af49483dd5d2bbf6918ce91f",
+      "semantics": {
+        "files_analyzed": 4,
+        "files_discovered": 4,
+        "files_failed": 0,
+        "files_ignored": 0,
+        "findings": [
+          [
+            "4af8b43b6d983406",
+            "CGULL-025",
+            "src/module_01.c",
+            2723,
+            1,
+            "Function 'module_01_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ],
+          [
+            "5904535e6751aa6c",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'value' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "a40e837217a7c03c",
+            "CGULL-001",
+            "src/module_03.c",
+            2890,
+            12,
+            "Banned insecure function call 'gets': gets() allows arbitrary buffer overflow into the stack without bounds checking. [policy=unconditional; policy_reason=No call form provides a destination bound.; evidence=semantic facts are descriptive only for an unconditional policy ban]"
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'salt' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "b07c012832a7fee0",
+            "CGULL-025",
+            "src/module_03.c",
+            2723,
+            1,
+            "Function 'module_03_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ],
+          [
+            "d3e0efe3cf3de710",
+            "CGULL-025",
+            "src/module_00.c",
+            2723,
+            1,
+            "Function 'module_00_entry' contains complex logic (162 lines) without any assert() invariant validations."
+          ],
+          [
+            "f20d3430bfc7048a",
+            "CGULL-025",
+            "src/module_02.c",
+            2723,
+            1,
+            "Function 'module_02_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ]
+        ],
+        "parser_status_counts": [
+          [
+            "fallback-parser",
+            0
+          ],
+          [
+            "parse-failed",
+            0
+          ],
+          [
+            "pycparser-success",
+            4
+          ],
+          [
+            "regex",
+            0
+          ]
+        ],
+        "scan_errors": []
+      },
+      "throughput_kloc_per_sec": 0.33554709898130025,
+      "unique_source_lines": 11551,
+      "wall_seconds": 34.4243774869999
+    },
+    {
+      "analyzed_lines": 11551,
+      "expanded_analysis_lines": 11603,
+      "finding_count": 7,
+      "jobs": 1,
+      "mode": "tu",
+      "parse_fallback_count": 0,
+      "pass_metric_expected_worker_snapshots": 0,
+      "pass_metric_worker_snapshots": 0,
+      "pass_metric_worker_snapshots_complete": true,
+      "pass_metrics": {
+        "analyze_function_summaries_detailed": {
+          "inclusive_wall_seconds": 2.257371313999897,
+          "invocation_count": 4
+        },
+        "apply_cfg_event_semantics": {
+          "inclusive_wall_seconds": 3.8928477119976606,
+          "invocation_count": 5187
+        },
+        "build_cfg": {
+          "inclusive_wall_seconds": 0.0,
+          "invocation_count": 0
+        },
+        "clone_structural_cfg": {
+          "inclusive_wall_seconds": 2.1247087179981463,
+          "invocation_count": 8432
+        },
+        "parse_conditional_directives": {
+          "inclusive_wall_seconds": 0.26659690399981173,
+          "invocation_count": 12
+        }
+      },
+      "peak_rss_bytes": 767545344,
+      "phases": {
+        "aggregate_file_analysis_seconds": 23.96878,
+        "file_discovery_seconds": 0.00056036299997686,
+        "independent_preparation_seconds": 0.09189000200001374,
+        "parser_seconds": 6.036393106999867,
+        "preparation_wall_seconds": 11.247796533000042,
+        "project_indexing_seconds": 0.10535774499999206,
+        "project_preparation_seconds": 11.156131243999994,
+        "project_summary_construction_seconds": 5.011097109999923,
+        "rule_execution_aggregate_seconds": 23.96878,
+        "total_wall_seconds": 35.22196936099999,
+        "tu_include_expansion_seconds": 0.09059764500011624,
+        "worker_execution_wall_seconds": 23.971590877999915,
+        "worker_startup_ipc_collection_residual_seconds": 0.002810877999916528
+      },
+      "repetition": 2,
+      "sampled_peak_tree_rss_bytes": null,
+      "semantic_digest": "909ffeb07a21ca33162bb049b18f99f63ac942e6af49483dd5d2bbf6918ce91f",
+      "semantics": {
+        "files_analyzed": 4,
+        "files_discovered": 4,
+        "files_failed": 0,
+        "files_ignored": 0,
+        "findings": [
+          [
+            "4af8b43b6d983406",
+            "CGULL-025",
+            "src/module_01.c",
+            2723,
+            1,
+            "Function 'module_01_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ],
+          [
+            "5904535e6751aa6c",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'value' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "a40e837217a7c03c",
+            "CGULL-001",
+            "src/module_03.c",
+            2890,
+            12,
+            "Banned insecure function call 'gets': gets() allows arbitrary buffer overflow into the stack without bounds checking. [policy=unconditional; policy_reason=No call form provides a destination bound.; evidence=semantic facts are descriptive only for an unconditional policy ban]"
+          ],
+          [
+            "aa1566b85c4d655a",
+            "CGULL-020",
+            "include/bench_types.h",
+            4,
+            1,
+            "Parameter 'salt' is declared in 'bench_mix' but never used in the function body (MISRA C:2012 Rule 2.7)."
+          ],
+          [
+            "b07c012832a7fee0",
+            "CGULL-025",
+            "src/module_03.c",
+            2723,
+            1,
+            "Function 'module_03_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ],
+          [
+            "d3e0efe3cf3de710",
+            "CGULL-025",
+            "src/module_00.c",
+            2723,
+            1,
+            "Function 'module_00_entry' contains complex logic (162 lines) without any assert() invariant validations."
+          ],
+          [
+            "f20d3430bfc7048a",
+            "CGULL-025",
+            "src/module_02.c",
+            2723,
+            1,
+            "Function 'module_02_entry' contains complex logic (163 lines) without any assert() invariant validations."
+          ]
+        ],
+        "parser_status_counts": [
+          [
+            "fallback-parser",
+            0
+          ],
+          [
+            "parse-failed",
+            0
+          ],
+          [
+            "pycparser-success",
+            4
+          ],
+          [
+            "regex",
+            0
+          ]
+        ],
+        "scan_errors": []
+      },
+      "throughput_kloc_per_sec": 0.32794872659193225,
+      "unique_source_lines": 11551,
+      "wall_seconds": 35.22196936099999
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "arms": {
+      "tu/jobs=1": {
+        "expanded_analysis_lines": 11603,
+        "jobs": 1,
+        "median_pass_metrics": {
+          "analyze_function_summaries_detailed": {
+            "median_calls_per_analyzed_file": 1.0,
+            "median_calls_per_generated_function": 0.006191950464396285,
+            "median_inclusive_wall_seconds": 1.843980492000128,
+            "median_invocation_count": 4
+          },
+          "apply_cfg_event_semantics": {
+            "median_calls_per_analyzed_file": 1296.75,
+            "median_calls_per_generated_function": 8.029411764705882,
+            "median_inclusive_wall_seconds": 3.8928477119976606,
+            "median_invocation_count": 5187
+          },
+          "build_cfg": {
+            "median_calls_per_analyzed_file": 0.0,
+            "median_calls_per_generated_function": 0.0,
+            "median_inclusive_wall_seconds": 0.0,
+            "median_invocation_count": 0
+          },
+          "clone_structural_cfg": {
+            "median_calls_per_analyzed_file": 2108.0,
+            "median_calls_per_generated_function": 13.052631578947368,
+            "median_inclusive_wall_seconds": 2.1247087179981463,
+            "median_invocation_count": 8432
+          },
+          "parse_conditional_directives": {
+            "median_calls_per_analyzed_file": 3.0,
+            "median_calls_per_generated_function": 0.018575851393188854,
+            "median_inclusive_wall_seconds": 0.26929720599991924,
+            "median_invocation_count": 12
+          }
+        },
+        "median_phases_seconds": {
+          "aggregate_file_analysis_seconds": 23.416739999999997,
+          "file_discovery_seconds": 0.00056036299997686,
+          "independent_preparation_seconds": 0.08799341099984304,
+          "parser_seconds": 6.036393106999867,
+          "preparation_wall_seconds": 11.247796533000042,
+          "project_indexing_seconds": 0.11219864400004553,
+          "project_preparation_seconds": 11.156131243999994,
+          "project_summary_construction_seconds": 4.863609188000055,
+          "rule_execution_aggregate_seconds": 23.416739999999997,
+          "total_wall_seconds": 34.4243774869999,
+          "tu_include_expansion_seconds": 0.08705062599995017,
+          "worker_execution_wall_seconds": 23.419121661999952,
+          "worker_startup_ipc_collection_residual_seconds": 0.002810877999916528
+        },
+        "median_throughput_kloc_per_sec": 0.33554709898130025,
+        "median_wall_seconds": 34.4243774869999,
+        "mode": "tu",
+        "samples": 3,
+        "worker_pass_metric_snapshots": {
+          "all_complete": true,
+          "expected": 0,
+          "minimum_merged": 0
+        }
+      }
+    }
+  },
+  "timing_notes": {
+    "activity_timings_overlap": true,
+    "expanded_analysis_lines": "include-expanded line volume recomputed after the timed scan for exactly the analyzed roots; excluded from scan timing and peak-RSS measurement",
+    "pass_metric_worker_snapshots": "parallel workers flush cumulative snapshots before each Future resolves; merged/expected/completeness fields expose hard-process losses that could otherwise undercount a benchmark arm",
+    "pass_metrics": "benchmark-only invocation counts and inclusive wall activity for repeated CFG/event/summary/preprocessor passes; parallel-worker activity is merged into the coordinator artifact, timings overlap, and must not be summed",
+    "peak_rss_bytes": "process-lifetime ru_maxrss sampled immediately after scan_path; null where the platform does not expose it",
+    "rule_execution_aggregate_seconds": "sum of per-file analysis durations minus scan-local parser/include work; it is CPU-like aggregate work and may exceed wall time in parallel mode",
+    "worker_startup_ipc_collection_residual_seconds": "worker-dispatch wall time minus a conservative ideal-compute lower bound; use for relative before/after comparisons on the same machine"
+  },
+  "workload": {
+    "file_count": 6,
+    "functions_per_module": 160,
+    "generated_function_count": 646,
+    "modules": 4,
+    "physical_lines": 11566,
+    "sha256": "b2faf6dbc45fa6b41fc6340b8b92e907fcff7313dc2a4eead9544af5ff968c80",
+    "statements_per_function": 12
+  }
+}

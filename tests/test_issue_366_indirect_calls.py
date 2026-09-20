@@ -2,7 +2,8 @@ from pycparser import c_parser
 
 from benchmarks.security_fact_support import build_security_context, build_security_models
 from cgull.cfg.call_graph import CallGraphFunction, build_call_graph
-from cgull.cfg.construction import build_cfg, find_function_def
+from cgull.analysis_session import analysis_session_for
+from cgull.cfg.construction import build_cfg
 from cgull.cfg.security_dataflow import analyze_function_security_dataflow
 from cgull.cfg.value_facts import FormatLiteralness, ValueProvenance
 from cgull.cfg.value_interprocedural import analyze_translation_unit_value_dataflow
@@ -158,11 +159,11 @@ def test_validator_summary_applies_through_resolved_indirect_call():
     ''')
     models = build_security_models()
     result = analyze_function_security_dataflow(ctx, "caller", models)
-    cfg = build_cfg(find_function_def(ctx.pycparser_ast, "caller"))
+    cfg = analysis_session_for(ctx).cfg("caller")
     sink = next(
         node
         for node in cfg.nodes.values()
-        if any(call.direct_callee == "sink" for call in node.calls)
+        if any(call.callee_expression == "sink" for call in node.calls)
     )
     assert ValidationProperty.BOUNDS_CHECKED in result.query_validation_properties(
         "value", sink.node_id

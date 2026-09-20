@@ -112,6 +112,10 @@ project-summary sessions to cut leftover `apply_cfg_event_semantics` fanout and
 cross-TU summary rebuilds after #543/#544/#548. See
 [`cfg-fanout-581.md`](cfg-fanout-581.md).
 
+Issue #583 routes remaining rule/summary consumers onto session-owned structural
+CFGs so public `build_cfg` fanout falls further while preserving the #582 annotated
+template cache. See [`cfg-structural-reuse-583.md`](cfg-structural-reuse-583.md).
+
 ## Baseline and optimization workflow
 
 The pull-request benchmark workflow runs a compact one-repetition file/TU and jobs 1/2 matrix on Ubuntu for every currently supported Python release (3.12 through 3.14). Each Python job uploads its own JSON artifact. This cross-version CI run validates benchmark portability and semantic parity; it is not an absolute performance gate.

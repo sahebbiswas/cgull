@@ -82,7 +82,9 @@ def test_tiny_sample_reports_all_requested_pass_counters(tmp_path):
     for metric in sample.pass_metrics.values():
         assert metric["invocation_count"] >= 0
         assert metric["inclusive_wall_seconds"] >= 0.0
-    assert sample.pass_metrics["build_cfg"]["invocation_count"] > 0
+    assert sample.pass_metrics["build_cfg"]["invocation_count"] == 0
+    assert sample.pass_metrics["clone_structural_cfg"]["invocation_count"] > 0
+    assert sample.pass_metrics["apply_cfg_event_semantics"]["invocation_count"] > 0
     assert sample.semantics.files_failed == 0
 
 
