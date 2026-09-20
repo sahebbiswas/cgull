@@ -42,7 +42,7 @@ From the root of a C project, initialize one editable project configuration:
 cgull init
 ```
 
-Interactive terminals offer focused, comprehensive, and custom finding profiles. In scripts/CI, initialization is deterministic and defaults to the focused profile; use `--profile comprehensive` when every registered rule should remain enabled. The focused profile keeps security/correctness coverage while explicitly skipping only the opinionated low-severity `CGULL-019` and `CGULL-025` policy checks.
+Interactive terminals offer focused, comprehensive, and custom finding profiles. In scripts/CI, initialization is deterministic and defaults to the focused profile; use `--profile comprehensive` when every registered rule should remain enabled. The focused profile keeps security/correctness coverage while explicitly skipping only the opinionated low-severity `CGULL-018`, `CGULL-019`, and `CGULL-025` policy checks.
 
 Then scan the project:
 
@@ -50,7 +50,7 @@ Then scan the project:
 cgull scan .
 ```
 
-C-GULL also works without project configuration: scans remain read-only and use inferred defaults when `.cgull.toml` is absent.
+C-GULL also works without project configuration: an unconfigured scan enables every registered rule. For a security-focused first pass, use `cgull scan . --profile focused`; inspect the selected rules with `cgull rules --profile focused`. `--profile comprehensive` adds no exclusions. Existing configuration exclusions remain effective for both profiles. Reports show separate security/correctness and policy/quality counts; these groups do not change severity or CI exit thresholds.
 
 Scan a narrower target when needed:
 

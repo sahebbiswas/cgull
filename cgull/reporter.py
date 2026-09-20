@@ -13,6 +13,7 @@ from . import __version__
 import logging
 from .utils import sanitize_terminal_text
 from .telemetry import telemetry_for
+from .finding_profiles import finding_group_counts
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,7 @@ class ReportGenerator:
         """Generates standard JSON security report."""
         data = result.to_dict()
         data["scan"] = telemetry_for(result).to_dict()
+        data["summary"]["finding_groups"] = finding_group_counts(result.issues)
         indent = 2 if pretty else None
         return json.dumps(data, indent=indent)
 
@@ -217,6 +219,7 @@ class ReportGenerator:
             "filesFailed": failed,
             "scanErrors": [err.to_dict() for err in result.scan_errors],
             "scanMetrics": telemetry_for(result).to_dict(),
+            "findingGroups": finding_group_counts(result.issues),
             "configurationWarnings": list(result.configuration_warnings),
         }
         inv_obj: Dict[str, Any] = {
@@ -266,6 +269,7 @@ class ReportGenerator:
         ignored = result.files_ignored or len(result.ignored_paths)
         failed = result.files_failed or len(result.failed_paths)
         telemetry = telemetry_for(result)
+        groups = finding_group_counts(result.issues)
 
         lines = [
             f"# 🛡️ C-GULL v{__version__} Security Audit Report",
@@ -298,6 +302,8 @@ class ReportGenerator:
             f"| Analysis time | {telemetry.elapsed_seconds:.2f} s |",
             f"| Throughput | {telemetry.throughput_kloc_per_sec:.2f} KLOC/s |",
             f"| Findings | {telemetry.findings_count} |",
+            f"| Security/correctness | {groups['security_correctness']} |",
+            f"| Policy/quality | {groups['policy_quality']} |",
             f"| Parse fallbacks | {telemetry.parse_fallback_count} |",
             f"| Scan errors | {telemetry.scan_error_count} |",
             "",
@@ -385,6 +391,7 @@ class ReportGenerator:
     @staticmethod
     def to_terminal_text(result: ScanResult) -> str:
         """Generates clean human-readable CLI terminal output."""
+        groups = finding_group_counts(result.issues)
         disc = result.files_discovered or (result.scanned_files_count + len(result.ignored_paths) + len(result.failed_paths))
         analyzed = result.files_analyzed or result.scanned_files_count
         ignored = result.files_ignored or len(result.ignored_paths)
@@ -404,6 +411,8 @@ class ReportGenerator:
             f" Lines of Code    : {result.total_lines_of_code}",
             f" Scan Duration    : {result.scan_duration_seconds:.3f}s",
             f" Total Findings   : {result.total_issues_count} (High: {result.high_severity_count}, Medium: {result.medium_severity_count}, Low: {result.low_severity_count})",
+            f" Security/correctness: {groups['security_correctness']}",
+            f" Policy/quality      : {groups['policy_quality']}",
         ]
         if result.is_baseline_filtered:
             lines.append(

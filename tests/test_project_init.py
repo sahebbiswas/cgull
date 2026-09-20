@@ -33,7 +33,7 @@ class TestProjectInit(unittest.TestCase):
             self.assertTrue(config_path.is_file())
             cfg = load_config(config_path=str(config_path), target_path=str(root))
             self.assertIsNone(cfg.error)
-            self.assertEqual(set(cfg.skipped_rules), {"CGULL-019", "CGULL-025"})
+            self.assertEqual(set(cfg.skipped_rules), {"CGULL-018", "CGULL-019", "CGULL-025"})
             self.assertEqual(cfg.mode, None)
             self.assertEqual(cfg.include_roots, [os.path.realpath(root / "include")])
             self.assertIn("Finding profile: focused", stdout.getvalue())

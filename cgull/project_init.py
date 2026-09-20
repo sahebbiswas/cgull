@@ -10,15 +10,12 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, TextIO, Tuple
 
 from .config import find_config_file
+from .finding_profiles import FOCUSED_SKIPS
 from .models import Severity
 from .project_state import DEFAULT_LOG_RETENTION_RUNS
 from .rules import get_all_rules
 
 
-FOCUSED_SKIPS: Dict[str, str] = {
-    "CGULL-019": "Focused profile: explicit void style is project policy",
-    "CGULL-025": "Focused profile: assertion placement is project policy",
-}
 DEFAULT_EXCLUDES: Tuple[str, ...] = (
     "build/",
     "dist/",
@@ -152,7 +149,7 @@ def _validate_focused_profile() -> None:
 
 def _prompt_profile(stdin: TextIO, stdout: TextIO) -> Tuple[str, Dict[str, str]]:
     _write(stdout, "Finding profile:")
-    _write(stdout, "  1. Focused (recommended): skip CGULL-019 and CGULL-025 only")
+    _write(stdout, "  1. Focused (recommended): skip CGULL-018, CGULL-019, and CGULL-025 only")
     _write(stdout, "  2. Comprehensive: enable every registered rule")
     _write(stdout, "  3. Custom: choose rule exclusions explicitly")
     stdout.write("Select profile [1/2/3, default 1]: ")

@@ -16,6 +16,7 @@ from .baseline import load_baseline_fingerprints, apply_baseline, BaselineError
 from .utils import ProgressIndicator
 import logging
 from .config import load_config
+from .finding_profiles import with_finding_profile
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,13 @@ Suppressing findings inline:
     # RULES subcommand
     rules_parser = subparsers.add_parser("rules", help="List all security audit rules supported by C-GULL")
     rules_parser.add_argument("-c", "--config", help="Path to .cgull.toml or pyproject.toml configuration file")
+
+    for profile_parser in (scan_parser, rules_parser):
+        profile_parser.add_argument(
+            "--profile", choices=["focused", "comprehensive"],
+            help="Finding profile: focused skips CGULL-018/019/025; comprehensive adds no skips. "
+                 "Configuration exclusions remain in effect; omitted means configuration or all rules.",
+        )
 
     return parser
 
@@ -257,6 +265,8 @@ def handle_scan(args) -> int:
         return 1
     for warning in config.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
+
+    config = with_finding_profile(config, getattr(args, "profile", None))
 
     # Determine rules to run
     all_rules = get_all_rules()
@@ -512,11 +522,14 @@ def handle_rules(args=None) -> int:
     for warning in config.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
+    config = with_finding_profile(config, getattr(args, "profile", None))
     all_rules = get_all_rules()
     active_rules = config.apply_to_rules([r() for r in [type(ru) for ru in all_rules]])
     active_ids = {r.rule_id for r in active_rules}
 
     print("=" * 80)
+    profile = getattr(args, "profile", None) or ("configured" if config.config_file_path else "comprehensive")
+    print(f"Finding profile: {profile} (configuration exclusions are retained)")
     config_note = f" (Config: {config.config_file_path})" if config.config_file_path else ""
     print(f" 🛡️  C-GULL Security Rules Catalog ({len(active_rules)}/{len(all_rules)} Active Rules){config_note}")
     print("=" * 80)
