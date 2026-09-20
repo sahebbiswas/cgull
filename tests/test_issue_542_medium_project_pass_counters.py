@@ -48,6 +48,7 @@ def test_pass_instrumentation_restores_all_wrappers_after_failure(tmp_path, monk
     recorder = benchmark.PhaseRecorder()
     original_build_cfg = cfg_construction.build_cfg
     original_worker_item = parallel_workers._scan_worker_item
+    original_work_item_builder = parallel_workers.build_parallel_work_item
 
     with pytest.raises(RuntimeError, match="boom"):
         with benchmark.phase_instrumentation(
@@ -55,10 +56,12 @@ def test_pass_instrumentation_restores_all_wrappers_after_failure(tmp_path, monk
         ):
             assert cfg_construction.build_cfg is not original_build_cfg
             assert parallel_workers._scan_worker_item is not original_worker_item
+            assert parallel_workers.build_parallel_work_item is not original_work_item_builder
             raise RuntimeError("boom")
 
     assert cfg_construction.build_cfg is original_build_cfg
     assert parallel_workers._scan_worker_item is original_worker_item
+    assert parallel_workers.build_parallel_work_item is original_work_item_builder
     assert benchmark.pass_metrics.WORKER_METRICS_ENV not in benchmark.os.environ
 
 
@@ -154,22 +157,39 @@ def test_worker_metric_directory_switch_flushes_previous_snapshot(tmp_path, monk
     assert metrics._WORKER_RECORDER is not recorder
 
 
-def test_worker_item_flushes_metrics_when_scan_raises(tmp_path, monkeypatch):
+def test_worker_item_uses_explicit_metrics_dir_and_flushes_on_failure(
+    tmp_path, monkeypatch
+):
     metrics = benchmark.pass_metrics
-    recorder = metrics.PassRecorder()
-    recorder.add_pass("build_cfg", 0.5)
+    monkeypatch.delenv(metrics.WORKER_METRICS_ENV, raising=False)
+    monkeypatch.setattr(metrics, "_WORKER_RECORDER", None)
+    monkeypatch.setattr(metrics, "_WORKER_PID", None)
+    monkeypatch.setattr(metrics, "_WORKER_METRICS_DIR", None)
+    monkeypatch.setattr(metrics, "_WORKER_RESTORATIONS", [])
+    monkeypatch.setattr(metrics, "_WORKER_FINALIZER", None)
+    monkeypatch.setattr(metrics, "install_pass_wrappers", lambda _recorder: [])
+    monkeypatch.setattr(
+        metrics.multiprocessing.util,
+        "Finalize",
+        lambda *args, **kwargs: object(),
+    )
 
-    monkeypatch.setattr(metrics, "_WORKER_RECORDER", recorder)
-    monkeypatch.setattr(metrics, "_WORKER_METRICS_DIR", str(tmp_path))
-    monkeypatch.setattr(metrics, "_ensure_worker_instrumentation", lambda: None)
-
-    def fail(_item):
+    def fail(item):
+        assert all(
+            name != metrics.WORKER_METRICS_OVERRIDE
+            for name, _value in item.config_overrides
+        )
+        metrics._WORKER_RECORDER.add_pass("build_cfg", 0.5)
         raise RuntimeError("worker failed")
 
     monkeypatch.setattr(metrics, "_ORIGINAL_SCAN_WORKER_ITEM", fail)
+    item = metrics.attach_worker_metrics_dir(
+        parallel_workers.ParallelScanWorkItem(file_path="example.c"),
+        tmp_path,
+    )
 
     with pytest.raises(RuntimeError, match="worker failed"):
-        metrics.benchmark_scan_worker_item(object())
+        metrics.benchmark_scan_worker_item(item)
 
     snapshot = json.loads(
         (tmp_path / f"{os.getpid()}.json").read_text(encoding="utf-8")
