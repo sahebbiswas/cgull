@@ -2,16 +2,18 @@
 
 Opt-in on-disk cache for finalized per-file findings so unchanged files can skip
 full reanalysis across process invocations. Entries are keyed by a digest of the
-analysis inputs (source bytes, expanded TU text, ScanConfig fingerprint, semantic
-model digest, C-GULL version, and cache schema version).
+analysis inputs (source bytes, expanded TU text, canonical file path, ScanConfig
+fingerprint, semantic model digest, C-GULL version, and cache schema version).
 
 Correctness notes for this first slice:
 - Cache hits are refused when the prepared AST context carries cross-TU project
   summaries (interprocedural inputs not yet folded into the key).
 - Corrupt or incomplete entries degrade to a miss.
-- Writes are atomic (temp file + os.replace).
+- Writes are atomic (temp file + os.replace) and best-effort (OSError is ignored).
 - Disabled by ``--no-cache`` / ``CGULL_NO_CACHE``; enabled by ``--cache-dir`` /
-  ``CGULL_CACHE_DIR`` (opt-in).
+  ``--cache-path`` / ``CGULL_CACHE_DIR`` (opt-in).
+- Keys include the canonical scanned path; restored hits also rewrite
+  path-dependent Issue fields and fingerprints for defense in depth.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from .models import (
     Severity,
 )
 
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 NO_CACHE_ENV = "CGULL_NO_CACHE"
 CACHE_DIR_ENV = "CGULL_CACHE_DIR"
 
@@ -97,6 +99,17 @@ def _canonical_json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def canonical_cache_path(file_path: str) -> str:
+    """Stable path spelling for cache identity and path rebinding."""
+    if not file_path:
+        return ""
+    expanded = os.path.expanduser(file_path)
+    try:
+        return os.path.realpath(os.path.abspath(expanded)).replace("\\", "/")
+    except OSError:
+        return os.path.abspath(expanded).replace("\\", "/")
+
+
 def _models_digest(rules: Sequence[Any]) -> str:
     """Stable digest of rule-attached semantic model registries."""
     chunks: List[str] = []
@@ -130,9 +143,54 @@ def _models_digest(rules: Sequence[Any]) -> str:
     return _sha256_text("\n".join(chunks))
 
 
+def _rule_identity(rule: Any) -> Dict[str, str]:
+    rule_id = getattr(rule, "rule_id", None)
+    return {
+        "rule_id": str(rule_id) if rule_id is not None else type(rule).__name__,
+        "type": f"{type(rule).__module__}.{type(rule).__qualname__}",
+    }
+
+
+def _config_fingerprint_fallback(config: ScanConfig) -> Dict[str, Any]:
+    """Fingerprint ScanConfig without ``to_dict()`` (supports custom rules)."""
+    return {
+        "enabled_rules": [_rule_identity(r) for r in config.get_rules()],
+        "engine_mode": (
+            config.engine_mode.value
+            if hasattr(config.engine_mode, "value")
+            else str(config.engine_mode)
+        ),
+        "severity_filter": (
+            sorted(
+                s.value if hasattr(s, "value") else str(s)
+                for s in config.severity_filter
+            )
+            if config.severity_filter is not None
+            else None
+        ),
+        "enable_inline_suppressions": config.enable_inline_suppressions,
+        "suppression_config": config.suppression_config,
+        "defined_syms": config.defined_syms,
+        "config_strategy": config.config_strategy,
+        "exhaustive_threshold": config.exhaustive_threshold,
+        "include_roots": list(config.include_roots),
+        "include_root_warnings": dict(config.include_root_warnings),
+        "dedup_headers": config.dedup_headers,
+        "mode": config.mode.value if hasattr(config.mode, "value") else str(config.mode),
+    }
+
+
 def config_fingerprint(config: ScanConfig) -> Dict[str, Any]:
-    """Serializable analysis-affecting configuration (excludes cache_dir)."""
-    data = config.to_dict()
+    """Serializable analysis-affecting configuration (excludes cache_dir).
+
+    Prefer ``ScanConfig.to_dict()`` for registered rules. Unregistered custom
+    rules make ``to_dict()`` raise; fall back to a type-aware fingerprint so
+    enabling the cache never crashes a scan.
+    """
+    try:
+        data = config.to_dict()
+    except ValueError:
+        return _config_fingerprint_fallback(config)
     data.pop("cache_dir", None)
     return data
 
@@ -143,17 +201,25 @@ def compute_cache_key(
     expanded_text: str,
     config: ScanConfig,
     cgull_version: str,
-) -> str:
-    """Content-addressed key for one file's reusable analysis product."""
-    payload = {
-        "schema_version": CACHE_SCHEMA_VERSION,
-        "cgull_version": cgull_version,
-        "source_sha256": _sha256_text(source_text),
-        "expanded_sha256": _sha256_text(expanded_text),
-        "config": config_fingerprint(config),
-        "models": _models_digest(config.get_rules()),
-    }
-    return _sha256_text(_canonical_json(payload))
+    file_path: str = "",
+) -> Optional[str]:
+    """Content-addressed key for one file's reusable analysis product.
+
+    Returns ``None`` when the key cannot be computed (caller must bypass cache).
+    """
+    try:
+        payload = {
+            "schema_version": CACHE_SCHEMA_VERSION,
+            "cgull_version": cgull_version,
+            "file_path": canonical_cache_path(file_path),
+            "source_sha256": _sha256_text(source_text),
+            "expanded_sha256": _sha256_text(expanded_text),
+            "config": config_fingerprint(config),
+            "models": _models_digest(config.get_rules()),
+        }
+        return _sha256_text(_canonical_json(payload))
+    except Exception:
+        return None
 
 
 def has_project_summaries(prepared: Any) -> bool:
@@ -168,6 +234,15 @@ def has_project_summaries(prepared: Any) -> bool:
     return bool(summaries)
 
 
+def _coerce_confidence(raw: Any) -> Optional[Confidence]:
+    """Parse Issue.confidence; raise ValueError/TypeError on corrupt values."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, Confidence):
+        return raw
+    return Confidence(raw)
+
+
 def issue_from_dict(data: Mapping[str, Any]) -> Issue:
     """Reconstruct an Issue from its JSON-serializable dict form."""
     related_raw = data.get("related_locations") or []
@@ -180,8 +255,7 @@ def issue_from_dict(data: Mapping[str, Any]) -> Issue:
         for item in related_raw
         if isinstance(item, Mapping)
     ]
-    confidence_raw = data.get("confidence")
-    confidence = Confidence(confidence_raw) if confidence_raw else None
+    confidence = _coerce_confidence(data.get("confidence"))
     fix_raw = data.get("fix_type", FixType.MANUAL_REVIEW.value)
     try:
         fix_type = FixType(fix_raw)
@@ -207,6 +281,95 @@ def issue_from_dict(data: Mapping[str, Any]) -> Issue:
         reachable_under=list(data.get("reachable_under") or []),
         related_tus=list(data.get("related_tus") or []),
         related_locations=related,
+    )
+
+
+def _derived_occurrence_fingerprint(base_fingerprint: str, occurrence: int) -> str:
+    if occurrence == 0:
+        return base_fingerprint
+    payload = f"{base_fingerprint}\0occurrence:{occurrence}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def rebind_cached_result(result: "CachedFileResult", file_path: str) -> "CachedFileResult":
+    """Rewrite path-dependent fields/fingerprints for the requesting scan path.
+
+    Always rebinds ``file_path`` (and matching related locations / TUs / scan
+    errors). Path-dependent fingerprints are recomputed only when the stored
+    path differs, so same-path hits preserve whatever the producer stored
+    (including empty fingerprints finalized later by the scanner).
+    """
+    from .utils import compute_issue_fingerprint
+
+    rebound_issues: List[Issue] = []
+    path_changed = False
+    for issue in result.issues:
+        old_path = issue.file_path
+        if old_path != file_path:
+            path_changed = True
+        related = [
+            RelatedLocation(
+                file_path=file_path if loc.file_path == old_path else loc.file_path,
+                line_number=loc.line_number,
+                column_number=loc.column_number,
+            )
+            for loc in issue.related_locations
+        ]
+        related_tus = [file_path if tu == old_path else tu for tu in issue.related_tus]
+        rebound_issues.append(
+            Issue(
+                rule_id=issue.rule_id,
+                rule_name=issue.rule_name,
+                impact=issue.impact,
+                file_path=file_path,
+                line_number=issue.line_number,
+                column_number=issue.column_number,
+                code_snippet=issue.code_snippet,
+                message=issue.message,
+                remediation=issue.remediation,
+                cwe_id=issue.cwe_id,
+                engine=issue.engine,
+                auto_fix_replacement=issue.auto_fix_replacement,
+                fingerprint=issue.fingerprint,
+                fix_type=issue.fix_type,
+                suggested_fix_replacement=issue.suggested_fix_replacement,
+                confidence=issue.confidence,
+                reachable_under=list(issue.reachable_under),
+                related_tus=related_tus,
+                related_locations=related,
+            )
+        )
+
+    if path_changed:
+        # Recompute path-dependent fingerprints (preserve occurrence disambiguation).
+        base_counts: Dict[str, int] = {}
+        for issue in rebound_issues:
+            if not issue.fingerprint and not issue.code_snippet:
+                continue
+            base = compute_issue_fingerprint(
+                issue.rule_id, issue.file_path, issue.code_snippet
+            )
+            occurrence = base_counts.get(base, 0)
+            base_counts[base] = occurrence + 1
+            issue.fingerprint = _derived_occurrence_fingerprint(base, occurrence)
+
+    scan_error = result.scan_error
+    if scan_error is not None and scan_error.file_path != file_path:
+        scan_error = ScanError(
+            file_path=file_path,
+            error_type=scan_error.error_type,
+            message=scan_error.message,
+        )
+
+    return CachedFileResult(
+        issues=tuple(rebound_issues),
+        lines_of_code=result.lines_of_code,
+        parser_status=result.parser_status,
+        parse_tier=result.parse_tier,
+        status=result.status,
+        confidence=result.confidence,
+        parse_attempts=result.parse_attempts,
+        scan_error=scan_error,
     )
 
 
@@ -272,7 +435,12 @@ class ResultCache:
             return None
 
         try:
-            issues = tuple(issue_from_dict(item) for item in (raw.get("issues") or []))
+            issue_items = raw.get("issues") or []
+            if not isinstance(issue_items, list):
+                raise ValueError("issues must be a list")
+            issues = tuple(issue_from_dict(item) for item in issue_items)
+            # Confidence on each Issue is validated inside issue_from_dict /
+            # _coerce_confidence; any invalid value raises into this block → miss.
             scan_error = None
             err = raw.get("scan_error")
             if isinstance(err, dict) and err:
@@ -294,7 +462,7 @@ class ResultCache:
                 parse_attempts=attempts,
                 scan_error=scan_error,
             )
-        except (TypeError, ValueError, KeyError):
+        except (TypeError, ValueError, KeyError, AttributeError):
             self.misses += 1
             return None
 
@@ -337,17 +505,29 @@ class ResultCache:
             "scan_error": scan_error.to_dict() if scan_error is not None else None,
         }
         path = self._entry_path(key)
-        fd, tmp_path = tempfile.mkstemp(prefix=".cgull-cache-", suffix=".tmp", dir=directory)
+        tmp_path = None
+        fd = None
         try:
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=".cgull-cache-", suffix=".tmp", dir=directory
+            )
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = None  # ownership transferred to handle
                 json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_path, path)
+            tmp_path = None
             self.stores += 1
         except OSError:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
