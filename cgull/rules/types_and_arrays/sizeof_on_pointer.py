@@ -50,7 +50,7 @@ class SizeofOnPointerRule(BaseRule):
                         is_ptr = True
                 else:
                     for param in fn.parameters:
-                        if param.name == var_name and (param.is_pointer or '*' in param.type_name or '*' in param.name):
+                        if param.name == var_name and (param.is_pointer or getattr(param, 'is_array', False) or '*' in param.type_name or '*' in param.name):
                             is_ptr = True
                             break
 
