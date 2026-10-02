@@ -15,7 +15,7 @@ from ..semantic_models import (
     SemanticModelRegistry,
 )
 from .call_graph import build_translation_unit_call_graph
-from .construction import build_cfg, find_function_def
+from .construction import find_function_def
 from .fixed_point import FixedPointConfig, FixedPointDiagnostic
 from .value_facts import (
     FormatLiteralness,
@@ -186,10 +186,20 @@ def analyze_translation_unit_value_dataflow(
 
 def _analyze_one(ast_ctx, function_name, entry, registry, summaries, evidence_limit, *, cfg=None):
     if cfg is None:
-        funcdef = find_function_def(getattr(ast_ctx, "pycparser_ast", None), function_name)
+        from ..analysis_session import analysis_session_for
+        from .construction import clone_cached_structural_cfg
+
+        session = analysis_session_for(ast_ctx)
+        funcdef = session.function_def(function_name) or find_function_def(
+            getattr(ast_ctx, "pycparser_ast", None), function_name
+        )
         if funcdef is None:
             return None, ()
-        cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+        cfg = session.analysis_cfg(function_name)
+        if cfg is None:
+            cfg = clone_cached_structural_cfg(
+                funcdef, line_map=getattr(ast_ctx, "line_map", None)
+            )
     if not cfg.blocks:
         cfg.build_basic_blocks()
     if not cfg.blocks:

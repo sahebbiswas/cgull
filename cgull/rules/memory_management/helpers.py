@@ -12,7 +12,8 @@ from ..banned_functions import BannedFunctionsRule
 from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext, CFunction, _format_pycparser_expr, get_type_byte_size, is_unsigned_type
 from ...utils import extract_call_args, split_call_args, extract_balanced_parens
-from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
+from ...analysis_session import analysis_session_for
+from ...cfg import StructuredCFG, CFGEvent, Nullness, Initialization, Allocation, FunctionSummary
 from ...cfg.construction import _guarded_expression_uses
 from ...cfg.expression_effects import ordered_storage_effects
 from ...cfg.summaries import is_zero_length_definite_buffer_write
@@ -282,14 +283,22 @@ def _ast_cfg_for_function(
     Multiple memory rules often request the same effect/summary inputs for each
     function. Cache the post-dataflow CFG on the AST context so later rules
     reuse it as a read-only view instead of rebuilding/applying/analyzing again.
+
+    Structural topology comes from the TU analysis session (pre-annotation), so
+    consumers do not re-enter the public ``build_cfg`` entry point for each rule.
     """
     if not ast_ctx.has_pycparser or ast_ctx.pycparser_ast is None:
         return None
-    funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+    session = analysis_session_for(ast_ctx)
+    funcdef = session.function_def(fn.name)
     if funcdef is None:
         return None
     if summaries is None:
-        summaries = analyze_function_summaries(ast_ctx, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs)
+        summaries = dict(
+            session.function_summary_result(
+                alloc_funcs, dealloc_funcs, realloc_funcs
+            ).summaries
+        )
 
     cache = getattr(ast_ctx, "_memory_rule_cfg_cache", None)
     if cache is None:
@@ -300,7 +309,16 @@ def _ast_cfg_for_function(
     if cached is not None:
         return cached
 
-    cfg = build_cfg(funcdef, alloc_funcs=alloc_funcs, dealloc_funcs=dealloc_funcs, realloc_funcs=realloc_funcs, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
+    # Isolated annotated view on the session's structural CFG — not public build_cfg.
+    cfg = session.analysis_cfg(
+        fn.name,
+        alloc_funcs=alloc_funcs,
+        dealloc_funcs=dealloc_funcs,
+        realloc_funcs=realloc_funcs,
+        summaries=summaries,
+    )
+    if cfg is None:
+        return None
     array_locals = {
         var.name
         for var in fn.variables.values()

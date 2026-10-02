@@ -21,7 +21,7 @@ from ..semantic_models import (
     SuccessConditionKind,
     ValidationProperty,
 )
-from .construction import build_cfg, find_function_def
+from .construction import find_function_def
 from .indirect_calls import resolve_indirect_calls
 
 
@@ -272,7 +272,15 @@ def analyze_function_security_dataflow(
         return None
     if summaries is None:
         summaries = analyze_security_summaries(ast_ctx, semantic_models)
-    cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+    from ..analysis_session import analysis_session_for
+    from .construction import clone_cached_structural_cfg
+
+    session = analysis_session_for(ast_ctx)
+    cfg = session.analysis_cfg(function_name)
+    if cfg is None:
+        cfg = clone_cached_structural_cfg(
+            funcdef, line_map=getattr(ast_ctx, "line_map", None)
+        )
     return analyze_security_dataflow(cfg, semantic_models, summaries)
 
 

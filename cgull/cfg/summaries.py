@@ -74,7 +74,7 @@ def is_zero_length_definite_buffer_write(
 
 
 from .call_graph import build_translation_unit_call_graph
-from .construction import _guarded_expression_uses, _is_nullish, build_cfg, find_function_def
+from .construction import _guarded_expression_uses, _is_nullish, find_function_def
 from .dataflow import meet_nullness
 from .fixed_point import FiniteLattice, FixedPointConfig, FixedPointDiagnostic, SCCFixedPointEngine
 from .model import Allocation, FunctionSummary, Nullness
@@ -423,17 +423,38 @@ def _analyze_one_function(
     param_names = [p.name for p in fn.parameters if p.name]
     cfg = None
     if getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None:
-        funcdef = find_function_def(ast_ctx.pycparser_ast, name)
+        from ..analysis_session import analysis_session_for
+        from .construction import apply_cfg_event_semantics, clone_cached_structural_cfg
+
+        session = analysis_session_for(ast_ctx)
+        funcdef = session.function_def(name) or find_function_def(ast_ctx.pycparser_ast, name)
         if funcdef is not None:
-            cfg = build_cfg(
-                funcdef,
-                alloc_funcs=alloc_funcs,
-                dealloc_funcs=dealloc_funcs,
-                realloc_funcs=realloc_funcs,
-                summaries=summaries,
-                line_map=getattr(ast_ctx, "line_map", None),
-                event_cache=event_cache,
+            # Prefer the session structural base so summary construction does not
+            # re-enter the public build_cfg fanout counter for every function.
+            use_session = session.function_def(name) is funcdef and (
+                event_cache is None or event_cache is session._event_cache()
             )
+            if use_session:
+                cfg = session.analysis_cfg(
+                    name,
+                    alloc_funcs=alloc_funcs,
+                    dealloc_funcs=dealloc_funcs,
+                    realloc_funcs=realloc_funcs,
+                    summaries=summaries,
+                )
+            else:
+                cfg = clone_cached_structural_cfg(
+                    funcdef, line_map=getattr(ast_ctx, "line_map", None)
+                )
+                apply_cfg_event_semantics(
+                    cfg,
+                    alloc_funcs=alloc_funcs,
+                    dealloc_funcs=dealloc_funcs,
+                    realloc_funcs=realloc_funcs,
+                    summaries=summaries,
+                    line_map=getattr(ast_ctx, "line_map", None),
+                    event_cache=event_cache,
+                )
 
     freed_params: Set[int] = set()
     unsafe_deref_params: Set[int] = set()

@@ -8,7 +8,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from pycparser import c_ast
 
 from ...ast_analyzer import CASTContext, _format_pycparser_expr
-from ...cfg import TERMINATING_CALL_NAMES, build_cfg, find_function_def
+from ...cfg import TERMINATING_CALL_NAMES
 from ...models import AnalysisEngine, FixType, Issue, RuleCategory, Severity
 from .helpers import _source_snippet
 from .memcpy_struct_member_overflow import MemcpyStructMemberOverflowRule
@@ -580,7 +580,10 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         if not dest_name or funcdef is None:
             return False
 
-        cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, 'line_map', None))
+        name = getattr(getattr(funcdef, "decl", None), "name", None)
+        if not name:
+            return False
+        cfg = self.get_analysis_session(ast_ctx).analysis_cfg(name)
         if cfg is None or cfg.entry is None:
             return False
 
@@ -711,8 +714,9 @@ class BufferCopyOverflowRule(MemcpyStructMemberOverflowRule):
         from pycparser import c_ast
 
         issues: List[Issue] = []
+        session = self.get_analysis_session(ast_ctx)
         for fn in ast_ctx.functions:
-            funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+            funcdef = session.function_def(fn.name)
             if funcdef is None or funcdef.body is None:
                 continue
 

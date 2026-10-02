@@ -13,7 +13,7 @@ from ..ast_analyzer.integer_types import (
     infer_integer_expression_type,
     usual_arithmetic_type,
 )
-from .construction import build_cfg, find_function_def
+from .construction import find_function_def
 
 __all__ = ["IntegerRange", "IntegerRangeAnalysis", "analyze_integer_ranges", "integer_type_range"]
 
@@ -470,7 +470,15 @@ def analyze_integer_ranges(ast_ctx, function_name: str) -> Optional[IntegerRange
     funcdef = find_function_def(getattr(ast_ctx, "pycparser_ast", None), function_name)
     if fn is None or funcdef is None:
         return None
-    cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+    from ..analysis_session import analysis_session_for
+    from .construction import clone_cached_structural_cfg
+
+    session = analysis_session_for(ast_ctx)
+    cfg = session.analysis_cfg(function_name)
+    if cfg is None:
+        cfg = clone_cached_structural_cfg(
+            funcdef, line_map=getattr(ast_ctx, "line_map", None)
+        )
     if not cfg.nodes or cfg.entry is None:
         return IntegerRangeAnalysis(ast_ctx, fn, cfg, {})
 

@@ -479,7 +479,6 @@ class DeadStoresRule(BaseRule):
             return LexicalDeadStoresRule().scan_ast(file_path, ast_ctx)
 
         issues = []
-        from ..cfg import build_cfg, find_function_def
         from .dead_store_initializers import (
             file_scope_enum_constants,
             pure_declaration_coordinates,
@@ -510,9 +509,10 @@ class DeadStoresRule(BaseRule):
             cfg = None
             funcdef = None
             if getattr(ast_ctx, "has_pycparser", False) and ast_ctx.pycparser_ast is not None:
-                funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+                session = self.get_analysis_session(ast_ctx)
+                funcdef = session.function_def(fn.name)
                 if funcdef is not None:
-                    cfg = build_cfg(funcdef, summaries=summaries, line_map=getattr(ast_ctx, "line_map", None))
+                    cfg = session.analysis_cfg(fn.name, summaries=summaries)
 
             if cfg is not None and cfg.nodes:
                 # AST/CFG path reachability check

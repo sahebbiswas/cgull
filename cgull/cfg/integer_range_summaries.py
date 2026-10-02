@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import re
 from typing import Dict, Mapping, Optional, Set, Tuple
 
-from .construction import build_cfg, find_function_def
+from .construction import find_function_def
 from .integer_ranges import (
     IntegerRange,
     IntegerRangeAnalysis,
@@ -231,7 +231,16 @@ def _analyze_seeded(
     if fn is None or funcdef is None:
         return None
     if cfg is None:
-        cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+        from ..analysis_session import analysis_session_for
+
+        session = analysis_session_for(ast_ctx)
+        cfg = session.analysis_cfg(function_name)
+        if cfg is None:
+            from .construction import clone_cached_structural_cfg
+
+            cfg = clone_cached_structural_cfg(
+                funcdef, line_map=getattr(ast_ctx, "line_map", None)
+            )
     if not cfg.nodes or cfg.entry is None:
         return _SummaryAwareIntegerRangeAnalysis(ast_ctx, fn, cfg, {}, return_ranges)
 
@@ -383,10 +392,18 @@ def _build_summary_index(ast_ctx) -> IntegerRangeSummaryIndex:
     models = _function_models(ast_ctx)
     funcdefs = _function_defs(ast_ctx)
     graph, callsites = _collect_calls(funcdefs)
-    cfgs = {
-        name: build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
-        for name, funcdef in funcdefs.items()
-    }
+    from ..analysis_session import analysis_session_for
+    from .construction import clone_cached_structural_cfg
+
+    session = analysis_session_for(ast_ctx)
+    cfgs = {}
+    for name, funcdef in funcdefs.items():
+        cfg = session.analysis_cfg(name)
+        if cfg is None:
+            cfg = clone_cached_structural_cfg(
+                funcdef, line_map=getattr(ast_ctx, "line_map", None)
+            )
+        cfgs[name] = cfg
     recursive = _recursive_functions(graph)
     escaped = _escaped_function_references(ast_ctx, funcdefs)
     eligible_parameters = {

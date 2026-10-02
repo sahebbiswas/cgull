@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import FrozenSet, Tuple
 
-from .construction import build_cfg, find_function_def
+from .construction import find_function_def
 from .security_dataflow import (
     Provenance,
     analyze_security_dataflow,
@@ -72,11 +72,19 @@ def query_unvalidated_sink_flows(
         function_name = getattr(fn, "name", None)
         if not function_name:
             continue
-        funcdef = find_function_def(ast, function_name)
+        from ..analysis_session import analysis_session_for
+        from .construction import clone_cached_structural_cfg
+
+        session = analysis_session_for(ast_context)
+        funcdef = session.function_def(function_name) or find_function_def(ast, function_name)
         if funcdef is None:
             continue
 
-        cfg = build_cfg(funcdef, line_map=getattr(ast_context, "line_map", None))
+        cfg = session.analysis_cfg(function_name)
+        if cfg is None:
+            cfg = clone_cached_structural_cfg(
+                funcdef, line_map=getattr(ast_context, "line_map", None)
+            )
         facts = analyze_security_dataflow(cfg, semantic_models, summaries)
         source_events = []
         validator_events = []

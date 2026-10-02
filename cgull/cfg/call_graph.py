@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from ..ast_analyzer import _PRELUDE_LINE_COUNT, _map_source_line
-from .construction import build_cfg, build_function_def_index
+from .construction import build_function_def_index
 from .dataflow import StructuredCFG
 from .indirect_calls import resolve_indirect_calls
 from .model import CFGCall, CFGSourceLocation
@@ -255,7 +255,7 @@ def build_translation_unit_call_graph(
     ``function_defs`` and ``cfg_provider`` let :class:`AnalysisSession` supply
     its one-pass definition index and canonical per-function CFGs. Standalone
     callers retain the same behavior but still benefit from the shared structural
-    CFG cache in :func:`build_cfg`.
+    CFG cache via :func:`clone_cached_structural_cfg`.
     """
     if not getattr(ast_context, "has_pycparser", False) or getattr(ast_context, "pycparser_ast", None) is None:
         return build_call_graph(())
@@ -277,7 +277,12 @@ def build_translation_unit_call_graph(
         funcdef = definitions.get(function.name)
         if funcdef is None:
             continue
-        cfg = cfg_provider(function.name) if cfg_provider is not None else build_cfg(funcdef, line_map=line_map)
+        if cfg_provider is not None:
+            cfg = cfg_provider(function.name)
+        else:
+            from .construction import clone_cached_structural_cfg
+
+            cfg = clone_cached_structural_cfg(funcdef, line_map=line_map)
         if cfg is None:
             continue
         seen.add(function.name)

@@ -122,16 +122,19 @@ class ArrayIndexOutOfBoundsRule(_BaseArrayIndexOutOfBoundsRule):
 
         from pycparser import c_ast
         from ...ast_analyzer import _extract_identifiers_from_ast, _format_pycparser_expr, is_unsigned_type
-        from ...cfg import _PRELUDE_LINE_COUNT, build_cfg, find_function_def
+        from ...cfg import _PRELUDE_LINE_COUNT
         from .array_bounds_guards import access_events, guarded_access
         from .buffer_capacity_contracts import capacity_in_states, function_contracts
 
         safe = set()
+        session = self.get_analysis_session(ast_ctx)
         for fn in ast_ctx.functions:
-            funcdef = find_function_def(ast_ctx.pycparser_ast, fn.name)
+            funcdef = session.function_def(fn.name)
             if funcdef is None:
                 continue
-            cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+            cfg = session.analysis_cfg(fn.name)
+            if cfg is None:
+                continue
             events = access_events(cfg)
             element_sizes = {
                 param.name: self._element_size(param.type_name, ast_ctx)

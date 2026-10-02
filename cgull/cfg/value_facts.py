@@ -15,7 +15,7 @@ from typing import Dict, FrozenSet, Mapping, Optional, Set, Tuple
 
 from ..semantic_models import EMPTY_SEMANTIC_MODELS, SemanticLocationKind, SemanticModelRegistry
 from .call_graph import build_translation_unit_call_graph
-from .construction import build_cfg, find_function_def
+from .construction import find_function_def
 from .fixed_point import FiniteLattice, FixedPointConfig, FixedPointDiagnostic, SCCFixedPointEngine
 
 
@@ -236,7 +236,15 @@ def analyze_function_value_dataflow(
     if summaries is None:
         summaries = analyze_value_summaries(ast_ctx, semantic_models)
     config = fixed_point_config or FixedPointConfig()
-    cfg = build_cfg(funcdef, line_map=getattr(ast_ctx, "line_map", None))
+    from ..analysis_session import analysis_session_for
+    from .construction import clone_cached_structural_cfg
+
+    session = analysis_session_for(ast_ctx)
+    cfg = session.analysis_cfg(function_name)
+    if cfg is None:
+        cfg = clone_cached_structural_cfg(
+            funcdef, line_map=getattr(ast_ctx, "line_map", None)
+        )
     return analyze_value_dataflow(cfg, semantic_models, summaries, evidence_limit=config.max_provenance)
 
 

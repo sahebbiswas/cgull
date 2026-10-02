@@ -1225,7 +1225,7 @@ class ImproperChrootJailRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         from copy import copy
         from pycparser import c_ast
-        from ..cfg.construction import build_cfg, find_function_def
+        from ..cfg.construction import build_cfg_uncached, find_function_def
         from .chroot_paths import calls_in, callee, expression, unsafe_success_path
 
         issues = []
@@ -1240,7 +1240,8 @@ class ImproperChrootJailRule(BaseRule):
                 local_def = copy(funcdef)
                 local_def.body = copy(funcdef.body)
                 local_def.body.block_items = list(funcdef.body.block_items or []) + [c_ast.Return(None)]
-                cfg = build_cfg(local_def, line_map=getattr(ast_ctx, "line_map", None))
+                # Mutated FuncDef (synthetic trailing return) — not session-shareable.
+                cfg = build_cfg_uncached(local_def, line_map=getattr(ast_ctx, "line_map", None))
                 declarations = {}
                 untracked_names = set()
 
