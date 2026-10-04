@@ -7,6 +7,11 @@ void clear_memory(char *ptr) {
     memset(ptr, 0, sizeof(ptr)); // expect: CGULL-029
 }
 
+void test_sizeof_on_array_param(char dest[20]) {
+    // Should be flagged: sizeof() on an array parameter which decays to a pointer
+    memset(dest, 0, sizeof(dest)); // expect: CGULL-029
+}
+
 int main() {
     char *dyn_buf = (char *)malloc(256);
     if (!dyn_buf) return 1;
