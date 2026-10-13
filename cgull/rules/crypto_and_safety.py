@@ -1312,3 +1312,126 @@ class ImproperChrootJailRule(BaseRule):
                     suggested_fix_replacement=line_content.strip().strip(";") + ";\nchdir(\"/\");"
                 ))
         return issues
+
+class UncheckedPrivilegeDropRule(BaseRule):
+    rule_id = "CGULL-057"
+    name = "Unchecked Privilege Drop"
+    impact = Severity.HIGH
+    category = RuleCategory.CONTROL_FLOW
+    description = "Detect calls to privilege-dropping functions (setuid, setgid, seteuid, setegid, setresuid, setresgid) where the return value is ignored. If the call fails, the process may retain elevated privileges unintentionally."
+    implementation_method = "AST parsing & regex to flag unchecked return values of setuid family functions"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-273"
+    remediation_suggestion = "Always check the return value of privilege-dropping functions and handle failures (e.g., abort the process if dropping privileges fails)."
+    sample_vulnerable_code = "setuid(getuid()); // FLAW: Unchecked return value"
+    sample_remediated_code = "if (setuid(getuid()) != 0) { abort(); }"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues = []
+        target_funcs = {"setuid", "setgid", "seteuid", "setegid", "setresuid", "setresgid"}
+
+        if ast_ctx.pycparser_ast:
+            from pycparser import c_ast
+
+            class PrivilegeDropVisitor(c_ast.NodeVisitor):
+                def __init__(self, outer):
+                    self.outer = outer
+                    self.parents = []
+
+                def generic_visit(self, node):
+                    self.parents.append(node)
+                    super().generic_visit(node)
+                    self.parents.pop()
+
+                def visit_FuncCall(self, node):
+                    if isinstance(node.name, c_ast.ID) and node.name.name in target_funcs:
+                        parent = self.parents[-1] if self.parents else None
+                        is_unchecked = False
+
+                        # Discarded directly as statement
+                        if isinstance(parent, (c_ast.Compound, c_ast.Case, c_ast.Default, c_ast.Label)):
+                            is_unchecked = True
+                        # Discarded in comma expression
+                        elif isinstance(parent, c_ast.ExprList):
+                            is_unchecked = True
+                        # Explicitly cast to void (void)setuid(...)
+                        elif isinstance(parent, c_ast.Cast):
+                            to_type = parent.to_type
+                            if isinstance(to_type, c_ast.Typename) and isinstance(to_type.type, c_ast.TypeDecl):
+                                if isinstance(to_type.type.type, c_ast.IdentifierType):
+                                    if 'void' in to_type.type.type.names:
+                                        is_unchecked = True
+
+                        if is_unchecked:
+                            from ..ast_analyzer import _PRELUDE_LINE_COUNT
+                            line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else 1
+                            raw_line = (
+                                ast_ctx.source_lines[line_no - 1]
+                                if 1 <= line_no <= len(ast_ctx.source_lines)
+                                else f"{node.name.name}(...)"
+                            )
+                            issues.append(self.outer.create_issue(
+                                file_path=file_path,
+                                line_number=line_no,
+                                code_snippet=raw_line.strip(),
+                                message=f"Return value of privilege-dropping function '{node.name.name}()' is not checked. If it fails, the process may retain root privileges (CWE-273).",
+                                column_number=node.coord.column if node.coord else 1,
+                                engine="AST",
+                                fix_type=FixType.SUGGESTED_FIX,
+                                suggested_fix_replacement=f"if ({node.name.name}(...) != 0) {{ /* handle error, abort */ }}"
+                            ))
+
+                    super().generic_visit(node)
+
+            PrivilegeDropVisitor(self).visit(ast_ctx.pycparser_ast)
+        else:
+            # Fallback text scan for non-parsable files
+            for fn in ast_ctx.functions:
+                for call in fn.calls:
+                    callee, line_no, raw_args = call[0], call[1], call[2]
+                    target_var = call[3] if len(call) > 3 else None
+                    if callee in target_funcs:
+                        if target_var is None:
+                            line_content = ast_ctx.source_lines[line_no - 1] if 1 <= line_no <= len(ast_ctx.source_lines) else ""
+                            # Quick regex check if it looks like an assignment or part of 'if'/'while'
+                            if not re.search(r'(=|!=|==|<|>|<=|>=)', line_content) and not re.search(r'\\b(if|while)\s*\(', line_content):
+                                snippet = line_content.strip() if line_content else f"{callee}({raw_args})"
+                                issues.append(self.create_issue(
+                                    file_path=file_path,
+                                    line_number=line_no,
+                                    code_snippet=snippet,
+                                    message=f"Return value of privilege-dropping function '{callee}()' is not checked. If it fails, the process may retain root privileges (CWE-273).",
+                                    column_number=1,
+                                    engine="AST",
+                                    fix_type=FixType.SUGGESTED_FIX,
+                                    suggested_fix_replacement=f"if ({callee}({raw_args}) != 0) {{ /* handle error, abort */ }}"
+                                ))
+        return issues
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues = []
+        target_line = masked_line_content if masked_line_content else line_content
+
+        # Look for standalone calls: ^ \s* (void)? \s* setuid ( ... ) ;
+        target_funcs_pattern = r'\b(setuid|setgid|seteuid|setegid|setresuid|setresgid)\s*\('
+        for m in re.finditer(target_funcs_pattern, target_line):
+            callee = m.group(1)
+            # If it's part of an expression (like if, =, !=, ==, etc), skip
+            prefix = line_content[:m.start()]
+            if re.search(r'(=|!=|==|<|>|<=|>=|\bif\s*\(|\bwhile\s*\(|\breturn\b)', prefix) or re.search(r'(=|!=|==|<|>|<=|>=)', target_line):
+                continue
+
+            issues.append(self.create_issue(
+                file_path=file_path,
+                line_number=line_number,
+                code_snippet=line_content.strip(),
+                message=f"Return value of privilege-dropping function '{callee}()' is not checked. If it fails, the process may retain root privileges (CWE-273).",
+                column_number=m.start() + 1,
+                engine="Regex",
+                fix_type=FixType.SUGGESTED_FIX,
+                suggested_fix_replacement=f"if ({callee}(...) != 0) {{ /* handle error, abort */ }}"
+            ))
+
+        return issues
