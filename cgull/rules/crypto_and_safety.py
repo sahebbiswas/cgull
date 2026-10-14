@@ -1418,10 +1418,28 @@ class UncheckedPrivilegeDropRule(BaseRule):
         target_funcs_pattern = r'\b(setuid|setgid|seteuid|setegid|setresuid|setresgid)\s*\('
         for m in re.finditer(target_funcs_pattern, target_line):
             callee = m.group(1)
-            # If it's part of an expression (like if, =, !=, ==, etc), skip
-            prefix = line_content[:m.start()]
-            if re.search(r'(=|!=|==|<|>|<=|>=|\bif\s*\(|\bwhile\s*\(|\breturn\b)', prefix) or re.search(r'(=|!=|==|<|>|<=|>=)', target_line):
+
+            # Exclude function prototypes / declarations
+            if re.search(r'\b(extern|typedef|int|void)\s+', target_line[:m.start()]):
                 continue
+
+            # If it's part of an expression (like =, !=, ==, etc), skip
+            prefix = line_content[:m.start()]
+
+            if re.search(r'(=|!=|==|<|>|<=|>=|\breturn\b)', prefix) or re.search(r'(=|!=|==|<|>|<=|>=)', target_line):
+                continue
+
+            if re.search(r'\b(if|while|for)\s*\(', prefix):
+                if_match = re.search(r'\b(if|while|for)\s*\(', prefix)
+                cond_start = if_match.end() - 1
+                parens = 0
+                for char in prefix[cond_start:]:
+                    if char == '(': parens += 1
+                    elif char == ')': parens -= 1
+                if parens > 0:
+                    continue # Inside condition
+                # else: body statement, which is unchecked
+
 
             issues.append(self.create_issue(
                 file_path=file_path,
