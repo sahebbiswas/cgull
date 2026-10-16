@@ -1420,13 +1420,13 @@ class UncheckedPrivilegeDropRule(BaseRule):
             callee = m.group(1)
 
             # Exclude function prototypes / declarations
-            if re.search(r'\b(extern|typedef|int|void)\s+', target_line[:m.start()]):
+            if re.search(r'\b(extern|typedef|int|void)\s+$', target_line[:m.start()]):
                 continue
 
             # If it's part of an expression (like =, !=, ==, etc), skip
             prefix = line_content[:m.start()]
 
-            if re.search(r'(=|!=|==|<|>|<=|>=|\breturn\b)', prefix) or re.search(r'(=|!=|==|<|>|<=|>=)', target_line):
+            if re.search(r'(=|!=|==|<|>|<=|>=|\breturn\b)', prefix):
                 continue
 
             if re.search(r'\b(if|while|for)\s*\(', prefix):
