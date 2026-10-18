@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add CGULL-057 (CWE-273) for privilege-dropping calls (`setuid`, `setgid`, `seteuid`, `setegid`, `setresuid`, `setresgid`) whose return value is discarded: bare statements, braceless `if`/`else`/loop bodies, `for` initializers and steps, dropped comma-expression operands and explicit `(void)` casts report, while results that are assigned, compared, returned, short-circuited on, used as a condition, or passed to another call do not. The regex and lexical-fallback paths judge only the current statement (including statements split across lines) and ignore prototypes, member calls and macro definitions (#591).
 - Declare `cpre>=0.11.0,<0.12` as an explicit runtime dependency and introduce `cgull.preprocessor.cpre_api` as the pinned public-API boundary (expressions, lossless conditional structure, exact Boolean proofs/witnesses) with smoke tests and ownership documentation for the #436 migration (#436).
 - Opt-in persistent content-addressed per-file result cache for repeat scans (`--cache-dir` / `--cache-path` / `CGULL_CACHE_DIR`, disable with `--no-cache` / `CGULL_NO_CACHE`); keys cover canonical path + source + expanded TU text, config/rule fingerprint, semantic-model digest, and C-GULL version, with atomic best-effort writes, path rebinding on hit, and corrupt-entry misses (#545).
 
