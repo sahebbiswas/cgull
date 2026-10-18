@@ -44,6 +44,7 @@ from .crypto_and_safety import (
     ImproperChrootJailRule,
     WeakCryptoPrimitivesRule,
     ToctouFileAccessRule,
+    UncheckedPrivilegeDropRule,
 )
 from .types_and_arrays import (
     PointerSubtractionSizeRule,
@@ -139,6 +140,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     MissingInclusionGuardRule,
     PreprocessorReachabilityRule,
     PreprocessorSimplificationRule,
+    UncheckedPrivilegeDropRule,
 ]
 
 # Built-ins explicitly opt into their analysis needs. The requirement resolver

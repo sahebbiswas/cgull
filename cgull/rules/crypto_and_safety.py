@@ -1312,3 +1312,385 @@ class ImproperChrootJailRule(BaseRule):
                     suggested_fix_replacement=line_content.strip().strip(";") + ";\nchdir(\"/\");"
                 ))
         return issues
+
+_PRIVILEGE_DROP_FUNCS = frozenset({
+    "setuid", "setgid", "seteuid", "setegid", "setresuid", "setresgid",
+})
+_PRIVILEGE_DROP_CALL_RE = re.compile(
+    r'\b(' + '|'.join(sorted(_PRIVILEGE_DROP_FUNCS)) + r')\s*\('
+)
+# What can consume a call's value when it appears *before* the call in the
+# same expression segment. `return` and assignment (`=`, `+=`, ...) consume it
+# whatever else sits in between; any other operator only does so when it is
+# directly attached to the call. Logical `&&`/`||` and the ternary `?`/`:` bind
+# looser than every other binary operator, so the operand right after one of
+# them is only consumed by operators that come after that point
+# (`ok && setuid(1);` drops the call, `ok && !setuid(1);` does not).
+_RETURN_RE = re.compile(r'\breturn\b')
+# Comparison operators contain '=' but are not assignments (`<<=`/`>>=` are).
+_COMPARISON_RE = re.compile(r'(?<![<>])(?:==|!=|<=|>=)')
+_LOGICAL_SPLIT_RE = re.compile(r'&&|\|\||\?|:')
+_TIGHT_OPERATOR_RE = re.compile(r'[=!<>+\-*/%&|^~]')
+# Owners of a parenthesised group that is not a function call's argument list.
+_NON_CALL_PAREN_KEYWORDS = frozenset({'if', 'while', 'switch', 'return', 'for'})
+# Operators that, appearing directly *after* the call, consume its result
+# (`setuid(0) || die()`, `setuid(0) == -1`, ...). `,` and `;` do not.
+_RESULT_CONSUMING_SUFFIX_RE = re.compile(r'\s*(?:\|\||&&|[=!]=|<=?|>=?|\?|[-+*/%&|^])')
+# `case X:`, `default:` and goto labels at the start of a segment are not operators.
+_LEADING_LABEL_RE = re.compile(r'^\s*(?:case\b[^:]*:|default\s*:|[A-Za-z_]\w*\s*:(?!:))')
+# How many earlier lines a regex scan reads to see the start of a statement
+# that is split across lines (`rc =\n    setuid(0);`, `if (c)\n    setuid(0);`).
+_PRIVILEGE_DROP_LOOKBACK_LINES = 8
+
+
+def _collapse_paren_groups(text: str) -> str:
+    """Replace every balanced ``(...)`` group with ``()``; unmatched parens stay."""
+    previous = None
+    while previous != text:
+        previous = text
+        text = re.sub(r'\([^()]*\)', '()', text)
+    return text
+
+
+def _find_closing_paren(text: str, open_idx: int) -> int:
+    """Index of the ``)`` matching the ``(`` at ``open_idx``, or -1 if not on this text."""
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == '(':
+            depth += 1
+        elif text[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def _segment_consumes_call(segment: str) -> bool:
+    """True if the text before a call, within one expression segment, consumes its value."""
+    if _RETURN_RE.search(segment):
+        return True
+    if '=' in _COMPARISON_RE.sub('', segment):
+        return True  # assignment
+    operand_prefix = _LOGICAL_SPLIT_RE.split(segment)[-1]
+    return bool(_TIGHT_OPERATOR_RE.search(operand_prefix))
+
+
+def _text_call_result_is_discarded(prefix: str, suffix: str) -> bool:
+    """Decide from source text whether a call's return value is dropped.
+
+    ``prefix`` is the text from the start of the statement up to the call and
+    ``suffix`` is whatever follows the call's closing parenthesis ("" when it is
+    not on the same line). Only the *current* statement is considered, so an
+    assignment in an earlier statement on the same line (``int rc = 0; setuid(1);``)
+    cannot hide the call, and a call used as an argument (``handle(setuid(1))``),
+    inside an ``if``/``while`` condition, or in a ``for`` condition clause is
+    treated as consumed.
+    """
+    if _RESULT_CONSUMING_SUFFIX_RE.match(suffix):
+        return False
+
+    # levels[0] is the statement level; every unclosed '(' opens another level.
+    # Each level tracks where its current expression segment starts (a segment
+    # restarts after ';' and ',') and how many ';' it has seen (for `for (;;)`).
+    levels = [[0, 0]]
+    opens = [-1]
+    for i, ch in enumerate(prefix):
+        if ch == '(':
+            levels.append([i + 1, 0])
+            opens.append(i)
+        elif ch == ')':
+            if len(levels) > 1:
+                levels.pop()
+                opens.pop()
+        elif ch == ';':
+            levels[-1][0] = i + 1
+            if len(levels) > 1:
+                levels[-1][1] += 1
+        elif ch in '{}':
+            if len(levels) == 1:
+                levels[0][0] = i + 1
+        elif ch == ',':
+            levels[-1][0] = i + 1
+
+    # `rest` is what follows the call at the level being examined, after the
+    # parentheses of any plain groups already stepped out of.
+    rest = suffix.lstrip()
+    for k in range(len(levels) - 1, -1, -1):
+        seg_start, semicolons = levels[k]
+        seg_end = opens[k + 1] if k + 1 < len(levels) else len(prefix)
+        segment = _collapse_paren_groups(prefix[seg_start:seg_end])
+        while True:
+            unlabelled = _LEADING_LABEL_RE.sub('', segment, count=1)
+            if unlabelled == segment:
+                break
+            segment = unlabelled
+        if _segment_consumes_call(segment):
+            return False
+        owner = None
+        if k > 0:
+            m = re.search(r'([A-Za-z_]\w*)\s*$', prefix[:opens[k]])
+            owner = m.group(1) if m else None
+            if owner and owner not in _NON_CALL_PAREN_KEYWORDS:
+                return False  # an argument of another call (or sizeof)
+        if rest.startswith(','):
+            # A non-final operand of a comma expression: its value is dropped
+            # whatever the surrounding expression does with the last operand.
+            return True
+        if k == 0:
+            break
+        if owner == 'for':
+            # for (init; cond; step): only the condition's value is used.
+            return semicolons != 1
+        if owner:
+            return False  # if/while/switch condition, or `return (...)`
+        # A plain parenthesised group, e.g. `(setuid(0));`: look outward.
+        rest = rest[1:].lstrip() if rest.startswith(')') else ''
+    return True
+
+
+def _statement_lookback(source_lines: List[str], line_number: int) -> str:
+    """Masked text of earlier lines that belong to the same statement as ``line_number``."""
+    prior: List[str] = []
+    idx = line_number - 2
+    while idx >= 0 and len(prior) < _PRIVILEGE_DROP_LOOKBACK_LINES:
+        if idx >= len(source_lines):
+            idx -= 1
+            continue
+        previous = mask_string_and_char_literals(source_lines[idx])
+        stripped = previous.strip()
+        if not stripped or stripped.startswith('#') or stripped.endswith((';', '{', '}')):
+            break
+        prior.append(previous)
+        idx -= 1
+    return (' '.join(reversed(prior)) + ' ') if prior else ''
+
+
+def _privilege_drop_calls_in_line(
+    source_lines: List[str],
+    line_number: int,
+    line_content: str,
+    masked_line_content: str = "",
+) -> List[Tuple[str, int, bool]]:
+    """Find privilege-dropping calls on one line.
+
+    Returns ``(callee, zero_based_column, result_is_discarded)`` per call. The
+    line is examined in its masked form (comments and literal contents removed),
+    together with the earlier lines of the same statement.
+    """
+    target = masked_line_content or mask_string_and_char_literals(line_content)
+    calls: List[Tuple[str, int, bool]] = []
+    if target.lstrip().startswith('#'):
+        return calls  # preprocessor directive, e.g. a macro body, is not a statement
+    prev_idx = line_number - 2
+    if 0 <= prev_idx < len(source_lines) and source_lines[prev_idx].rstrip().endswith('\\'):
+        return calls  # continuation line of a macro definition or directive
+
+    lookback: Optional[str] = None
+    for m in _PRIVILEGE_DROP_CALL_RE.finditer(target):
+        callee = m.group(1)
+        prefix = target[:m.start()]
+        # Prototypes/definitions (`extern int setuid(uid_t);`) and member calls
+        # (`ops->setuid(0)`) are not calls to the libc function.
+        if re.search(r'\b(?:extern|typedef|int|void)\s+$', prefix) or re.search(r'(?:\.|->)\s*$', prefix):
+            calls.append((callee, m.start(), False))
+            continue
+        if lookback is None:
+            lookback = _statement_lookback(source_lines, line_number)
+        close = _find_closing_paren(target, m.end() - 1)
+        suffix = target[close + 1:] if close >= 0 else ""
+        calls.append((callee, m.start(), _text_call_result_is_discarded(lookback + prefix, suffix)))
+    return calls
+
+
+def _is_void_cast(c_ast, cast) -> bool:
+    """True for an explicit ``(void)`` cast (a deliberate discard)."""
+    type_decl = getattr(cast.to_type, 'type', None)
+    inner = getattr(type_decl, 'type', None)
+    return (
+        isinstance(type_decl, c_ast.TypeDecl)
+        and isinstance(inner, c_ast.IdentifierType)
+        and 'void' in inner.names
+    )
+
+
+def _ast_call_result_is_discarded(c_ast, call, ancestors: list) -> bool:
+    """True if nothing consumes the value of ``call`` (a pycparser ``FuncCall``).
+
+    ``ancestors`` is the chain of nodes from the root down to ``call``'s parent.
+    The value is dropped when the call is a statement on its own, the body of a
+    braceless ``if``/``else``/loop, a ``for`` initialiser or step, a non-final
+    operand of a comma expression, or is explicitly cast to ``void``. It is
+    consumed when it is assigned, compared, returned, used as a condition,
+    short-circuited on, or passed as an argument to another call.
+    """
+    child = call
+    for idx in range(len(ancestors) - 1, -1, -1):
+        parent = ancestors[idx]
+        if isinstance(parent, c_ast.Compound):
+            return True
+        if isinstance(parent, c_ast.Case):
+            return child is not parent.expr
+        if isinstance(parent, (c_ast.Default, c_ast.Label)):
+            return True
+        if isinstance(parent, (c_ast.If, c_ast.While, c_ast.DoWhile, c_ast.For, c_ast.Switch)):
+            # Everything except the controlling condition is a statement/step.
+            return child is not parent.cond
+        if isinstance(parent, c_ast.Cast):
+            if _is_void_cast(c_ast, parent):
+                return True
+            child = parent
+            continue
+        if isinstance(parent, c_ast.ExprList):
+            grandparent = ancestors[idx - 1] if idx > 0 else None
+            if isinstance(grandparent, c_ast.FuncCall) and grandparent.args is parent:
+                return False  # passed as an argument
+            if child is not parent.exprs[-1]:
+                return True  # earlier operand of a comma expression
+            child = parent  # the last operand's value is the expression's value
+            continue
+        if isinstance(parent, c_ast.TernaryOp):
+            if child is parent.cond:
+                return False
+            child = parent
+            continue
+        if isinstance(parent, c_ast.BinaryOp) and parent.op in ('&&', '||'):
+            if child is parent.left:
+                return False  # evaluated for its truth value
+            child = parent
+            continue
+        # Assignment, Decl initialiser, Return, other operators, call names, ...
+        return False
+    return False
+
+
+def _discarded_privilege_drop_calls(root) -> list:
+    """Privilege-dropping ``FuncCall`` nodes under ``root`` whose result is dropped.
+
+    Iterative so very deep trees cannot exhaust the interpreter stack. Tracks
+    the full ancestor chain (including enclosing ``FuncCall`` nodes).
+    """
+    from pycparser import c_ast
+
+    found = []
+    ancestors: list = []
+    stack = [(root, False)]
+    while stack:
+        node, leaving = stack.pop()
+        if leaving:
+            ancestors.pop()
+            continue
+        if (
+            isinstance(node, c_ast.FuncCall)
+            and isinstance(node.name, c_ast.ID)
+            and node.name.name in _PRIVILEGE_DROP_FUNCS
+            and _ast_call_result_is_discarded(c_ast, node, ancestors)
+        ):
+            found.append(node)
+        ancestors.append(node)
+        stack.append((node, True))
+        for _, child in reversed(node.children()):
+            stack.append((child, False))
+    return found
+
+
+class UncheckedPrivilegeDropRule(BaseRule):
+    rule_id = "CGULL-057"
+    name = "Unchecked Privilege Drop"
+    impact = Severity.HIGH
+    category = RuleCategory.CONTROL_FLOW
+    description = "Detect calls to privilege-dropping functions (setuid, setgid, seteuid, setegid, setresuid, setresgid) where the return value is ignored. If the call fails, the process may retain elevated privileges unintentionally."
+    implementation_method = "AST parsing & regex to flag unchecked return values of setuid family functions"
+    implementation_complexity = "Low"
+    chances_of_false_positives = "Low"
+    cwe_id = "CWE-273"
+    remediation_suggestion = "Always check the return value of privilege-dropping functions and handle failures (e.g., abort the process if dropping privileges fails)."
+    sample_vulnerable_code = "setuid(getuid()); // FLAW: Unchecked return value"
+    sample_remediated_code = "if (setuid(getuid()) != 0) { abort(); }"
+    analysis_engine = AnalysisEngine.HYBRID
+
+    _MESSAGE = "Return value of privilege-dropping function '{callee}()' is not checked. If it fails, the process may retain root privileges (CWE-273)."
+
+    def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
+        issues: List[Issue] = []
+
+        if ast_ctx.pycparser_ast is not None:
+            for node in _discarded_privilege_drop_calls(ast_ctx.pycparser_ast):
+                callee = node.name.name
+                line_no = (node.coord.line - _PRELUDE_LINE_COUNT) if node.coord else 1
+                raw_line = (
+                    ast_ctx.source_lines[line_no - 1]
+                    if 1 <= line_no <= len(ast_ctx.source_lines)
+                    else f"{callee}(...)"
+                )
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_no,
+                    code_snippet=raw_line.strip(),
+                    message=self._MESSAGE.format(callee=callee),
+                    column_number=node.coord.column if node.coord else 1,
+                    engine="AST",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"if ({callee}(...) != 0) {{ /* handle error, abort */ }}"
+                ))
+            return issues
+
+        # Fallback for files pycparser could not parse: the lexical call list is
+        # judged with the same statement-scoped text analysis as the regex pass.
+        clean_lines = ast_ctx.clean_source.splitlines() if ast_ctx.clean_source else list(ast_ctx.source_lines)
+        reported = set()
+        occurrence: Dict[Tuple[int, str], int] = {}
+        for fn in ast_ctx.functions:
+            for call in fn.calls:
+                callee, line_no, raw_args = call[0], call[1], call[2]
+                if callee not in _PRIVILEGE_DROP_FUNCS:
+                    continue
+                # The nth record of a callee on a line is matched to its nth
+                # textual occurrence. The producer's assignment target is not
+                # used: it is derived from the text before the call, which says
+                # nothing about operands dropped inside the expression
+                # (`rc = (setuid(1), 2);`), so the statement analysis decides.
+                nth = occurrence.get((line_no, callee), 0)
+                occurrence[(line_no, callee)] = nth + 1
+                if not (1 <= line_no <= len(clean_lines)):
+                    continue
+                same_callee = [
+                    c for c in _privilege_drop_calls_in_line(clean_lines, line_no, clean_lines[line_no - 1])
+                    if c[0] == callee
+                ]
+                if not same_callee:
+                    continue
+                _, column0, discarded = same_callee[min(nth, len(same_callee) - 1)]
+                if not discarded or (line_no, column0) in reported:
+                    continue
+                reported.add((line_no, column0))
+                raw_line = ast_ctx.source_lines[line_no - 1] if line_no <= len(ast_ctx.source_lines) else clean_lines[line_no - 1]
+                issues.append(self.create_issue(
+                    file_path=file_path,
+                    line_number=line_no,
+                    code_snippet=raw_line.strip() or f"{callee}({raw_args})",
+                    message=self._MESSAGE.format(callee=callee),
+                    column_number=column0 + 1,
+                    engine="AST",
+                    fix_type=FixType.SUGGESTED_FIX,
+                    suggested_fix_replacement=f"if ({callee}({raw_args}) != 0) {{ /* handle error, abort */ }}"
+                ))
+        return issues
+
+    def scan_line(self, file_path: str, line_number: int, line_content: str, full_code: str, source_lines: List[str], masked_line_content: str = "") -> List[Issue]:
+        issues: List[Issue] = []
+        for callee, column0, discarded in _privilege_drop_calls_in_line(
+            source_lines, line_number, line_content, masked_line_content
+        ):
+            if not discarded:
+                continue
+            issues.append(self.create_issue(
+                file_path=file_path,
+                line_number=line_number,
+                code_snippet=line_content.strip(),
+                message=self._MESSAGE.format(callee=callee),
+                column_number=column0 + 1,
+                engine="Regex",
+                fix_type=FixType.SUGGESTED_FIX,
+                suggested_fix_replacement=f"if ({callee}(...) != 0) {{ /* handle error, abort */ }}"
+            ))
+        return issues

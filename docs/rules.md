@@ -240,6 +240,32 @@ excluded. Complex control-flow exits and interprocedural cursor updates are not
 fully modeled. Behavioral corpus coverage is provided; Juliet coverage is
 **not yet measured**.
 
+## CGULL-057: unchecked privilege drop
+
+This rule (CWE-273) reports a call to `setuid`, `setgid`, `seteuid`, `setegid`,
+`setresuid` or `setresgid` whose return value is thrown away. If the call fails,
+the process keeps the privileges it meant to give up and carries on running.
+
+The value counts as discarded when the call is a statement on its own, the body
+of a braceless `if`/`else`/`while`/`for`, a `for` initializer or step, a
+non-final operand of a comma expression, an operand whose result is discarded
+(`ok && setuid(1);`), or is explicitly cast to `void`. It counts as checked when
+it is assigned, compared, negated, returned, used as an `if`/`while`/`for`
+condition, short-circuited on (`setuid(1) || die();`), or passed to another call
+(`handle(setuid(1))`).
+
+```c
+setuid(getuid());                     /* reported */
+if (setuid(getuid()) != 0) abort();   /* checked */
+```
+
+The AST pass and the regex pass share these semantics. The regex and lexical
+fallback paths look only at the current statement, including earlier lines of a
+statement split across lines, so an unrelated assignment earlier on the same line
+does not hide the call. Prototypes, member calls such as `ops->setuid(0)` and
+macro definitions are ignored. Calls to `setreuid`, `setregid`, `setgroups` and
+`initgroups` are not covered. Juliet coverage is **not yet measured**.
+
 ## Nullable pointers (CGULL-004)
 
 Local pointers include results of calls with known nullable return contracts,
