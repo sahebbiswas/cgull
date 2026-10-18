@@ -1,7 +1,8 @@
+#define _GNU_SOURCE
 #include <unistd.h>
 
-void handle_status(int);
-void report(int, int);
+int handle_status(int);
+int report(int, int);
 
 extern int setuid(uid_t uid);
 
@@ -25,7 +26,7 @@ void safe_drops(int flag, struct ops *o) {
     o->setuid(1000);
     res =
         setuid(1000);
-    handle_status(flag,
+    report(flag,
         setuid(1000));
     if (flag &&
         setgid(1000))

@@ -54,7 +54,7 @@ def test_unchecked_privilege_drop():
 # --------------------------------------------------------------------------
 
 COMMON_CODE = """#include <unistd.h>
-void handle_status(int);
+int handle_status(int);
 
 void statements(int c) {
     setuid(1);                                  // FLAG
@@ -141,8 +141,8 @@ def test_issue_metadata_is_reported_for_each_engine():
 # --------------------------------------------------------------------------
 
 ARGUMENT_CODE = """#include <unistd.h>
-void handle_status(int);
-void report(int, int);
+int handle_status(int);
+int report(int, int);
 void f(void) {
     handle_status(setuid(1000));
     report(1, setgid(1000));
@@ -171,7 +171,7 @@ def test_call_passed_as_function_argument_is_not_reported_by_lexical_fallback():
 # --------------------------------------------------------------------------
 
 def _ast_issues(body):
-    code = "#include <unistd.h>\nvoid handle_status(int);\nint ok;\nvoid f(int c) {\n" + body + "\n}\n"
+    code = "#include <unistd.h>\nint handle_status(int);\nint ok;\nvoid f(int c) {\n" + body + "\n}\n"
     scanner = CGullScanner(rules=[UncheckedPrivilegeDropRule()], engine_mode=AnalysisEngine.AST)
     return scanner.scan_text(code, file_path="t.c").issues
 
@@ -233,11 +233,11 @@ def test_regex_assignment_in_same_statement_still_counts_as_checked():
 
 def test_regex_multiline_statements():
     code = """#include <unistd.h>
-void handle_status(int);
+int report(int, int);
 void f(int c, int rc) {
     rc =
         setuid(1);
-    handle_status(c,
+    report(c,
         setuid(2));
     if (c &&
         setuid(3))

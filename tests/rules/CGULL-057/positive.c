@@ -1,6 +1,5 @@
+#define _GNU_SOURCE
 #include <unistd.h>
-
-void handle_status(int);
 
 void safe_drops() {
     if (setuid(1000) != 0) return;
