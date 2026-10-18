@@ -1319,10 +1319,20 @@ _PRIVILEGE_DROP_FUNCS = frozenset({
 _PRIVILEGE_DROP_CALL_RE = re.compile(
     r'\b(' + '|'.join(sorted(_PRIVILEGE_DROP_FUNCS)) + r')\s*\('
 )
-# Operators/keywords that, appearing *before* the call inside the same
-# expression segment, mean its result is consumed (assigned, compared,
-# negated, returned, used as a ternary operand, ...).
-_RESULT_CONSUMING_PREFIX_RE = re.compile(r'[=!<>?+\-*/%&|^~]|\breturn\b')
+# What can consume a call's value when it appears *before* the call in the
+# same expression segment. `return` and assignment (`=`, `+=`, ...) consume it
+# whatever else sits in between; any other operator only does so when it is
+# directly attached to the call. Logical `&&`/`||` and the ternary `?`/`:` bind
+# looser than every other binary operator, so the operand right after one of
+# them is only consumed by operators that come after that point
+# (`ok && setuid(1);` drops the call, `ok && !setuid(1);` does not).
+_RETURN_RE = re.compile(r'\breturn\b')
+# Comparison operators contain '=' but are not assignments (`<<=`/`>>=` are).
+_COMPARISON_RE = re.compile(r'(?<![<>])(?:==|!=|<=|>=)')
+_LOGICAL_SPLIT_RE = re.compile(r'&&|\|\||\?|:')
+_TIGHT_OPERATOR_RE = re.compile(r'[=!<>+\-*/%&|^~]')
+# Owners of a parenthesised group that is not a function call's argument list.
+_NON_CALL_PAREN_KEYWORDS = frozenset({'if', 'while', 'switch', 'return', 'for'})
 # Operators that, appearing directly *after* the call, consume its result
 # (`setuid(0) || die()`, `setuid(0) == -1`, ...). `,` and `;` do not.
 _RESULT_CONSUMING_SUFFIX_RE = re.compile(r'\s*(?:\|\||&&|[=!]=|<=?|>=?|\?|[-+*/%&|^])')
@@ -1353,6 +1363,16 @@ def _find_closing_paren(text: str, open_idx: int) -> int:
             if depth == 0:
                 return i
     return -1
+
+
+def _segment_consumes_call(segment: str) -> bool:
+    """True if the text before a call, within one expression segment, consumes its value."""
+    if _RETURN_RE.search(segment):
+        return True
+    if '=' in _COMPARISON_RE.sub('', segment):
+        return True  # assignment
+    operand_prefix = _LOGICAL_SPLIT_RE.split(segment)[-1]
+    return bool(_TIGHT_OPERATOR_RE.search(operand_prefix))
 
 
 def _text_call_result_is_discarded(prefix: str, suffix: str) -> bool:
@@ -1392,6 +1412,9 @@ def _text_call_result_is_discarded(prefix: str, suffix: str) -> bool:
         elif ch == ',':
             levels[-1][0] = i + 1
 
+    # `rest` is what follows the call at the level being examined, after the
+    # parentheses of any plain groups already stepped out of.
+    rest = suffix.lstrip()
     for k in range(len(levels) - 1, -1, -1):
         seg_start, semicolons = levels[k]
         seg_end = opens[k + 1] if k + 1 < len(levels) else len(prefix)
@@ -1401,19 +1424,27 @@ def _text_call_result_is_discarded(prefix: str, suffix: str) -> bool:
             if unlabelled == segment:
                 break
             segment = unlabelled
-        if _RESULT_CONSUMING_PREFIX_RE.search(segment):
+        if _segment_consumes_call(segment):
             return False
+        owner = None
+        if k > 0:
+            m = re.search(r'([A-Za-z_]\w*)\s*$', prefix[:opens[k]])
+            owner = m.group(1) if m else None
+            if owner and owner not in _NON_CALL_PAREN_KEYWORDS:
+                return False  # an argument of another call (or sizeof)
+        if rest.startswith(','):
+            # A non-final operand of a comma expression: its value is dropped
+            # whatever the surrounding expression does with the last operand.
+            return True
         if k == 0:
             break
-        owner = re.search(r'([A-Za-z_]\w*)\s*$', prefix[:opens[k]])
+        if owner == 'for':
+            # for (init; cond; step): only the condition's value is used.
+            return semicolons != 1
         if owner:
-            if owner.group(1) == 'for':
-                # for (init; cond; step): only the condition's value is used.
-                return semicolons != 1
-            # if/while/switch condition, return (...), sizeof(...), or the
-            # argument list of another call: the value is consumed.
-            return False
-        # A plain parenthesised group, e.g. `(setuid(0));`: keep looking outward.
+            return False  # if/while/switch condition, or `return (...)`
+        # A plain parenthesised group, e.g. `(setuid(0));`: look outward.
+        rest = rest[1:].lstrip() if rest.startswith(')') else ''
     return True
 
 
@@ -1611,16 +1642,15 @@ class UncheckedPrivilegeDropRule(BaseRule):
         for fn in ast_ctx.functions:
             for call in fn.calls:
                 callee, line_no, raw_args = call[0], call[1], call[2]
-                target_var = call[3] if len(call) > 3 else None
                 if callee not in _PRIVILEGE_DROP_FUNCS:
                     continue
-                # Count every recorded call of this callee on the line (including
-                # ones whose result is assigned) so the nth record is matched to
-                # the nth textual occurrence.
+                # The nth record of a callee on a line is matched to its nth
+                # textual occurrence. The producer's assignment target is not
+                # used: it is derived from the text before the call, which says
+                # nothing about operands dropped inside the expression
+                # (`rc = (setuid(1), 2);`), so the statement analysis decides.
                 nth = occurrence.get((line_no, callee), 0)
                 occurrence[(line_no, callee)] = nth + 1
-                if target_var is not None:
-                    continue
                 if not (1 <= line_no <= len(clean_lines)):
                     continue
                 same_callee = [

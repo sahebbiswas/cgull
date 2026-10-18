@@ -55,6 +55,7 @@ def test_unchecked_privilege_drop():
 
 COMMON_CODE = """#include <unistd.h>
 int handle_status(int);
+int ok;
 
 void statements(int c) {
     setuid(1);                                  // FLAG
@@ -74,6 +75,17 @@ void statements(int c) {
     while (setuid(16) != 0) {}
     handle_status(handle_status(setuid(17)));
     if (rc && setuid(18) != 0) return;
+    ok && setuid(23);                           // FLAG
+    !c && setgid(24);                           // FLAG
+    c ? setuid(25) : 0;                         // FLAG
+    c ? setuid(26) : setgid(26);                // FLAG
+    rc = (setuid(27), 2);                       // FLAG
+    rc = (2, setuid(28));
+    if (setuid(29), c) return;                  // FLAG
+    ok = ok && setuid(30);
+    rc = c ? setuid(31) : setgid(31);
+    rc = !setuid(32);
+    ok && !setuid(33);
     switch (c) {
     case -1: setuid(19); break;                 // FLAG
     default: break;
@@ -119,6 +131,41 @@ def test_common_cases_agree_on_lexical_fallback_parser():
     assert ctx.pycparser_ast is None, "fixture must exercise the no-AST fallback"
     assert _flagged_lines(code, AnalysisEngine.AST) == _marked_lines(COMMON_CODE)
     assert _flagged_lines(code, AnalysisEngine.HYBRID) == _marked_lines(COMMON_CODE)
+
+
+def _dropped_callees(code, mode):
+    scanner = CGullScanner(rules=[UncheckedPrivilegeDropRule()], engine_mode=mode)
+    issues = scanner.scan_text(code, file_path="t.c").issues
+    return sorted(i.message.split("'")[1] for i in issues)
+
+
+@pytest.mark.parametrize(
+    "mode, force_fallback",
+    [
+        (AnalysisEngine.AST, False),
+        (AnalysisEngine.REGEX, False),
+        (AnalysisEngine.AST, True),
+    ],
+    ids=["ast", "regex-only", "lexical-fallback"],
+)
+def test_only_the_dropped_operand_of_a_comma_expression_is_reported(mode, force_fallback):
+    suffix = FORCE_FALLBACK_SUFFIX if force_fallback else ""
+    head = "#include <unistd.h>\nint f(int c) {\n    int rc = 0;\n"
+    tail = "\n    return rc;\n}\n" + suffix
+    cases = {
+        "    rc = (setuid(1), 2);": ["setuid()"],
+        "    rc = (2, setuid(1));": [],
+        "    c = (setuid(1), setgid(2));": ["setuid()"],
+        "    seteuid(1), setegid(2);": ["setegid()", "seteuid()"],
+        "    if (setuid(1), c) return 0;": ["setuid()"],
+        "    if (c, setuid(1)) return 0;": [],
+        "    rc = (setuid(1), setgid(2)) + 1;": ["setuid()"],
+    }
+    for stmt, expected in cases.items():
+        code = head + stmt + tail
+        if force_fallback:
+            assert CASTParser().parse(code).pycparser_ast is None
+        assert _dropped_callees(code, mode) == expected, stmt
 
 
 def test_issue_metadata_is_reported_for_each_engine():
