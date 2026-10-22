@@ -17,6 +17,10 @@ inputs:
     description: 'Exit with error if issues at or above severity threshold are found (high, medium, low, all, none)'
     required: false
     default: 'high'
+  strict-confidence:
+    description: 'Count FALLBACK-confidence findings from structural engines toward fail-on (true, false)'
+    required: false
+    default: 'false'
   format:
     description: 'Report format (sarif, text, json, markdown)'
     required: false
@@ -45,6 +49,7 @@ runs:
         IN_PATH: ${{ inputs.path }}
         IN_SEVERITY: ${{ inputs.severity }}
         IN_FAIL_ON: ${{ inputs.fail-on }}
+        IN_STRICT_CONFIDENCE: ${{ inputs.strict-confidence }}
         IN_FORMAT: ${{ inputs.format }}
         IN_SARIF_FILE: ${{ inputs.sarif-file }}
         IN_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
@@ -57,6 +62,10 @@ runs:
 
         if [ -n "$IN_FAIL_ON" ] && [ "$IN_FAIL_ON" != "none" ]; then
           ARGS+=("--fail-on" "$IN_FAIL_ON")
+        fi
+
+        if [ "$IN_STRICT_CONFIDENCE" = "true" ]; then
+          ARGS+=("--strict-confidence")
         fi
 
         if [ "$IN_FORMAT" = "sarif" ] || [ "$IN_UPLOAD_SARIF" = "true" ]; then

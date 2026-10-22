@@ -223,6 +223,7 @@ def _render_config(
             "[output]",
             'default_format = "text"',
             "warn_on_fallback = false",
+            "strict_confidence = false",
             "",
             "[logging]",
             f"retention_runs = {DEFAULT_LOG_RETENTION_RUNS}",

@@ -105,6 +105,8 @@ Gate high-severity findings in CI:
 cgull scan . --fail-on high
 ```
 
+By default `--fail-on` ignores findings from structural engines that only reached `FALLBACK` confidence (they stay in every report); add `--strict-confidence` to count them. See [Gate and confidence](https://github.com/sahebbiswas/cgull/blob/main/docs/reporting-and-ci.md#gate-and-confidence).
+
 Adopt C-GULL on a codebase with existing findings:
 
 ```bash

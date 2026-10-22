@@ -37,6 +37,7 @@ class CGullConfig:
     default_format: Optional[str] = None
     fail_on: Optional[str] = None
     warn_on_fallback: bool = False
+    strict_confidence: bool = False
     logging_retention_runs: int = DEFAULT_LOG_RETENTION_RUNS
     warnings: List[str] = field(default_factory=list)
     config_file_path: Optional[str] = None
@@ -399,5 +400,12 @@ def load_config(config_path: Optional[str] = None, target_path: Optional[str] = 
                 cfg.warn_on_fallback = b_val
             else:
                 cfg.warnings.append(f"Invalid boolean value '{raw_wof}' for [output].warn_on_fallback in {config_path}")
+        if "strict_confidence" in output_sec:
+            raw_sc = output_sec["strict_confidence"]
+            sc_val = parse_bool_val(raw_sc)
+            if sc_val is not None:
+                cfg.strict_confidence = sc_val
+            else:
+                cfg.warnings.append(f"Invalid boolean value '{raw_sc}' for [output].strict_confidence in {config_path}")
 
     return cfg

@@ -8,6 +8,7 @@ import re
 from typing import Dict, Any, List
 from .models import ScanResult, Severity, FixType
 from . import __version__
+from .gating import count_for_gate
 
 
 import logging
@@ -277,6 +278,7 @@ class ReportGenerator:
         failed = result.files_failed or len(result.failed_paths)
         telemetry = telemetry_for(result)
         groups = finding_group_counts(result.issues)
+        gate = count_for_gate(result.issues)
 
         lines = [
             f"# 🛡️ C-GULL v{__version__} Security Audit Report",
@@ -320,6 +322,8 @@ class ReportGenerator:
             "| :--- | :--- | :--- |",
             f"| **Total Issues** | **{result.total_issues_count}** | {'🚨 Needs Immediate Remediation' if result.high_severity_count > 0 else '✅ Passed'} |",
             f"| 🔴 High Severity | {result.high_severity_count} | {'CRITICAL' if result.high_severity_count > 0 else 'None'} |",
+            f"| High: counted by default | {gate.high_full} | Counts toward `--fail-on` |",
+            f"| High: structural `FALLBACK` | {gate.high_fallback} | Reported; counts toward `--fail-on` only with `--strict-confidence` |",
             f"| 🟡 Medium Severity | {result.medium_severity_count} | Warning |",
             f"| 🔵 Low Severity | {result.low_severity_count} | Notice |",
             f"| Security actionable | {groups['security_correctness']} | Memory/bounds/correctness |",
@@ -429,6 +433,12 @@ class ReportGenerator:
             lines.append(
                 f" Finding classes  : security actionable {groups['security_correctness']}, "
                 f"policy/quality {groups['policy_quality']}"
+            )
+        gate = count_for_gate(result.issues)
+        if gate.high:
+            lines.append(
+                f" High by gate policy: {gate.high_full} counted, "
+                f"{gate.high_fallback} structural FALLBACK (--fail-on counts these only with --strict-confidence)"
             )
         if result.is_baseline_filtered:
             lines.append(
