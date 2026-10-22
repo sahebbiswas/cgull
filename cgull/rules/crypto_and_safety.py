@@ -1315,6 +1315,7 @@ class ImproperChrootJailRule(BaseRule):
 
 _PRIVILEGE_DROP_FUNCS = frozenset({
     "setuid", "setgid", "seteuid", "setegid", "setresuid", "setresgid",
+    "setreuid", "setregid", "setgroups", "initgroups",
 })
 _PRIVILEGE_DROP_CALL_RE = re.compile(
     r'\b(' + '|'.join(sorted(_PRIVILEGE_DROP_FUNCS)) + r')\s*\('
@@ -1598,7 +1599,7 @@ class UncheckedPrivilegeDropRule(BaseRule):
     name = "Unchecked Privilege Drop"
     impact = Severity.HIGH
     category = RuleCategory.CONTROL_FLOW
-    description = "Detect calls to privilege-dropping functions (setuid, setgid, seteuid, setegid, setresuid, setresgid) where the return value is ignored. If the call fails, the process may retain elevated privileges unintentionally."
+    description = "Detect calls to privilege-dropping functions (setuid, setgid, seteuid, setegid, setresuid, setresgid, setreuid, setregid, setgroups, initgroups) where the return value is ignored. If the call fails, the process may retain elevated privileges unintentionally."
     implementation_method = "AST parsing & regex to flag unchecked return values of setuid family functions"
     implementation_complexity = "Low"
     chances_of_false_positives = "Low"
