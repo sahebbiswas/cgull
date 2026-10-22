@@ -409,3 +409,22 @@ int f(void) {
     scanner = CGullScanner(rules=[UncheckedPrivilegeDropRule()], engine_mode=AnalysisEngine.AST)
     issues = scanner.scan_text(code, file_path="t.c").issues
     assert [(i.line_number, i.column_number) for i in issues] == [(3, 25)]
+
+
+@pytest.mark.parametrize(
+    "mode, force_fallback",
+    [
+        (AnalysisEngine.AST, False),
+        (AnalysisEngine.REGEX, False),
+        (AnalysisEngine.AST, True),
+    ],
+    ids=["ast", "regex-only", "lexical-fallback"],
+)
+@pytest.mark.parametrize("func", ["setreuid", "setregid", "setgroups", "initgroups"])
+def test_extended_privilege_drop_callees(func, mode, force_fallback):
+    suffix = FORCE_FALLBACK_SUFFIX if force_fallback else ""
+    head = "#include <unistd.h>\nint f(int c) {\n    int rc = 0;\n"
+    tail = "\n    return rc;\n}\n" + suffix
+    assert _dropped_callees(head + f"    {func}(1, 2);" + tail, mode) == [f"{func}()"]
+    assert _dropped_callees(head + f"    rc = {func}(1, 2);" + tail, mode) == []
+    assert _dropped_callees(head + f"    if ({func}(1, 2) != 0) return 1;" + tail, mode) == []

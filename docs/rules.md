@@ -243,7 +243,7 @@ fully modeled. Behavioral corpus coverage is provided; Juliet coverage is
 ## CGULL-057: unchecked privilege drop
 
 This rule (CWE-273) reports a call to `setuid`, `setgid`, `seteuid`, `setegid`,
-`setresuid` or `setresgid` whose return value is thrown away. If the call fails,
+`setresuid`, `setresgid`, `setreuid`, `setregid`, `setgroups` or `initgroups` whose return value is thrown away. If the call fails,
 the process keeps the privileges it meant to give up and carries on running.
 
 The value counts as discarded when the call is a statement on its own, the body
@@ -263,8 +263,7 @@ The AST pass and the regex pass share these semantics. The regex and lexical
 fallback paths look only at the current statement, including earlier lines of a
 statement split across lines, so an unrelated assignment earlier on the same line
 does not hide the call. Prototypes, member calls such as `ops->setuid(0)` and
-macro definitions are ignored. Calls to `setreuid`, `setregid`, `setgroups` and
-`initgroups` are not covered. Juliet coverage is **not yet measured**.
+macro definitions are ignored. Juliet coverage is **not yet measured**.
 
 ## Nullable pointers (CGULL-004)
 

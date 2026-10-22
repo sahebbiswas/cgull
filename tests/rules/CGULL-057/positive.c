@@ -22,4 +22,8 @@ void unsafe_drops(int flag) {
     }
     if (flag)
         seteuid(1000); // expect: CGULL-057
+    setreuid(1000, 1000); // expect: CGULL-057
+    setregid(1000, 1000); // expect: CGULL-057
+    setgroups(0, 0); // expect: CGULL-057
+    initgroups("user", 1000); // expect: CGULL-057
 }

@@ -8,13 +8,17 @@ extern int setuid(uid_t uid);
 
 #define DROP_PRIVS() setuid(0)
 
-struct ops { int (*setuid)(int); };
+struct ops { int (*setuid)(int); int (*setgroups)(int); };
 
 void safe_drops(int flag, struct ops *o) {
     if (setuid(1000) != 0) return;
     int res = setgid(1000);
     if (res < 0) return;
     while (seteuid(1000) != 0) {}
+    if (setreuid(1000, 1000) != 0) return;
+    if (setregid(1000, 1000) != 0) return;
+    if (setgroups(0, 0) != 0) return;
+    res = initgroups("user", 1000);
     handle_status(setuid(1000));
     report(1, setgid(1000));
     handle_status(report(0, seteuid(1000)));
