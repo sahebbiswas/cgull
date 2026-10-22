@@ -17,6 +17,7 @@ from .utils import ProgressIndicator
 import logging
 from .config import load_config
 from .finding_profiles import with_finding_profile
+from .gating import count_for_gate, excluded_by_confidence, gate_fails
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ Suppressing findings inline:
     scan_parser.add_argument("--engine", choices=["regex", "ast", "hybrid"], default="hybrid", help="Scan engine mode (default: hybrid)")
     scan_parser.add_argument("--fail-on", choices=["high", "medium", "low", "all"], default=None, help="Exit with code 1 if vulnerabilities at or above severity threshold are found (useful for CI/CD)")
     scan_parser.add_argument("--fail-on-high", action="store_true", help="Exit with code 1 if high-severity vulnerabilities are found (useful for CI/CD; alias for --fail-on high)")
+    scan_parser.add_argument("--strict-confidence", action="store_true", help="Count FALLBACK-confidence findings from structural engines toward --fail-on (default: they are reported but do not fail the gate)")
     scan_parser.add_argument("--fail-on-error", action="store_true", help="Exit with code 1 if scan errors or file analysis failures occur (useful for CI/CD)")
     scan_parser.add_argument("--warn-on-fallback", action="store_true", help="Exit with code 1 if AST parsing falls back to regex-fallback mode for any file")
     scan_parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of files to scan in parallel (default: 1, sequential). Use 0 to auto-detect CPU count. Negative values are invalid.")
@@ -550,11 +552,22 @@ def handle_scan(args) -> int:
     if args.fail_on_high:
         fail_on = "high"
 
-    if fail_on == "high" and result.high_severity_count > 0:
-        return 1
-    elif fail_on == "medium" and (result.high_severity_count > 0 or result.medium_severity_count > 0):
-        return 1
-    elif fail_on in ("low", "all") and result.total_issues_count > 0:
+    if fail_on is None:
+        return 0
+
+    strict_confidence = bool(getattr(args, "strict_confidence", False)) or config.strict_confidence
+    gate_counts = count_for_gate(result.issues)
+    if not strict_confidence:
+        excluded = excluded_by_confidence(fail_on, gate_counts)
+        if excluded:
+            print(
+                f"Note: {excluded} FALLBACK-confidence finding(s) at or above --fail-on {fail_on} "
+                "are reported but do not count toward the exit status; "
+                "use --strict-confidence (or [output].strict_confidence = true) to count them.",
+                file=sys.stderr,
+            )
+
+    if gate_fails(fail_on, gate_counts, strict_confidence):
         return 1
 
     return 0

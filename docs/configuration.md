@@ -194,9 +194,10 @@ roots = ["include", "platform/include"]
 default_format = "sarif"
 fail_on = "high"
 warn_on_fallback = true
+strict_confidence = false
 ```
 
-`default_format` accepts `text`, `json`, `sarif`, or `markdown`. `fail_on` accepts `high`, `medium`, `low`, or `all`. `warn_on_fallback` accepts a TOML boolean; compatible `1/0` and common true/false strings are also parsed by the loader.
+`default_format` accepts `text`, `json`, `sarif`, or `markdown`. `fail_on` accepts `high`, `medium`, `low`, or `all`. `warn_on_fallback` and `strict_confidence` accept a TOML boolean; compatible `1/0` and common true/false strings are also parsed by the loader. By default `fail_on` ignores `FALLBACK`-confidence findings from structural engines; set `strict_confidence = true` (or pass `--strict-confidence`) to count them. See [Gate and confidence](reporting-and-ci.md#gate-and-confidence).
 
 Use output policy for stable repository defaults and CLI switches for one-off overrides.
 

@@ -71,6 +71,7 @@ The action exposes the common CI surface:
 | `format` | report format | `sarif` |
 | `sarif-file` | SARIF output path | `results.sarif` |
 | `upload-sarif` | upload SARIF to GitHub Code Scanning | `false` |
+| `strict-confidence` | count `FALLBACK`-confidence findings toward `fail-on` | `false` |
 
 For advanced CLI options not exposed by the composite action, install C-GULL in the workflow and invoke `cgull scan` directly.
 
