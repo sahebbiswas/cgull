@@ -30,6 +30,45 @@ from .helpers import (
 logger = logging.getLogger(__name__)
 
 
+_SIGNED_INT_RETURN_TYPES = frozenset({
+    "int", "signed", "signed int", "short", "short int", "signed short", "signed short int",
+    "long", "long int", "signed long", "signed long int",
+    "long long", "long long int", "signed long long", "signed long long int",
+    "ssize_t", "int8_t", "int16_t", "int32_t", "int64_t", "intptr_t",
+})
+_RETURN_TYPE_NOISE = re.compile(r"\b(?:const|volatile|static|inline|extern|register|restrict|__restrict|__restrict__|__inline|__inline__)\b")
+
+
+_EXPORT_WRAPPER_RE = re.compile(r"^\s*[A-Z_][A-Z0-9_]*\s*\(\s*([^()]+?)\s*\)\s*$")
+
+
+def _null_guard_fix(fn, var_name: str, int_return: str = "-EINVAL") -> Tuple[Optional[str], FixType]:
+    """Suggested NULL guard that matches the enclosing function's return type (#586).
+
+    Returns ``(replacement, fix_type)``. Only mechanical cases get a replacement:
+    ``void`` (``return;``), pointers (``return NULL;``) and signed integer types
+    (``return <int_return>;``, the errno-style convention). Booleans, floating
+    point, unsigned or ``size_t``-like types, structs and unresolved typedefs have
+    no universal error value, so they stay text-only manual review rather than
+    advertise a replacement that may not type-check or may mean success.
+    """
+    raw = str(getattr(fn, "return_type", "") or "")
+    # Export-style wrapper left unexpanded by the fallback parser: CJSON_PUBLIC(const char*)
+    wrapper = _EXPORT_WRAPPER_RE.match(raw)
+    if wrapper:
+        raw = wrapper.group(1)
+    return_type = " ".join(_RETURN_TYPE_NOISE.sub(" ", raw).replace("*", " * ").split())
+    if not return_type or re.search(r"[()\[\]{}]", return_type):
+        return None, FixType.MANUAL_REVIEW
+    if return_type == "void":
+        return f"if ({var_name} == NULL) return;", FixType.SUGGESTED_FIX
+    if "*" in return_type:
+        return f"if ({var_name} == NULL) return NULL;", FixType.SUGGESTED_FIX
+    if return_type in _SIGNED_INT_RETURN_TYPES:
+        return f"if ({var_name} == NULL) return {int_return};", FixType.SUGGESTED_FIX
+    return None, FixType.MANUAL_REVIEW
+
+
 def _lexical_additive_arith_match(var_name: str, text: str) -> Optional[re.Match]:
     """Match additive pointer arithmetic; exclude ++/-- and require an operand.
 
@@ -176,6 +215,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                                         f"Null pointer dereference: pointer '{deref_var}' "
                                         f"{null_phrase} when dereferenced."
                                     )
+                                fix_text, fix_type = _null_guard_fix(fn, deref_var, "-1")
                                 issues.append(self.create_issue(
                                     file_path=file_path,
                                     line_number=deref_line,
@@ -183,8 +223,8 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                                     message=message,
                                     column_number=1,
                                     engine="AST",
-                                    fix_type=FixType.SUGGESTED_FIX,
-                                    suggested_fix_replacement=f"if ({deref_var} == NULL) return -1;"
+                                    fix_type=fix_type,
+                                    suggested_fix_replacement=fix_text,
                                 ))
 
                 # 2. Pointer parameters dereferenced without a preceding NULL check
@@ -211,6 +251,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                                 f"Pointer parameter '{param.name}' in function '{fn.name}' "
                                 f"is dereferenced without a preceding NULL check."
                             )
+                        fix_text, fix_type = _null_guard_fix(fn, param.name)
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=deref_line,
@@ -218,8 +259,8 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                             message=message,
                             column_number=1,
                             engine="AST",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=f"if ({param.name} == NULL) return -EINVAL;"
+                            fix_type=fix_type,
+                            suggested_fix_replacement=fix_text,
                         ))
                 continue
 
@@ -279,6 +320,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                                 f"Pointer parameter '{p_name}' in function '{fn.name}' "
                                 f"is dereferenced without a preceding NULL check."
                             )
+                        fix_text, fix_type = _null_guard_fix(fn, p_name)
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=line_no,
@@ -286,8 +328,8 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                             message=message,
                             column_number=use_match.start() + 1,
                             engine="AST",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=f"if ({p_name} == NULL) return -EINVAL;"
+                            fix_type=fix_type,
+                            suggested_fix_replacement=fix_text,
                         ))
                         break
 
@@ -336,6 +378,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                                 f"Null pointer dereference: pointer '{v_name}' "
                                 f"is known to be NULL when dereferenced."
                             )
+                        fix_text, fix_type = _null_guard_fix(fn, v_name, "-1")
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=sub_line_no,
@@ -343,8 +386,8 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                             message=message,
                             column_number=use_match.start() + 1,
                             engine="AST",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=f"if ({v_name} == NULL) return -1;"
+                            fix_type=fix_type,
+                            suggested_fix_replacement=fix_text,
                         ))
                         break
 
@@ -395,6 +438,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                                 f"Null pointer dereference: pointer '{v_name}' "
                                 f"is known to be NULL when dereferenced."
                             )
+                        fix_text, fix_type = _null_guard_fix(fn, v_name, "-1")
                         issues.append(self.create_issue(
                             file_path=file_path,
                             line_number=sub_line_no,
@@ -402,8 +446,8 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                             message=message,
                             column_number=use_match.start() + 1,
                             engine="AST",
-                            fix_type=FixType.SUGGESTED_FIX,
-                            suggested_fix_replacement=f"if ({v_name} == NULL) return -1;"
+                            fix_type=fix_type,
+                            suggested_fix_replacement=fix_text,
                         ))
                         break
 
