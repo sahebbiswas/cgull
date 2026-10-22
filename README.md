@@ -144,6 +144,10 @@ The [documentation knowledgebase](https://github.com/sahebbiswas/cgull/blob/main
 
 For changes between releases, see the [changelog](https://github.com/sahebbiswas/cgull/blob/main/CHANGELOG.md). [GitHub Releases](https://github.com/sahebbiswas/cgull/releases) contain release-specific summaries and generated pull-request lists. Maintainers should follow the [release guide](https://github.com/sahebbiswas/cgull/blob/main/docs/releasing.md); contributors should also read [CONTRIBUTING.md](https://github.com/sahebbiswas/cgull/blob/main/CONTRIBUTING.md).
 
+## Versioning
+
+C-GULL follows [Semantic Versioning](https://semver.org/). The package version is defined once, as `cgull.__version__`, and read by `pyproject.toml` during builds. Every pull request merged to `main` bumps it by one step (patch for fixes, precision improvements, docs and tooling; minor for new rules and features and, while C-GULL is `0.x`, deliberate compatibility breaks), so not every version is published to PyPI. See [CONTRIBUTING.md](https://github.com/sahebbiswas/cgull/blob/main/CONTRIBUTING.md#-versioning) for the full rules.
+
 ## Project status
 
 C-GULL is under active development. Static analysis is necessarily conservative and no analyzer proves that C code is secure. Treat findings as engineering evidence: review them in source/build context, tune project semantics deliberately, and combine static analysis with compiler diagnostics, testing, sanitizers, fuzzing, review, and platform-specific security controls.

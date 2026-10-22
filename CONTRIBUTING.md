@@ -27,7 +27,10 @@ To maintain repository quality and streamline code reviews, please follow these 
 - **Synced to Upstream Tip**: Always rebase your feature or bugfix branch on top of the latest `main`/`master` tip before submitting a PR or generating a patch file (`git rebase main`).
 - **Atomic Commits & Descriptive Messages**: Break work into logical, atomic commits. Write clear, concise commit summary lines (under 50 characters) followed by detailed body explanations when necessary.
 - **Clean Patch-File PRs**: Ensure patches do not include temporary files, untracked artifacts, or unrelated formatting changes.
-- **CHANGELOG Maintenance & Version Bumps**: Keep `CHANGELOG.md` updated following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) standards. New features, rules, fixes, and CLI options should be listed under the `[Unreleased]` section. When bumping `__version__` in `cgull/__init__.py`, move `[Unreleased]` entries into a new version section header with the release date.
+- **Bump the Version**: Every pull request merged to `main` changes `__version__` in [`cgull/__init__.py`](cgull/__init__.py) exactly once. See [Versioning](#-versioning) for how to pick the step.
+- **CHANGELOG Maintenance**: Keep `CHANGELOG.md` updated following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) standards. New features, rules, fixes, and CLI options are listed under the `[Unreleased]` section in the same pull request. Entries move into a dated version section only when a release is prepared (see [`docs/releasing.md`](docs/releasing.md)).
+- **Close the Issues It Finishes**: Put `Closes #N` in the pull request description, one per line, for each issue the pull request completes. Use `Refs #N` for an issue it only advances.
+- **Track Gaps You Don't Fix**: Bugs, edge cases and backlog items you find but leave out of the change are recorded as issues, not as code comments, and linked from the pull request with `Refs #N`. Search open and closed issues first and add to an existing one instead of opening a duplicate. Fix everything that is in scope for the change in the same pull request rather than splitting it into follow-up issues.
 - **CI Gate Enforcement**: PRs will only be merged if all automated tests, corpus behavioral gates, and benchmark quality thresholds pass cleanly.
 
 ---
@@ -194,6 +197,29 @@ Baseline reports (`--baseline baseline.json`) represent previously accepted find
 - `load_baseline_fingerprints` loads fingerprints into a Python `Counter` (multiset).
 - Multi-occurrence matching: if a file contains two textually identical occurrences of a flaw, `Counter` tracking guarantees that fixing *one* occurrence correctly reports *one* remaining issue as pre-existing and does not hide the second occurrence.
 - `apply_baseline` compares current scan findings against `baseline_counts`, computing `baseline_new_count` and `baseline_resolved_count`.
+
+---
+
+## 🔖 Versioning
+
+C-GULL follows [Semantic Versioning 2.0.0](https://semver.org/). The version moves with `main`: every merged pull request gets its own version, and releases are cut from `main` whenever it is stable enough (see [`docs/releasing.md`](docs/releasing.md)). A version is never held back waiting for a release.
+
+- **One source of truth.** The version is defined once, as `__version__` in `cgull/__init__.py`. `pyproject.toml` reads it, `cgull.__version__` exposes it, and the CLI, reports, SARIF output, and result-cache keys report it. Don't repeat the number elsewhere.
+- **Bump once per pull request**, against the version on the branch the pull request targets, not once per commit. Follow-up fixes to a pull request that has not merged fold into its existing bump (squash or amend) instead of adding a second one. If the target branch moves to the same version before you merge, bump again on top of it.
+- **Stacked pull requests** bump once each, relative to the pull request below them. When a lower pull request merges, rebase the next one onto `main` and re-check that its version is still exactly one step above `main`.
+- **Pick the part to bump by the largest change in the pull request:**
+
+  | Bump | When | Example |
+  | :--- | :--- | :--- |
+  | Patch (`0.13.0` → `0.13.1`) | Compatible bug fixes, false-positive or false-negative precision fixes to existing rules, docs, tests, internal refactors, tooling and CI, dependency range updates | Stop CGULL-004 reporting after a dominating NULL guard |
+  | Minor (`0.13.1` → `0.14.0`) | A new feature or capability: a new rule ID, a new analysis capability, a new CLI option, configuration key, or report field | Add a new rule such as CGULL-057 |
+  | Major (`0.x` → `1.0.0`, `1.x` → `2.0.0`) | An intentionally incompatible change to a public contract: CLI, configuration, output schema, or documented API | Rename or remove a CLI option, or change `OUTPUT_SCHEMA_VERSION` incompatibly |
+
+- **Get the maintainer's agreement before a major bump.**
+- **While the major version is `0`**, a change that breaks compatibility is a minor bump, as SemVer allows, and must be announced as **Behaviour change:** at the top of the pull request description and in its `CHANGELOG.md` entry. Rejecting input that used to be accepted, or removing a finding category, are examples.
+- **What counts as public:** the `cgull` CLI and its exit codes, configuration files and keys, report and output schemas, stable rule IDs, and the documented names exported from the top-level `cgull` package. Other submodules and names starting with `_` are internal and can change in any version.
+- **Not every version is published.** PyPI only gets the versions that are released, so gaps between published versions are expected. A release publishes whatever version `main` is at, and its tag must be `vX.Y.Z` for that version.
+- **Review decides the step.** There is no automated check on the bump, so reviewers confirm that the version is exactly one step above the target branch and that the step matches the table above.
 
 ---
 
