@@ -116,3 +116,37 @@ const char *test_tn_guarded_offset_plus_pointer(const char *p, int off) {
 int test_fp_integer_addition(int a, int b) {
     return a + b;
 }
+
+/* cJSON-shaped guards (#587): Is*-style predicate, loop condition, early exit */
+typedef int guard_bool;
+typedef struct guard_node { struct guard_node *next; char *valuestring; double valuedouble; int type; } guard_node;
+
+static guard_bool guard_is_string(const guard_node * const item) {
+    if (item == NULL) {
+        return (guard_bool)0;
+    }
+    return (item->type & 0xFF) == 16;
+}
+
+static const char *guard_get_string(const guard_node * const item) {
+    if (!guard_is_string(item)) {
+        return NULL;
+    }
+    return item->valuestring;
+}
+
+static void guard_delete_all(guard_node *item) {
+    guard_node *next = NULL;
+    while (item != NULL) {
+        next = item->next;
+        item = next;
+    }
+}
+
+static int guard_sum(guard_node *list) {
+    int total = 0;
+    for (guard_node *p = list; p != NULL; p = p->next) {
+        total += p->type;
+    }
+    return total;
+}

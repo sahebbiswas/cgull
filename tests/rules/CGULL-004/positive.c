@@ -96,3 +96,10 @@ const char *test_tp_null_local_plus_offset(int off) {
 int test_tp_star_pointer_plus_index(int *p, int i) {
     return *(p + i); // expect: CGULL-004
 }
+
+/* Unguarded setter must still report next to guarded cJSON-shaped code (#587) */
+typedef struct setter_node { int type; } setter_node;
+
+static void setter_unguarded(setter_node *p) {
+    p->type = 1; // expect: CGULL-004
+}

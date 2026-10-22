@@ -12,6 +12,7 @@ from ...models import Severity, RuleCategory, Issue, AnalysisEngine, FixType
 from ...ast_analyzer import CASTContext, CFunction, get_type_byte_size, is_unsigned_type
 from ...utils import extract_call_args, split_call_args, extract_balanced_parens
 from ...cfg import StructuredCFG, CFGEvent, build_cfg, find_function_def, Nullness, Initialization, Allocation, analyze_function_summaries, FunctionSummary
+from .lexical_null_guards import LexicalBody, derive_truthy_nonnull_predicates
 from .helpers import (
     _brace_depths,
     _source_snippet,
@@ -133,6 +134,7 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
     def scan_ast(self, file_path: str, ast_ctx: CASTContext) -> List[Issue]:
         issues = []
         summaries = self.get_analysis_session(ast_ctx).function_summaries
+        lexical_predicates = None
         for fn in ast_ctx.functions:
             ptr_params = [p for p in fn.parameters if p.is_pointer and p.name]
             cfg = _ast_cfg_for_function(ast_ctx, fn, summaries=summaries)
@@ -222,7 +224,10 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                 continue
 
             # Parser unavailable: preserve and extend lexical fallback.
+            if lexical_predicates is None:
+                lexical_predicates = derive_truthy_nonnull_predicates(ast_ctx.functions)
             body_lines = fn.body.splitlines()
+            lexical_body = LexicalBody(body_lines)
             body_start = getattr(fn, "body_start_line", fn.start_line + 1)
             depths = _brace_depths(body_lines)
             pointer_names = _pointer_var_names(fn)
@@ -255,6 +260,14 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                     ):
                         continue
                     use_match = deref_match or arith_match
+                    if use_match and lexical_body.is_guarded(
+                        p_name,
+                        lexical_body.position(i, use_match.start()),
+                        lexical_predicates,
+                    ):
+                        # A dominating guard (enclosing loop/if condition, early exit,
+                        # short circuit, or Is*-style predicate) proves it non-NULL.
+                        continue
                     if use_match:
                         if deref_match is None and arith_match is not None:
                             message = (
@@ -342,6 +355,10 @@ class MissingNullCheckOnFunctionParametersRule(BaseRule):
                 if not m:
                     continue
                 v_name = m.group(1) or m.group(2)
+                if '{' not in line and line[m.end():].strip():
+                    # Brace-less then-statement on the same line (``if (!p) return -1;``):
+                    # the NULL fact only holds inside that statement, not on the next line.
+                    continue
                 target_depth = depths[i] - 1 if '{' in line else depths[i]
                 for j in range(i + 1, len(body_lines)):
                     if j > i + 1 and depths[j] <= target_depth:
