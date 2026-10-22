@@ -29,6 +29,37 @@ cgull scan . --severity all --fail-on high
 
 Supported failure thresholds are `high`, `medium`, `low`, and `all`. `--fail-on-high` remains a compatibility alias for `--fail-on high`.
 
+### Gate and confidence
+
+Every finding carries an `impact` (how serious it is if real) and a `confidence` (how well the engine could prove it: `FULL`, `FALLBACK`, or `LIMITED`). `--fail-on` gates on impact, and by default it counts only findings the engine proved:
+
+| Finding | Default | With `--strict-confidence` |
+| --- | --- | --- |
+| Any impact, confidence `FULL`, `LIMITED`, or unset | counts toward `--fail-on` | counts |
+| Any impact, structural engine (`AST`, `AST-CFG`, `Interprocedural`, `Symbolic preprocessor`), confidence `FALLBACK` | reported, does **not** count | counts |
+| Any impact, `Regex` engine, any confidence | counts toward `--fail-on` | counts |
+
+`FALLBACK` marks structural findings produced from the regex-fallback parser tier rather than a full `pycparser` parse. They stay in every report format and keep their `impact`; JSON and SARIF also carry each finding's `confidence` (text and Markdown list the findings and show the High split by gate policy, but not a per-finding confidence). Only the exit status changes. Lexical `Regex` findings do not depend on the parser tier, so they always count, and `LIMITED` is not demoted because it marks deliberately conservative rules, not a degraded parse.
+
+When the default policy leaves findings out of the gate, `cgull scan` prints a note to stderr with the count, and the text and Markdown summaries split High findings into those the gate counts by default and those excluded as structural `FALLBACK`. To gate on severity alone, as before, pass `--strict-confidence` or set it for the repository:
+
+```toml
+[output]
+fail_on = "high"
+strict_confidence = true
+```
+
+To keep the previous exit-status behavior in an existing workflow, opt in explicitly. Command line: `cgull scan . --fail-on high --strict-confidence`. GitHub Action (inputs reach the action as strings, so use `'true'`):
+
+```yaml
+- uses: sahebbiswas/cgull@main
+  with:
+    fail-on: high
+    strict-confidence: 'true'
+```
+
+`--warn-on-fallback` is separate and is not a substitute for `--strict-confidence`: `--strict-confidence` makes `FALLBACK` findings count toward `--fail-on`, while `--warn-on-fallback` fails the run when any file fell back to the regex-fallback parser tier at all, which is the stricter way to require full parser coverage.
+
 Use `--fail-on-error` when file-analysis failures must also fail CI, and `--warn-on-fallback` when structural parser fallback is unacceptable for the repository.
 
 ## Baseline / diff adoption
