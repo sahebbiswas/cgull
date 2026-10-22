@@ -52,3 +52,26 @@ void test_unsigned_comparison_safe(size_t a, size_t b) {
         printf("Both unsigned\n");
     }
 }
+
+#include <string.h>
+
+/* Pointer overlap test (cJSON_SetValuestring shape, #588): pointer provenance, not integer signedness */
+int test_pointer_overlap_safe(char *dst, const char *src) {
+    size_t src_len = strlen(src);
+    size_t dst_len = strlen(dst);
+    if (!(src + src_len < dst || dst + dst_len < src)) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Integer comparison next to pointer code must still report */
+int test_int_vs_size_next_to_pointer_code_vulnerable(char *p, char *end, int i, size_t len) {
+    if (p + len < end) {
+        return 1;
+    }
+    if (i < len) { // expect: CGULL-033
+        return 2;
+    }
+    return 0;
+}

@@ -40,10 +40,99 @@ class SignedUnsignedComparisonRule(BaseRule):
                 return True
         return False
 
-    def _get_var_signedness(self, var_expr: str, fn, ast_ctx) -> Optional[bool]:
+    @staticmethod
+    def _is_pointer_like(obj) -> bool:
+        """Pointers and arrays are addresses, not integer-rank operands (INT02-C is about integers)."""
+        return bool(
+            getattr(obj, "is_pointer", False)
+            or getattr(obj, "is_array", False)
+            or "*" in str(getattr(obj, "type_name", "") or "")
+        )
+
+    def _resolve_named_object(self, name: str, fn, ast_ctx):
+        """Local variable, then parameter, then global with this name (nearest scope wins)."""
+        if fn:
+            var_obj = fn.variables.get(name)
+            if var_obj:
+                return var_obj
+            for param in fn.parameters:
+                if param.name == name:
+                    return param
+        if ast_ctx and name in ast_ctx.global_variables:
+            return ast_ctx.global_variables[name]
+        return None
+
+    @staticmethod
+    def _extend_left(line: str, pos: int) -> str:
+        """Text of the operand expression that ends at *pos* (stops at the enclosing delimiter/operator)."""
+        depth = 0
+        i = pos
+        while i > 0:
+            ch = line[i - 1]
+            if ch == ")":
+                depth += 1
+            elif ch == "(":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and (ch in ",;?:{}=<&|" or (ch == ">" and line[i - 2:i] != "->")):
+                break
+            i -= 1
+        return line[i:pos]
+
+    @staticmethod
+    def _extend_right(line: str, pos: int) -> str:
+        """Text of the operand expression that starts at *pos*."""
+        depth = 0
+        i = pos
+        n = len(line)
+        while i < n:
+            ch = line[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and (
+                ch in ",;?:{}=<&|"
+                or (ch == ">" and line[i - 1:i] != "-")
+                or (ch == "!" and line[i + 1:i + 2] == "=")
+            ):
+                break
+            i += 1
+        return line[pos:i]
+
+    @staticmethod
+    def _is_dereferenced(text: str, start: int, end: int) -> bool:
+        """The identifier at ``text[start:end]`` is used as ``*p``, ``p[i]``, ``p->m`` or ``p.m`` (an integer-valued access)."""
+        before = text[:start].rstrip()
+        if before.endswith("*"):
+            prior = before[:-1].rstrip()
+            if not prior or not (prior[-1].isalnum() or prior[-1] in "_)]"):
+                return True  # unary dereference
+        return bool(re.match(r"\s*(?:\[|->|\.)", text[end:]))
+
+    def _expression_has_pointer(self, text: str, fn, ast_ctx) -> bool:
+        """True when a named pointer/array takes part in the expression as an address (``p + n``, ``p``)."""
+        # ``sizeof(buf)`` is an unsigned integer, not an address, even when buf is an array.
+        text = re.sub(r"\bsizeof\s*\((?:[^()]|\([^()]*\))*\)", " 0 ", text)
+        text = re.sub(r"\bsizeof\s+[A-Za-z_]\w*", " 0 ", text)
+        for match in re.finditer(r"(?<![\w.>])([A-Za-z_]\w*)\b(?!\s*\()", text):
+            obj = self._resolve_named_object(match.group(1), fn, ast_ctx)
+            if obj is None or not self._is_pointer_like(obj):
+                continue
+            if self._is_dereferenced(text, match.start(1), match.end(1)):
+                continue
+            return True
+        return False
+
+    def _get_var_signedness(self, var_expr: str, fn, ast_ctx, dereferenced: bool = False) -> Optional[bool]:
         """
         Returns True if unsigned, False if signed, or None if unknown/literal.
         var_expr can be a variable identifier, param name, or 'sizeof(...)'.
+        A pointer or array used as an address is not an integer operand, so it is
+        unknown (None); with ``dereferenced=True`` (``*p``) its pointee type decides.
         """
         expr_clean = var_expr.strip()
         if expr_clean.startswith("sizeof") or "sizeof(" in expr_clean:
@@ -58,6 +147,8 @@ class SignedUnsignedComparisonRule(BaseRule):
         if fn:
             var_obj = fn.variables.get(var_name)
             if var_obj:
+                if self._is_pointer_like(var_obj) and not dereferenced:
+                    return None
                 if self._is_unsigned_type(var_obj.type_name, custom_typedefs) or not var_obj.is_signed:
                     return True
                 if self._is_signed_type(var_obj.type_name) or var_obj.is_signed:
@@ -65,6 +156,8 @@ class SignedUnsignedComparisonRule(BaseRule):
 
             for param in fn.parameters:
                 if param.name == var_name:
+                    if self._is_pointer_like(param) and not dereferenced:
+                        return None
                     if self._is_unsigned_type(param.type_name, custom_typedefs):
                         return True
                     if self._is_signed_type(param.type_name):
@@ -72,6 +165,8 @@ class SignedUnsignedComparisonRule(BaseRule):
 
         if ast_ctx and var_name in ast_ctx.global_variables:
             var_obj = ast_ctx.global_variables[var_name]
+            if self._is_pointer_like(var_obj) and not dereferenced:
+                return None
             if self._is_unsigned_type(var_obj.type_name, custom_typedefs) or not var_obj.is_signed:
                 return True
             if self._is_signed_type(var_obj.type_name) or var_obj.is_signed:
@@ -165,7 +260,18 @@ class SignedUnsignedComparisonRule(BaseRule):
                     ):
                         continue
 
-                    left_signedness = self._get_var_signedness(left_expr, fn, ast_ctx)
+                    # A relational comparison of addresses (``p + n < q``, ``*p < n``)
+                    # is pointer provenance, not integer signedness. Judge the whole
+                    # operand expression, not just the identifier next to the operator.
+                    left_text = self._extend_left(line, m.start(1)) + m.group(1)
+                    right_text = m.group(3) + self._extend_right(line, m.end(3))
+                    if self._expression_has_pointer(left_text, fn, ast_ctx) or self._expression_has_pointer(right_text, fn, ast_ctx):
+                        continue
+
+                    left_signedness = self._get_var_signedness(
+                        left_expr, fn, ast_ctx,
+                        dereferenced=self._is_dereferenced(line, m.start(1), m.end(1)),
+                    )
 
                     if right_expr.startswith("-") and right_expr[1:].isdigit():
                         if left_signedness is True:
