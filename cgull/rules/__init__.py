@@ -17,6 +17,7 @@ from .banned_functions import (
     UncheckedSnprintfReturnRule,
     StrncpyNullTerminationRule,
 )
+from .banned_functions_legacy import ReadlinkNullTerminationRule
 from .banned_functions_policy import BannedFunctionsRule
 from .format_string import FormatStringRule
 from .command_injection import CommandInjectionRule
@@ -111,6 +112,7 @@ ALL_RULES: List[Type[BaseRule]] = [
     BufferCopyOverflowRule,
     ToctouFileAccessRule,
     StrncpyNullTerminationRule,
+    ReadlinkNullTerminationRule,
     UnvalidatedExternalDataSinkRule,
     PointerRangeBoundsRule,
     ValidatedPointerRangeRule,
